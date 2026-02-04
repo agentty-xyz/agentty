@@ -22,6 +22,11 @@ enum Status {
     Done,
 }
 
+enum AppMode {
+    List,
+    Prompt { input: String },
+}
+
 struct Agent {
     name: String,
     status: Status,
@@ -76,46 +81,77 @@ fn main() -> io::Result<()> {
     let mut table_state = TableState::default();
     table_state.select(Some(0));
 
+    let mut mode = AppMode::List;
+
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(100);
 
     loop {
         terminal.draw(|f| {
-            let rects = Layout::default()
-                .constraints([Constraint::Min(0), Constraint::Length(1)])
-                .margin(2)
-                .split(f.area());
+            let area = f.area();
+            match &mode {
+                AppMode::List => {
+                    let rects = Layout::default()
+                        .constraints([Constraint::Min(0), Constraint::Length(1)])
+                        .margin(2)
+                        .split(area);
 
-            let selected_style = Style::default().bg(Color::DarkGray);
-            let normal_style = Style::default().bg(Color::Gray).fg(Color::Black);
-            let header_cells = ["Agent Name", "Status"].iter().map(|h| Cell::from(*h));
-            let header = Row::new(header_cells)
-                .style(normal_style)
-                .height(1)
-                .bottom_margin(1);
-            let rows = agents.iter().map(|agent| {
-                let cells = vec![
-                    Cell::from(agent.name.as_str()),
-                    Cell::from(agent.status.icon())
-                        .style(Style::default().fg(agent.status.color())),
-                ];
-                Row::new(cells).height(1)
-            });
-            let t = Table::new(
-                rows,
-                [Constraint::Percentage(50), Constraint::Percentage(50)],
-            )
-            .header(header)
-            .block(Block::default().borders(Borders::ALL).title("Agents"))
-            .row_highlight_style(selected_style)
-            .highlight_symbol(">> ");
+                    let selected_style = Style::default().bg(Color::DarkGray);
+                    let normal_style = Style::default().bg(Color::Gray).fg(Color::Black);
+                    let header_cells = ["Agent Name", "Status"].iter().map(|h| Cell::from(*h));
+                    let header = Row::new(header_cells)
+                        .style(normal_style)
+                        .height(1)
+                        .bottom_margin(1);
+                    let rows = agents.iter().map(|agent| {
+                        let cells = vec![
+                            Cell::from(agent.name.as_str()),
+                            Cell::from(agent.status.icon())
+                                .style(Style::default().fg(agent.status.color())),
+                        ];
+                        Row::new(cells).height(1)
+                    });
+                    let t = Table::new(
+                        rows,
+                        [Constraint::Percentage(50), Constraint::Percentage(50)],
+                    )
+                    .header(header)
+                    .block(Block::default().borders(Borders::ALL).title("Agents"))
+                    .row_highlight_style(selected_style)
+                    .highlight_symbol(">> ");
 
-            f.render_stateful_widget(t, rects[0], &mut table_state);
+                    f.render_stateful_widget(t, rects[0], &mut table_state);
 
-            let help_message =
-                ratatui::widgets::Paragraph::new("Press 'j'/'k' to navigate, 'q' to quit")
+                    let help_message = ratatui::widgets::Paragraph::new(
+                        "Press 'a' to add agent, 'j'/'k' to navigate, 'q' to quit",
+                    )
                     .style(Style::default().fg(Color::Gray));
-            f.render_widget(help_message, rects[1]);
+                    f.render_widget(help_message, rects[1]);
+                }
+                AppMode::Prompt { input } => {
+                    let rects = Layout::default()
+                        .constraints([
+                            Constraint::Length(3),
+                            Constraint::Min(0),
+                            Constraint::Length(1),
+                        ])
+                        .margin(2)
+                        .split(area);
+
+                    let input_widget = ratatui::widgets::Paragraph::new(input.as_str()).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("New Agent Name"),
+                    );
+                    f.render_widget(input_widget, rects[0]);
+
+                    let help_message = ratatui::widgets::Paragraph::new(
+                        "Press 'Enter' to confirm, 'Esc' to cancel",
+                    )
+                    .style(Style::default().fg(Color::Gray));
+                    f.render_widget(help_message, rects[2]);
+                }
+            }
         })?;
 
         let timeout = tick_rate
@@ -124,35 +160,63 @@ fn main() -> io::Result<()> {
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        let i = match table_state.selected() {
-                            Some(i) => {
-                                if i >= agents.len() - 1 {
-                                    0
-                                } else {
-                                    i + 1
+                match &mut mode {
+                    AppMode::List => match key.code {
+                        KeyCode::Char('q') => break,
+                        KeyCode::Char('a') => {
+                            mode = AppMode::Prompt {
+                                input: String::new(),
+                            };
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            let i = match table_state.selected() {
+                                Some(i) => {
+                                    if i >= agents.len() - 1 {
+                                        0
+                                    } else {
+                                        i + 1
+                                    }
                                 }
-                            }
-                            None => 0,
-                        };
-                        table_state.select(Some(i));
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        let i = match table_state.selected() {
-                            Some(i) => {
-                                if i == 0 {
-                                    agents.len() - 1
-                                } else {
-                                    i - 1
+                                None => 0,
+                            };
+                            table_state.select(Some(i));
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            let i = match table_state.selected() {
+                                Some(i) => {
+                                    if i == 0 {
+                                        agents.len() - 1
+                                    } else {
+                                        i - 1
+                                    }
                                 }
+                                None => 0,
+                            };
+                            table_state.select(Some(i));
+                        }
+                        _ => {}
+                    },
+                    AppMode::Prompt { input } => match key.code {
+                        KeyCode::Enter => {
+                            if !input.is_empty() {
+                                agents.push(Agent {
+                                    name: input.clone(),
+                                    status: Status::InProgress,
+                                });
                             }
-                            None => 0,
-                        };
-                        table_state.select(Some(i));
-                    }
-                    _ => {}
+                            mode = AppMode::List;
+                        }
+                        KeyCode::Esc => {
+                            mode = AppMode::List;
+                        }
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        _ => {}
+                    },
                 }
             }
         }
