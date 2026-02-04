@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     InProgress,
     Done,
@@ -57,5 +57,47 @@ impl Status {
             Status::InProgress => Color::Yellow,
             Status::Done => Color::Green,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_status_icon() {
+        // Arrange & Act & Assert
+        assert_eq!(Status::InProgress.icon(), "⏳");
+        assert_eq!(Status::Done.icon(), "✅");
+    }
+
+    #[test]
+    fn test_status_color() {
+        // Arrange & Act & Assert
+        assert_eq!(Status::InProgress.color(), Color::Yellow);
+        assert_eq!(Status::Done.color(), Color::Green);
+    }
+
+    #[test]
+    fn test_agent_status() {
+        // Arrange
+        let agent = Agent {
+            name: "test".to_string(),
+            prompt: "prompt".to_string(),
+            folder: PathBuf::new(),
+            output: Arc::new(Mutex::new(String::new())),
+            running: Arc::new(AtomicBool::new(true)),
+        };
+
+        // Act & Assert (InProgress)
+        assert_eq!(agent.status(), Status::InProgress);
+
+        // Act
+        agent
+            .running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // Assert (Done)
+        assert_eq!(agent.status(), Status::Done);
     }
 }

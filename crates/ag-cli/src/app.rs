@@ -12,22 +12,25 @@ use ratatui::widgets::TableState;
 
 use crate::model::{Agent, AppMode};
 
+pub const DEFAULT_BASE_PATH: &str = "/var/tmp/.agentty";
+
 pub struct App {
     pub agents: Vec<Agent>,
     pub table_state: TableState,
     pub mode: AppMode,
+    base_path: PathBuf,
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self::new()
+        Self::new(PathBuf::from(DEFAULT_BASE_PATH))
     }
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(base_path: PathBuf) -> Self {
         let mut table_state = TableState::default();
-        let agents = Self::load_agents();
+        let agents = Self::load_agents(&base_path);
         if agents.is_empty() {
             table_state.select(None);
         } else {
@@ -37,12 +40,12 @@ impl App {
             agents,
             table_state,
             mode: AppMode::List,
+            base_path,
         }
     }
 
-    fn load_agents() -> Vec<Agent> {
-        let base = PathBuf::from("/var/tmp/.agentty");
-        let Ok(entries) = std::fs::read_dir(&base) else {
+    fn load_agents(base: &PathBuf) -> Vec<Agent> {
+        let Ok(entries) = std::fs::read_dir(base) else {
             return Vec::new();
         };
         let mut agents: Vec<Agent> = entries
@@ -114,7 +117,7 @@ impl App {
         let short_hash = &hash[..8];
         let name = short_hash.to_string();
 
-        let folder = PathBuf::from(format!("/var/tmp/.agentty/{short_hash}"));
+        let folder = self.base_path.join(short_hash);
         let _ = std::fs::create_dir_all(&folder);
         let _ = std::fs::write(folder.join("prompt.txt"), &prompt);
 
@@ -249,5 +252,116 @@ impl App {
         } else if i >= self.agents.len() {
             self.table_state.select(Some(self.agents.len() - 1));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn test_new_app_empty() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // Act
+        let app = App::new(dir.path().to_path_buf());
+
+        // Assert
+        assert!(app.agents.is_empty());
+        assert_eq!(app.table_state.selected(), None);
+    }
+
+    #[test]
+    fn test_add_agent() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = App::new(dir.path().to_path_buf());
+
+        // Act
+        app.add_agent("Hello".to_string());
+
+        // Assert
+        assert_eq!(app.agents.len(), 1);
+        assert_eq!(app.agents[0].prompt, "Hello");
+        assert_eq!(app.table_state.selected(), Some(0));
+
+        // Check filesystem
+        let agent_dir = &app.agents[0].folder;
+        assert!(agent_dir.exists());
+        assert!(agent_dir.join("prompt.txt").exists());
+        assert!(agent_dir.join("output.txt").exists());
+        assert!(agent_dir.join(".gemini/settings.json").exists());
+    }
+
+    #[test]
+    fn test_navigation() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = App::new(dir.path().to_path_buf());
+        app.add_agent("A".to_string());
+        app.add_agent("B".to_string());
+        // Sorting means names are hash-based, but we have 2 agents.
+        // Let's assume index 0 is selected initially (or after add).
+
+        // Act & Assert (Next)
+        app.table_state.select(Some(0));
+        app.next();
+        assert_eq!(app.table_state.selected(), Some(1));
+        app.next();
+        assert_eq!(app.table_state.selected(), Some(0)); // Loop back
+
+        // Act & Assert (Previous)
+        app.previous();
+        assert_eq!(app.table_state.selected(), Some(1)); // Loop back
+        app.previous();
+        assert_eq!(app.table_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_delete_agent() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = App::new(dir.path().to_path_buf());
+        app.add_agent("A".to_string());
+
+        // Act
+        app.delete_selected_agent();
+
+        // Assert
+        assert!(app.agents.is_empty());
+        assert_eq!(app.table_state.selected(), None);
+        // Check fs (we can't easily check exact folder path as it's gone from struct,
+        // but the directory should be empty or at least that agent subfolder gone.
+        // Since we don't store the hash outside, we trust the logic for now or could
+        // spy the path before delete)
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .expect("failed to read dir")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_reply() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = App::new(dir.path().to_path_buf());
+        app.add_agent("Initial".to_string());
+
+        // Act
+        app.reply(0, "Reply".to_string());
+
+        // Assert
+        // We check if output text was updated.
+        // Note: spawn_agent_task runs in a thread, so there might be a race if we check
+        // immediately. However, the reply function *synchronously* appends to
+        // the output buffer and file *before* spawning.
+        let agent = &app.agents[0];
+        let output = agent.output.lock().expect("failed to lock output");
+        assert!(output.contains("Reply"));
     }
 }

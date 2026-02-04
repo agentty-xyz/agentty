@@ -11,3 +11,6 @@ workspace = true
 libc.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+
+[dev-dependencies]
+tempfile = "3.10"

@@ -1,8 +1,9 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ag_cli::app::App;
+use ag_cli::app::{App, DEFAULT_BASE_PATH};
 use ag_cli::model::AppMode;
 use ag_cli::ui;
 use crossterm::event::{self, Event, KeyCode};
@@ -14,7 +15,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 fn main() -> io::Result<()> {
-    let _lock = match ag_cli::lock::acquire_lock() {
+    let base_path = PathBuf::from(DEFAULT_BASE_PATH);
+    let lock_path = base_path.join("lock");
+    let _lock = match ag_cli::lock::acquire_lock(&lock_path) {
         Ok(file) => file,
         Err(e) => {
             #[allow(clippy::print_stderr)]
@@ -33,7 +36,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = App::new(base_path);
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(100);
 

@@ -18,6 +18,7 @@ To ensure code quality, run the following commands with autofix enabled:
 - **Test:** `cargo test`
 - **Lint:** `cargo clippy --fix --allow-dirty -- -D warnings`
 - **Format:** `cargo fmt --all`
+- **Coverage:** `cargo tarpaulin` (install with `cargo install cargo-tarpaulin`)
 
 ## Git Conventions
 - Before committing, review the recent commit history using an optimized command (e.g., `git log -n 5 --format="---%n%B"`) to ensure consistency with the established tone, phrasing, and level of detail while being token-efficient.
