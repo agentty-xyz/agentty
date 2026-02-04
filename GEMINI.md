@@ -17,3 +17,10 @@ To ensure code quality, run the following commands:
 - **Test:** `cargo test`
 - **Lint:** `cargo clippy -- -D warnings`
 - **Format:** `cargo fmt --all -- --check`
+
+## Git Conventions
+- Follow the "commit title and description" style:
+  - The first line should be a concise summary (the "title").
+  - Use a blank line between the title and the body.
+  - The body (the "description") should provide more detail on *why* and *how* the change was made when it's not immediately obvious from the title.
+- Do not use conventional commit prefixes (e.g., `feat:`, `fix:`).
