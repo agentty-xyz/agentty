@@ -79,7 +79,7 @@ fn main() -> io::Result<()> {
     loop {
         terminal.draw(|f| {
             let rects = Layout::default()
-                .constraints([Constraint::Percentage(100)])
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
                 .margin(2)
                 .split(f.area());
 
@@ -110,6 +110,10 @@ fn main() -> io::Result<()> {
             .highlight_symbol(">> ");
 
             f.render_widget(t, rects[0]);
+
+            let help_message = ratatui::widgets::Paragraph::new("Press 'q' to quit")
+                .style(Style::default().fg(Color::Gray));
+            f.render_widget(help_message, rects[1]);
         })?;
 
         let timeout = tick_rate
