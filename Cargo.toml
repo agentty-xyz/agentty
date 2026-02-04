@@ -8,6 +8,7 @@ authors = ["Vladimir Minev"]
 edition = "2024"
 
 [workspace.dependencies]
+libc = "0.2"
 ratatui = "0.29.0"
 crossterm = "0.28.1"
 

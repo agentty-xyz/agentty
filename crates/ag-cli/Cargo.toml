@@ -8,5 +8,6 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+libc.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true

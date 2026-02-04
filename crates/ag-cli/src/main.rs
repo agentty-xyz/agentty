@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -14,6 +14,18 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 fn main() -> io::Result<()> {
+    let _lock = match ag_cli::lock::acquire_lock() {
+        Ok(file) => file,
+        Err(e) => {
+            #[allow(clippy::print_stderr)]
+            {
+                let _ = writeln!(io::stderr(), "Error: {e}");
+            }
+            #[allow(clippy::exit)]
+            std::process::exit(1);
+        }
+    };
+
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
