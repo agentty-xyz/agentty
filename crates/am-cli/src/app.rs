@@ -1,5 +1,6 @@
-use crate::model::{Agent, AppMode, Status};
 use ratatui::widgets::TableState;
+
+use crate::model::{Agent, AppMode, Status};
 
 pub struct App {
     pub agents: Vec<Agent>,

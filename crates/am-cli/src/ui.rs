@@ -1,9 +1,7 @@
-use ratatui::{
-    Frame,
-    layout::{Constraint, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, Cell, Row, Table, TableState},
-};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
 
 use crate::model::{Agent, AppMode};
 

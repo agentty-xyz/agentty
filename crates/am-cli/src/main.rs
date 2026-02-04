@@ -1,17 +1,16 @@
-use std::{
-    io,
-    time::{Duration, Instant},
-};
+use std::io;
+use std::time::{Duration, Instant};
 
 use am_cli::app::App;
 use am_cli::model::{Agent, AppMode, Status};
 use am_cli::ui;
-use crossterm::{
-    event::{self, Event, KeyCode},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+use crossterm::event::{self, Event, KeyCode};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 fn main() -> io::Result<()> {
     // setup terminal
