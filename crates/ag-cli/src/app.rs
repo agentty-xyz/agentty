@@ -135,51 +135,13 @@ impl App {
         let output = Arc::new(Mutex::new(initial_output));
         let running = Arc::new(AtomicBool::new(true));
 
-        // Spawn background process
-        let output_clone = Arc::clone(&output);
-        let running_clone = Arc::clone(&running);
-        let prompt_clone = prompt.clone();
-        let folder_clone = folder.clone();
-        std::thread::spawn(move || {
-            let mut file = std::fs::OpenOptions::new()
-                .append(true)
-                .open(folder_clone.join("output.txt"))
-                .ok();
-
-            let child = Command::new("gemini")
-                .arg("--prompt")
-                .arg(prompt_clone)
-                .arg("--model")
-                .arg("gemini-3-flash-preview")
-                .current_dir(folder_clone)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn();
-
-            match child {
-                Ok(mut child) => {
-                    if let Some(stdout) = child.stdout.take() {
-                        let reader = BufReader::new(stdout);
-                        for line in reader.lines().map_while(Result::ok) {
-                            if let Some(ref mut f) = file {
-                                let _ = writeln!(f, "{line}");
-                            }
-                            if let Ok(mut buf) = output_clone.lock() {
-                                buf.push_str(&line);
-                                buf.push('\n');
-                            }
-                        }
-                    }
-                    let _ = child.wait();
-                }
-                Err(e) => {
-                    if let Ok(mut buf) = output_clone.lock() {
-                        let _ = writeln!(buf, "Failed to spawn process: {e}");
-                    }
-                }
-            }
-            running_clone.store(false, Ordering::Relaxed);
-        });
+        Self::spawn_agent_task(
+            folder.clone(),
+            prompt.clone(),
+            Arc::clone(&output),
+            Arc::clone(&running),
+            false,
+        );
 
         self.agents.push(Agent {
             name: name.clone(),
@@ -193,6 +155,80 @@ impl App {
         if let Some(index) = self.agents.iter().position(|a| a.name == name) {
             self.table_state.select(Some(index));
         }
+    }
+
+    pub fn reply(&mut self, agent_index: usize, prompt: String) {
+        let Some(agent) = self.agents.get_mut(agent_index) else {
+            return;
+        };
+
+        let folder = agent.folder.clone();
+        let output = Arc::clone(&agent.output);
+        let running = Arc::clone(&agent.running);
+
+        let reply_line = format!("\n › {prompt}\n\n");
+        if let Ok(mut buf) = output.lock() {
+            buf.push_str(&reply_line);
+        }
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .open(folder.join("output.txt"))
+            .and_then(|mut f| write!(f, "{reply_line}"));
+
+        running.store(true, Ordering::Relaxed);
+        Self::spawn_agent_task(folder, prompt, output, running, true);
+    }
+
+    fn spawn_agent_task(
+        folder: PathBuf,
+        prompt: String,
+        output: Arc<Mutex<String>>,
+        running: Arc<AtomicBool>,
+        resume: bool,
+    ) {
+        std::thread::spawn(move || {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(folder.join("output.txt"))
+                .ok();
+
+            let mut cmd = Command::new("gemini");
+            cmd.arg("--prompt")
+                .arg(prompt)
+                .arg("--model")
+                .arg("gemini-3-flash-preview")
+                .current_dir(&folder)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+
+            if resume {
+                cmd.arg("--resume").arg("latest");
+            }
+
+            match cmd.spawn() {
+                Ok(mut child) => {
+                    if let Some(stdout) = child.stdout.take() {
+                        let reader = BufReader::new(stdout);
+                        for line in reader.lines().map_while(Result::ok) {
+                            if let Some(ref mut f) = file {
+                                let _ = writeln!(f, "{line}");
+                            }
+                            if let Ok(mut buf) = output.lock() {
+                                buf.push_str(&line);
+                                buf.push('\n');
+                            }
+                        }
+                    }
+                    let _ = child.wait();
+                }
+                Err(e) => {
+                    if let Ok(mut buf) = output.lock() {
+                        let _ = writeln!(buf, "Failed to spawn process: {e}");
+                    }
+                }
+            }
+            running.store(false, Ordering::Relaxed);
+        });
     }
 
     pub fn selected_agent(&self) -> Option<&Agent> {

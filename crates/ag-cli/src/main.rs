@@ -85,9 +85,38 @@ fn main() -> io::Result<()> {
                         }
                         _ => {}
                     },
-                    AppMode::View { .. } => {
-                        if key.code == KeyCode::Char('q') {
+                    AppMode::View { agent_index } => match key.code {
+                        KeyCode::Char('q') => {
                             app.mode = AppMode::List;
+                        }
+                        KeyCode::Char('r') => {
+                            app.mode = AppMode::Reply {
+                                agent_index: *agent_index,
+                                input: String::new(),
+                            };
+                        }
+                        _ => {}
+                    },
+                    AppMode::Reply { agent_index, input } => {
+                        let agent_index = *agent_index;
+                        match key.code {
+                            KeyCode::Enter => {
+                                let prompt = input.clone();
+                                app.mode = AppMode::View { agent_index };
+                                if !prompt.is_empty() {
+                                    app.reply(agent_index, prompt);
+                                }
+                            }
+                            KeyCode::Esc => {
+                                app.mode = AppMode::View { agent_index };
+                            }
+                            KeyCode::Char(c) => {
+                                input.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                input.pop();
+                            }
+                            _ => {}
                         }
                     }
                     AppMode::Prompt { input } => match key.code {

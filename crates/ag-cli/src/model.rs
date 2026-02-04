@@ -14,6 +14,7 @@ pub enum AppMode {
     List,
     Prompt { input: String },
     View { agent_index: usize },
+    Reply { agent_index: usize, input: String },
 }
 
 pub struct Agent {
