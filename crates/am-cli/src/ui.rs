@@ -132,7 +132,7 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
             let cursor_x = input_area
                 .x
                 .saturating_add(u16::try_from(input.len()).unwrap_or(u16::MAX))
-                .saturating_add(3);
+                .saturating_add(4);
             f.set_cursor_position((cursor_x, input_area.y + 1));
         }
     }
