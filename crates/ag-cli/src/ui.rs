@@ -45,7 +45,7 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
                 let horizontal_chunks = centered_horizontal_layout(vertical_chunks[1]);
 
                 let hint = Paragraph::new(vec![
-                    Line::from("Welcome to Agent Manager!"),
+                    Line::from("Welcome to Agentty!"),
                     Line::from(""),
                     Line::from(Span::styled(
                         "Press 'a' to initiate",

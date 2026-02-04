@@ -1,4 +1,4 @@
-# Agent Manager CLI
+# Agentty CLI
 
 Modular TUI application for managing agents.
 

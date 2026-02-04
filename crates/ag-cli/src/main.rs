@@ -1,9 +1,9 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use am_cli::app::App;
-use am_cli::model::AppMode;
-use am_cli::ui;
+use ag_cli::app::App;
+use ag_cli::model::AppMode;
+use ag_cli::ui;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{

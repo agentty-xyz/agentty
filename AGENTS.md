@@ -1,11 +1,12 @@
-# Agent Manager
+# Agentty
 
-Project to manage agents.
+TUI tool to manage agents.
 
 ## Project Facts
 - Project is a Rust workspace.
 - The `crates/` directory contains all workspace members.
-- `am-cli`: A binary crate providing the CLI interface using Ratatui.
+- All workspace crates use the `ag-` prefix (e.g., `ag-cli`).
+- `ag-cli`: A binary crate providing the CLI interface using Ratatui.
 
 ## Rust Project Style Guide
 - Dependency versions and project information (version, authors) are managed in the root `Cargo.toml`.
@@ -16,7 +17,7 @@ Project to manage agents.
 To ensure code quality, run the following commands:
 - **Test:** `cargo test`
 - **Lint:** `cargo clippy -- -D warnings`
-- **Format:** `cargo +nightly fmt --all -- --check`
+- **Format:** `cargo fmt --all -- --check`
 
 ## Git Conventions
 - Before committing, review the recent commit history using an optimized command (e.g., `git log -n 5 --format="---%n%B"`) to ensure consistency with the established tone, phrasing, and level of detail while being token-efficient.
