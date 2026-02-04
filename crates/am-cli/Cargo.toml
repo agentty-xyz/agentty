@@ -1,0 +1,12 @@
+[package]
+name = "am-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ratatui.workspace = true
+crossterm.workspace = true
