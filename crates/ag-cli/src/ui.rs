@@ -157,6 +157,13 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
                         .as_millis();
                     let frame_idx = (now / 100) as usize % SPINNER_FRAMES.len();
                     let spinner = SPINNER_FRAMES[frame_idx];
+
+                    if let Some(last) = lines.last() {
+                        if last.width() == 0 {
+                            lines.pop();
+                        }
+                    }
+
                     lines.push(Line::from(vec![Span::styled(
                         format!("{spinner} Thinking..."),
                         Style::default().fg(Color::Yellow),
