@@ -1,0 +1,32 @@
+# Agent Manager
+
+Project to manage agents.
+
+## Project Facts
+- Project is a Rust workspace.
+- The `crates/` directory contains all workspace members.
+- `am-cli`: A binary crate providing the CLI interface using Ratatui.
+
+## Rust Project Style Guide
+- Dependency versions and project information (version, authors) are managed in the root `Cargo.toml`.
+- All workspace crates must use `workspace = true` for shared package metadata and dependencies.
+- Use `ratatui` for terminal UI development.
+
+## Quality Gates
+To ensure code quality, run the following commands:
+- **Test:** `cargo test`
+- **Lint:** `cargo clippy -- -D warnings`
+- **Format:** `cargo +nightly fmt --all -- --check`
+
+## Git Conventions
+- Before committing, review the recent commit history using an optimized command (e.g., `git log -n 5 --format="---%n%B"`) to ensure consistency with the established tone, phrasing, and level of detail while being token-efficient.
+- Follow the "commit title and description" style:
+  - The first line should be a concise summary (the "title") in present simple tense (e.g., "Fix cursor offset" not "Fixed cursor offset").
+  - Use a blank line between the title and the body.
+  - The body (the "description") should provide more detail on *why* and *how* in present simple tense. It is not needed when the title is self-explanatory.
+- Do not use conventional commit prefixes (e.g., `feat:`, `fix:`).
+- Do not add `Co-Authored-By` trailers or any AI attribution to commit messages.
+
+## Agent Instructions
+- Always update `AGENTS.md` files (root and sub-crates) whenever new architectural insights, project facts, or significant conventions are established or discovered during conversations. Both `CLAUDE.md` and `GEMINI.md` are symlinks to `AGENTS.md`, so a single update keeps all AI assistants in sync.
+- When creating a new `AGENTS.md` file in any directory, always create corresponding symlinks: `ln -s AGENTS.md CLAUDE.md && ln -s AGENTS.md GEMINI.md` in the same directory.
