@@ -116,16 +116,32 @@ impl App {
         let _ = std::fs::create_dir_all(&folder);
         let _ = std::fs::write(folder.join("prompt.txt"), &prompt);
 
+        // Create isolated gemini settings
+        let gemini_dir = folder.join(".gemini");
+        let _ = std::fs::create_dir_all(&gemini_dir);
+        let settings = r#"{
+  "context.loadMemoryFromIncludeDirectories": false,
+  "context.fileFiltering.respectGitIgnore": false,
+  "context.discoveryMaxDirs": 1,
+  "context.fileFiltering.enableRecursiveFileSearch": false
+}"#;
+        let _ = std::fs::write(gemini_dir.join("settings.json"), settings);
+
         let output = Arc::new(Mutex::new(String::new()));
         let running = Arc::new(AtomicBool::new(true));
 
         // Spawn background process
         let output_clone = Arc::clone(&output);
         let running_clone = Arc::clone(&running);
+        let prompt_clone = prompt.clone();
+        let folder_clone = folder.clone();
         std::thread::spawn(move || {
-            let child = Command::new("bash")
-                .arg("-c")
-                .arg("for i in $(seq 0 60); do echo $i; sleep 1; done")
+            let child = Command::new("gemini")
+                .arg("--prompt")
+                .arg(prompt_clone)
+                .arg("--model")
+                .arg("gemini-3-flash-preview")
+                .current_dir(folder_clone)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn();
