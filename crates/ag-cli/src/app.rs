@@ -153,14 +153,16 @@ impl App {
         });
 
         self.agents.push(Agent {
-            name,
+            name: name.clone(),
             prompt,
             folder,
             output,
             running,
         });
-        if self.table_state.selected().is_none() {
-            self.table_state.select(Some(0));
+        self.agents.sort_by(|a, b| a.name.cmp(&b.name));
+
+        if let Some(index) = self.agents.iter().position(|a| a.name == name) {
+            self.table_state.select(Some(index));
         }
     }
 
