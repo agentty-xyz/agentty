@@ -44,8 +44,17 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
 
                 let horizontal_chunks = centered_horizontal_layout(vertical_chunks[1]);
 
+                let version = env!("CARGO_PKG_VERSION");
+                let title = Line::from(vec![
+                    Span::styled(
+                        " Agentty ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("v{version} "), Style::default().fg(Color::DarkGray)),
+                ]);
                 let hint = Paragraph::new(vec![
-                    Line::from("Welcome to Agentty!"),
                     Line::from(""),
                     Line::from(Span::styled(
                         "Press 'a' to initiate",
@@ -57,7 +66,7 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Cyan))
-                        .title(" AM "),
+                        .title(title),
                 );
                 f.render_widget(hint, horizontal_chunks[1]);
             } else {
