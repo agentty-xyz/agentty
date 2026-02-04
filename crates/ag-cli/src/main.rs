@@ -48,6 +48,13 @@ fn main() -> io::Result<()> {
                         KeyCode::Char('k') | KeyCode::Up => {
                             app.previous();
                         }
+                        KeyCode::Enter => {
+                            if let Some(i) = app.table_state.selected() {
+                                if i < app.agents.len() {
+                                    app.mode = AppMode::View { agent_index: i };
+                                }
+                            }
+                        }
                         KeyCode::Char('o') => {
                             if let Some(agent) = app.selected_agent() {
                                 let folder = agent.folder.clone();
@@ -63,6 +70,11 @@ fn main() -> io::Result<()> {
                         }
                         _ => {}
                     },
+                    AppMode::View { .. } => {
+                        if key.code == KeyCode::Esc {
+                            app.mode = AppMode::List;
+                        }
+                    }
                     AppMode::Prompt { input } => match key.code {
                         KeyCode::Enter => {
                             let prompt = input.clone();
@@ -87,7 +99,6 @@ fn main() -> io::Result<()> {
         }
 
         if last_tick.elapsed() >= Duration::from_secs(1) {
-            app.toggle_all();
             last_tick = Instant::now();
         }
     }

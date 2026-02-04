@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
 
@@ -11,13 +13,25 @@ pub enum Status {
 pub enum AppMode {
     List,
     Prompt { input: String },
+    View { agent_index: usize },
 }
 
 pub struct Agent {
     pub name: String,
     pub prompt: String,
-    pub status: Status,
     pub folder: PathBuf,
+    pub output: Arc<Mutex<String>>,
+    pub running: Arc<AtomicBool>,
+}
+
+impl Agent {
+    pub fn status(&self) -> Status {
+        if self.running.load(std::sync::atomic::Ordering::Relaxed) {
+            Status::InProgress
+        } else {
+            Status::Done
+        }
+    }
 }
 
 impl Status {
@@ -33,12 +47,5 @@ impl Status {
             Status::InProgress => Color::Yellow,
             Status::Done => Color::Green,
         }
-    }
-
-    pub fn toggle(&mut self) {
-        *self = match self {
-            Status::InProgress => Status::Done,
-            Status::Done => Status::InProgress,
-        };
     }
 }

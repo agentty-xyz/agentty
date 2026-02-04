@@ -1,11 +1,16 @@
 use std::collections::hash_map::DefaultHasher;
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::widgets::TableState;
 
-use crate::model::{Agent, AppMode, Status};
+use crate::model::{Agent, AppMode};
 
 pub struct App {
     pub agents: Vec<Agent>,
@@ -51,8 +56,9 @@ impl App {
                 Some(Agent {
                     name: folder.file_name()?.to_string_lossy().into_owned(),
                     prompt,
-                    status: Status::InProgress,
                     folder,
+                    output: Arc::new(Mutex::new(String::new())),
+                    running: Arc::new(AtomicBool::new(false)),
                 })
             })
             .collect();
@@ -112,11 +118,48 @@ impl App {
         let _ = std::fs::create_dir_all(&folder);
         let _ = std::fs::write(folder.join("prompt.txt"), &prompt);
 
+        let output = Arc::new(Mutex::new(String::new()));
+        let running = Arc::new(AtomicBool::new(true));
+
+        // Spawn background process
+        let output_clone = Arc::clone(&output);
+        let running_clone = Arc::clone(&running);
+        std::thread::spawn(move || {
+            let child = Command::new("bash")
+                .arg("-c")
+                .arg("for i in $(seq 0 60); do echo $i; sleep 1; done")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn();
+
+            match child {
+                Ok(mut child) => {
+                    if let Some(stdout) = child.stdout.take() {
+                        let reader = BufReader::new(stdout);
+                        for line in reader.lines().map_while(Result::ok) {
+                            if let Ok(mut buf) = output_clone.lock() {
+                                buf.push_str(&line);
+                                buf.push('\n');
+                            }
+                        }
+                    }
+                    let _ = child.wait();
+                }
+                Err(e) => {
+                    if let Ok(mut buf) = output_clone.lock() {
+                        let _ = writeln!(buf, "Failed to spawn process: {e}");
+                    }
+                }
+            }
+            running_clone.store(false, Ordering::Relaxed);
+        });
+
         self.agents.push(Agent {
             name,
             prompt,
-            status: Status::InProgress,
             folder,
+            output,
+            running,
         });
         if self.table_state.selected().is_none() {
             self.table_state.select(Some(0));
@@ -125,11 +168,5 @@ impl App {
 
     pub fn selected_agent(&self) -> Option<&Agent> {
         self.table_state.selected().and_then(|i| self.agents.get(i))
-    }
-
-    pub fn toggle_all(&mut self) {
-        for agent in &mut self.agents {
-            agent.status.toggle();
-        }
     }
 }

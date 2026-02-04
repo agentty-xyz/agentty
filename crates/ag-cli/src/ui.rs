@@ -6,7 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
-use crate::model::{Agent, AppMode};
+use crate::model::{Agent, AppMode, Status};
 
 fn centered_horizontal_layout(area: ratatui::layout::Rect) -> std::rc::Rc<[ratatui::layout::Rect]> {
     Layout::default()
@@ -71,14 +71,14 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
                     .height(1)
                     .bottom_margin(1);
                 let rows = agents.iter().map(|agent| {
+                    let status = agent.status();
                     let cells = vec![
                         Cell::from(agent.name.as_str()),
                         Cell::from(Span::styled(
                             agent.folder.display().to_string(),
                             Style::default().fg(Color::Cyan),
                         )),
-                        Cell::from(agent.status.icon())
-                            .style(Style::default().fg(agent.status.color())),
+                        Cell::from(status.icon()).style(Style::default().fg(status.color())),
                     ];
                     Row::new(cells).height(1)
                 });
@@ -99,9 +99,55 @@ pub fn render(f: &mut Frame, mode: &AppMode, agents: &[Agent], table_state: &mut
                 f.render_stateful_widget(t, main_area, table_state);
             }
 
-            let help_message = Paragraph::new("q: quit | a: add | o: open | j/k: nav")
-                .style(Style::default().fg(Color::Gray));
+            let help_message =
+                Paragraph::new("q: quit | a: add | o: open | Enter: view | j/k: nav")
+                    .style(Style::default().fg(Color::Gray));
             f.render_widget(help_message, footer_area);
+        }
+        AppMode::View { agent_index } => {
+            if let Some(agent) = agents.get(*agent_index) {
+                let chunks = Layout::default()
+                    .constraints([Constraint::Min(0), Constraint::Length(1)])
+                    .margin(1)
+                    .split(area);
+
+                let output_area = chunks[0];
+                let footer_area = chunks[1];
+
+                let status = agent.status();
+                let status_label = match status {
+                    Status::InProgress => "In Progress",
+                    Status::Done => "Done",
+                };
+                let title = format!(" {} — {} ", agent.name, status_label);
+
+                let output_text = agent
+                    .output
+                    .lock()
+                    .map(|buf| buf.clone())
+                    .unwrap_or_default();
+
+                let lines: Vec<Line> = output_text.lines().map(Line::from).collect();
+
+                // Auto-scroll: calculate offset so we show the last lines
+                let inner_height = output_area.height.saturating_sub(2) as usize;
+                let scroll_offset = lines.len().saturating_sub(inner_height);
+
+                let paragraph = Paragraph::new(lines)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(status.color()))
+                            .title(Span::styled(title, Style::default().fg(status.color()))),
+                    )
+                    .scroll((u16::try_from(scroll_offset).unwrap_or(u16::MAX), 0));
+
+                f.render_widget(paragraph, output_area);
+
+                let help_message =
+                    Paragraph::new("Esc: back").style(Style::default().fg(Color::Gray));
+                f.render_widget(help_message, footer_area);
+            }
         }
         AppMode::Prompt { input } => {
             // First, determine horizontal layout to get available width
