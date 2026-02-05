@@ -13,14 +13,14 @@ use crate::ui::util::{calculate_input_height, wrap_lines};
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub struct ViewPage<'a> {
+pub struct SessionChatPage<'a> {
     pub sessions: &'a [Session],
     pub session_index: usize,
     pub scroll_offset: Option<u16>,
     pub mode: &'a AppMode,
 }
 
-impl<'a> ViewPage<'a> {
+impl<'a> SessionChatPage<'a> {
     pub fn new(
         sessions: &'a [Session],
         session_index: usize,
@@ -36,7 +36,7 @@ impl<'a> ViewPage<'a> {
     }
 }
 
-impl Page for ViewPage<'_> {
+impl Page for SessionChatPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         if let Some(session) = self.sessions.get(self.session_index) {
             let bottom_height = if let AppMode::Reply { input, .. } = self.mode {

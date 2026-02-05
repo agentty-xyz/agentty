@@ -35,7 +35,8 @@ pub fn render(
 
     match mode {
         AppMode::List => {
-            pages::list::ListPage::new(sessions, table_state).render(f, content_area);
+            pages::sessions_list::SessionsListPage::new(sessions, table_state)
+                .render(f, content_area);
         }
         AppMode::View {
             session_index,
@@ -46,11 +47,16 @@ pub fn render(
             scroll_offset,
             ..
         } => {
-            pages::view::ViewPage::new(sessions, *session_index, *scroll_offset, mode)
-                .render(f, content_area);
+            pages::session_chat::SessionChatPage::new(
+                sessions,
+                *session_index,
+                *scroll_offset,
+                mode,
+            )
+            .render(f, content_area);
         }
         AppMode::Prompt { input } => {
-            pages::prompt::PromptPage::new(input).render(f, content_area);
+            pages::new_session::NewSessionPage::new(input).render(f, content_area);
         }
     }
 }

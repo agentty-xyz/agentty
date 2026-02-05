@@ -11,9 +11,9 @@ The UI is split into separate modules to improve readability and maintainability
 - **`mod.rs`**: The main entry point. It contains the top-level `render` function which dispatches rendering to the appropriate sub-module based on the current `AppMode`. It also defines the `Page` trait.
 - **`components.rs`**: Contains reusable UI widgets shared across different pages, such as the `render_status_bar` and `render_chat_input`.
 - **`pages/`**: Directory containing the rendering logic for each distinct UI page.
-    - **`list.rs`**: `ListPage` - renders the session list (`AppMode::List`).
-    - **`view.rs`**: `ViewPage` - renders the session detail view (`AppMode::View`) and reply interface (`AppMode::Reply`).
-    - **`prompt.rs`**: `PromptPage` - renders the initial prompt input (`AppMode::Prompt`).
+    - **`sessions_list.rs`**: `SessionsListPage` - renders the session list (`AppMode::List`).
+    - **`session_chat.rs`**: `SessionChatPage` - renders the session detail view (`AppMode::View`) and reply interface (`AppMode::Reply`).
+    - **`new_session.rs`**: `NewSessionPage` - renders the initial prompt input (`AppMode::Prompt`).
 - **`util.rs`**: Contains pure helper functions for layout calculations, text wrapping, and input handling. **All logic that can be unit-tested without a full TUI environment should go here.**
 
 ## Maintenance Guidelines

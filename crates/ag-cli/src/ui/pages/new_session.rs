@@ -5,17 +5,17 @@ use crate::ui::Page;
 use crate::ui::components::render_chat_input;
 use crate::ui::util::calculate_input_height;
 
-pub struct PromptPage<'a> {
+pub struct NewSessionPage<'a> {
     pub input: &'a str,
 }
 
-impl<'a> PromptPage<'a> {
+impl<'a> NewSessionPage<'a> {
     pub fn new(input: &'a str) -> Self {
         Self { input }
     }
 }
 
-impl Page for PromptPage<'_> {
+impl Page for NewSessionPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let input_height = calculate_input_height(area.width.saturating_sub(2), self.input);
         let chunks = Layout::default()
