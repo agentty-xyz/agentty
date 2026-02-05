@@ -7,20 +7,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::model::{AppMode, Session, Status};
-use crate::ui::Screen;
+use crate::ui::Page;
 use crate::ui::components::render_chat_input;
 use crate::ui::util::{calculate_input_height, wrap_lines};
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub struct ViewScreen<'a> {
+pub struct ViewPage<'a> {
     pub sessions: &'a [Session],
     pub session_index: usize,
     pub scroll_offset: Option<u16>,
     pub mode: &'a AppMode,
 }
 
-impl<'a> ViewScreen<'a> {
+impl<'a> ViewPage<'a> {
     pub fn new(
         sessions: &'a [Session],
         session_index: usize,
@@ -36,7 +36,7 @@ impl<'a> ViewScreen<'a> {
     }
 }
 
-impl Screen for ViewScreen<'_> {
+impl Page for ViewPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         if let Some(session) = self.sessions.get(self.session_index) {
             let bottom_height = if let AppMode::Reply { input, .. } = self.mode {

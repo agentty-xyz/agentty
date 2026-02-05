@@ -1,21 +1,21 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 
-use crate::ui::Screen;
+use crate::ui::Page;
 use crate::ui::components::render_chat_input;
 use crate::ui::util::calculate_input_height;
 
-pub struct PromptScreen<'a> {
+pub struct PromptPage<'a> {
     pub input: &'a str,
 }
 
-impl<'a> PromptScreen<'a> {
+impl<'a> PromptPage<'a> {
     pub fn new(input: &'a str) -> Self {
         Self { input }
     }
 }
 
-impl Screen for PromptScreen<'_> {
+impl Page for PromptPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let input_height = calculate_input_height(area.width.saturating_sub(2), self.input);
         let chunks = Layout::default()

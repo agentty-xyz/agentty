@@ -5,15 +5,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::model::Session;
-use crate::ui::Screen;
+use crate::ui::Page;
 use crate::ui::util::centered_horizontal_layout;
 
-pub struct ListScreen<'a> {
+pub struct ListPage<'a> {
     pub sessions: &'a [Session],
     pub table_state: &'a mut TableState,
 }
 
-impl<'a> ListScreen<'a> {
+impl<'a> ListPage<'a> {
     pub fn new(sessions: &'a [Session], table_state: &'a mut TableState) -> Self {
         Self {
             sessions,
@@ -22,7 +22,7 @@ impl<'a> ListScreen<'a> {
     }
 }
 
-impl Screen for ListScreen<'_> {
+impl Page for ListPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .constraints([Constraint::Min(0), Constraint::Length(1)])

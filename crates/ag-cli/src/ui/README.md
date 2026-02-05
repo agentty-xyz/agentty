@@ -4,24 +4,26 @@ This directory contains the modular user interface components for the Agentty CL
 
 ## Code Design & Architecture
 
-The UI is split into separate modules to improve readability and maintainability. The core philosophy is **separation of concerns** by screen and component type.
+The UI is split into separate modules to improve readability and maintainability. The core philosophy is **separation of concerns** by page and component type.
 
 ### Module Structure
 
-- **`mod.rs`**: The main entry point. It contains the top-level `render` function which dispatches rendering to the appropriate sub-module based on the current `AppMode`.
-- **`components.rs`**: Contains reusable UI widgets shared across different screens, such as the `render_status_bar` and `render_chat_input`.
-- **`list.rs`**: Responsible for rendering the session list screen (`AppMode::List`).
-- **`view.rs`**: Responsible for rendering the session detail view (`AppMode::View`) and the reply interface (`AppMode::Reply`).
-- **`prompt.rs`**: Responsible for rendering the initial prompt input screen (`AppMode::Prompt`).
+- **`mod.rs`**: The main entry point. It contains the top-level `render` function which dispatches rendering to the appropriate sub-module based on the current `AppMode`. It also defines the `Page` trait.
+- **`components.rs`**: Contains reusable UI widgets shared across different pages, such as the `render_status_bar` and `render_chat_input`.
+- **`pages/`**: Directory containing the rendering logic for each distinct UI page.
+    - **`list.rs`**: `ListPage` - renders the session list (`AppMode::List`).
+    - **`view.rs`**: `ViewPage` - renders the session detail view (`AppMode::View`) and reply interface (`AppMode::Reply`).
+    - **`prompt.rs`**: `PromptPage` - renders the initial prompt input (`AppMode::Prompt`).
 - **`util.rs`**: Contains pure helper functions for layout calculations, text wrapping, and input handling. **All logic that can be unit-tested without a full TUI environment should go here.**
 
 ## Maintenance Guidelines
 
-1.  **Adding a New Screen**:
-    - Create a new module (e.g., `my_screen.rs`).
-    - Implement a public `render` function.
-    - Expose the module in `mod.rs`.
-    - Update the match expression in `mod.rs` to call your new render function for the corresponding `AppMode`.
+1.  **Adding a New Page**:
+    - Create a new module in `pages/` (e.g., `pages/my_page.rs`).
+    - Define a struct (e.g., `MyPage`) that holds necessary references.
+    - Implement the `Page` trait for your struct.
+    - Expose the module in `pages/mod.rs`.
+    - Update the match expression in `mod.rs` to instantiate and render your page.
 
 2.  **Modifying Layouts**:
     - Use `util.rs` for complex layout logic (like splitting areas or calculating heights).

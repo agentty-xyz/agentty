@@ -1,8 +1,6 @@
 pub mod components;
-pub mod list;
-pub mod prompt;
+pub mod pages;
 pub mod util;
-pub mod view;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -11,8 +9,8 @@ use ratatui::widgets::TableState;
 use crate::agent::AgentKind;
 use crate::model::{AppMode, Session};
 
-/// A trait for UI screens that enforces a standard rendering interface.
-pub trait Screen {
+/// A trait for UI pages that enforces a standard rendering interface.
+pub trait Page {
     fn render(&mut self, f: &mut Frame, area: Rect);
 }
 
@@ -37,7 +35,7 @@ pub fn render(
 
     match mode {
         AppMode::List => {
-            list::ListScreen::new(sessions, table_state).render(f, content_area);
+            pages::list::ListPage::new(sessions, table_state).render(f, content_area);
         }
         AppMode::View {
             session_index,
@@ -48,11 +46,11 @@ pub fn render(
             scroll_offset,
             ..
         } => {
-            view::ViewScreen::new(sessions, *session_index, *scroll_offset, mode)
+            pages::view::ViewPage::new(sessions, *session_index, *scroll_offset, mode)
                 .render(f, content_area);
         }
         AppMode::Prompt { input } => {
-            prompt::PromptScreen::new(input).render(f, content_area);
+            pages::prompt::PromptPage::new(input).render(f, content_area);
         }
     }
 }
