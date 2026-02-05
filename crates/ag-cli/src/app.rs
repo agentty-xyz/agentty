@@ -21,12 +21,20 @@ pub struct App {
     pub mode: AppMode,
     pub current_tab: Tab,
     base_path: PathBuf,
+    working_dir: PathBuf,
+    git_branch: Option<String>,
     agent_kind: AgentKind,
     backend: Box<dyn AgentBackend>,
 }
 
 impl App {
-    pub fn new(base_path: PathBuf, agent_kind: AgentKind, backend: Box<dyn AgentBackend>) -> Self {
+    pub fn new(
+        base_path: PathBuf,
+        working_dir: PathBuf,
+        git_branch: Option<String>,
+        agent_kind: AgentKind,
+        backend: Box<dyn AgentBackend>,
+    ) -> Self {
         let mut table_state = TableState::default();
         let sessions = Self::load_sessions(&base_path);
         if sessions.is_empty() {
@@ -40,6 +48,8 @@ impl App {
             mode: AppMode::List,
             current_tab: Tab::Sessions,
             base_path,
+            working_dir,
+            git_branch,
             agent_kind,
             backend,
         }
@@ -47,6 +57,14 @@ impl App {
 
     pub fn agent_kind(&self) -> AgentKind {
         self.agent_kind
+    }
+
+    pub fn working_dir(&self) -> &PathBuf {
+        &self.working_dir
+    }
+
+    pub fn git_branch(&self) -> Option<&str> {
+        self.git_branch.as_deref()
     }
 
     pub fn next_tab(&mut self) {
@@ -290,7 +308,14 @@ mod tests {
     }
 
     fn new_test_app(path: PathBuf) -> App {
-        App::new(path, AgentKind::Gemini, Box::new(create_mock_backend()))
+        let working_dir = PathBuf::from("/tmp/test");
+        App::new(
+            path,
+            working_dir,
+            None,
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+        )
     }
 
     #[test]
@@ -314,6 +339,52 @@ mod tests {
 
         // Act & Assert
         assert_eq!(app.agent_kind(), AgentKind::Gemini);
+    }
+
+    #[test]
+    fn test_working_dir_getter() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app(dir.path().to_path_buf());
+
+        // Act
+        let working_dir = app.working_dir();
+
+        // Assert
+        assert_eq!(working_dir, &PathBuf::from("/tmp/test"));
+    }
+
+    #[test]
+    fn test_git_branch_getter_with_branch() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let working_dir = PathBuf::from("/tmp/test");
+        let app = App::new(
+            dir.path().to_path_buf(),
+            working_dir,
+            Some("main".to_string()),
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+        );
+
+        // Act
+        let branch = app.git_branch();
+
+        // Assert
+        assert_eq!(branch, Some("main"));
+    }
+
+    #[test]
+    fn test_git_branch_getter_without_branch() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app(dir.path().to_path_buf());
+
+        // Act
+        let branch = app.git_branch();
+
+        // Assert
+        assert_eq!(branch, None);
     }
 
     #[test]
@@ -574,7 +645,13 @@ mod tests {
                     .stderr(Stdio::null());
                 cmd
             });
-        let mut app = App::new(dir.path().to_path_buf(), AgentKind::Gemini, Box::new(mock));
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            None,
+            AgentKind::Gemini,
+            Box::new(mock),
+        );
 
         // Act — add session (start command)
         app.add_session("SpawnInit".to_string());

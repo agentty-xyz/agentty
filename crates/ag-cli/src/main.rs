@@ -17,6 +17,8 @@ use ratatui::backend::CrosstermBackend;
 
 fn main() -> io::Result<()> {
     let base_path = PathBuf::from(AGENTTY_WORKSPACE);
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let git_branch = ag_cli::git::detect_git_info(&working_dir);
     let lock_path = base_path.join("lock");
     let _lock = match ag_cli::lock::acquire_lock(&lock_path) {
         Ok(file) => file,
@@ -39,13 +41,15 @@ fn main() -> io::Result<()> {
 
     let agent_kind = AgentKind::from_env();
     let backend = agent_kind.create_backend();
-    let mut app = App::new(base_path, agent_kind, backend);
+    let mut app = App::new(base_path, working_dir, git_branch, agent_kind, backend);
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(100);
 
     loop {
         let current_agent_kind = app.agent_kind();
         let current_tab = app.current_tab;
+        let current_working_dir = app.working_dir().clone();
+        let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
         terminal.draw(|f| {
             ui::render(
                 f,
@@ -54,6 +58,8 @@ fn main() -> io::Result<()> {
                 &mut app.table_state,
                 current_agent_kind,
                 current_tab,
+                &current_working_dir,
+                current_git_branch.as_deref(),
             );
         })?;
 

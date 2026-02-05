@@ -19,6 +19,7 @@ pub trait Component {
     fn render(&self, f: &mut Frame, area: Rect);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     f: &mut Frame,
     mode: &AppMode,
@@ -26,18 +27,31 @@ pub fn render(
     table_state: &mut TableState,
     agent_kind: AgentKind,
     current_tab: Tab,
+    working_dir: &std::path::Path,
+    git_branch: Option<&str>,
 ) {
     let area = f.area();
 
-    // Top status bar (all modes)
+    // Three-section layout: top status bar, content area, footer bar
     let outer_chunks = Layout::default()
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1), // Top status bar
+            Constraint::Min(0),    // Content area
+            Constraint::Length(1), // Footer bar
+        ])
         .split(area);
 
     let status_bar_area = outer_chunks[0];
     let content_area = outer_chunks[1];
+    let footer_bar_area = outer_chunks[2];
 
     components::status_bar::StatusBar::new(agent_kind).render(f, status_bar_area);
+
+    components::footer_bar::FooterBar::new(
+        working_dir.to_string_lossy().to_string(),
+        git_branch.map(std::string::ToString::to_string),
+    )
+    .render(f, footer_bar_area);
 
     match mode {
         AppMode::List => {
