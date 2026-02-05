@@ -35,6 +35,17 @@ Run these commands with autofix enabled:
 - **Test Ordering:** Verify tests follow the same order as the functions they test.
 - **Dependencies:** Verify all dependencies (including dev/build) are defined in the root `Cargo.toml` and referenced via `workspace = true`.
 
+## Documentation Conventions
+- **Code Element Formatting:** Always wrap code elements in backticks (`) when referencing them in documentation, commit messages, PR descriptions, or bullet points:
+  - Enum variants: `Sessions`, `Roadmap`
+  - Struct/Type names: `RoadmapPage`, `Tab`, `AppMode`
+  - Function names: `next_tab()`, `render()`
+  - Field names: `current_tab`, `table_state`
+  - Key bindings: `Tab`, `Enter`, `Esc`
+  - File names: `model.rs`, `AGENTS.md`
+  - Configuration values: `workspace = true`
+- This improves readability and clearly distinguishes code from prose.
+
 ## Git Conventions
 - Before committing, review the recent commit history using an optimized command (e.g., `git log -n 5 --format="---%n%B"`) to ensure consistency with the established tone, phrasing, and level of detail while being token-efficient.
 - Follow the "commit title and description" style:

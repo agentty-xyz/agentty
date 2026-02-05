@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 
 use crate::model::Tab;
 use crate::ui::Component;
@@ -20,25 +20,31 @@ impl Tabs {
 impl Component for Tabs {
     fn render(&self, f: &mut Frame, area: Rect) {
         let tabs = [Tab::Sessions, Tab::Roadmap];
+        let max_width = tabs.iter().map(|t| t.title().len()).max().unwrap_or(0);
         let tab_titles: Vec<_> = tabs
             .iter()
             .map(|tab| {
                 let title = tab.title();
+                let padded = format!(" {title:<max_width$} ");
                 if *tab == self.current_tab {
                     Span::styled(
-                        format!(" {title} "),
+                        padded,
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
                     )
                 } else {
-                    Span::styled(format!(" {title} "), Style::default().fg(Color::Gray))
+                    Span::styled(padded, Style::default().fg(Color::Gray))
                 }
             })
             .collect();
 
         let line = Line::from(tab_titles);
-        let paragraph = Paragraph::new(line).block(Block::default().borders(Borders::BOTTOM));
+        let paragraph = Paragraph::new(line).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .padding(Padding::top(1)),
+        );
         f.render_widget(paragraph, area);
     }
 }

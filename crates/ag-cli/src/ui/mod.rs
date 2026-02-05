@@ -57,7 +57,7 @@ pub fn render(
         AppMode::List => {
             // Split content area for tabs and main content
             let chunks = Layout::default()
-                .constraints([Constraint::Length(2), Constraint::Min(0)])
+                .constraints([Constraint::Length(3), Constraint::Min(0)])
                 .split(content_area);
 
             let tabs_area = chunks[0];
