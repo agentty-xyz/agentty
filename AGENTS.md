@@ -55,6 +55,30 @@ Run these commands with autofix enabled:
 - Do not use conventional commit prefixes (e.g., `feat:`, `fix:`).
 - Do not add `Co-Authored-By` trailers or any AI attribution to commit messages.
 
+## Git Worktree Integration
+Agentty automatically creates isolated git worktrees for sessions when launched from within a git repository:
+
+- **Automatic Behavior:** When `agentty` is launched from a git repository, each new session automatically gets its own git worktree with a dedicated branch.
+- **Branch Naming:** Worktree branches follow the pattern `agentty/<hash>`, where `<hash>` is the 8-character session identifier (e.g., `agentty/a1b2c3d4`).
+- **Base Branch:** The worktree is based on the branch that was active when `agentty` was launched.
+- **Location:** Worktrees are created in the session folder (under `/var/tmp/.agentty/<hash>/`), separate from the main repository.
+- **Session Creation:** If worktree creation fails (e.g., git not installed, permission errors), session creation fails atomically and displays an error message.
+- **Cleanup:** When a session is deleted, its worktree is automatically removed using `git worktree remove --force`.
+- **Non-Git Directories:** Sessions in non-git directories work normally without worktrees.
+
+### Cleanup Commands
+To manually clean up all agentty branches (if needed):
+```bash
+# List all agentty branches
+git branch | grep agentty/
+
+# Delete all agentty branches
+git branch | grep agentty/ | xargs git branch -D
+
+# Prune stale worktree references
+git worktree prune
+```
+
 ## Agent Instructions
 - **MANDATORY:** After every user instruction that establishes a preference, convention, or workflow change (e.g., "run checks with autofix", "use X instead of Y", "always do Z"), immediately update the relevant `AGENTS.md` file so the instruction persists across sessions. If unsure whether something qualifies, update anyway — over-documenting is better than losing context. Both `CLAUDE.md` and `GEMINI.md` are symlinks to `AGENTS.md`, so a single update keeps all AI assistants in sync.
 - Always cover all touched code with auto tests to prevent regressions and ensure stability.

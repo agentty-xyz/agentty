@@ -231,7 +231,13 @@ fn main() -> io::Result<()> {
                             let prompt = input.clone();
                             app.mode = AppMode::List;
                             if !prompt.is_empty() {
-                                app.add_session(prompt);
+                                if let Err(e) = app.add_session(prompt) {
+                                    #[allow(clippy::print_stderr)]
+                                    {
+                                        eprintln!("Error creating session: {e}");
+                                    }
+                                    // TODO: Add proper error display in TUI
+                                }
                             }
                         }
                         KeyCode::Esc => {

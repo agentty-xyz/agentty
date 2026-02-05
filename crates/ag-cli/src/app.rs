@@ -105,7 +105,7 @@ impl App {
         self.table_state.select(Some(i));
     }
 
-    pub fn add_session(&mut self, prompt: String) {
+    pub fn add_session(&mut self, prompt: String) -> Result<(), String> {
         let mut hasher = DefaultHasher::new();
         prompt.hash(&mut hasher);
         let nanos = SystemTime::now()
@@ -122,7 +122,30 @@ impl App {
         let _ = std::fs::write(folder.join("prompt.txt"), &prompt);
         let _ = std::fs::write(folder.join("agent.txt"), self.agent_kind.to_string());
 
-        let initial_output = format!(" › {prompt}\n\n");
+        // Create git worktree if in a git repo
+        if let Some(ref branch) = self.git_branch {
+            use crate::git;
+
+            let worktree_branch = format!("agentty/{short_hash}");
+
+            // Find git repo root (may be different from working_dir if in subdirectory)
+            let Some(repo_root) = git::find_git_repo_root(&self.working_dir) else {
+                let _ = std::fs::remove_dir_all(&folder);
+                return Err("Failed to find git repository root".to_string());
+            };
+
+            // Create worktree, clean up session folder on error
+            if let Err(e) = git::create_worktree(&repo_root, &folder, &worktree_branch, branch) {
+                let _ = std::fs::remove_dir_all(&folder);
+                return Err(format!("Failed to create git worktree: {e}"));
+            }
+        }
+
+        let initial_output = if self.git_branch.is_some() {
+            format!(" › {prompt}\n\n[Git worktree: agentty/{short_hash}]\n\n")
+        } else {
+            format!(" › {prompt}\n\n")
+        };
         let _ = std::fs::write(folder.join("output.txt"), &initial_output);
 
         self.backend.setup(&folder);
@@ -151,6 +174,8 @@ impl App {
         if let Some(index) = self.sessions.iter().position(|a| a.name == name) {
             self.table_state.select(Some(index));
         }
+
+        Ok(())
     }
 
     pub fn reply(&mut self, session_index: usize, prompt: &str) {
@@ -190,6 +215,14 @@ impl App {
             return;
         }
         let session = self.sessions.remove(i);
+
+        // Remove git worktree if in a git repo (ignore errors - folder removal will
+        // clean up)
+        if self.git_branch.is_some() {
+            use crate::git;
+            let _ = git::remove_worktree(&session.folder);
+        }
+
         let _ = std::fs::remove_dir_all(&session.folder);
         if self.sessions.is_empty() {
             self.table_state.select(None);
@@ -392,8 +425,10 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("A".to_string());
-        app.add_session("B".to_string());
+        app.add_session("A".to_string())
+            .expect("failed to add session");
+        app.add_session("B".to_string())
+            .expect("failed to add session");
 
         // Act & Assert (Next)
         app.table_state.select(Some(0));
@@ -428,7 +463,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("A".to_string());
+        app.add_session("A".to_string())
+            .expect("failed to add session");
 
         // Act & Assert — next recovers from None
         app.table_state.select(None);
@@ -448,7 +484,8 @@ mod tests {
         let mut app = new_test_app(dir.path().to_path_buf());
 
         // Act
-        app.add_session("Hello".to_string());
+        app.add_session("Hello".to_string())
+            .expect("failed to add session");
 
         // Assert
         assert_eq!(app.sessions.len(), 1);
@@ -473,7 +510,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("Initial".to_string());
+        app.add_session("Initial".to_string())
+            .expect("failed to add session");
 
         // Act
         app.reply(0, "Reply");
@@ -489,7 +527,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("Test".to_string());
+        app.add_session("Test".to_string())
+            .expect("failed to add session");
 
         // Act & Assert
         assert!(app.selected_session().is_some());
@@ -503,7 +542,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("A".to_string());
+        app.add_session("A".to_string())
+            .expect("failed to add session");
 
         // Act
         app.delete_selected_session();
@@ -524,8 +564,10 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("1".to_string());
-        app.add_session("2".to_string());
+        app.add_session("1".to_string())
+            .expect("failed to add session");
+        app.add_session("2".to_string())
+            .expect("failed to add session");
 
         // Act & Assert — index out of bounds
         app.table_state.select(Some(99));
@@ -543,8 +585,10 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("1".to_string());
-        app.add_session("2".to_string());
+        app.add_session("1".to_string())
+            .expect("failed to add session");
+        app.add_session("2".to_string())
+            .expect("failed to add session");
 
         // Act & Assert — delete last item
         app.table_state.select(Some(1));
@@ -654,7 +698,8 @@ mod tests {
         );
 
         // Act — add session (start command)
-        app.add_session("SpawnInit".to_string());
+        app.add_session("SpawnInit".to_string())
+            .expect("failed to add session");
         std::thread::sleep(std::time::Duration::from_millis(300));
 
         // Assert
@@ -730,5 +775,91 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Roadmap);
         app.next_tab();
         assert_eq!(app.current_tab, Tab::Sessions);
+    }
+
+    #[test]
+    fn test_add_session_without_git() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf());
+
+        // Act
+        let result = app.add_session("Test".to_string());
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(app.sessions.len(), 1);
+        let output = app.sessions[0]
+            .output
+            .lock()
+            .expect("failed to lock output");
+        assert!(!output.contains("Git worktree"));
+    }
+
+    #[test]
+    fn test_add_session_with_git_no_actual_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mock = MockAgentBackend::new();
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            Some("main".to_string()), // Simulate git branch
+            AgentKind::Gemini,
+            Box::new(mock),
+        );
+
+        // Act
+        let result = app.add_session("Test".to_string());
+
+        // Assert - should fail because git repo doesn't actually exist
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("git repository root")
+        );
+    }
+
+    #[test]
+    fn test_add_session_cleans_up_on_error() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mock = MockAgentBackend::new();
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            Some("main".to_string()), // Simulate git branch
+            AgentKind::Gemini,
+            Box::new(mock),
+        );
+
+        // Act
+        let result = app.add_session("Test".to_string());
+
+        // Assert - session should not be created
+        assert!(result.is_err());
+        assert_eq!(app.sessions.len(), 0);
+
+        // Verify no session folder was left behind
+        let entries = std::fs::read_dir(dir.path())
+            .expect("failed to read dir")
+            .count();
+        assert_eq!(entries, 0, "Session folder should be cleaned up on error");
+    }
+
+    #[test]
+    fn test_delete_session_without_git() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf());
+        app.add_session("Test".to_string())
+            .expect("failed to add session");
+
+        // Act
+        app.delete_selected_session();
+
+        // Assert
+        assert_eq!(app.sessions.len(), 0);
     }
 }

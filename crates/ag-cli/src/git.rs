@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
@@ -9,8 +10,9 @@ pub fn detect_git_info(dir: &Path) -> Option<String> {
 }
 
 /// Walks up the directory tree to find a .git directory.
-/// Returns the directory containing .git if found, None otherwise.
-fn find_git_repo(dir: &Path) -> Option<PathBuf> {
+/// Returns the directory containing .git (the repository root) if found, None
+/// otherwise.
+pub fn find_git_repo_root(dir: &Path) -> Option<PathBuf> {
     let mut current = dir.to_path_buf();
     loop {
         let git_dir = current.join(".git");
@@ -21,6 +23,11 @@ fn find_git_repo(dir: &Path) -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// Legacy alias for `find_git_repo_root`, kept for internal use.
+fn find_git_repo(dir: &Path) -> Option<PathBuf> {
+    find_git_repo_root(dir)
 }
 
 /// Reads .git/HEAD and extracts the current branch name.
@@ -41,6 +48,90 @@ fn get_git_branch(repo_dir: &Path) -> Option<String> {
     }
 
     None
+}
+
+/// Creates a git worktree at the specified path with a new branch.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository root
+/// * `worktree_path` - Path where the worktree should be created
+/// * `branch_name` - Name of the new branch to create
+/// * `base_branch` - Name of the branch to base the new branch on
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) with detailed error message on failure
+pub fn create_worktree(
+    repo_path: &Path,
+    worktree_path: &Path,
+    branch_name: &str,
+    base_branch: &str,
+) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["worktree", "add", "-b", branch_name])
+        .arg(worktree_path)
+        .arg(base_branch)
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git worktree command failed: {}", stderr.trim()));
+    }
+
+    Ok(())
+}
+
+/// Removes a git worktree at the specified path.
+///
+/// Uses --force to remove even with uncommitted changes.
+/// Finds the main repository by reading the worktree's .git file.
+///
+/// # Arguments
+/// * `worktree_path` - Path to the worktree to remove
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) with detailed error message on failure
+pub fn remove_worktree(worktree_path: &Path) -> Result<(), String> {
+    // Read the .git file in the worktree to find the main repo
+    let git_file = worktree_path.join(".git");
+    let repo_root = if git_file.is_file() {
+        // Worktree: .git file contains "gitdir: /path/to/main/.git/worktrees/name"
+        let content =
+            fs::read_to_string(&git_file).map_err(|e| format!("Failed to read .git file: {e}"))?;
+
+        if let Some(gitdir_line) = content.lines().find(|l| l.starts_with("gitdir:")) {
+            let gitdir = gitdir_line.trim_start_matches("gitdir:").trim();
+            // Extract main repo path: /path/to/main/.git/worktrees/name -> /path/to/main
+            PathBuf::from(gitdir)
+                .parent() // Remove "worktrees/name"
+                .and_then(|p| p.parent()) // Remove ".git"
+                .ok_or_else(|| "Invalid gitdir path in .git file".to_string())?
+                .to_path_buf()
+        } else {
+            return Err("Invalid .git file format".to_string());
+        }
+    } else {
+        // Not a worktree or doesn't exist - try parent directory
+        worktree_path
+            .parent()
+            .ok_or_else(|| "Worktree path has no parent".to_string())?
+            .to_path_buf()
+    };
+
+    let output = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(worktree_path)
+        .current_dir(repo_root)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git worktree command failed: {}", stderr.trim()));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -168,5 +259,143 @@ mod tests {
 
         // Assert
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_find_git_repo_root() {
+        // Arrange
+        let temp = TempDir::new().expect("test setup failed");
+        let git_dir = temp.path().join(".git");
+        fs::create_dir(&git_dir).expect("test setup failed");
+
+        // Act
+        let result = find_git_repo_root(temp.path());
+
+        // Assert
+        assert_eq!(result, Some(temp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_create_worktree_success() {
+        // Arrange
+        let temp = TempDir::new().expect("test setup failed");
+        setup_test_git_repo(temp.path()).expect("test setup failed");
+        let worktree_path = temp.path().join("worktree");
+        let branch_name = "agentty/test123";
+        let base_branch = "main";
+
+        // Act
+        let result = create_worktree(temp.path(), &worktree_path, branch_name, base_branch);
+
+        // Assert
+        assert!(result.is_ok());
+        assert!(worktree_path.exists());
+        assert!(worktree_path.join(".git").exists());
+    }
+
+    #[test]
+    fn test_create_worktree_invalid_repo() {
+        // Arrange
+        let temp = TempDir::new().expect("test setup failed");
+        let worktree_path = temp.path().join("worktree");
+        let branch_name = "agentty/test123";
+        let base_branch = "main";
+
+        // Act
+        let result = create_worktree(temp.path(), &worktree_path, branch_name, base_branch);
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("not a git repository")
+        );
+    }
+
+    #[test]
+    fn test_create_worktree_branch_exists() {
+        // Arrange
+        let temp = TempDir::new().expect("test setup failed");
+        setup_test_git_repo(temp.path()).expect("test setup failed");
+        let worktree_path = temp.path().join("worktree");
+        let branch_name = "main"; // Branch already exists
+        let base_branch = "main";
+
+        // Act
+        let result = create_worktree(temp.path(), &worktree_path, branch_name, base_branch);
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("already exists")
+        );
+    }
+
+    #[test]
+    fn test_remove_worktree_success() {
+        // Arrange
+        let temp = TempDir::new().expect("test setup failed");
+        setup_test_git_repo(temp.path()).expect("test setup failed");
+        let worktree_path = temp.path().join("worktree");
+        let branch_name = "agentty/test123";
+        let base_branch = "main";
+        create_worktree(temp.path(), &worktree_path, branch_name, base_branch)
+            .expect("test setup failed");
+
+        // Act
+        let result = remove_worktree(&worktree_path);
+
+        // Assert
+        assert!(result.is_ok());
+        assert!(!worktree_path.exists());
+    }
+
+    #[test]
+    fn test_remove_worktree_not_exists() {
+        // Arrange
+        let temp = TempDir::new().expect("test setup failed");
+        let worktree_path = temp.path().join("nonexistent");
+
+        // Act
+        let result = remove_worktree(&worktree_path);
+
+        // Assert
+        // Should fail because worktree doesn't exist
+        assert!(result.is_err());
+    }
+
+    /// Helper function to set up a test git repository with an initial commit
+    fn setup_test_git_repo(path: &Path) -> std::io::Result<()> {
+        use std::process::Command;
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()?;
+        fs::write(path.join("README.md"), "test")?;
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()?;
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(path)
+            .output()?;
+        Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(path)
+            .output()?;
+        Ok(())
     }
 }
