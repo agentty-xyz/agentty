@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ratatui::widgets::TableState;
 
 use crate::agent::{AgentBackend, AgentKind};
+use crate::git;
 use crate::model::{AppMode, Session, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
@@ -123,8 +124,6 @@ impl App {
 
         // Create git worktree if in a git repo
         if let Some(ref branch) = self.git_branch {
-            use crate::git;
-
             let worktree_branch = format!("agentty/{hash}");
 
             // Find git repo root (may be different from working_dir if in subdirectory)
@@ -220,7 +219,6 @@ impl App {
 
         // Remove git worktree and branch if in a git repo
         if self.git_branch.is_some() {
-            use crate::git;
             let branch_name = format!("agentty/{}", session.name);
 
             // Find repo root for branch deletion

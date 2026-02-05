@@ -19,6 +19,7 @@ TUI tool to manage agents.
     - Followed by less public functions (e.g., `pub(crate)`).
     - Private functions last.
     - If a function has multiple callees, they should appear in the order they are first called within that function.
+- **Imports:** Always place imports at the top of the file. Do not use local `use` statements within functions or other blocks.
 
 ## Quality Gates
 To ensure code quality, you must pass both automated and manual gates.

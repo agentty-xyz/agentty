@@ -420,8 +420,6 @@ mod tests {
 
     /// Helper function to set up a test git repository with an initial commit
     fn setup_test_git_repo(path: &Path) -> std::io::Result<()> {
-        use std::process::Command;
-
         Command::new("git")
             .args(["init"])
             .current_dir(path)
