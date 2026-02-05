@@ -7,9 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::model::{AppMode, Session, Status};
-use crate::ui::Page;
-use crate::ui::components::render_chat_input;
+use crate::ui::components::chat_input::ChatInput;
 use crate::ui::util::{calculate_input_height, wrap_lines};
+use crate::ui::{Component, Page};
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -109,7 +109,7 @@ impl Page for SessionChatPage<'_> {
             f.render_widget(paragraph, output_area);
 
             if let AppMode::Reply { input, .. } = self.mode {
-                render_chat_input(f, " Reply ", input, bottom_area);
+                ChatInput::new(" Reply ", input).render(f, bottom_area);
             } else {
                 let help_message = Paragraph::new("q: back | r: reply | j/k: scroll")
                     .style(Style::default().fg(Color::Gray));

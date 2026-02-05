@@ -1,9 +1,9 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 
-use crate::ui::Page;
-use crate::ui::components::render_chat_input;
+use crate::ui::components::chat_input::ChatInput;
 use crate::ui::util::calculate_input_height;
+use crate::ui::{Component, Page};
 
 pub struct NewSessionPage<'a> {
     pub input: &'a str,
@@ -24,6 +24,6 @@ impl Page for NewSessionPage<'_> {
             .split(area);
 
         // Top area (chunks[0]) remains empty for "New Chat" feel
-        render_chat_input(f, " New Chat ", self.input, chunks[1]);
+        ChatInput::new(" New Chat ", self.input).render(f, chunks[1]);
     }
 }

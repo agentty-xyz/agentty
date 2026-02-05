@@ -8,8 +8,10 @@ The UI is split into separate modules to improve readability and maintainability
 
 ### Module Structure
 
-- **`mod.rs`**: The main entry point. It contains the top-level `render` function which dispatches rendering to the appropriate sub-module based on the current `AppMode`. It also defines the `Page` trait.
-- **`components.rs`**: Contains reusable UI widgets shared across different pages, such as the `render_status_bar` and `render_chat_input`.
+- **`mod.rs`**: The main entry point. It contains the top-level `render` function which dispatches rendering to the appropriate sub-module based on the current `AppMode`. It also defines the `Page` and `Component` traits.
+- **`components/`**: Directory containing reusable UI widgets shared across different pages. All components implement the `Component` trait.
+    - **`status_bar.rs`**: `StatusBar` - renders the top status bar showing app version and agent type.
+    - **`chat_input.rs`**: `ChatInput` - renders the chat input box with cursor positioning.
 - **`pages/`**: Directory containing the rendering logic for each distinct UI page.
     - **`sessions_list.rs`**: `SessionsListPage` - renders the session list (`AppMode::List`).
     - **`session_chat.rs`**: `SessionChatPage` - renders the session detail view (`AppMode::View`) and reply interface (`AppMode::Reply`).
@@ -30,8 +32,11 @@ The UI is split into separate modules to improve readability and maintainability
     - Ensure extensive unit tests in `util.rs` for any layout calculations.
 
 3.  **Components**:
-    - If a UI element is used in more than one place, extract it into `components.rs`.
-    - Keep components stateless where possible; pass all necessary data as arguments.
+    - If a UI element is used in more than one place, create a new module in `components/`.
+    - Define a struct that holds necessary rendering data.
+    - Implement the `Component` trait with a `render(&self, f: &mut Frame, area: Rect)` method.
+    - Add a `new()` constructor to initialize the struct.
+    - Usage pattern: `ComponentName::new(...).render(f, area)`
 
 4.  **Testing**:
     - **Unit Tests**: Focus on `util.rs`. Test layout logic, string manipulation, and input height calculations heavily here.

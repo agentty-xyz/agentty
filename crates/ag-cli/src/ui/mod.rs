@@ -14,6 +14,11 @@ pub trait Page {
     fn render(&mut self, f: &mut Frame, area: Rect);
 }
 
+/// A trait for UI components that enforces a standard rendering interface.
+pub trait Component {
+    fn render(&self, f: &mut Frame, area: Rect);
+}
+
 pub fn render(
     f: &mut Frame,
     mode: &AppMode,
@@ -31,7 +36,7 @@ pub fn render(
     let status_bar_area = outer_chunks[0];
     let content_area = outer_chunks[1];
 
-    components::render_status_bar(f, status_bar_area, agent_kind);
+    components::status_bar::StatusBar::new(agent_kind).render(f, status_bar_area);
 
     match mode {
         AppMode::List => {
