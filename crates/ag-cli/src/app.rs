@@ -277,15 +277,36 @@ impl App {
         running: Arc<AtomicBool>,
     ) {
         std::thread::spawn(move || {
-            let mut file = std::fs::OpenOptions::new()
+            let file = std::fs::OpenOptions::new()
                 .append(true)
                 .open(folder.join("output.txt"))
                 .ok();
+            let file = Arc::new(Mutex::new(file));
 
             match cmd.spawn() {
                 Ok(mut child) => {
-                    if let Some(stdout) = child.stdout.take() {
-                        Self::process_output(stdout, &mut file, &output);
+                    let stdout = child.stdout.take();
+                    let stderr = child.stderr.take();
+
+                    let mut handles = Vec::new();
+
+                    if let Some(stdout) = stdout {
+                        let out_clone = Arc::clone(&output);
+                        let file_clone = Arc::clone(&file);
+                        handles.push(std::thread::spawn(move || {
+                            Self::process_output(stdout, &file_clone, &out_clone);
+                        }));
+                    }
+                    if let Some(stderr) = stderr {
+                        let out_clone = Arc::clone(&output);
+                        let file_clone = Arc::clone(&file);
+                        handles.push(std::thread::spawn(move || {
+                            Self::process_output(stderr, &file_clone, &out_clone);
+                        }));
+                    }
+
+                    for handle in handles {
+                        let _ = handle.join();
                     }
                     let _ = child.wait();
                 }
@@ -301,13 +322,15 @@ impl App {
 
     fn process_output<R: std::io::Read>(
         source: R,
-        file: &mut Option<std::fs::File>,
+        file: &Arc<Mutex<Option<std::fs::File>>>,
         output: &Arc<Mutex<String>>,
     ) {
         let reader = BufReader::new(source);
         for line in reader.lines().map_while(Result::ok) {
-            if let Some(f) = file {
-                let _ = writeln!(f, "{line}");
+            if let Ok(mut f_guard) = file.lock() {
+                if let Some(f) = f_guard.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                }
             }
             if let Ok(mut buf) = output.lock() {
                 buf.push_str(&line);
@@ -745,11 +768,11 @@ mod tests {
     fn test_process_output_sync() {
         // Arrange
         let output = Arc::new(Mutex::new(String::new()));
-        let mut file = None;
+        let file = Arc::new(Mutex::new(None));
         let source = "Line 1\nLine 2".as_bytes();
 
         // Act
-        App::process_output(source, &mut file, &output);
+        App::process_output(source, &file, &output);
 
         // Assert
         let out = output.lock().expect("failed to lock output").clone();
@@ -759,11 +782,12 @@ mod tests {
         // Arrange — with file
         let dir = tempdir().expect("failed to create temp dir");
         let file_path = dir.path().join("out.txt");
-        let mut file = Some(std::fs::File::create(&file_path).expect("failed to create file"));
+        let f = std::fs::File::create(&file_path).expect("failed to create file");
+        let file = Arc::new(Mutex::new(Some(f)));
         let source_file = "File Line".as_bytes();
 
         // Act
-        App::process_output(source_file, &mut file, &output);
+        App::process_output(source_file, &file, &output);
 
         // Assert
         drop(file);

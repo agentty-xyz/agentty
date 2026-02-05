@@ -43,9 +43,10 @@ impl AgentBackend for GeminiBackend {
             .arg(prompt)
             .arg("--model")
             .arg("gemini-3-flash-preview")
+            .arg("--yolo")
             .current_dir(folder)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         cmd
     }
 }
@@ -61,9 +62,11 @@ impl AgentBackend for ClaudeBackend {
         let mut cmd = Command::new("claude");
         cmd.arg("-p")
             .arg(prompt)
+            .arg("--permission-mode")
+            .arg("bypassPermissions")
             .current_dir(folder)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         cmd
     }
 
@@ -72,9 +75,11 @@ impl AgentBackend for ClaudeBackend {
         cmd.arg("-c")
             .arg("-p")
             .arg(prompt)
+            .arg("--permission-mode")
+            .arg("bypassPermissions")
             .current_dir(folder)
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         cmd
     }
 }
@@ -178,6 +183,7 @@ mod tests {
         assert!(debug.contains("--prompt"));
         assert!(debug.contains("hello"));
         assert!(debug.contains("gemini-3-flash-preview"));
+        assert!(debug.contains("--yolo"));
         assert!(!debug.contains("--resume"));
     }
 
@@ -213,6 +219,8 @@ mod tests {
         assert!(debug.contains("claude"));
         assert!(debug.contains("-p"));
         assert!(debug.contains("hello"));
+        assert!(debug.contains("--permission-mode"));
+        assert!(debug.contains("bypassPermissions"));
         assert!(!debug.contains("-c"));
     }
 
@@ -231,6 +239,8 @@ mod tests {
         assert!(debug.contains("-c"));
         assert!(debug.contains("-p"));
         assert!(debug.contains("follow-up"));
+        assert!(debug.contains("--permission-mode"));
+        assert!(debug.contains("bypassPermissions"));
     }
 
     #[test]
