@@ -13,7 +13,7 @@ use ratatui::widgets::TableState;
 use crate::agent::{AgentBackend, AgentKind};
 use crate::model::{AppMode, Session};
 
-pub const DEFAULT_BASE_PATH: &str = "/var/tmp/.agentty";
+pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
 
 pub struct App {
     pub sessions: Vec<Session>,

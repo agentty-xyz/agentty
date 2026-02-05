@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use ag_cli::agent::AgentKind;
-use ag_cli::app::{App, DEFAULT_BASE_PATH};
+use ag_cli::app::{AGENTTY_WORKSPACE, App};
 use ag_cli::model::AppMode;
 use ag_cli::ui;
 use crossterm::event::{self, Event, KeyCode};
@@ -16,7 +16,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 fn main() -> io::Result<()> {
-    let base_path = PathBuf::from(DEFAULT_BASE_PATH);
+    let base_path = PathBuf::from(AGENTTY_WORKSPACE);
     let lock_path = base_path.join("lock");
     let _lock = match ag_cli::lock::acquire_lock(&lock_path) {
         Ok(file) => file,
