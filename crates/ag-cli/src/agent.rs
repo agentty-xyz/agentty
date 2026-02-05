@@ -26,7 +26,10 @@ impl AgentBackend for GeminiBackend {
   "context.loadMemoryFromIncludeDirectories": false,
   "context.fileFiltering.respectGitIgnore": false,
   "context.discoveryMaxDirs": 1,
-  "context.fileFiltering.enableRecursiveFileSearch": false
+  "context.fileFiltering.enableRecursiveFileSearch": false,
+  "skills.enabled": false,
+  "hooksConfig.enabled": false,
+  "general.enablePromptCompletion": false
 }"#;
         let _ = std::fs::write(gemini_dir.join("settings.json"), settings);
     }
