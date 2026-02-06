@@ -97,6 +97,7 @@ git worktree prune
 ## Directory Index
 - [.claude/](.claude/) - Claude AI specific settings.
 - [.git-town.toml](.git-town.toml) - Git Town configuration.
+- [.github/](.github/) - GitHub configuration files.
 - [.gitignore](.gitignore) - Git ignore patterns.
 - [.pre-commit-config.yaml](.pre-commit-config.yaml) - Pre-commit hooks configuration.
 - [.rustfmt.toml](.rustfmt.toml) - Rustfmt configuration.
