@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use ag_cli::agent::AgentKind;
-use ag_cli::app::{AGENTTY_WORKSPACE, App};
+use ag_cli::app::{AGENTTY_WORKSPACE, App, SESSION_DATA_DIR};
 use ag_cli::model::AppMode;
 use ag_cli::ui;
 use crossterm::event::{self, Event, KeyCode};
@@ -204,6 +204,29 @@ fn main() -> io::Result<()> {
                                     };
                                 }
                             }
+                            KeyCode::Char('c') => {
+                                if let Some(session) = app.sessions.get(session_idx) {
+                                    let result_message = match app.commit_session(session_idx) {
+                                        Ok(msg) => format!("\n[Commit] {msg}\n"),
+                                        Err(err) => format!("\n[Commit Error] {err}\n"),
+                                    };
+                                    if let Ok(mut buf) = session.output.lock() {
+                                        buf.push_str(&result_message);
+                                    }
+                                    let _ = std::fs::OpenOptions::new()
+                                        .append(true)
+                                        .open(
+                                            session
+                                                .folder
+                                                .join(SESSION_DATA_DIR)
+                                                .join("output.txt"),
+                                        )
+                                        .and_then(|mut f| {
+                                            use std::io::Write;
+                                            write!(f, "{result_message}")
+                                        });
+                                }
+                            }
                             KeyCode::Char('m') => {
                                 if let Some(session) = app.sessions.get(session_idx) {
                                     let result_message = match app.merge_session(session_idx) {
@@ -215,7 +238,12 @@ fn main() -> io::Result<()> {
                                     }
                                     let _ = std::fs::OpenOptions::new()
                                         .append(true)
-                                        .open(session.folder.join("output.txt"))
+                                        .open(
+                                            session
+                                                .folder
+                                                .join(SESSION_DATA_DIR)
+                                                .join("output.txt"),
+                                        )
                                         .and_then(|mut f| {
                                             use std::io::Write;
                                             write!(f, "{result_message}")

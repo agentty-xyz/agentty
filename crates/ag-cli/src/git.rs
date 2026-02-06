@@ -206,6 +206,47 @@ pub fn squash_merge(
     Ok(())
 }
 
+/// Stages all changes and commits them with the given message.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `commit_message` - Message for the commit
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) with detailed error message on failure
+pub fn commit_all(repo_path: &Path, commit_message: &str) -> Result<(), String> {
+    // Stage all changes
+    let output = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to stage changes: {}", stderr.trim()));
+    }
+
+    // Commit (skip pre-commit hooks)
+    let output = Command::new("git")
+        .args(["commit", "--no-verify", "-m", commit_message])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Check if there's nothing to commit
+        if stdout.contains("nothing to commit") || stderr.contains("nothing to commit") {
+            return Err("Nothing to commit: no changes detected".to_string());
+        }
+        return Err(format!("Failed to commit: {}", stderr.trim()));
+    }
+
+    Ok(())
+}
+
 /// Deletes a git branch.
 ///
 /// Uses -D to force deletion even if not merged.
@@ -593,6 +634,49 @@ mod tests {
             result
                 .expect_err("should be error")
                 .contains("Failed to checkout")
+        );
+    }
+
+    #[test]
+    fn test_commit_all_success() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+
+        // Create a new file to commit
+        fs::write(dir.path().join("new_file.txt"), "new content").expect("test setup failed");
+
+        // Act
+        let result = commit_all(dir.path(), "Test commit message");
+
+        // Assert
+        assert!(result.is_ok());
+
+        // Verify the commit was made
+        let output = Command::new("git")
+            .args(["log", "--oneline", "-1"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test execution failed");
+        let log = String::from_utf8_lossy(&output.stdout);
+        assert!(log.contains("Test commit message"));
+    }
+
+    #[test]
+    fn test_commit_all_no_changes() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+
+        // Act - no changes to commit
+        let result = commit_all(dir.path(), "Empty commit");
+
+        // Assert
+        assert!(result.is_err());
+        let error = result.expect_err("should be error");
+        assert!(
+            error.contains("Nothing to commit"),
+            "Expected 'Nothing to commit', got: {error}"
         );
     }
 

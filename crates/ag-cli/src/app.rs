@@ -15,6 +15,7 @@ use crate::git;
 use crate::model::{AppMode, Session, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
+pub const SESSION_DATA_DIR: &str = ".agentty";
 
 pub struct App {
     pub sessions: Vec<Session>,
@@ -139,10 +140,14 @@ impl App {
             let _ = std::fs::create_dir_all(&folder);
         }
 
-        let _ = std::fs::write(folder.join("prompt.txt"), &prompt);
-        let _ = std::fs::write(folder.join("agent.txt"), self.agent_kind.to_string());
+        // Create .agentty subdirectory for session metadata
+        let data_dir = folder.join(SESSION_DATA_DIR);
+        let _ = std::fs::create_dir_all(&data_dir);
+
+        let _ = std::fs::write(data_dir.join("prompt.txt"), &prompt);
+        let _ = std::fs::write(data_dir.join("agent.txt"), self.agent_kind.to_string());
         if let Some(ref branch) = self.git_branch {
-            let _ = std::fs::write(folder.join("base_branch.txt"), branch);
+            let _ = std::fs::write(data_dir.join("base_branch.txt"), branch);
         }
 
         let initial_output = if self.git_branch.is_some() {
@@ -150,7 +155,7 @@ impl App {
         } else {
             format!(" › {prompt}\n\n")
         };
-        let _ = std::fs::write(folder.join("output.txt"), &initial_output);
+        let _ = std::fs::write(data_dir.join("output.txt"), &initial_output);
 
         self.backend.setup(&folder);
 
@@ -197,7 +202,7 @@ impl App {
         }
         let _ = std::fs::OpenOptions::new()
             .append(true)
-            .open(folder.join("output.txt"))
+            .open(folder.join(SESSION_DATA_DIR).join("output.txt"))
             .and_then(|mut f| write!(f, "{reply_line}"));
 
         running.store(true, Ordering::Relaxed);
@@ -242,6 +247,25 @@ impl App {
         }
     }
 
+    pub fn commit_session(&self, session_index: usize) -> Result<String, String> {
+        let session = self
+            .sessions
+            .get(session_index)
+            .ok_or_else(|| "Session not found".to_string())?;
+
+        // Verify this session has a git worktree
+        let data_dir = session.folder.join(SESSION_DATA_DIR);
+        let base_branch_path = data_dir.join("base_branch.txt");
+        if !base_branch_path.exists() {
+            return Err("No git worktree for this session".to_string());
+        }
+
+        // Commit all changes in the worktree
+        git::commit_all(&session.folder, "TEST COMMIT FROM AGENT")?;
+
+        Ok("Successfully committed changes".to_string())
+    }
+
     pub fn merge_session(&self, session_index: usize) -> Result<String, String> {
         let session = self
             .sessions
@@ -249,7 +273,8 @@ impl App {
             .ok_or_else(|| "Session not found".to_string())?;
 
         // Read base branch from session folder
-        let base_branch_path = session.folder.join("base_branch.txt");
+        let data_dir = session.folder.join(SESSION_DATA_DIR);
+        let base_branch_path = data_dir.join("base_branch.txt");
         let base_branch = std::fs::read_to_string(&base_branch_path)
             .map_err(|_| "No git worktree for this session".to_string())?
             .trim()
@@ -284,10 +309,11 @@ impl App {
                 if !folder.is_dir() {
                     return None;
                 }
-                let prompt = std::fs::read_to_string(folder.join("prompt.txt")).ok()?;
+                let data_dir = folder.join(SESSION_DATA_DIR);
+                let prompt = std::fs::read_to_string(data_dir.join("prompt.txt")).ok()?;
                 let output_text =
-                    std::fs::read_to_string(folder.join("output.txt")).unwrap_or_default();
-                let agent = std::fs::read_to_string(folder.join("agent.txt"))
+                    std::fs::read_to_string(data_dir.join("output.txt")).unwrap_or_default();
+                let agent = std::fs::read_to_string(data_dir.join("agent.txt"))
                     .map(|s| s.trim().to_string())
                     .unwrap_or_else(|_| "unknown".to_string());
                 Some(Session {
@@ -313,7 +339,7 @@ impl App {
         std::thread::spawn(move || {
             let file = std::fs::OpenOptions::new()
                 .append(true)
-                .open(folder.join("output.txt"))
+                .open(folder.join(SESSION_DATA_DIR).join("output.txt"))
                 .ok();
             let file = Arc::new(Mutex::new(file));
 
@@ -561,11 +587,12 @@ mod tests {
 
         // Check filesystem
         let session_dir = &app.sessions[0].folder;
+        let data_dir = session_dir.join(SESSION_DATA_DIR);
         assert!(session_dir.exists());
-        assert!(session_dir.join("prompt.txt").exists());
-        assert!(session_dir.join("output.txt").exists());
+        assert!(data_dir.join("prompt.txt").exists());
+        assert!(data_dir.join("output.txt").exists());
         assert_eq!(
-            std::fs::read_to_string(session_dir.join("agent.txt")).expect("agent.txt"),
+            std::fs::read_to_string(data_dir.join("agent.txt")).expect("agent.txt"),
             "gemini"
         );
     }
@@ -672,10 +699,12 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let session_dir = dir.path().join("12345678");
+        let data_dir = session_dir.join(SESSION_DATA_DIR);
         std::fs::create_dir(&session_dir).expect("failed to create session dir");
-        std::fs::write(session_dir.join("prompt.txt"), "Existing").expect("failed to write prompt");
-        std::fs::write(session_dir.join("output.txt"), "Output").expect("failed to write output");
-        std::fs::write(session_dir.join("agent.txt"), "claude").expect("failed to write agent");
+        std::fs::create_dir(&data_dir).expect("failed to create data dir");
+        std::fs::write(data_dir.join("prompt.txt"), "Existing").expect("failed to write prompt");
+        std::fs::write(data_dir.join("output.txt"), "Output").expect("failed to write output");
+        std::fs::write(data_dir.join("agent.txt"), "claude").expect("failed to write agent");
 
         // Add some garbage files to test filter logic
         std::fs::write(dir.path().join("ignored_file.txt"), "")
@@ -711,8 +740,10 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let session_dir = dir.path().join("noagent01");
+        let data_dir = session_dir.join(SESSION_DATA_DIR);
         std::fs::create_dir(&session_dir).expect("failed to create session dir");
-        std::fs::write(session_dir.join("prompt.txt"), "Test").expect("failed to write prompt");
+        std::fs::create_dir(&data_dir).expect("failed to create data dir");
+        std::fs::write(data_dir.join("prompt.txt"), "Test").expect("failed to write prompt");
 
         // Act
         let app = new_test_app(dir.path().to_path_buf());
@@ -927,6 +958,44 @@ mod tests {
 
         // Assert
         assert_eq!(app.sessions.len(), 0);
+    }
+
+    #[test]
+    fn test_commit_session_no_git() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf());
+        app.add_session("Test".to_string())
+            .expect("failed to add session");
+
+        // Act
+        let result = app.commit_session(0);
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("No git worktree")
+        );
+    }
+
+    #[test]
+    fn test_commit_session_invalid_index() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app(dir.path().to_path_buf());
+
+        // Act
+        let result = app.commit_session(99);
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("Session not found")
+        );
     }
 
     #[test]
