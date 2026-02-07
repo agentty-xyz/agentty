@@ -4,9 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::icon::Icon;
 use crate::ui::Component;
-
-const GIT_BRANCH_INDICATOR: char = '\u{25cf}'; // ●
 
 pub struct FooterBar {
     git_branch: Option<String>,
@@ -54,15 +53,15 @@ impl Component for FooterBar {
 
             let status_text = if let Some((ahead, behind)) = self.git_status {
                 if ahead == 0 && behind == 0 {
-                    "✓ ".to_string()
+                    format!("{} ", Icon::Check)
                 } else {
-                    format!("↓{behind} ↑{ahead} ")
+                    format!("{}{behind} {}{ahead} ", Icon::ArrowDown, Icon::ArrowUp)
                 }
             } else {
                 String::new()
             };
 
-            let branch_text = format!("{status_text}{GIT_BRANCH_INDICATOR} {branch}");
+            let branch_text = format!("{status_text}{} {branch}", Icon::GitBranch);
             let branch_width = branch_text.len();
             let total_width = area.width as usize;
 

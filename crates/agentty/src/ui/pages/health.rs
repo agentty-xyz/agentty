@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -8,9 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::health::{HealthEntry, HealthStatus};
+use crate::icon::Icon;
 use crate::ui::Page;
-
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub struct HealthPage<'a> {
     health_checks: &'a Arc<Mutex<Vec<HealthEntry>>>,
@@ -39,22 +37,16 @@ impl Page for HealthPage<'_> {
             .map(|lock| lock.clone())
             .unwrap_or_default();
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let frame_idx = (now / 100) as usize % SPINNER_FRAMES.len();
-
         let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(""));
 
         for entry in &entries {
             let (icon, icon_color) = match entry.status {
-                HealthStatus::Pending => ("·", Color::DarkGray),
-                HealthStatus::Running => (SPINNER_FRAMES[frame_idx], Color::Cyan),
-                HealthStatus::Pass => ("✓", Color::Green),
-                HealthStatus::Warn => ("!", Color::Yellow),
-                HealthStatus::Fail => ("✗", Color::Red),
+                HealthStatus::Pending => (Icon::Pending, Color::DarkGray),
+                HealthStatus::Running => (Icon::current_spinner(), Color::Cyan),
+                HealthStatus::Pass => (Icon::Check, Color::Green),
+                HealthStatus::Warn => (Icon::Warn, Color::Yellow),
+                HealthStatus::Fail => (Icon::Cross, Color::Red),
             };
 
             let label = format!("{:<18}", entry.kind.label());
@@ -66,7 +58,7 @@ impl Page for HealthPage<'_> {
 
             lines.push(Line::from(vec![
                 Span::raw("   "),
-                Span::styled(icon, Style::default().fg(icon_color)),
+                Span::styled(icon.as_str(), Style::default().fg(icon_color)),
                 Span::raw("  "),
                 Span::styled(label, Style::default().fg(Color::White)),
                 Span::styled(message, Style::default().fg(Color::Gray)),

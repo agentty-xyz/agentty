@@ -1,17 +1,14 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::icon::Icon;
 use crate::model::{AppMode, Session, Status};
 use crate::ui::components::chat_input::ChatInput;
 use crate::ui::util::{calculate_input_height, wrap_lines};
 use crate::ui::{Component, Page};
-
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub struct SessionChatPage<'a> {
     pub sessions: &'a [Session],
@@ -70,13 +67,6 @@ impl Page for SessionChatPage<'_> {
             let mut lines = wrap_lines(&output_text, inner_width);
 
             if status == Status::InProgress {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis();
-                let frame_idx = (now / 100) as usize % SPINNER_FRAMES.len();
-                let spinner = SPINNER_FRAMES[frame_idx];
-
                 if let Some(last) = lines.last() {
                     if last.width() == 0 {
                         lines.pop();
@@ -84,7 +74,7 @@ impl Page for SessionChatPage<'_> {
                 }
 
                 lines.push(Line::from(vec![Span::styled(
-                    format!("{spinner} Thinking..."),
+                    format!("{} Thinking...", Icon::current_spinner()),
                     Style::default().fg(Color::Yellow),
                 )]));
             }

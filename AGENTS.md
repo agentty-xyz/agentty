@@ -22,6 +22,7 @@ TUI tool to manage agents.
     - Followed by less public functions (e.g., `pub(crate)`).
     - Private functions last.
     - If a function has multiple callees, they should appear in the order they are first called within that function.
+- **File Naming:** Use **singular** names for Rust source files (e.g., `model.rs`, `icon.rs`, `agent.rs`). Do not use plural forms.
 - **Imports:** Always place imports at the top of the file. Do not use local `use` statements within functions or other blocks.
 - **Struct Fields:** Order fields in structs as follows:
     - Public fields first.

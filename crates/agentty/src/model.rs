@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
 
+use crate::icon::Icon;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Sessions,
@@ -118,10 +120,10 @@ impl Tab {
 }
 
 impl Status {
-    pub fn icon(self) -> &'static str {
+    pub fn icon(self) -> Icon {
         match self {
-            Status::InProgress => "⏳",
-            Status::Done => "✅",
+            Status::InProgress => Icon::current_spinner(),
+            Status::Done => Icon::Check,
         }
     }
 
@@ -164,8 +166,8 @@ mod tests {
     #[test]
     fn test_status_icon() {
         // Arrange & Act & Assert
-        assert_eq!(Status::InProgress.icon(), "⏳");
-        assert_eq!(Status::Done.icon(), "✅");
+        assert!(matches!(Status::InProgress.icon(), Icon::Spinner(_)));
+        assert_eq!(Status::Done.icon(), Icon::Check);
     }
 
     #[test]

@@ -7,6 +7,7 @@
 - [db.rs](db.rs) - `Database` struct wrapping SQLx for session metadata persistence.
 - [git.rs](git.rs) - Git integration and worktree management.
 - [health.rs](health.rs) - Health check domain logic.
+- [icon.rs](icon.rs) - Centralized `Icon` enum for consistent Unicode symbols.
 - [lib.rs](lib.rs) - Library entry point, exports modules.
 - [lock.rs](lock.rs) - Single-instance session lock using POSIX `flock`.
 - [main.rs](main.rs) - Binary entry point, uses the library.
