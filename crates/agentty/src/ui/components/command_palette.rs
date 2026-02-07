@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::agent::AgentKind;
-use crate::model::{PaletteCommand, PaletteFocus};
+use crate::model::{PaletteCommand, PaletteFocus, Project};
 use crate::ui::Component;
 
 pub struct CommandPaletteInput<'a> {
@@ -92,15 +92,24 @@ impl Component for CommandPaletteInput<'_> {
     }
 }
 
-pub struct CommandOptionList {
+pub struct CommandOptionList<'a> {
+    active_project_id: i64,
     command: PaletteCommand,
+    projects: &'a [Project],
     selected_index: usize,
 }
 
-impl CommandOptionList {
-    pub fn new(command: PaletteCommand, selected_index: usize) -> Self {
+impl<'a> CommandOptionList<'a> {
+    pub fn new(
+        command: PaletteCommand,
+        selected_index: usize,
+        projects: &'a [Project],
+        active_project_id: i64,
+    ) -> Self {
         Self {
+            active_project_id,
             command,
+            projects,
             selected_index,
         }
     }
@@ -112,11 +121,24 @@ impl CommandOptionList {
                 .map(std::string::ToString::to_string)
                 .collect(),
             PaletteCommand::Health => Vec::new(),
+            PaletteCommand::Projects => self
+                .projects
+                .iter()
+                .map(|project| {
+                    let branch = project.git_branch.as_deref().unwrap_or("no branch");
+                    let marker = if project.id == self.active_project_id {
+                        "* "
+                    } else {
+                        ""
+                    };
+                    format!("{marker}{} ({branch})", project.path.display())
+                })
+                .collect(),
         }
     }
 }
 
-impl Component for CommandOptionList {
+impl Component for CommandOptionList<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let options = self.options();
         let dropdown_height = u16::try_from(options.len()).unwrap_or(0) + 2; // +2 for borders
@@ -138,7 +160,7 @@ impl Component for CommandOptionList {
             .enumerate()
             .map(|(index, option)| {
                 let is_selected = index == self.selected_index;
-                let prefix = if is_selected { "/" } else { " " };
+                let prefix = if is_selected { ">" } else { " " };
                 let style = if is_selected {
                     Style::default()
                         .fg(Color::Cyan)

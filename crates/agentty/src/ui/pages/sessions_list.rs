@@ -76,7 +76,10 @@ impl Page for SessionsListPage<'_> {
             let rows = self.sessions.iter().map(|session| {
                 let status = session.status();
                 let cells = vec![
-                    Cell::from(format!("{} [{}]", session.name, session.agent)),
+                    Cell::from(format!(
+                        "{} [{}][{}]",
+                        session.name, session.project_name, session.agent
+                    )),
                     Cell::from(format!("{}", status.icon()))
                         .style(Style::default().fg(status.color())),
                 ];

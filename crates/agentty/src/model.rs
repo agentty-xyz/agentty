@@ -8,6 +8,12 @@ use crate::icon::Icon;
 
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
+pub struct Project {
+    pub git_branch: Option<String>,
+    pub id: i64,
+    pub path: PathBuf,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Sessions,
@@ -85,15 +91,21 @@ pub enum PaletteFocus {
 pub enum PaletteCommand {
     Agents,
     Health,
+    Projects,
 }
 
 impl PaletteCommand {
-    pub const ALL: &[PaletteCommand] = &[PaletteCommand::Agents, PaletteCommand::Health];
+    pub const ALL: &[PaletteCommand] = &[
+        PaletteCommand::Agents,
+        PaletteCommand::Health,
+        PaletteCommand::Projects,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             PaletteCommand::Agents => "agents",
             PaletteCommand::Health => "health",
+            PaletteCommand::Projects => "projects",
         }
     }
 
@@ -114,6 +126,7 @@ pub struct Session {
     pub folder: PathBuf,
     pub name: String,
     pub output: Arc<Mutex<String>>,
+    pub project_name: String,
     pub prompt: String,
     pub status: Arc<Mutex<Status>>,
 }
@@ -187,6 +200,7 @@ mod tests {
             folder: PathBuf::new(),
             name: "test".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            project_name: String::new(),
             prompt: "prompt".to_string(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -224,6 +238,7 @@ mod tests {
             folder: dir.path().to_path_buf(),
             name: "test".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            project_name: String::new(),
             prompt: "prompt".to_string(),
             status: Arc::new(Mutex::new(Status::Done)),
         };
@@ -263,14 +278,16 @@ mod tests {
         // Arrange & Act & Assert
         assert_eq!(PaletteCommand::Agents.label(), "agents");
         assert_eq!(PaletteCommand::Health.label(), "health");
+        assert_eq!(PaletteCommand::Projects.label(), "projects");
     }
 
     #[test]
     fn test_palette_command_all() {
         // Arrange & Act & Assert
-        assert_eq!(PaletteCommand::ALL.len(), 2);
+        assert_eq!(PaletteCommand::ALL.len(), 3);
         assert_eq!(PaletteCommand::ALL[0], PaletteCommand::Agents);
         assert_eq!(PaletteCommand::ALL[1], PaletteCommand::Health);
+        assert_eq!(PaletteCommand::ALL[2], PaletteCommand::Projects);
     }
 
     #[test]
@@ -300,6 +317,16 @@ mod tests {
 
         // Assert
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_palette_command_filter_projects() {
+        // Arrange & Act
+        let results = PaletteCommand::filter("proj");
+
+        // Assert
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], PaletteCommand::Projects);
     }
 
     #[test]

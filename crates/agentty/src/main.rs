@@ -66,6 +66,7 @@ async fn main() -> io::Result<()> {
         let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
         let current_git_status = app.git_status_info();
         let health_checks = app.health_checks().clone();
+        let current_active_project_id = app.active_project_id();
 
         terminal.draw(|f| {
             ui::render(
@@ -79,6 +80,8 @@ async fn main() -> io::Result<()> {
                 current_git_branch.as_deref(),
                 current_git_status,
                 &health_checks,
+                &app.projects,
+                current_active_project_id,
             );
         })?;
 
@@ -402,15 +405,15 @@ async fn main() -> io::Result<()> {
                                 let filtered = PaletteCommand::filter(input);
                                 if let Some(&command) = filtered.get(*selected_index) {
                                     match command {
-                                        PaletteCommand::Health => {
-                                            app.start_health_checks();
-                                            app.mode = AppMode::Health;
-                                        }
-                                        PaletteCommand::Agents => {
+                                        PaletteCommand::Agents | PaletteCommand::Projects => {
                                             app.mode = AppMode::CommandOption {
                                                 command,
                                                 selected_index: 0,
                                             };
+                                        }
+                                        PaletteCommand::Health => {
+                                            app.start_health_checks();
+                                            app.mode = AppMode::Health;
                                         }
                                     }
                                 }
@@ -438,6 +441,7 @@ async fn main() -> io::Result<()> {
                             let option_count = match command {
                                 PaletteCommand::Agents => AgentKind::ALL.len(),
                                 PaletteCommand::Health => 0,
+                                PaletteCommand::Projects => app.projects.len(),
                             };
                             if option_count > 0 {
                                 *selected_index = (*selected_index + 1).min(option_count - 1);
@@ -454,6 +458,12 @@ async fn main() -> io::Result<()> {
                                     }
                                 }
                                 PaletteCommand::Health => {}
+                                PaletteCommand::Projects => {
+                                    if let Some(project) = app.projects.get(*selected_index) {
+                                        let project_id = project.id;
+                                        let _ = app.switch_project(project_id).await;
+                                    }
+                                }
                             }
                             app.mode = AppMode::List;
                         }

@@ -10,7 +10,7 @@ use ratatui::widgets::TableState;
 
 use crate::agent::AgentKind;
 use crate::health::HealthEntry;
-use crate::model::{AppMode, Session, Tab};
+use crate::model::{AppMode, Project, Session, Tab};
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -34,6 +34,8 @@ pub fn render(
     git_branch: Option<&str>,
     git_status: Option<(u32, u32)>,
     health_checks: &Arc<Mutex<Vec<HealthEntry>>>,
+    projects: &[Project],
+    active_project_id: i64,
 ) {
     let area = f.area();
 
@@ -113,8 +115,13 @@ pub fn render(
             render_list_background(f, content_area, sessions, table_state, current_tab);
 
             // Overlay option list at the bottom
-            components::command_palette::CommandOptionList::new(*command, *selected_index)
-                .render(f, content_area);
+            components::command_palette::CommandOptionList::new(
+                *command,
+                *selected_index,
+                projects,
+                active_project_id,
+            )
+            .render(f, content_area);
         }
         AppMode::Health => {
             pages::health::HealthPage::new(health_checks).render(f, content_area);

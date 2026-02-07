@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,21 +16,24 @@ use crate::agent::{AgentBackend, AgentKind};
 use crate::db::Database;
 use crate::git;
 use crate::health::{self, HealthEntry};
-use crate::model::{AppMode, SESSION_DATA_DIR, Session, Status, Tab};
+use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, Status, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
 
 pub struct App {
     pub current_tab: Tab,
     pub mode: AppMode,
+    pub projects: Vec<Project>,
     pub sessions: Vec<Session>,
     pub table_state: TableState,
+    active_project_id: i64,
     agent_kind: AgentKind,
     backend: Box<dyn AgentBackend>,
     base_path: PathBuf,
     db: Database,
     git_branch: Option<String>,
     git_status: Arc<Mutex<Option<(u32, u32)>>>,
+    git_status_cancel: Arc<AtomicBool>,
     health_checks: Arc<Mutex<Vec<HealthEntry>>>,
     working_dir: PathBuf,
 }
@@ -42,8 +47,19 @@ impl App {
         backend: Box<dyn AgentBackend>,
         db: Database,
     ) -> Self {
+        let active_project_id = db
+            .upsert_project(&working_dir.to_string_lossy(), git_branch.as_deref())
+            .await
+            .unwrap_or(0);
+
+        let _ = db.backfill_sessions_project(active_project_id).await;
+
+        Self::discover_sibling_projects(&working_dir, &db).await;
+
+        let projects = Self::load_projects_from_db(&db).await;
+
         let mut table_state = TableState::default();
-        let sessions = Self::load_sessions(&base_path, &db).await;
+        let sessions = Self::load_sessions(&base_path, &db, &projects).await;
         if sessions.is_empty() {
             table_state.select(None);
         } else {
@@ -51,25 +67,14 @@ impl App {
         }
 
         let git_status = Arc::new(Mutex::new(None));
+        let git_status_cancel = Arc::new(AtomicBool::new(false));
 
         if git_branch.is_some() {
-            let status_clone = Arc::clone(&git_status);
-            let dir_clone = working_dir.clone();
-
-            tokio::spawn(async move {
-                let repo_root = git::find_git_repo_root(&dir_clone).unwrap_or(dir_clone);
-
-                loop {
-                    let _ = git::fetch_remote(&repo_root);
-
-                    let status = git::get_ahead_behind(&repo_root).ok();
-                    if let Ok(mut lock) = status_clone.lock() {
-                        *lock = status;
-                    }
-
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                }
-            });
+            Self::spawn_git_status_task(
+                &working_dir,
+                Arc::clone(&git_status),
+                Arc::clone(&git_status_cancel),
+            );
         }
 
         Self {
@@ -77,15 +82,22 @@ impl App {
             mode: AppMode::List,
             sessions,
             table_state,
+            active_project_id,
             agent_kind,
             backend,
             base_path,
             db,
             git_branch,
             git_status,
+            git_status_cancel,
             health_checks: Arc::new(Mutex::new(Vec::new())),
+            projects,
             working_dir,
         }
+    }
+
+    pub fn active_project_id(&self) -> i64 {
+        self.active_project_id
     }
 
     pub fn agent_kind(&self) -> AgentKind {
@@ -116,6 +128,49 @@ impl App {
     pub fn start_health_checks(&mut self) {
         self.health_checks =
             health::run_health_checks(self.db.pool().clone(), self.git_branch.clone());
+    }
+
+    pub async fn switch_project(&mut self, project_id: i64) -> Result<(), String> {
+        let project = self
+            .db
+            .get_project(project_id)
+            .await?
+            .ok_or_else(|| "Project not found".to_string())?;
+
+        // Cancel existing git status task
+        self.git_status_cancel.store(true, Ordering::Relaxed);
+
+        // Update working dir and git info
+        self.working_dir = PathBuf::from(&project.path);
+        self.git_branch = project.git_branch.clone();
+        self.active_project_id = project_id;
+
+        // Reset git status
+        if let Ok(mut status) = self.git_status.lock() {
+            *status = None;
+        }
+
+        // Start new git status task
+        let new_cancel = Arc::new(AtomicBool::new(false));
+        self.git_status_cancel = new_cancel.clone();
+        if self.git_branch.is_some() {
+            Self::spawn_git_status_task(
+                &self.working_dir,
+                Arc::clone(&self.git_status),
+                new_cancel,
+            );
+        }
+
+        // Refresh project list and reload all sessions
+        self.projects = Self::load_projects_from_db(&self.db).await;
+        self.sessions = Self::load_sessions(&self.base_path, &self.db, &self.projects).await;
+        if self.sessions.is_empty() {
+            self.table_state.select(None);
+        } else {
+            self.table_state.select(Some(0));
+        }
+
+        Ok(())
     }
 
     pub fn next_tab(&mut self) {
@@ -204,6 +259,7 @@ impl App {
                 &self.agent_kind.to_string(),
                 base_branch,
                 &Status::InProgress.to_string(),
+                self.active_project_id,
             )
             .await
             .map_err(|err| format!("Failed to save session metadata: {err}"))?;
@@ -226,11 +282,17 @@ impl App {
             name.clone(),
         );
 
+        let project_name = self
+            .working_dir
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
         self.sessions.push(Session {
             agent: self.agent_kind.to_string(),
             folder,
             name: name.clone(),
             output,
+            project_name,
             prompt,
             status,
         });
@@ -459,7 +521,15 @@ impl App {
         Ok(())
     }
 
-    async fn load_sessions(base: &Path, db: &Database) -> Vec<Session> {
+    async fn load_sessions(base: &Path, db: &Database, projects: &[Project]) -> Vec<Session> {
+        let project_names: HashMap<i64, String> = projects
+            .iter()
+            .filter_map(|project| {
+                let name = project.path.file_name()?.to_string_lossy().to_string();
+                Some((project.id, name))
+            })
+            .collect();
+
         let db_rows = db.load_sessions().await.unwrap_or_default();
         let mut sessions: Vec<Session> = db_rows
             .into_iter()
@@ -473,11 +543,17 @@ impl App {
                 let output_text =
                     std::fs::read_to_string(data_dir.join("output.txt")).unwrap_or_default();
                 let status = row.status.parse::<Status>().unwrap_or(Status::Done);
+                let project_name = row
+                    .project_id
+                    .and_then(|id| project_names.get(&id))
+                    .cloned()
+                    .unwrap_or_default();
                 Some(Session {
                     agent: row.agent,
                     folder,
                     name: row.name,
                     output: Arc::new(Mutex::new(output_text)),
+                    project_name,
                     prompt,
                     status: Arc::new(Mutex::new(status)),
                 })
@@ -485,6 +561,67 @@ impl App {
             .collect();
         sessions.sort_by(|a, b| a.name.cmp(&b.name));
         sessions
+    }
+
+    async fn discover_sibling_projects(working_dir: &Path, db: &Database) {
+        let Some(parent) = working_dir.parent() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || path == working_dir {
+                continue;
+            }
+            if path.join(".git").exists() {
+                let branch = git::detect_git_info(&path);
+                let _ = db
+                    .upsert_project(&path.to_string_lossy(), branch.as_deref())
+                    .await;
+            }
+        }
+    }
+
+    async fn load_projects_from_db(db: &Database) -> Vec<Project> {
+        db.load_projects()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| Project {
+                git_branch: row.git_branch,
+                id: row.id,
+                path: PathBuf::from(row.path),
+            })
+            .collect()
+    }
+
+    fn spawn_git_status_task(
+        working_dir: &Path,
+        git_status: Arc<Mutex<Option<(u32, u32)>>>,
+        cancel: Arc<AtomicBool>,
+    ) {
+        let dir = working_dir.to_path_buf();
+        tokio::spawn(async move {
+            let repo_root = git::find_git_repo_root(&dir).unwrap_or(dir);
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let _ = git::fetch_remote(&repo_root);
+                let status = git::get_ahead_behind(&repo_root).ok();
+                if let Ok(mut lock) = git_status.lock() {
+                    *lock = status;
+                }
+                for _ in 0..30 {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        });
     }
 
     fn spawn_session_task(
@@ -676,6 +813,7 @@ mod tests {
             folder,
             name: name.to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            project_name: String::new(),
             prompt: prompt.to_string(),
             status: Arc::new(Mutex::new(Status::Done)),
         });
@@ -972,7 +1110,11 @@ mod tests {
         let db = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        db.insert_session("12345678", "claude", "main", "Done")
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("12345678", "claude", "main", "Done", project_id)
             .await
             .expect("failed to insert");
 
@@ -1021,7 +1163,11 @@ mod tests {
         let db = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        db.insert_session("missing01", "gemini", "main", "Done")
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("missing01", "gemini", "main", "Done", project_id)
             .await
             .expect("failed to insert");
 
@@ -1390,5 +1536,145 @@ mod tests {
                 .expect_err("should be error")
                 .contains("Session not found")
         );
+    }
+
+    #[tokio::test]
+    async fn test_active_project_id_getter() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app(dir.path().to_path_buf()).await;
+
+        // Act & Assert
+        assert!(app.active_project_id() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_projects_auto_registered() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app(dir.path().to_path_buf()).await;
+
+        // Act & Assert — cwd auto-registered as a project
+        assert_eq!(app.projects.len(), 1);
+        assert_eq!(app.projects[0].path, PathBuf::from("/tmp/test"));
+    }
+
+    #[tokio::test]
+    async fn test_switch_project() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
+        let other_id = app
+            .db
+            .upsert_project("/tmp/other", Some("develop"))
+            .await
+            .expect("failed to upsert");
+
+        // Act
+        app.switch_project(other_id)
+            .await
+            .expect("failed to switch");
+
+        // Assert
+        assert_eq!(app.active_project_id(), other_id);
+        assert_eq!(app.working_dir(), &PathBuf::from("/tmp/other"));
+        assert_eq!(app.git_branch(), Some("develop"));
+        assert!(app.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_switch_project_not_found() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
+
+        // Act
+        let result = app.switch_project(999).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Project not found"));
+    }
+
+    #[tokio::test]
+    async fn test_switch_project_shows_all_sessions() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        app.add_session("Session A".to_string())
+            .await
+            .expect("failed to add session");
+        assert_eq!(app.sessions.len(), 1);
+
+        let other_id = app
+            .db
+            .upsert_project("/tmp/other", None)
+            .await
+            .expect("failed to upsert");
+
+        // Act — switch to other project
+        app.switch_project(other_id)
+            .await
+            .expect("failed to switch");
+
+        // Assert — all sessions still visible after switching projects
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.active_project_id(), other_id);
+    }
+
+    #[tokio::test]
+    async fn test_add_session_scoped_to_project() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let project_id = app.active_project_id();
+
+        // Act
+        app.add_session("Scoped".to_string())
+            .await
+            .expect("failed to add session");
+
+        // Assert — session belongs to the active project
+        let sessions = app
+            .db
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("failed to load");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].project_id, Some(project_id));
+    }
+
+    #[tokio::test]
+    async fn test_discover_sibling_projects() {
+        // Arrange — create a parent dir with two git repo subdirectories
+        let parent = tempdir().expect("failed to create temp dir");
+        let repo_a = parent.path().join("repo_a");
+        let repo_b = parent.path().join("repo_b");
+        let not_repo = parent.path().join("plain_dir");
+        std::fs::create_dir(&repo_a).expect("failed to create repo_a");
+        std::fs::create_dir(&repo_b).expect("failed to create repo_b");
+        std::fs::create_dir(&not_repo).expect("failed to create plain_dir");
+        setup_test_git_repo(&repo_a);
+        setup_test_git_repo(&repo_b);
+
+        // Act — launch app from repo_a
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let app = App::new(
+            parent.path().to_path_buf(),
+            repo_a.clone(),
+            Some("main".to_string()),
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+            db,
+        )
+        .await;
+
+        // Assert — repo_a (cwd) and repo_b (sibling) are discovered, plain_dir is not
+        assert_eq!(app.projects.len(), 2);
+        let paths: Vec<&Path> = app.projects.iter().map(|p| p.path.as_path()).collect();
+        assert!(paths.contains(&repo_a.as_path()));
+        assert!(paths.contains(&repo_b.as_path()));
     }
 }
