@@ -14,6 +14,7 @@ homepage = "https://github.com/opencloudtool/agentty"
 libc = "0.2"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
+dirs = "6.0"
 mockall = "0.14"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tempfile = "3.10"

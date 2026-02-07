@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 crossterm.workspace = true
+dirs.workspace = true
 libc.workspace = true
 ratatui.workspace = true
 sqlx.workspace = true

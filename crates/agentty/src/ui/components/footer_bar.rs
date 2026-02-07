@@ -24,8 +24,18 @@ impl FooterBar {
 
 impl Component for FooterBar {
     fn render(&self, f: &mut Frame, area: Rect) {
+        let display_path = if let Some(home) = dirs::home_dir() {
+            if let Ok(path) = std::path::Path::new(&self.working_dir).strip_prefix(home) {
+                format!("~/{}", path.display())
+            } else {
+                self.working_dir.clone()
+            }
+        } else {
+            self.working_dir.clone()
+        };
+
         let left_text = Span::styled(
-            format!(" Working Dir: {}", self.working_dir),
+            format!(" Working Dir: {display_path}"),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::DIM),
@@ -34,7 +44,7 @@ impl Component for FooterBar {
         let mut spans = vec![left_text];
 
         if let Some(branch) = &self.git_branch {
-            let left_width = format!(" Working Dir: {}", self.working_dir).len();
+            let left_width = format!(" Working Dir: {display_path}").len();
             let branch_text = format!("{GIT_BRANCH_INDICATOR} {branch}");
             let branch_width = branch_text.len();
             let total_width = area.width as usize;
@@ -94,7 +104,12 @@ mod tests {
         // Arrange
         let backend = TestBackend::new(80, 3);
         let mut terminal = Terminal::new(backend).expect("failed to create terminal");
-        let footer = FooterBar::new("/home/user".to_string(), Some("main".to_string()));
+        let path = if let Some(home) = dirs::home_dir() {
+            home.join("project").to_string_lossy().to_string()
+        } else {
+            "/tmp/project".to_string()
+        };
+        let footer = FooterBar::new(path, Some("main".to_string()));
 
         // Act
         terminal
@@ -108,7 +123,11 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
-        assert!(text.contains("Working Dir: /home/user"));
+        if dirs::home_dir().is_some() {
+            assert!(text.contains("Working Dir: ~/project"));
+        } else {
+            assert!(text.contains("Working Dir: /tmp/project"));
+        }
         assert!(text.contains("main"));
     }
 
@@ -117,7 +136,8 @@ mod tests {
         // Arrange
         let backend = TestBackend::new(80, 3);
         let mut terminal = Terminal::new(backend).expect("failed to create terminal");
-        let footer = FooterBar::new("/home/user".to_string(), None);
+        let path = "/tmp/other-project".to_string();
+        let footer = FooterBar::new(path, None);
 
         // Act
         terminal
@@ -131,6 +151,6 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
-        assert!(text.contains("Working Dir: /home/user"));
+        assert!(text.contains("Working Dir: /tmp/other-project"));
     }
 }
