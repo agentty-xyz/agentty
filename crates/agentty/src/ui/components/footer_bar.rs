@@ -9,9 +9,9 @@ use crate::ui::Component;
 const GIT_BRANCH_INDICATOR: char = '\u{25cf}'; // ●
 
 pub struct FooterBar {
-    working_dir: String,
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
+    working_dir: String,
 }
 
 impl FooterBar {
@@ -21,9 +21,9 @@ impl FooterBar {
         git_status: Option<(u32, u32)>,
     ) -> Self {
         Self {
-            working_dir,
             git_branch,
             git_status,
+            working_dir,
         }
     }
 }

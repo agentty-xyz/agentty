@@ -23,6 +23,10 @@ TUI tool to manage agents.
     - Private functions last.
     - If a function has multiple callees, they should appear in the order they are first called within that function.
 - **Imports:** Always place imports at the top of the file. Do not use local `use` statements within functions or other blocks.
+- **Struct Fields:** Order fields in structs as follows:
+    - Public fields first.
+    - Private fields second.
+    - Within each group, sort fields alphabetically.
 
 ## Database Standards (SQLx + SQLite)
 

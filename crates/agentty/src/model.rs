@@ -77,11 +77,11 @@ impl PaletteCommand {
 }
 
 pub struct Session {
-    pub name: String,
-    pub prompt: String,
-    pub folder: PathBuf,
     pub agent: String,
+    pub folder: PathBuf,
+    pub name: String,
     pub output: Arc<Mutex<String>>,
+    pub prompt: String,
     pub running: Arc<AtomicBool>,
 }
 
@@ -136,11 +136,11 @@ mod tests {
     fn test_session_status() {
         // Arrange
         let session = Session {
-            name: "test".to_string(),
-            prompt: "prompt".to_string(),
-            folder: PathBuf::new(),
             agent: "gemini".to_string(),
+            folder: PathBuf::new(),
+            name: "test".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            prompt: "prompt".to_string(),
             running: Arc::new(AtomicBool::new(true)),
         };
 

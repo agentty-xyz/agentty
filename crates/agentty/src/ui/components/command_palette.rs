@@ -9,17 +9,17 @@ use crate::model::{PaletteCommand, PaletteFocus};
 use crate::ui::Component;
 
 pub struct CommandPaletteInput<'a> {
+    focus: PaletteFocus,
     input: &'a str,
     selected_index: usize,
-    focus: PaletteFocus,
 }
 
 impl<'a> CommandPaletteInput<'a> {
     pub fn new(input: &'a str, selected_index: usize, focus: PaletteFocus) -> Self {
         Self {
+            focus,
             input,
             selected_index,
-            focus,
         }
     }
 }

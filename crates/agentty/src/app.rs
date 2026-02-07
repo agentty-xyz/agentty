@@ -19,17 +19,17 @@ pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
 pub struct App {
+    pub current_tab: Tab,
+    pub mode: AppMode,
     pub sessions: Vec<Session>,
     pub table_state: TableState,
-    pub mode: AppMode,
-    pub current_tab: Tab,
-    base_path: PathBuf,
-    working_dir: PathBuf,
-    git_branch: Option<String>,
-    git_status: Arc<Mutex<Option<(u32, u32)>>>,
     agent_kind: AgentKind,
     backend: Box<dyn AgentBackend>,
+    base_path: PathBuf,
     db: Database,
+    git_branch: Option<String>,
+    git_status: Arc<Mutex<Option<(u32, u32)>>>,
+    working_dir: PathBuf,
 }
 
 impl App {
@@ -72,17 +72,17 @@ impl App {
         }
 
         Self {
+            current_tab: Tab::Sessions,
+            mode: AppMode::List,
             sessions,
             table_state,
-            mode: AppMode::List,
-            current_tab: Tab::Sessions,
-            base_path,
-            working_dir,
-            git_branch,
-            git_status,
             agent_kind,
             backend,
+            base_path,
             db,
+            git_branch,
+            git_status,
+            working_dir,
         }
     }
 
@@ -199,11 +199,11 @@ impl App {
         );
 
         self.sessions.push(Session {
-            name: name.clone(),
-            prompt,
-            folder,
             agent: self.agent_kind.to_string(),
+            folder,
+            name: name.clone(),
             output,
+            prompt,
             running,
         });
         self.sessions.sort_by(|a, b| a.name.cmp(&b.name));
@@ -353,11 +353,11 @@ impl App {
                 let output_text =
                     std::fs::read_to_string(data_dir.join("output.txt")).unwrap_or_default();
                 Some(Session {
-                    name: row.name,
-                    prompt,
-                    folder,
                     agent: row.agent,
+                    folder,
+                    name: row.name,
                     output: Arc::new(Mutex::new(output_text)),
+                    prompt,
                     running: Arc::new(AtomicBool::new(false)),
                 })
             })
@@ -534,11 +534,11 @@ mod tests {
         std::fs::write(data_dir.join("prompt.txt"), prompt).expect("failed to write prompt");
         std::fs::write(data_dir.join("output.txt"), "").expect("failed to write output");
         app.sessions.push(Session {
-            name: name.to_string(),
-            prompt: prompt.to_string(),
-            folder,
             agent: "gemini".to_string(),
+            folder,
+            name: name.to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            prompt: prompt.to_string(),
             running: Arc::new(AtomicBool::new(false)),
         });
         if app.table_state.selected().is_none() {

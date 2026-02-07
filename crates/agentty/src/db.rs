@@ -45,9 +45,9 @@ pub struct Database {
 }
 
 pub struct SessionRow {
-    pub name: String,
     pub agent: String,
     pub base_branch: String,
+    pub name: String,
 }
 
 impl Database {
@@ -109,9 +109,9 @@ impl Database {
             Ok(rows
                 .iter()
                 .map(|row| SessionRow {
-                    name: row.get("name"),
                     agent: row.get("agent"),
                     base_branch: row.get("base_branch"),
+                    name: row.get("name"),
                 })
                 .collect())
         })
