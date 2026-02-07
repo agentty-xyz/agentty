@@ -26,7 +26,7 @@ This allows agents to work on code changes without affecting your main working d
 ```sh
 git clone <repo-url>
 cd agentty
-cargo run
+cargo run # Builds and runs the 'agentty' binary
 ```
 
 ## Development

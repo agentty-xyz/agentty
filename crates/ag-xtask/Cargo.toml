@@ -3,6 +3,9 @@ name = "ag-xtask"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 tracing.workspace = true

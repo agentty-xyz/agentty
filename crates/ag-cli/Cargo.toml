@@ -3,6 +3,13 @@ name = "ag-cli"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "agentty"
+path = "src/main.rs"
 
 [lints]
 workspace = true

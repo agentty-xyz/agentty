@@ -1,6 +1,7 @@
 # Agentty CLI
 
 Modular TUI application for managing agent sessions.
+The main binary is named `agentty`.
 
 ## Directory Index
 - [src/](src/) - Source code directory.
