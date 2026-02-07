@@ -68,11 +68,10 @@ impl Page for SessionChatPage<'_> {
             let mut lines = wrap_lines(&output_text, inner_width);
 
             if status != Status::Done {
-                if let Some(last) = lines.last() {
-                    if last.width() == 0 {
-                        lines.pop();
-                    }
+                while lines.last().is_some_and(|last| last.width() == 0) {
+                    lines.pop();
                 }
+                lines.push(Line::from(""));
 
                 let msg = match status {
                     Status::Processing => "Creating PR...",
