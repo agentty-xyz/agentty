@@ -15,10 +15,9 @@ use crate::agent::{AgentBackend, AgentKind};
 use crate::db::Database;
 use crate::git;
 use crate::health::{self, HealthEntry};
-use crate::model::{AppMode, Session, Tab};
+use crate::model::{AppMode, SESSION_DATA_DIR, Session, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
-pub const SESSION_DATA_DIR: &str = ".agentty";
 
 pub struct App {
     pub current_tab: Tab,
@@ -259,18 +258,12 @@ impl App {
             return;
         };
 
+        let reply_line = format!("\n › {prompt}\n\n");
+        session.append_output(&reply_line);
+
         let folder = session.folder.clone();
         let output = Arc::clone(&session.output);
         let running = Arc::clone(&session.running);
-
-        let reply_line = format!("\n › {prompt}\n\n");
-        if let Ok(mut buf) = output.lock() {
-            buf.push_str(&reply_line);
-        }
-        let _ = std::fs::OpenOptions::new()
-            .append(true)
-            .open(folder.join(SESSION_DATA_DIR).join("output.txt"))
-            .and_then(|mut f| write!(f, "{reply_line}"));
 
         running.store(true, Ordering::Relaxed);
         let cmd = backend.build_resume_command(&folder, prompt);
@@ -438,17 +431,7 @@ impl App {
                 Err(e) => format!("\n[PR Error] Join error: {e}\n"),
             };
 
-            if let Ok(mut buf) = output.lock() {
-                buf.push_str(&result_message);
-            }
-            let _ = std::fs::OpenOptions::new()
-                .append(true)
-                .open(folder.join(SESSION_DATA_DIR).join("output.txt"))
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    write!(f, "{result_message}")
-                });
-
+            Session::write_output(&output, &folder, &result_message);
             is_creating_pr.store(false, std::sync::atomic::Ordering::Relaxed);
         });
 
@@ -1356,6 +1339,24 @@ mod tests {
             result
                 .expect_err("should be error")
                 .contains("No git worktree")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_pr_session_invalid_index() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app(dir.path().to_path_buf()).await;
+
+        // Act
+        let result = app.create_pr_session(99).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("Session not found")
         );
     }
 }

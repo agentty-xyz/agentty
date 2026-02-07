@@ -53,6 +53,7 @@ impl Page for SessionChatPage<'_> {
             let status = session.status();
             let status_label = match status {
                 Status::InProgress => "In Progress",
+                Status::Processing => "Processing",
                 Status::Done => "Done",
             };
             let title = format!(" {} — {} ", session.name, status_label);
@@ -66,25 +67,21 @@ impl Page for SessionChatPage<'_> {
             let inner_width = output_area.width.saturating_sub(2) as usize;
             let mut lines = wrap_lines(&output_text, inner_width);
 
-            if status == Status::InProgress {
+            if status != Status::Done {
                 if let Some(last) = lines.last() {
                     if last.width() == 0 {
                         lines.pop();
                     }
                 }
 
-                let msg = if session
-                    .is_creating_pr
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    "Creating PR..."
-                } else {
-                    "Thinking..."
+                let msg = match status {
+                    Status::Processing => "Creating PR...",
+                    _ => "Thinking...",
                 };
 
                 lines.push(Line::from(vec![Span::styled(
                     format!("{} {}", Icon::current_spinner(), msg),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(status.color()),
                 )]));
             }
 

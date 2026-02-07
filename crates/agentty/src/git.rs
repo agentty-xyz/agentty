@@ -804,6 +804,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_create_pr_push_fails_no_remote() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+
+        // Create a feature branch
+        Command::new("git")
+            .args(["checkout", "-b", "agentty/test123"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+
+        // Act — push should fail because there is no remote
+        let result = create_pr(dir.path(), "agentty/test123", "main", "Test PR");
+
+        // Assert
+        assert!(result.is_err());
+        let error = result.expect_err("should be error");
+        assert!(
+            error.contains("Git push failed"),
+            "Expected 'Git push failed', got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_create_pr_invalid_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // Act — no git repo at all
+        let result = create_pr(dir.path(), "some-branch", "main", "Test PR");
+
+        // Assert
+        assert!(result.is_err());
+    }
+
     /// Helper function to set up a test git repository with an initial commit
     fn setup_test_git_repo(path: &Path) -> std::io::Result<()> {
         Command::new("git")

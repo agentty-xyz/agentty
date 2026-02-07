@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use agentty::agent::AgentKind;
-use agentty::app::{AGENTTY_WORKSPACE, App, SESSION_DATA_DIR};
+use agentty::app::{AGENTTY_WORKSPACE, App};
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::model::{AppMode, PaletteCommand, PaletteFocus};
 use agentty::ui;
@@ -237,21 +237,7 @@ async fn main() -> io::Result<()> {
                                         Ok(msg) => format!("\n[Commit] {msg}\n"),
                                         Err(err) => format!("\n[Commit Error] {err}\n"),
                                     };
-                                    if let Ok(mut buf) = session.output.lock() {
-                                        buf.push_str(&result_message);
-                                    }
-                                    let _ = std::fs::OpenOptions::new()
-                                        .append(true)
-                                        .open(
-                                            session
-                                                .folder
-                                                .join(SESSION_DATA_DIR)
-                                                .join("output.txt"),
-                                        )
-                                        .and_then(|mut f| {
-                                            use std::io::Write;
-                                            write!(f, "{result_message}")
-                                        });
+                                    session.append_output(&result_message);
                                 }
                             }
                             KeyCode::Char('m') => {
@@ -261,43 +247,13 @@ async fn main() -> io::Result<()> {
                                         Ok(msg) => format!("\n[Merge] {msg}\n"),
                                         Err(err) => format!("\n[Merge Error] {err}\n"),
                                     };
-                                    if let Ok(mut buf) = session.output.lock() {
-                                        buf.push_str(&result_message);
-                                    }
-                                    let _ = std::fs::OpenOptions::new()
-                                        .append(true)
-                                        .open(
-                                            session
-                                                .folder
-                                                .join(SESSION_DATA_DIR)
-                                                .join("output.txt"),
-                                        )
-                                        .and_then(|mut f| {
-                                            use std::io::Write;
-                                            write!(f, "{result_message}")
-                                        });
+                                    session.append_output(&result_message);
                                 }
                             }
                             KeyCode::Char('p') => {
                                 if let Err(e) = app.create_pr_session(session_idx).await {
-                                    // Log immediate errors (e.g. "Already processing") to output
                                     if let Some(session) = app.sessions.get(session_idx) {
-                                        let err_msg = format!("\n[PR Error] {e}\n");
-                                        if let Ok(mut buf) = session.output.lock() {
-                                            buf.push_str(&err_msg);
-                                        }
-                                        let _ = std::fs::OpenOptions::new()
-                                            .append(true)
-                                            .open(
-                                                session
-                                                    .folder
-                                                    .join(SESSION_DATA_DIR)
-                                                    .join("output.txt"),
-                                            )
-                                            .and_then(|mut f| {
-                                                use std::io::Write;
-                                                write!(f, "{err_msg}")
-                                            });
+                                        session.append_output(&format!("\n[PR Error] {e}\n"));
                                     }
                                 }
                             }
