@@ -19,19 +19,8 @@ pub trait AgentBackend: Send + Sync {
 pub struct GeminiBackend;
 
 impl AgentBackend for GeminiBackend {
-    fn setup(&self, folder: &Path) {
-        let gemini_dir = folder.join(".gemini");
-        let _ = std::fs::create_dir_all(&gemini_dir);
-        let settings = r#"{
-  "context.loadMemoryFromIncludeDirectories": false,
-  "context.fileFiltering.respectGitIgnore": false,
-  "context.discoveryMaxDirs": 1,
-  "context.fileFiltering.enableRecursiveFileSearch": false,
-  "skills.enabled": false,
-  "hooksConfig.enabled": false,
-  "general.enablePromptCompletion": false
-}"#;
-        let _ = std::fs::write(gemini_dir.join("settings.json"), settings);
+    fn setup(&self, _folder: &Path) {
+        // Gemini CLI needs no config files
     }
 
     fn build_resume_command(&self, folder: &Path, prompt: &str) -> Command {
@@ -143,7 +132,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_gemini_setup_creates_settings() {
+    fn test_gemini_setup_creates_no_files() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let backend = GeminiBackend;
@@ -152,10 +141,12 @@ mod tests {
         backend.setup(dir.path());
 
         // Assert
-        let settings_path = dir.path().join(".gemini/settings.json");
-        assert!(settings_path.exists());
-        let content = std::fs::read_to_string(settings_path).expect("failed to read settings");
-        assert!(content.contains("context.loadMemoryFromIncludeDirectories"));
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .expect("failed to read dir")
+                .count(),
+            0
+        );
     }
 
     #[test]
