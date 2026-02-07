@@ -272,6 +272,23 @@ pub fn delete_branch(repo_path: &Path, branch_name: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Returns the output of `git diff` for the given repository path.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// The diff output as a string, or an error message on failure
+pub fn diff(repo_path: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("diff")
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Fetches from the configured remote.
 ///
 /// # Arguments
@@ -803,6 +820,39 @@ mod tests {
             error.contains("Nothing to commit"),
             "Expected 'Nothing to commit', got: {error}"
         );
+    }
+
+    #[test]
+    fn test_diff_success() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "modified").expect("test setup failed");
+
+        // Act
+        let result = diff(dir.path());
+
+        // Assert
+        assert!(result.is_ok());
+        let output = result.expect("should succeed");
+        assert!(
+            output.contains("diff --git"),
+            "Expected diff output, got: {output}"
+        );
+    }
+
+    #[test]
+    fn test_diff_no_changes() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+
+        // Act
+        let result = diff(dir.path());
+
+        // Assert
+        assert!(result.is_ok());
+        assert!(result.expect("should succeed").is_empty());
     }
 
     #[test]

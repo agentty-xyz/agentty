@@ -609,8 +609,17 @@ impl App {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                let _ = git::fetch_remote(&repo_root);
-                let status = git::get_ahead_behind(&repo_root).ok();
+                {
+                    let root = repo_root.clone();
+                    let _ = tokio::task::spawn_blocking(move || git::fetch_remote(&root)).await;
+                }
+                let status = {
+                    let root = repo_root.clone();
+                    tokio::task::spawn_blocking(move || git::get_ahead_behind(&root))
+                        .await
+                        .ok()
+                        .and_then(std::result::Result::ok)
+                };
                 if let Ok(mut lock) = git_status.lock() {
                     *lock = status;
                 }
