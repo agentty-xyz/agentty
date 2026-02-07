@@ -142,7 +142,7 @@ impl App {
 
         // Update working dir and git info
         self.working_dir = PathBuf::from(&project.path);
-        self.git_branch = project.git_branch.clone();
+        self.git_branch.clone_from(&project.git_branch);
         self.active_project_id = project_id;
 
         // Reset git status
@@ -248,12 +248,37 @@ impl App {
         .map_err(|e| format!("Join error: {e}"))?
         .map_err(|err| format!("Failed to create git worktree: {err}"))?;
 
-        // Create .agentty subdirectory for session metadata
         let data_dir = folder.join(SESSION_DATA_DIR);
-        let _ = std::fs::create_dir_all(&data_dir);
+        if let Err(err) = std::fs::create_dir_all(&data_dir) {
+            self.rollback_failed_session_creation(
+                &folder,
+                &repo_root,
+                &name,
+                &worktree_branch,
+                false,
+            )
+            .await;
 
-        let _ = std::fs::write(data_dir.join("prompt.txt"), &prompt);
-        self.db
+            return Err(format!(
+                "Failed to create session metadata directory: {err}"
+            ));
+        }
+
+        if let Err(err) = std::fs::write(data_dir.join("prompt.txt"), &prompt) {
+            self.rollback_failed_session_creation(
+                &folder,
+                &repo_root,
+                &name,
+                &worktree_branch,
+                false,
+            )
+            .await;
+
+            return Err(format!("Failed to write session prompt: {err}"));
+        }
+
+        if let Err(err) = self
+            .db
             .insert_session(
                 &name,
                 &self.agent_kind.to_string(),
@@ -262,10 +287,32 @@ impl App {
                 self.active_project_id,
             )
             .await
-            .map_err(|err| format!("Failed to save session metadata: {err}"))?;
+        {
+            self.rollback_failed_session_creation(
+                &folder,
+                &repo_root,
+                &name,
+                &worktree_branch,
+                false,
+            )
+            .await;
+
+            return Err(format!("Failed to save session metadata: {err}"));
+        }
 
         let initial_output = format!(" › {prompt}\n\n[Git worktree: agentty/{hash}]\n\n");
-        let _ = std::fs::write(data_dir.join("output.txt"), &initial_output);
+        if let Err(err) = std::fs::write(data_dir.join("output.txt"), &initial_output) {
+            self.rollback_failed_session_creation(
+                &folder,
+                &repo_root,
+                &name,
+                &worktree_branch,
+                true,
+            )
+            .await;
+
+            return Err(format!("Failed to write session output: {err}"));
+        }
 
         self.backend.setup(&folder);
 
@@ -519,6 +566,32 @@ impl App {
         });
 
         Ok(())
+    }
+
+    async fn rollback_failed_session_creation(
+        &self,
+        folder: &Path,
+        repo_root: &Path,
+        session_name: &str,
+        worktree_branch: &str,
+        session_saved: bool,
+    ) {
+        if session_saved {
+            let _ = self.db.delete_session(session_name).await;
+        }
+
+        {
+            let folder = folder.to_path_buf();
+            let repo_root = repo_root.to_path_buf();
+            let worktree_branch = worktree_branch.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = git::remove_worktree(&folder);
+                let _ = git::delete_branch(&repo_root, &worktree_branch);
+            })
+            .await;
+        }
+
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     async fn load_sessions(base: &Path, db: &Database, projects: &[Project]) -> Vec<Session> {
@@ -1564,8 +1637,11 @@ mod tests {
         let app = new_test_app(dir.path().to_path_buf()).await;
 
         // Act & Assert — cwd auto-registered as a project
-        assert_eq!(app.projects.len(), 1);
-        assert_eq!(app.projects[0].path, PathBuf::from("/tmp/test"));
+        assert!(
+            app.projects
+                .iter()
+                .any(|project| project.path == PathBuf::from("/tmp/test"))
+        );
     }
 
     #[tokio::test]

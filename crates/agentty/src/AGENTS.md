@@ -1,5 +1,8 @@
 # Source Code
 
+## Local Conventions
+- Avoid near-identical local variable names in the same function (for example, `gitdir` and `git_dir`). Use one clear naming style with distinct, descriptive names.
+
 ## Directory Index
 - [ui/](ui/) - User Interface module.
 - [agent.rs](agent.rs) - `AgentBackend` trait and concrete backends (`GeminiBackend`, `ClaudeBackend`).

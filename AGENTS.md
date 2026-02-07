@@ -144,6 +144,7 @@ already applied — just re-run to confirm everything passes.
   - Use a blank line between the title and the body.
   - The body (the "description") should provide more detail on *why* and *how* in present simple tense. It is not needed when the title is self-explanatory.
 - Do not use conventional commit prefixes (e.g., `feat:`, `fix:`).
+- Never use `--no-verify` with git commands to bypass `pre-commit` hooks.
 - Do not add `Co-Authored-By` trailers or any AI attribution to commit messages.
 
 ## Git Worktree Integration

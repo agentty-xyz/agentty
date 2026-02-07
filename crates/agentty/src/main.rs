@@ -8,6 +8,7 @@ use agentty::app::{AGENTTY_WORKSPACE, App};
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::model::{AppMode, PaletteCommand, PaletteFocus};
 use agentty::ui;
+use crossterm::cursor::Show;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -16,6 +17,24 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
+
+/// Restores terminal state on all exit paths after raw mode is enabled.
+///
+/// The app uses `?` extensively inside the event loop and setup flow. Without
+/// this guard, any early return after entering raw mode and the alternate
+/// screen can leave the user's shell in a broken state.
+///
+/// Keeping cleanup in `Drop` guarantees restore runs during normal exit,
+/// runtime errors, and unwinding panics.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, LeaveAlternateScreen, Show);
+    }
+}
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -37,6 +56,8 @@ async fn main() -> io::Result<()> {
 
     // setup terminal
     enable_raw_mode()?;
+    let _terminal_guard = TerminalGuard;
+
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -508,9 +529,6 @@ async fn main() -> io::Result<()> {
         }
     }
 
-    // restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
     terminal.show_cursor()?;
 
     Ok(())

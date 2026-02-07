@@ -33,7 +33,8 @@ fn find_git_repo(dir: &Path) -> Option<PathBuf> {
 /// Reads .git/HEAD and extracts the current branch name.
 /// Returns the branch name for normal HEAD, or "HEAD@{hash}" for detached HEAD.
 fn get_git_branch(repo_dir: &Path) -> Option<String> {
-    let head_path = repo_dir.join(".git").join("HEAD");
+    let git_dir = resolve_git_dir(repo_dir)?;
+    let head_path = git_dir.join("HEAD");
     let content = fs::read_to_string(head_path).ok()?;
     let content = content.trim();
 
@@ -45,6 +46,28 @@ fn get_git_branch(repo_dir: &Path) -> Option<String> {
     // Detached HEAD: full commit hash
     if content.len() >= 7 && content.chars().all(|c| c.is_ascii_hexdigit()) {
         return Some(format!("HEAD@{}", &content[..7]));
+    }
+
+    None
+}
+
+fn resolve_git_dir(repo_dir: &Path) -> Option<PathBuf> {
+    let dot_git = repo_dir.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+
+    if dot_git.is_file() {
+        let content = fs::read_to_string(&dot_git).ok()?;
+        let git_dir_line = content.lines().find(|line| line.starts_with("gitdir:"))?;
+        let git_dir_path = git_dir_line.trim_start_matches("gitdir:").trim();
+        let git_dir = PathBuf::from(git_dir_path);
+
+        if git_dir.is_absolute() {
+            return Some(git_dir);
+        }
+
+        return Some(repo_dir.join(git_dir));
     }
 
     None
@@ -96,21 +119,16 @@ pub fn remove_worktree(worktree_path: &Path) -> Result<(), String> {
     // Read the .git file in the worktree to find the main repo
     let git_file = worktree_path.join(".git");
     let repo_root = if git_file.is_file() {
-        // Worktree: .git file contains "gitdir: /path/to/main/.git/worktrees/name"
-        let content =
-            fs::read_to_string(&git_file).map_err(|e| format!("Failed to read .git file: {e}"))?;
+        let git_dir = resolve_git_dir(worktree_path)
+            .ok_or_else(|| "Invalid .git file format in worktree".to_string())?;
 
-        if let Some(gitdir_line) = content.lines().find(|l| l.starts_with("gitdir:")) {
-            let gitdir = gitdir_line.trim_start_matches("gitdir:").trim();
-            // Extract main repo path: /path/to/main/.git/worktrees/name -> /path/to/main
-            PathBuf::from(gitdir)
-                .parent() // Remove "worktrees/name"
-                .and_then(|p| p.parent()) // Remove ".git"
-                .ok_or_else(|| "Invalid gitdir path in .git file".to_string())?
-                .to_path_buf()
-        } else {
-            return Err("Invalid .git file format".to_string());
-        }
+        // Extract main repo path: /path/to/main/.git/worktrees/name -> /path/to/main
+        git_dir
+            .parent() // Remove worktree name
+            .and_then(|path| path.parent()) // Remove "worktrees"
+            .and_then(|path| path.parent()) // Remove ".git"
+            .ok_or_else(|| "Invalid gitdir path in .git file".to_string())?
+            .to_path_buf()
     } else {
         // Not a worktree or doesn't exist - try parent directory
         worktree_path
@@ -514,6 +532,35 @@ mod tests {
     }
 
     #[test]
+    fn test_get_git_branch_worktree_git_file() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let worktree_path = dir.path().join("worktree");
+        fs::create_dir(&worktree_path).expect("test setup failed");
+
+        let git_dir = dir
+            .path()
+            .join("main")
+            .join(".git")
+            .join("worktrees")
+            .join("worktree");
+        fs::create_dir_all(&git_dir).expect("test setup failed");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/feature/worktree\n")
+            .expect("test setup failed");
+        fs::write(
+            worktree_path.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .expect("test setup failed");
+
+        // Act
+        let result = get_git_branch(&worktree_path);
+
+        // Assert
+        assert_eq!(result, Some("feature/worktree".to_string()));
+    }
+
+    #[test]
     fn test_detect_git_info_full_flow() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -527,6 +574,34 @@ mod tests {
 
         // Assert
         assert_eq!(result, Some("feature-branch".to_string()));
+    }
+
+    #[test]
+    fn test_detect_git_info_worktree_git_file() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let worktree_path = dir.path().join("worktree");
+        fs::create_dir(&worktree_path).expect("test setup failed");
+
+        let git_dir = dir
+            .path()
+            .join("main")
+            .join(".git")
+            .join("worktrees")
+            .join("worktree");
+        fs::create_dir_all(&git_dir).expect("test setup failed");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("test setup failed");
+        fs::write(
+            worktree_path.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .expect("test setup failed");
+
+        // Act
+        let result = detect_git_info(&worktree_path);
+
+        // Assert
+        assert_eq!(result, Some("main".to_string()));
     }
 
     #[test]
@@ -547,6 +622,23 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let git_dir = dir.path().join(".git");
         fs::create_dir(&git_dir).expect("test setup failed");
+
+        // Act
+        let result = find_git_repo_root(dir.path());
+
+        // Assert
+        assert_eq!(result, Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_git_repo_root_with_git_file() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        fs::write(
+            dir.path().join(".git"),
+            "gitdir: /tmp/main/.git/worktrees/test\n",
+        )
+        .expect("test setup failed");
 
         // Act
         let result = find_git_repo_root(dir.path());
