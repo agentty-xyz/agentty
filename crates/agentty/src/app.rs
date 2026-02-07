@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ratatui::widgets::TableState;
 
 use crate::agent::{AgentBackend, AgentKind};
+use crate::db::Database;
 use crate::git;
 use crate::model::{AppMode, Session, Tab};
 
@@ -27,6 +28,7 @@ pub struct App {
     git_branch: Option<String>,
     agent_kind: AgentKind,
     backend: Box<dyn AgentBackend>,
+    db: Database,
 }
 
 impl App {
@@ -36,9 +38,10 @@ impl App {
         git_branch: Option<String>,
         agent_kind: AgentKind,
         backend: Box<dyn AgentBackend>,
+        db: Database,
     ) -> Self {
         let mut table_state = TableState::default();
-        let sessions = Self::load_sessions(&base_path);
+        let sessions = Self::load_sessions(&base_path, &db);
         if sessions.is_empty() {
             table_state.select(None);
         } else {
@@ -54,6 +57,7 @@ impl App {
             git_branch,
             agent_kind,
             backend,
+            db,
         }
     }
 
@@ -113,6 +117,11 @@ impl App {
     }
 
     pub fn add_session(&mut self, prompt: String) -> Result<(), String> {
+        let base_branch = self
+            .git_branch
+            .as_deref()
+            .ok_or_else(|| "Git branch is required to create a session".to_string())?;
+
         let mut hasher = DefaultHasher::new();
         prompt.hash(&mut hasher);
         let nanos = SystemTime::now()
@@ -128,38 +137,23 @@ impl App {
             return Err(format!("Session folder {hash} already exists"));
         }
 
-        // Create git worktree if in a git repo
-        if let Some(ref branch) = self.git_branch {
-            let worktree_branch = format!("agentty/{hash}");
-
-            // Find git repo root (may be different from working_dir if in subdirectory)
-            let Some(repo_root) = git::find_git_repo_root(&self.working_dir) else {
-                return Err("Failed to find git repository root".to_string());
-            };
-
-            // Create worktree (this also creates the folder)
-            if let Err(e) = git::create_worktree(&repo_root, &folder, &worktree_branch, branch) {
-                return Err(format!("Failed to create git worktree: {e}"));
-            }
-        } else {
-            let _ = std::fs::create_dir_all(&folder);
-        }
+        // Create git worktree
+        let worktree_branch = format!("agentty/{hash}");
+        let repo_root = git::find_git_repo_root(&self.working_dir)
+            .ok_or_else(|| "Failed to find git repository root".to_string())?;
+        git::create_worktree(&repo_root, &folder, &worktree_branch, base_branch)
+            .map_err(|err| format!("Failed to create git worktree: {err}"))?;
 
         // Create .agentty subdirectory for session metadata
         let data_dir = folder.join(SESSION_DATA_DIR);
         let _ = std::fs::create_dir_all(&data_dir);
 
         let _ = std::fs::write(data_dir.join("prompt.txt"), &prompt);
-        let _ = std::fs::write(data_dir.join("agent.txt"), self.agent_kind.to_string());
-        if let Some(ref branch) = self.git_branch {
-            let _ = std::fs::write(data_dir.join("base_branch.txt"), branch);
-        }
+        self.db
+            .insert_session(&name, &self.agent_kind.to_string(), base_branch)
+            .map_err(|err| format!("Failed to save session metadata: {err}"))?;
 
-        let initial_output = if self.git_branch.is_some() {
-            format!(" › {prompt}\n\n[Git worktree: agentty/{hash}]\n\n")
-        } else {
-            format!(" › {prompt}\n\n")
-        };
+        let initial_output = format!(" › {prompt}\n\n[Git worktree: agentty/{hash}]\n\n");
         let _ = std::fs::write(data_dir.join("output.txt"), &initial_output);
 
         self.backend.setup(&folder);
@@ -245,6 +239,8 @@ impl App {
         }
         let session = self.sessions.remove(i);
 
+        let _ = self.db.delete_session(&session.name);
+
         // Remove git worktree and branch if in a git repo
         if self.git_branch.is_some() {
             let branch_name = format!("agentty/{}", session.name);
@@ -273,10 +269,8 @@ impl App {
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
 
-        // Verify this session has a git worktree
-        let data_dir = session.folder.join(SESSION_DATA_DIR);
-        let base_branch_path = data_dir.join("base_branch.txt");
-        if !base_branch_path.exists() {
+        // Verify this session has a git worktree via DB
+        if self.db.get_base_branch(&session.name)?.is_none() {
             return Err("No git worktree for this session".to_string());
         }
 
@@ -292,13 +286,11 @@ impl App {
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
 
-        // Read base branch from session folder
-        let data_dir = session.folder.join(SESSION_DATA_DIR);
-        let base_branch_path = data_dir.join("base_branch.txt");
-        let base_branch = std::fs::read_to_string(&base_branch_path)
-            .map_err(|_| "No git worktree for this session".to_string())?
-            .trim()
-            .to_string();
+        // Read base branch from DB
+        let base_branch = self
+            .db
+            .get_base_branch(&session.name)?
+            .ok_or_else(|| "No git worktree for this session".to_string())?;
 
         // Find repo root
         let repo_root = git::find_git_repo_root(&self.working_dir)
@@ -318,14 +310,12 @@ impl App {
         ))
     }
 
-    fn load_sessions(base: &PathBuf) -> Vec<Session> {
-        let Ok(entries) = std::fs::read_dir(base) else {
-            return Vec::new();
-        };
-        let mut sessions: Vec<Session> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let folder = entry.path();
+    fn load_sessions(base: &Path, db: &Database) -> Vec<Session> {
+        let db_rows = db.load_sessions().unwrap_or_default();
+        let mut sessions: Vec<Session> = db_rows
+            .into_iter()
+            .filter_map(|row| {
+                let folder = base.join(&row.name);
                 if !folder.is_dir() {
                     return None;
                 }
@@ -333,14 +323,11 @@ impl App {
                 let prompt = std::fs::read_to_string(data_dir.join("prompt.txt")).ok()?;
                 let output_text =
                     std::fs::read_to_string(data_dir.join("output.txt")).unwrap_or_default();
-                let agent = std::fs::read_to_string(data_dir.join("agent.txt"))
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_else(|_| "unknown".to_string());
                 Some(Session {
-                    name: folder.file_name()?.to_string_lossy().into_owned(),
+                    name: row.name,
                     prompt,
                     folder,
-                    agent,
+                    agent: row.agent,
                     output: Arc::new(Mutex::new(output_text)),
                     running: Arc::new(AtomicBool::new(false)),
                 })
@@ -453,13 +440,81 @@ mod tests {
 
     fn new_test_app(path: PathBuf) -> App {
         let working_dir = PathBuf::from("/tmp/test");
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
         App::new(
             path,
             working_dir,
             None,
             AgentKind::Gemini,
             Box::new(create_mock_backend()),
+            db,
         )
+    }
+
+    fn setup_test_git_repo(path: &Path) {
+        Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("git init failed");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .expect("git config failed");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .expect("git config failed");
+        std::fs::write(path.join("README.md"), "test").expect("write failed");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .expect("git add failed");
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(path)
+            .output()
+            .expect("git commit failed");
+        Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(path)
+            .output()
+            .expect("git branch failed");
+    }
+
+    fn new_test_app_with_git(path: &Path) -> App {
+        setup_test_git_repo(path);
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
+        App::new(
+            path.to_path_buf(),
+            path.to_path_buf(),
+            Some("main".to_string()),
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+            db,
+        )
+    }
+
+    fn add_manual_session(app: &mut App, base_path: &Path, name: &str, prompt: &str) {
+        let folder = base_path.join(name);
+        let data_dir = folder.join(SESSION_DATA_DIR);
+        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+        std::fs::write(data_dir.join("prompt.txt"), prompt).expect("failed to write prompt");
+        std::fs::write(data_dir.join("output.txt"), "").expect("failed to write output");
+        app.sessions.push(Session {
+            name: name.to_string(),
+            prompt: prompt.to_string(),
+            folder,
+            agent: "gemini".to_string(),
+            output: Arc::new(Mutex::new(String::new())),
+            running: Arc::new(AtomicBool::new(false)),
+        });
+        if app.table_state.selected().is_none() {
+            app.table_state.select(Some(0));
+        }
     }
 
     #[test]
@@ -503,12 +558,14 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let working_dir = PathBuf::from("/tmp/test");
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
         let app = App::new(
             dir.path().to_path_buf(),
             working_dir,
             Some("main".to_string()),
             AgentKind::Gemini,
             Box::new(create_mock_backend()),
+            db,
         );
 
         // Act
@@ -549,7 +606,7 @@ mod tests {
     fn test_navigation() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("A".to_string())
             .expect("failed to add session");
         app.add_session("B".to_string())
@@ -587,7 +644,7 @@ mod tests {
     fn test_navigation_recovery() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("A".to_string())
             .expect("failed to add session");
 
@@ -606,7 +663,7 @@ mod tests {
     fn test_add_session() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
 
         // Act
         app.add_session("Hello".to_string())
@@ -616,7 +673,6 @@ mod tests {
         assert_eq!(app.sessions.len(), 1);
         assert_eq!(app.sessions[0].prompt, "Hello");
         assert_eq!(app.table_state.selected(), Some(0));
-
         assert_eq!(app.sessions[0].agent, "gemini");
 
         // Check filesystem
@@ -625,17 +681,19 @@ mod tests {
         assert!(session_dir.exists());
         assert!(data_dir.join("prompt.txt").exists());
         assert!(data_dir.join("output.txt").exists());
-        assert_eq!(
-            std::fs::read_to_string(data_dir.join("agent.txt")).expect("agent.txt"),
-            "gemini"
-        );
+
+        // Check DB
+        let db_sessions = app.db.load_sessions().expect("failed to load");
+        assert_eq!(db_sessions.len(), 1);
+        assert_eq!(db_sessions[0].agent, "gemini");
+        assert_eq!(db_sessions[0].base_branch, "main");
     }
 
     #[test]
     fn test_reply() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("Initial".to_string())
             .expect("failed to add session");
 
@@ -652,7 +710,7 @@ mod tests {
     fn test_selected_session() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("Test".to_string())
             .expect("failed to add session");
 
@@ -667,9 +725,10 @@ mod tests {
     fn test_delete_session() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("A".to_string())
             .expect("failed to add session");
+        let session_folder = app.sessions[0].folder.clone();
 
         // Act
         app.delete_selected_session();
@@ -677,19 +736,16 @@ mod tests {
         // Assert
         assert!(app.sessions.is_empty());
         assert_eq!(app.table_state.selected(), None);
-        assert_eq!(
-            std::fs::read_dir(dir.path())
-                .expect("failed to read dir")
-                .count(),
-            0
-        );
+        assert!(!session_folder.exists());
+        let db_sessions = app.db.load_sessions().expect("failed to load");
+        assert!(db_sessions.is_empty());
     }
 
     #[test]
     fn test_delete_selected_session_edge_cases() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("1".to_string())
             .expect("failed to add session");
         app.add_session("2".to_string())
@@ -710,7 +766,7 @@ mod tests {
     fn test_delete_last_session_update_selection() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf());
+        let mut app = new_test_app_with_git(dir.path());
         app.add_session("1".to_string())
             .expect("failed to add session");
         app.add_session("2".to_string())
@@ -732,22 +788,26 @@ mod tests {
     fn test_load_existing_sessions() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
+        db.insert_session("12345678", "claude", "main")
+            .expect("failed to insert");
+
         let session_dir = dir.path().join("12345678");
         let data_dir = session_dir.join(SESSION_DATA_DIR);
         std::fs::create_dir(&session_dir).expect("failed to create session dir");
         std::fs::create_dir(&data_dir).expect("failed to create data dir");
         std::fs::write(data_dir.join("prompt.txt"), "Existing").expect("failed to write prompt");
         std::fs::write(data_dir.join("output.txt"), "Output").expect("failed to write output");
-        std::fs::write(data_dir.join("agent.txt"), "claude").expect("failed to write agent");
-
-        // Add some garbage files to test filter logic
-        std::fs::write(dir.path().join("ignored_file.txt"), "")
-            .expect("failed to write ignored file");
-        let ignored_dir = dir.path().join("ignored_dir");
-        std::fs::create_dir(&ignored_dir).expect("failed to create ignored dir");
 
         // Act
-        let app = new_test_app(dir.path().to_path_buf());
+        let app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            None,
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+            db,
+        );
 
         // Assert
         assert_eq!(app.sessions.len(), 1);
@@ -770,27 +830,33 @@ mod tests {
     }
 
     #[test]
-    fn test_load_session_without_agent_txt_defaults_to_unknown() {
-        // Arrange
+    fn test_load_session_without_folder_skipped() {
+        // Arrange — DB has a row but no matching folder on disk
         let dir = tempdir().expect("failed to create temp dir");
-        let session_dir = dir.path().join("noagent01");
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir(&session_dir).expect("failed to create session dir");
-        std::fs::create_dir(&data_dir).expect("failed to create data dir");
-        std::fs::write(data_dir.join("prompt.txt"), "Test").expect("failed to write prompt");
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
+        db.insert_session("missing01", "gemini", "main")
+            .expect("failed to insert");
 
         // Act
-        let app = new_test_app(dir.path().to_path_buf());
+        let app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            None,
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+            db,
+        );
 
-        // Assert
-        assert_eq!(app.sessions.len(), 1);
-        assert_eq!(app.sessions[0].agent, "unknown");
+        // Assert — session is skipped because folder doesn't exist
+        assert!(app.sessions.is_empty());
     }
 
     #[test]
     fn test_spawn_integration() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
         let mut mock = MockAgentBackend::new();
         mock.expect_setup().returning(|_| {});
         mock.expect_build_start_command()
@@ -821,10 +887,11 @@ mod tests {
             });
         let mut app = App::new(
             dir.path().to_path_buf(),
-            PathBuf::from("/tmp/test"),
-            None,
+            dir.path().to_path_buf(),
+            Some("main".to_string()),
             AgentKind::Gemini,
             Box::new(mock),
+            db,
         );
 
         // Act — add session (start command)
@@ -934,26 +1001,28 @@ mod tests {
         let result = app.add_session("Test".to_string());
 
         // Assert
-        assert!(result.is_ok());
-        assert_eq!(app.sessions.len(), 1);
-        let output = app.sessions[0]
-            .output
-            .lock()
-            .expect("failed to lock output");
-        assert!(!output.contains("Git worktree"));
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("Git branch is required")
+        );
+        assert!(app.sessions.is_empty());
     }
 
     #[test]
     fn test_add_session_with_git_no_actual_repo() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
         let mock = MockAgentBackend::new();
         let mut app = App::new(
             dir.path().to_path_buf(),
             PathBuf::from("/tmp/test"),
-            Some("main".to_string()), // Simulate git branch
+            Some("main".to_string()),
             AgentKind::Gemini,
             Box::new(mock),
+            db,
         );
 
         // Act
@@ -972,13 +1041,15 @@ mod tests {
     fn test_add_session_cleans_up_on_error() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().expect("failed to open in-memory db");
         let mock = MockAgentBackend::new();
         let mut app = App::new(
             dir.path().to_path_buf(),
             PathBuf::from("/tmp/test"),
-            Some("main".to_string()), // Simulate git branch
+            Some("main".to_string()),
             AgentKind::Gemini,
             Box::new(mock),
+            db,
         );
 
         // Act
@@ -1000,8 +1071,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("Test".to_string())
-            .expect("failed to add session");
+        add_manual_session(&mut app, dir.path(), "manual01", "Test");
 
         // Act
         app.delete_selected_session();
@@ -1015,8 +1085,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("Test".to_string())
-            .expect("failed to add session");
+        add_manual_session(&mut app, dir.path(), "manual01", "Test");
 
         // Act
         let result = app.commit_session(0);
@@ -1053,8 +1122,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf());
-        app.add_session("Test".to_string())
-            .expect("failed to add session");
+        add_manual_session(&mut app, dir.path(), "manual01", "Test");
 
         // Act
         let result = app.merge_session(0);

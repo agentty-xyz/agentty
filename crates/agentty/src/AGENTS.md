@@ -4,6 +4,7 @@
 - [ui/](ui/) - User Interface module.
 - [agent.rs](agent.rs) - `AgentBackend` trait and concrete backends (`GeminiBackend`, `ClaudeBackend`).
 - [app.rs](app.rs) - `App` struct holding application state (`sessions`, `table_state`, `mode`) and business logic.
+- [db.rs](db.rs) - `Database` struct wrapping SQLx for session metadata persistence.
 - [git.rs](git.rs) - Git integration and worktree management.
 - [lib.rs](lib.rs) - Library entry point, exports modules.
 - [lock.rs](lock.rs) - Single-instance session lock using POSIX `flock`.

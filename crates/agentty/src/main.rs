@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use agentty::agent::AgentKind;
 use agentty::app::{AGENTTY_WORKSPACE, App, SESSION_DATA_DIR};
+use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::model::{AppMode, PaletteCommand, PaletteFocus};
 use agentty::ui;
 use crossterm::event::{self, Event, KeyCode};
@@ -39,9 +40,12 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let db_path = base_path.join(DB_DIR).join(DB_FILE);
+    let db = Database::open(&db_path).map_err(io::Error::other)?;
+
     let agent_kind = AgentKind::from_env();
     let backend = agent_kind.create_backend();
-    let mut app = App::new(base_path, working_dir, git_branch, agent_kind, backend);
+    let mut app = App::new(base_path, working_dir, git_branch, agent_kind, backend, db);
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(100);
 

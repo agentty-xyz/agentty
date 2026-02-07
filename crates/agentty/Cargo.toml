@@ -15,9 +15,11 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+crossterm.workspace = true
 libc.workspace = true
 ratatui.workspace = true
-crossterm.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true

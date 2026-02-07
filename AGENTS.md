@@ -24,6 +24,39 @@ TUI tool to manage agents.
     - If a function has multiple callees, they should appear in the order they are first called within that function.
 - **Imports:** Always place imports at the top of the file. Do not use local `use` statements within functions or other blocks.
 
+## Database Standards (SQLx + SQLite)
+
+### 1. Stack & Pattern
+* **Driver:** `sqlx` (Feature: `sqlite`).
+* **Runtime:** `tokio`.
+* **Pattern:** Repository pattern or direct service-layer queries. **No ORM**.
+* **Safety:** Prefer compile-time checked macros (`query!`, `query_as!`).
+    * *Requirement:* `.sqlx` directory must be committed for offline compilation (CI/CD).
+* **Concurrency:** Must enable **WAL Mode** (Write-Ahead Logging) for concurrent readers/writers.
+
+### 2. Naming Conventions (Strict)
+* **Tables:** `snake_case`, **SINGULAR** (e.g., `user`, `order_item`).
+    * *Rationale:* Matches Rust struct names exactly (`User` -> `user`).
+* **Columns:** `snake_case`.
+    * **PK:** `id` (`INTEGER PRIMARY KEY AUTOINCREMENT`).
+    * **FK:** `{table}_id` (e.g., `user_id`).
+    * **Booleans:** Prefix with `is_`, `has_` (Stored as `INTEGER`, mapped to `bool`).
+    * **Timestamps:** `{action}_at` (Stored as `INTEGER` (Unix) or `TEXT` (ISO8601)).
+* **Rust Structs:**
+    * Name: Singular, PascalCase (e.g., `User`).
+    * Fields: `snake_case` (Matches DB columns 1:1).
+
+### 3. Implementation Guidelines
+1.  **Configuration:**
+    * Set `PRAGMA foreign_keys = ON;` (SQLite defaults to OFF).
+    * Set `PRAGMA journal_mode = WAL;` (Crucial for performance).
+2.  **Migrations:** Embedded at compile time via `sqlx::migrate!()`.
+    * Place SQL files in `crates/<crate>/migrations/` named `NNN_description.sql`.
+    * Migrations run automatically on database open; no external CLI required.
+3.  **Dependency Injection:** Pass `&sqlx::SqlitePool` to functions.
+    * *Note:* SQLite handles cloning the pool cheaply.
+4.  **Error Handling:** Map `sqlx::Error` to domain-specific errors.
+
 ## Quality Gates
 To ensure code quality, you must pass both automated and manual gates.
 

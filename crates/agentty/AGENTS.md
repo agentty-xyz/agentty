@@ -4,6 +4,7 @@ Modular TUI application for managing agent sessions.
 The main binary is named `agentty`.
 
 ## Directory Index
+- [migrations/](migrations/) - SQLite schema migrations for SQLx.
 - [src/](src/) - Source code directory.
 - [AGENTS.md](AGENTS.md) - Crate documentation.
 - [Cargo.toml](Cargo.toml) - Crate dependencies and metadata.
