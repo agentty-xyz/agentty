@@ -37,9 +37,16 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-      - id: agents-index-check
-        name: agents index check
+      - id: check-indexes
+        name: check indexes
         description: Verifies that all AGENTS.md files have an up-to-date Directory Index.
-        entry: cargo run -q -p ag-xtask
+        entry: cargo run -q -p ag-xtask -- check-indexes
         language: system
+        pass_filenames: false
+      - id: check-migrations
+        name: check migrations
+        description: Verifies that migration files have unique prefix numbers.
+        entry: cargo run -q -p ag-xtask -- check-migrations
+        language: system
+        types: [sql]
         pass_filenames: false
