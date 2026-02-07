@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use agentty::agent::AgentKind;
 use agentty::app::{AGENTTY_WORKSPACE, App, SESSION_DATA_DIR};
-use agentty::model::AppMode;
+use agentty::model::{AppMode, PaletteCommand, PaletteFocus};
 use agentty::ui;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
@@ -46,7 +46,16 @@ fn main() -> io::Result<()> {
     let tick_rate = Duration::from_millis(100);
 
     loop {
-        let current_agent_kind = app.agent_kind();
+        let current_agent_kind = match &app.mode {
+            AppMode::CommandOption {
+                command: PaletteCommand::Agents,
+                selected_index,
+            } => AgentKind::ALL
+                .get(*selected_index)
+                .copied()
+                .unwrap_or_else(|| app.agent_kind()),
+            _ => app.agent_kind(),
+        };
         let current_tab = app.current_tab;
         let current_working_dir = app.working_dir().clone();
         let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
@@ -74,6 +83,13 @@ fn main() -> io::Result<()> {
                         KeyCode::Char('q') => break,
                         KeyCode::Tab => {
                             app.next_tab();
+                        }
+                        KeyCode::Char('/') => {
+                            app.mode = AppMode::CommandPalette {
+                                input: String::new(),
+                                selected_index: 0,
+                                focus: PaletteFocus::Input,
+                            };
                         }
                         KeyCode::Char('a') => {
                             app.mode = AppMode::Prompt {
@@ -282,6 +298,14 @@ fn main() -> io::Result<()> {
                                     scroll_offset: scroll_snapshot,
                                 };
                             }
+                            KeyCode::Char('c')
+                                if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                            {
+                                app.mode = AppMode::View {
+                                    session_index,
+                                    scroll_offset: scroll_snapshot,
+                                };
+                            }
                             KeyCode::Char(c) => {
                                 input.push(c);
                             }
@@ -308,6 +332,11 @@ fn main() -> io::Result<()> {
                         KeyCode::Esc => {
                             app.mode = AppMode::List;
                         }
+                        KeyCode::Char('c')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            app.mode = AppMode::List;
+                        }
                         KeyCode::Char(c) => {
                             input.push(c);
                         }
@@ -332,6 +361,105 @@ fn main() -> io::Result<()> {
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
                             *scroll_offset = scroll_offset.saturating_sub(1);
+                        }
+                        _ => {}
+                    },
+                    AppMode::CommandPalette {
+                        input,
+                        selected_index,
+                        focus,
+                    } => match focus {
+                        PaletteFocus::Input => match key.code {
+                            KeyCode::Char('c')
+                                if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                            {
+                                app.mode = AppMode::List;
+                            }
+                            KeyCode::Char(c) => {
+                                input.push(c);
+                                *selected_index = 0;
+                            }
+                            KeyCode::Backspace => {
+                                input.pop();
+                                *selected_index = 0;
+                            }
+                            KeyCode::Tab => {
+                                let filtered = PaletteCommand::filter(input);
+                                if !filtered.is_empty() {
+                                    *focus = PaletteFocus::Dropdown;
+                                }
+                            }
+                            KeyCode::Esc => {
+                                app.mode = AppMode::List;
+                            }
+                            _ => {}
+                        },
+                        PaletteFocus::Dropdown => match key.code {
+                            KeyCode::Char('c')
+                                if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                            {
+                                app.mode = AppMode::List;
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                let filtered = PaletteCommand::filter(input);
+                                if !filtered.is_empty() {
+                                    *selected_index = (*selected_index + 1).min(filtered.len() - 1);
+                                }
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                *selected_index = selected_index.saturating_sub(1);
+                            }
+                            KeyCode::Enter => {
+                                let filtered = PaletteCommand::filter(input);
+                                if let Some(&command) = filtered.get(*selected_index) {
+                                    app.mode = AppMode::CommandOption {
+                                        command,
+                                        selected_index: 0,
+                                    };
+                                }
+                            }
+                            KeyCode::Esc | KeyCode::Tab => {
+                                *focus = PaletteFocus::Input;
+                            }
+                            _ => {}
+                        },
+                    },
+                    AppMode::CommandOption {
+                        command,
+                        selected_index,
+                    } => match key.code {
+                        KeyCode::Char('c')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            app.mode = AppMode::List;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            let option_count = match command {
+                                PaletteCommand::Agents => AgentKind::ALL.len(),
+                            };
+                            if option_count > 0 {
+                                *selected_index = (*selected_index + 1).min(option_count - 1);
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            *selected_index = selected_index.saturating_sub(1);
+                        }
+                        KeyCode::Enter => {
+                            match command {
+                                PaletteCommand::Agents => {
+                                    if let Some(&agent_kind) = AgentKind::ALL.get(*selected_index) {
+                                        app.set_agent_kind(agent_kind);
+                                    }
+                                }
+                            }
+                            app.mode = AppMode::List;
+                        }
+                        KeyCode::Esc => {
+                            app.mode = AppMode::CommandPalette {
+                                input: String::new(),
+                                selected_index: 0,
+                                focus: PaletteFocus::Input,
+                            };
                         }
                         _ => {}
                     },

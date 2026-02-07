@@ -4,6 +4,7 @@ Reusable UI widgets implementing the `Component` trait.
 
 ## Directory Index
 - [chat_input.rs](chat_input.rs) - Chat input component.
+- [command_palette.rs](command_palette.rs) - Command palette and option list components.
 - [footer_bar.rs](footer_bar.rs) - Footer bar component.
 - [mod.rs](mod.rs) - Component module exports.
 - [status_bar.rs](status_bar.rs) - Status bar component.

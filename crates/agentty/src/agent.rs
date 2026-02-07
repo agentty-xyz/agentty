@@ -95,6 +95,9 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
+    /// All available agent kinds, in display order.
+    pub const ALL: &[AgentKind] = &[AgentKind::Gemini, AgentKind::Claude];
+
     /// Parse from `AGENTTY_AGENT` env var, defaulting to Gemini.
     pub fn from_env() -> Self {
         std::env::var("AGENTTY_AGENT")
@@ -246,6 +249,14 @@ mod tests {
         assert!(debug.contains("follow-up"));
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
+    }
+
+    #[test]
+    fn test_agent_kind_all() {
+        // Arrange & Act & Assert
+        assert_eq!(AgentKind::ALL.len(), 2);
+        assert_eq!(AgentKind::ALL[0], AgentKind::Gemini);
+        assert_eq!(AgentKind::ALL[1], AgentKind::Claude);
     }
 
     #[test]

@@ -61,6 +61,11 @@ impl App {
         self.agent_kind
     }
 
+    pub fn set_agent_kind(&mut self, agent_kind: AgentKind) {
+        self.agent_kind = agent_kind;
+        self.backend = agent_kind.create_backend();
+    }
+
     pub fn working_dir(&self) -> &PathBuf {
         &self.working_dir
     }
@@ -188,6 +193,21 @@ impl App {
     }
 
     pub fn reply(&mut self, session_index: usize, prompt: &str) {
+        let session_agent = self
+            .sessions
+            .get(session_index)
+            .and_then(|s| s.agent.parse::<AgentKind>().ok())
+            .unwrap_or(self.agent_kind);
+        let backend = session_agent.create_backend();
+        self.reply_with_backend(session_index, prompt, backend.as_ref());
+    }
+
+    fn reply_with_backend(
+        &mut self,
+        session_index: usize,
+        prompt: &str,
+        backend: &dyn AgentBackend,
+    ) {
         let Some(session) = self.sessions.get_mut(session_index) else {
             return;
         };
@@ -206,7 +226,7 @@ impl App {
             .and_then(|mut f| write!(f, "{reply_line}"));
 
         running.store(true, Ordering::Relaxed);
-        let cmd = self.backend.build_resume_command(&folder, prompt);
+        let cmd = backend.build_resume_command(&folder, prompt);
         Self::spawn_session_task(folder, cmd, output, running);
     }
 
@@ -512,6 +532,20 @@ mod tests {
     }
 
     #[test]
+    fn test_set_agent_kind() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf());
+        assert_eq!(app.agent_kind(), AgentKind::Gemini);
+
+        // Act
+        app.set_agent_kind(AgentKind::Claude);
+
+        // Assert
+        assert_eq!(app.agent_kind(), AgentKind::Claude);
+    }
+
+    #[test]
     fn test_navigation() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -812,7 +846,23 @@ mod tests {
         }
 
         // Act — reply (resume command)
-        app.reply(0, "SpawnReply");
+        let mut resume_mock = MockAgentBackend::new();
+        resume_mock
+            .expect_build_resume_command()
+            .returning(|folder, prompt| {
+                let mut cmd = Command::new("echo");
+                cmd.arg("--prompt")
+                    .arg(prompt)
+                    .arg("--model")
+                    .arg("gemini-3-flash-preview")
+                    .arg("--resume")
+                    .arg("latest")
+                    .current_dir(folder)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+                cmd
+            });
+        app.reply_with_backend(0, "SpawnReply", &resume_mock);
         std::thread::sleep(std::time::Duration::from_millis(300));
 
         // Assert

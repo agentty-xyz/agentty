@@ -35,6 +35,45 @@ pub enum AppMode {
         diff: String,
         scroll_offset: u16,
     },
+    CommandPalette {
+        input: String,
+        selected_index: usize,
+        focus: PaletteFocus,
+    },
+    CommandOption {
+        command: PaletteCommand,
+        selected_index: usize,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PaletteFocus {
+    Input,
+    Dropdown,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PaletteCommand {
+    Agents,
+}
+
+impl PaletteCommand {
+    pub const ALL: &[PaletteCommand] = &[PaletteCommand::Agents];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PaletteCommand::Agents => "agents",
+        }
+    }
+
+    pub fn filter(query: &str) -> Vec<PaletteCommand> {
+        let query_lower = query.to_lowercase();
+        Self::ALL
+            .iter()
+            .filter(|cmd| cmd.label().contains(&query_lower))
+            .copied()
+            .collect()
+    }
 }
 
 pub struct Session {
@@ -129,6 +168,57 @@ mod tests {
         // Arrange & Act & Assert
         assert_eq!(Status::InProgress.color(), Color::Yellow);
         assert_eq!(Status::Done.color(), Color::Green);
+    }
+
+    #[test]
+    fn test_palette_command_label() {
+        // Arrange & Act & Assert
+        assert_eq!(PaletteCommand::Agents.label(), "agents");
+    }
+
+    #[test]
+    fn test_palette_command_all() {
+        // Arrange & Act & Assert
+        assert_eq!(PaletteCommand::ALL.len(), 1);
+        assert_eq!(PaletteCommand::ALL[0], PaletteCommand::Agents);
+    }
+
+    #[test]
+    fn test_palette_command_filter() {
+        // Arrange & Act
+        let results = PaletteCommand::filter("age");
+
+        // Assert
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], PaletteCommand::Agents);
+    }
+
+    #[test]
+    fn test_palette_command_filter_case_insensitive() {
+        // Arrange & Act
+        let results = PaletteCommand::filter("AGE");
+
+        // Assert
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], PaletteCommand::Agents);
+    }
+
+    #[test]
+    fn test_palette_command_filter_no_match() {
+        // Arrange & Act
+        let results = PaletteCommand::filter("xyz");
+
+        // Assert
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_palette_command_filter_empty_query() {
+        // Arrange & Act
+        let results = PaletteCommand::filter("");
+
+        // Assert — empty query matches all commands
+        assert_eq!(results.len(), PaletteCommand::ALL.len());
     }
 
     #[test]

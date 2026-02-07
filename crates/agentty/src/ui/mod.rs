@@ -55,25 +55,7 @@ pub fn render(
 
     match mode {
         AppMode::List => {
-            // Split content area for tabs and main content
-            let chunks = Layout::default()
-                .constraints([Constraint::Length(3), Constraint::Min(0)])
-                .split(content_area);
-
-            let tabs_area = chunks[0];
-            let main_area = chunks[1];
-
-            components::tabs::Tabs::new(current_tab).render(f, tabs_area);
-
-            match current_tab {
-                Tab::Sessions => {
-                    pages::sessions_list::SessionsListPage::new(sessions, table_state)
-                        .render(f, main_area);
-                }
-                Tab::Roadmap => {
-                    pages::roadmap::RoadmapPage.render(f, main_area);
-                }
-            }
+            render_list_background(f, content_area, sessions, table_state, current_tab);
         }
         AppMode::View {
             session_index,
@@ -104,6 +86,52 @@ pub fn render(
                 pages::diff::DiffPage::new(session, diff.clone(), *scroll_offset)
                     .render(f, content_area);
             }
+        }
+        AppMode::CommandPalette {
+            input,
+            selected_index,
+            focus,
+        } => {
+            // Render List page as background
+            render_list_background(f, content_area, sessions, table_state, current_tab);
+
+            // Overlay command palette at the bottom
+            components::command_palette::CommandPaletteInput::new(input, *selected_index, *focus)
+                .render(f, content_area);
+        }
+        AppMode::CommandOption {
+            command,
+            selected_index,
+        } => {
+            // Render List page as background
+            render_list_background(f, content_area, sessions, table_state, current_tab);
+
+            // Overlay option list at the bottom
+            components::command_palette::CommandOptionList::new(*command, *selected_index)
+                .render(f, content_area);
+        }
+    }
+}
+
+fn render_list_background(
+    f: &mut Frame,
+    content_area: Rect,
+    sessions: &[Session],
+    table_state: &mut TableState,
+    current_tab: Tab,
+) {
+    let chunks = Layout::default()
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(content_area);
+
+    components::tabs::Tabs::new(current_tab).render(f, chunks[0]);
+
+    match current_tab {
+        Tab::Sessions => {
+            pages::sessions_list::SessionsListPage::new(sessions, table_state).render(f, chunks[1]);
+        }
+        Tab::Roadmap => {
+            pages::roadmap::RoadmapPage.render(f, chunks[1]);
         }
     }
 }
