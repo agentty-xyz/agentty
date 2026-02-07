@@ -184,10 +184,12 @@ async fn check_github_auth() -> HealthEntry {
     {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let account = parse_auth_field(&stdout, "Logged in to");
-            let scopes = parse_auth_field(&stdout, "Token scopes:");
+            let account = parse_auth_field(&stdout, "account ")
+                .and_then(|value| value.split_whitespace().next());
+            let scopes =
+                parse_auth_field(&stdout, "Token scopes:").map(|value| value.replace('\'', ""));
             let detail = match (account, scopes) {
-                (Some(account), Some(scopes)) => format!("{account} | scopes: {scopes}"),
+                (Some(account), Some(scopes)) => format!("{account} ({scopes})"),
                 (Some(account), None) => account.to_string(),
                 _ => "Authenticated".to_string(),
             };
@@ -206,16 +208,10 @@ async fn check_github_auth() -> HealthEntry {
 }
 
 fn parse_auth_field<'a>(output: &'a str, prefix: &str) -> Option<&'a str> {
-    output
-        .lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix('-')
-                .unwrap_or(line.trim())
-                .trim()
-                .strip_prefix(prefix)
-        })
-        .map(str::trim)
+    output.lines().find_map(|line| {
+        let start = line.find(prefix)?;
+        Some(line[start + prefix.len()..].trim())
+    })
 }
 
 #[cfg(test)]
@@ -429,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_auth_field_found() {
+    fn test_parse_auth_field_with_dash_bullet() {
         // Arrange
         let output = "  - Active account: true\n  - Token scopes: 'repo', 'read:org'\n";
 
@@ -440,6 +436,22 @@ mod tests {
         // Assert
         assert_eq!(account, Some("true"));
         assert_eq!(scopes, Some("'repo', 'read:org'"));
+    }
+
+    #[test]
+    fn test_parse_auth_field_with_check_bullet() {
+        // Arrange — matches actual `gh auth status` output
+        let output =
+            "  \u{2713} Logged in to github.com account user (keyring)\n  - Token scopes: 'repo'\n";
+
+        // Act
+        let account =
+            parse_auth_field(output, "account ").and_then(|value| value.split_whitespace().next());
+        let scopes = parse_auth_field(output, "Token scopes:").map(|value| value.replace('\'', ""));
+
+        // Assert
+        assert_eq!(account, Some("user"));
+        assert_eq!(scopes, Some("repo".to_string()));
     }
 
     #[test]
