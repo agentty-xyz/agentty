@@ -34,14 +34,12 @@ use std::path::Path;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
-use tokio::runtime::{Builder, Runtime};
 
 pub const DB_DIR: &str = "db";
 pub const DB_FILE: &str = "agentty.db";
 
 pub struct Database {
     pool: SqlitePool,
-    runtime: Runtime,
 }
 
 pub struct SessionRow {
@@ -51,125 +49,104 @@ pub struct SessionRow {
 }
 
 impl Database {
-    pub fn open(db_path: &Path) -> Result<Self, String> {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| format!("Failed to create runtime: {err}"))?;
+    pub async fn open(db_path: &Path) -> Result<Self, String> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("Failed to create database directory: {err}"))?;
+        }
 
-        let pool: SqlitePool = runtime.block_on(async {
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|err| format!("Failed to create database directory: {err}"))?;
-            }
+        let options = SqliteConnectOptions::new()
+            .filename(db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
 
-            let options = SqliteConnectOptions::new()
-                .filename(db_path)
-                .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal)
-                .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(|err| format!("Failed to connect to database: {err}"))?;
 
-            let pool = SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
-                .map_err(|err| format!("Failed to connect to database: {err}"))?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|err| format!("Failed to run migrations: {err}"))?;
 
-            sqlx::migrate!("./migrations")
-                .run(&pool)
-                .await
-                .map_err(|err| format!("Failed to run migrations: {err}"))?;
-
-            Ok::<_, String>(pool)
-        })?;
-
-        Ok(Self { pool, runtime })
+        Ok(Self { pool })
     }
 
-    pub fn insert_session(&self, name: &str, agent: &str, base_branch: &str) -> Result<(), String> {
-        self.runtime.block_on(async {
-            sqlx::query("INSERT INTO session (name, agent, base_branch) VALUES (?, ?, ?)")
-                .bind(name)
-                .bind(agent)
-                .bind(base_branch)
-                .execute(&self.pool)
-                .await
-                .map_err(|err| format!("Failed to insert session: {err}"))?;
-            Ok(())
-        })
+    pub async fn insert_session(
+        &self,
+        name: &str,
+        agent: &str,
+        base_branch: &str,
+    ) -> Result<(), String> {
+        sqlx::query("INSERT INTO session (name, agent, base_branch) VALUES (?, ?, ?)")
+            .bind(name)
+            .bind(agent)
+            .bind(base_branch)
+            .execute(&self.pool)
+            .await
+            .map_err(|err| format!("Failed to insert session: {err}"))?;
+        Ok(())
     }
 
-    pub fn load_sessions(&self) -> Result<Vec<SessionRow>, String> {
-        self.runtime.block_on(async {
-            let rows = sqlx::query("SELECT name, agent, base_branch FROM session ORDER BY name")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|err| format!("Failed to load sessions: {err}"))?;
+    pub async fn load_sessions(&self) -> Result<Vec<SessionRow>, String> {
+        let rows = sqlx::query("SELECT name, agent, base_branch FROM session ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|err| format!("Failed to load sessions: {err}"))?;
 
-            Ok(rows
-                .iter()
-                .map(|row| SessionRow {
-                    agent: row.get("agent"),
-                    base_branch: row.get("base_branch"),
-                    name: row.get("name"),
-                })
-                .collect())
-        })
+        Ok(rows
+            .iter()
+            .map(|row| SessionRow {
+                agent: row.get("agent"),
+                base_branch: row.get("base_branch"),
+                name: row.get("name"),
+            })
+            .collect())
     }
 
-    pub fn delete_session(&self, name: &str) -> Result<(), String> {
-        self.runtime.block_on(async {
-            sqlx::query("DELETE FROM session WHERE name = ?")
-                .bind(name)
-                .execute(&self.pool)
-                .await
-                .map_err(|err| format!("Failed to delete session: {err}"))?;
-            Ok(())
-        })
+    pub async fn delete_session(&self, name: &str) -> Result<(), String> {
+        sqlx::query("DELETE FROM session WHERE name = ?")
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(|err| format!("Failed to delete session: {err}"))?;
+        Ok(())
     }
 
-    pub fn get_base_branch(&self, name: &str) -> Result<Option<String>, String> {
-        self.runtime.block_on(async {
-            let row = sqlx::query("SELECT base_branch FROM session WHERE name = ?")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|err| format!("Failed to get base branch: {err}"))?;
+    pub async fn get_base_branch(&self, name: &str) -> Result<Option<String>, String> {
+        let row = sqlx::query("SELECT base_branch FROM session WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|err| format!("Failed to get base branch: {err}"))?;
 
-            Ok(row.map(|row| row.get("base_branch")))
-        })
+        Ok(row.map(|row| row.get("base_branch")))
     }
 }
 
 #[cfg(test)]
 impl Database {
-    pub fn open_in_memory() -> Result<Self, String> {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| format!("Failed to create runtime: {err}"))?;
+    pub async fn open_in_memory() -> Result<Self, String> {
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
 
-        let pool: SqlitePool = runtime.block_on(async {
-            let options = SqliteConnectOptions::new()
-                .filename(":memory:")
-                .journal_mode(SqliteJournalMode::Wal)
-                .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(|err| format!("Failed to connect to in-memory database: {err}"))?;
 
-            let pool = SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
-                .map_err(|err| format!("Failed to connect to in-memory database: {err}"))?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|err| format!("Failed to run migrations: {err}"))?;
 
-            sqlx::migrate!("./migrations")
-                .run(&pool)
-                .await
-                .map_err(|err| format!("Failed to run migrations: {err}"))?;
-
-            Ok::<_, String>(pool)
-        })?;
-
-        Ok(Self { pool, runtime })
+        Ok(Self { pool })
     }
 }
 
@@ -177,78 +154,81 @@ impl Database {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_open_in_memory() {
+    #[tokio::test]
+    async fn test_open_in_memory() {
         // Arrange & Act
-        let db = Database::open_in_memory();
+        let db = Database::open_in_memory().await;
 
         // Assert
         assert!(db.is_ok());
     }
 
-    #[test]
-    fn test_open_creates_directory_and_file() {
+    #[tokio::test]
+    async fn test_open_creates_directory_and_file() {
         // Arrange
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("subdir").join("test.db");
 
         // Act
-        let db = Database::open(&db_path);
+        let db = Database::open(&db_path).await;
 
         // Assert
         assert!(db.is_ok());
         assert!(db_path.exists());
     }
 
-    #[test]
-    fn test_insert_session() {
+    #[tokio::test]
+    async fn test_insert_session() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
 
         // Act
-        let result = db.insert_session("sess1", "claude", "main");
+        let result = db.insert_session("sess1", "claude", "main").await;
 
         // Assert
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_insert_duplicate_session_fails() {
+    #[tokio::test]
+    async fn test_insert_duplicate_session_fails() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
         db.insert_session("sess1", "claude", "main")
+            .await
             .expect("failed to insert");
 
         // Act
-        let result = db.insert_session("sess1", "gemini", "develop");
+        let result = db.insert_session("sess1", "gemini", "develop").await;
 
         // Assert
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_load_sessions_empty() {
+    #[tokio::test]
+    async fn test_load_sessions_empty() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
 
         // Act
-        let sessions = db.load_sessions().expect("failed to load");
+        let sessions = db.load_sessions().await.expect("failed to load");
 
         // Assert
         assert!(sessions.is_empty());
     }
 
-    #[test]
-    fn test_load_sessions_ordered_by_name() {
+    #[tokio::test]
+    async fn test_load_sessions_ordered_by_name() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
         db.insert_session("beta", "claude", "main")
+            .await
             .expect("failed to insert");
         db.insert_session("alpha", "gemini", "develop")
+            .await
             .expect("failed to insert");
 
         // Act
-        let sessions = db.load_sessions().expect("failed to load");
+        let sessions = db.load_sessions().await.expect("failed to load");
 
         // Assert
         assert_eq!(sessions.len(), 2);
@@ -260,55 +240,60 @@ mod tests {
         assert_eq!(sessions[1].base_branch, "main");
     }
 
-    #[test]
-    fn test_delete_session() {
+    #[tokio::test]
+    async fn test_delete_session() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
         db.insert_session("sess1", "claude", "main")
+            .await
             .expect("failed to insert");
 
         // Act
-        let result = db.delete_session("sess1");
+        let result = db.delete_session("sess1").await;
 
         // Assert
         assert!(result.is_ok());
-        let sessions = db.load_sessions().expect("failed to load");
+        let sessions = db.load_sessions().await.expect("failed to load");
         assert!(sessions.is_empty());
     }
 
-    #[test]
-    fn test_delete_nonexistent_session_succeeds() {
+    #[tokio::test]
+    async fn test_delete_nonexistent_session_succeeds() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
 
         // Act
-        let result = db.delete_session("nonexistent");
+        let result = db.delete_session("nonexistent").await;
 
         // Assert
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_get_base_branch_exists() {
+    #[tokio::test]
+    async fn test_get_base_branch_exists() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
         db.insert_session("sess1", "claude", "main")
+            .await
             .expect("failed to insert");
 
         // Act
-        let branch = db.get_base_branch("sess1").expect("failed to get");
+        let branch = db.get_base_branch("sess1").await.expect("failed to get");
 
         // Assert
         assert_eq!(branch, Some("main".to_string()));
     }
 
-    #[test]
-    fn test_get_base_branch_not_found() {
+    #[tokio::test]
+    async fn test_get_base_branch_not_found() {
         // Arrange
-        let db = Database::open_in_memory().expect("failed to open db");
+        let db = Database::open_in_memory().await.expect("failed to open db");
 
         // Act
-        let branch = db.get_base_branch("nonexistent").expect("failed to get");
+        let branch = db
+            .get_base_branch("nonexistent")
+            .await
+            .expect("failed to get");
 
         // Assert
         assert_eq!(branch, None);

@@ -16,7 +16,8 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     let base_path = PathBuf::from(AGENTTY_WORKSPACE);
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let git_branch = agentty::git::detect_git_info(&working_dir);
@@ -41,11 +42,11 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let db_path = base_path.join(DB_DIR).join(DB_FILE);
-    let db = Database::open(&db_path).map_err(io::Error::other)?;
+    let db = Database::open(&db_path).await.map_err(io::Error::other)?;
 
     let agent_kind = AgentKind::from_env();
     let backend = agent_kind.create_backend();
-    let mut app = App::new(base_path, working_dir, git_branch, agent_kind, backend, db);
+    let mut app = App::new(base_path, working_dir, git_branch, agent_kind, backend, db).await;
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_millis(100);
 
@@ -120,7 +121,7 @@ fn main() -> io::Result<()> {
                             }
                         }
                         KeyCode::Char('d') => {
-                            app.delete_selected_session();
+                            app.delete_selected_session().await;
                         }
                         KeyCode::Char('o') => {
                             if let Some(session) = app.selected_session() {
@@ -229,7 +230,8 @@ fn main() -> io::Result<()> {
                             }
                             KeyCode::Char('c') => {
                                 if let Some(session) = app.sessions.get(session_idx) {
-                                    let result_message = match app.commit_session(session_idx) {
+                                    let result_message = match app.commit_session(session_idx).await
+                                    {
                                         Ok(msg) => format!("\n[Commit] {msg}\n"),
                                         Err(err) => format!("\n[Commit Error] {err}\n"),
                                     };
@@ -252,7 +254,8 @@ fn main() -> io::Result<()> {
                             }
                             KeyCode::Char('m') => {
                                 if let Some(session) = app.sessions.get(session_idx) {
-                                    let result_message = match app.merge_session(session_idx) {
+                                    let result_message = match app.merge_session(session_idx).await
+                                    {
                                         Ok(msg) => format!("\n[Merge] {msg}\n"),
                                         Err(err) => format!("\n[Merge Error] {err}\n"),
                                     };
@@ -327,7 +330,7 @@ fn main() -> io::Result<()> {
                             let prompt = input.clone();
                             app.mode = AppMode::List;
                             if !prompt.is_empty() {
-                                if let Err(e) = app.add_session(prompt) {
+                                if let Err(e) = app.add_session(prompt).await {
                                     #[allow(clippy::print_stderr)]
                                     {
                                         eprintln!("Error creating session: {e}");
