@@ -53,7 +53,7 @@ impl Component for CommandPaletteInput<'_> {
                 .map(|(index, cmd)| {
                     let is_selected =
                         self.focus == PaletteFocus::Dropdown && index == self.selected_index;
-                    let prefix = if is_selected { ">> " } else { "   " };
+                    let prefix = if is_selected { "/" } else { " " };
                     let style = if is_selected {
                         Style::default()
                             .fg(Color::Cyan)
@@ -76,7 +76,7 @@ impl Component for CommandPaletteInput<'_> {
 
         // Render input line
         let input_line = Line::from(vec![
-            Span::styled("> / ", Style::default().fg(Color::Cyan)),
+            Span::styled("> /", Style::default().fg(Color::Cyan)),
             Span::raw(self.input),
         ]);
         let input_widget = Paragraph::new(input_line);
@@ -86,7 +86,7 @@ impl Component for CommandPaletteInput<'_> {
         // Set cursor position
         let cursor_x = input_area
             .x
-            .saturating_add(4) // "> / " prefix
+            .saturating_add(3) // "> /" prefix
             .saturating_add(u16::try_from(self.input.len()).unwrap_or(0));
         f.set_cursor_position((cursor_x, input_area.y));
     }
@@ -138,7 +138,7 @@ impl Component for CommandOptionList {
             .enumerate()
             .map(|(index, option)| {
                 let is_selected = index == self.selected_index;
-                let prefix = if is_selected { ">> " } else { "   " };
+                let prefix = if is_selected { "/" } else { " " };
                 let style = if is_selected {
                     Style::default()
                         .fg(Color::Cyan)
