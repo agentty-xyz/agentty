@@ -9,7 +9,7 @@ TUI tool to manage agents.
 - `agentty`: A binary crate providing the CLI interface using Ratatui.
 - **Workflow**: Agents are run in isolated git worktrees.
 - **Review**: Users review changes using the Diff view (`d` key in chat) which shows the output of `git diff` in the session's worktree.
-- **Output**: Agent `stdout` and `stderr` are captured in parallel using multiple threads to ensure prompts and errors are visible.
+- **Output**: Agent `stdout` and `stderr` are captured in parallel using `tokio` tasks to ensure prompts and errors are visible.
 
 ## Rust Project Style Guide
 - **Dependency Management:** ALL dependencies (including `dev-dependencies` and `build-dependencies`) must be defined in the root `Cargo.toml` under `[workspace.dependencies]`.
@@ -60,6 +60,49 @@ TUI tool to manage agents.
 3.  **Dependency Injection:** Pass `&sqlx::SqlitePool` to functions.
     * *Note:* SQLite handles cloning the pool cheaply.
 4.  **Error Handling:** Map `sqlx::Error` to domain-specific errors.
+
+## Async Runtime (Tokio)
+
+The project uses `tokio` as its async runtime. The binary entry point uses `#[tokio::main]` and all I/O-bound operations are async.
+
+### Feature Selection
+- **NEVER** use `features = ["full"]`. The project optimizes for binary size — only enable the specific features you need.
+- When adding a new tokio API, check which feature flag it requires and add only that flag.
+
+### Mutex Selection: `std::sync::Mutex` vs `tokio::sync::Mutex`
+- **Default to `std::sync::Mutex`** unless you need to hold the lock across an `.await` point.
+- `tokio::sync::Mutex` is only needed when the critical section itself contains `.await` calls (e.g., async file I/O, async network calls).
+- If the critical section is purely synchronous (e.g., `writeln!` to a `std::fs::File`, pushing to a `String`), use `std::sync::Mutex` even inside async functions. It is cheaper and avoids unnecessary async overhead.
+- **Wrong:** `Arc<tokio::sync::Mutex<std::fs::File>>` with `file.lock().await` followed by sync `writeln!`.
+- **Right:** `Arc<std::sync::Mutex<std::fs::File>>` with `file.lock().ok()` followed by sync `writeln!`.
+
+### Blocking Operations
+- Use `tokio::task::spawn_blocking` for operations that block the thread (e.g., shelling out to `git` via `std::process::Command`).
+- Do **not** call blocking functions directly in async contexts — it starves the tokio worker threads.
+- For subprocess management where you need async streaming of stdout/stderr, use `tokio::process::Command` instead.
+
+### Variable Cloning for `move` Closures
+- When cloning variables for `spawn_blocking` or `tokio::spawn` closures, prefer **variable shadowing** or **scoped blocks** over `_clone` suffixes.
+- **Wrong:** `let folder_clone = folder.clone(); let root_clone = root.clone();`
+- **Right (shadowing):** `let folder = folder.clone();`
+- **Right (scoped block):** Wrap the `spawn_blocking` call in a block so the originals remain available after:
+  ```rust
+  {
+      let source = source_branch.clone();
+      tokio::task::spawn_blocking(move || do_work(&source)).await??;
+  }
+  // source_branch is still usable here
+  ```
+
+### Tests
+- Use `#[tokio::test]` for async test functions, not `#[test]`.
+- All `sqlx` operations are async and require `.await`.
+- For sleep/delays in tests, use `tokio::time::sleep` instead of `std::thread::sleep`.
+
+### Anti-Patterns to Avoid
+- **No sync wrappers:** Do not wrap async code in `Runtime::new()` + `block_on()`. The codebase is fully async — keep it that way.
+- **No `features = ["full"]`:** Always specify individual tokio features.
+- **No `tokio::sync::Mutex` for sync-only guards:** Only use it when the critical section contains `.await`.
 
 ## Quality Gates
 To ensure code quality, you must pass both automated and manual gates.
