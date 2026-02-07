@@ -48,7 +48,7 @@ async fn main() -> io::Result<()> {
     let agent_kind = AgentKind::from_env();
     let backend = agent_kind.create_backend();
     let mut app = App::new(base_path, working_dir, git_branch, agent_kind, backend, db).await;
-    let tick_rate = Duration::from_millis(100);
+    let tick_rate = Duration::from_millis(50);
 
     // Spawn a dedicated thread for crossterm event reading so the main async
     // loop can yield to tokio between iterations.
