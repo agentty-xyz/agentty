@@ -25,7 +25,7 @@ impl FooterBar {
 impl Component for FooterBar {
     fn render(&self, f: &mut Frame, area: Rect) {
         let left_text = Span::styled(
-            format!(" Working Directory: {}", self.working_dir),
+            format!(" Working Dir: {}", self.working_dir),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::DIM),
@@ -34,7 +34,7 @@ impl Component for FooterBar {
         let mut spans = vec![left_text];
 
         if let Some(branch) = &self.git_branch {
-            let left_width = format!(" Working Directory: {}", self.working_dir).len();
+            let left_width = format!(" Working Dir: {}", self.working_dir).len();
             let branch_text = format!("{GIT_BRANCH_INDICATOR} {branch}");
             let branch_width = branch_text.len();
             let total_width = area.width as usize;
@@ -108,7 +108,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
-        assert!(text.contains("Working Directory: /home/user"));
+        assert!(text.contains("Working Dir: /home/user"));
         assert!(text.contains("main"));
     }
 
@@ -131,6 +131,6 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
-        assert!(text.contains("Working Directory: /home/user"));
+        assert!(text.contains("Working Dir: /home/user"));
     }
 }
