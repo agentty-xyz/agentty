@@ -96,6 +96,7 @@ git worktree prune
 
 ## Directory Index
 - [.claude/](.claude/) - Claude AI specific settings.
+- [.gemini/](.gemini/) - Gemini AI specific settings.
 - [.git-town.toml](.git-town.toml) - Git Town configuration.
 - [.github/](.github/) - GitHub configuration files.
 - [.gitignore](.gitignore) - Git ignore patterns.
@@ -106,6 +107,7 @@ git worktree prune
 - [Cargo.lock](Cargo.lock) - Exact version pins for dependencies.
 - [Cargo.toml](Cargo.toml) - Workspace root configuration and dependency definitions.
 - [CLAUDE.md](CLAUDE.md) - Symlink to AGENTS.md.
+- [dist-workspace.toml](dist-workspace.toml) - Release configuration for cargo-dist.
 - [GEMINI.md](GEMINI.md) - Symlink to AGENTS.md.
 - [LICENSE](LICENSE) - Project license file.
 - [README.md](README.md) - Main project documentation.

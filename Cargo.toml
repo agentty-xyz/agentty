@@ -6,6 +6,9 @@ members = ["crates/*"]
 version = "0.1.0"
 authors = ["Vladimir Minev"]
 edition = "2024"
+description = "A terminal UI tool for managing agents"
+repository = "https://github.com/opencloudtool/agentty"
+homepage = "https://github.com/opencloudtool/agentty"
 
 [workspace.dependencies]
 libc = "0.2"
@@ -56,3 +59,8 @@ codegen-units = 1 # Allows compiler to perform better optimization.
 lto = true # Enables Link-time Optimization.
 opt-level = "s" # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true # Ensures debug symbols are removed.
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
