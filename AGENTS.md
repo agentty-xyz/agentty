@@ -28,6 +28,9 @@ TUI tool to manage agents.
     - Public fields first.
     - Private fields second.
     - Within each group, sort fields alphabetically.
+- **Clippy Compliance:** Do not bypass clippy rules with `#[allow()]`. Adopt the solution that complies with the rule.
+- **Code Grouping:** Within functions, separate related code blocks with empty lines. Group lines that belong together logically and add blank lines between distinct groups.
+- **Return Spacing:** Always add an empty line before return statements, both explicit (`return`) and implicit (last expression). Exception: single-line blocks where the return is the only statement.
 
 ## Database Standards (SQLx + SQLite)
 

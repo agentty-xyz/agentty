@@ -20,15 +20,19 @@ enum Command {
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
     let result = match cli.command {
         None => check_index::run().and(check_migration::run()),
         Some(Command::CheckIndexes) => check_index::run(),
         Some(Command::CheckMigrations) => check_migration::run(),
     };
+
     if let Err(err) = result {
         error!("{err}");
+
         return ExitCode::FAILURE;
     }
+
     ExitCode::SUCCESS
 }

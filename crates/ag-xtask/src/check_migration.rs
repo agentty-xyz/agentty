@@ -6,9 +6,11 @@ use tracing::error;
 
 pub(crate) fn run() -> Result<(), String> {
     let migration_dirs = find_migration_dirs(Path::new("crates"));
+
     for dir in migration_dirs {
         check_prefixes(&dir)?;
     }
+
     Ok(())
 }
 
@@ -17,6 +19,7 @@ fn find_migration_dirs(base: &Path) -> Vec<PathBuf> {
         Ok(entries) => entries,
         Err(err) => {
             error!("Failed to read {}: {}", base.display(), err);
+
             return Vec::new();
         }
     };
@@ -29,6 +32,7 @@ fn find_migration_dirs(base: &Path) -> Vec<PathBuf> {
         }
     }
     dirs.sort();
+
     dirs
 }
 

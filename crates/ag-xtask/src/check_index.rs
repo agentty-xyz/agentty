@@ -40,6 +40,7 @@ fn run_with_runner(runner: &dyn CommandRunner) -> Result<(), String> {
             "Index check failed. Some files are missing from AGENTS.md indexes.".to_string(),
         );
     }
+
     Ok(())
 }
 
@@ -53,6 +54,7 @@ fn get_tracked_files(runner: &dyn CommandRunner) -> Result<Vec<String>, String> 
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+
     Ok(stdout.lines().map(ToString::to_string).collect())
 }
 
@@ -66,6 +68,7 @@ fn get_agents_files(runner: &dyn CommandRunner) -> Result<Vec<PathBuf>, String> 
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+
     Ok(stdout.lines().map(PathBuf::from).collect())
 }
 
@@ -105,6 +108,7 @@ fn process_directory(agents_path: &Path, tracked_files: &[String]) -> bool {
         agents_path.display(),
         missing.join(", ")
     );
+
     false
 }
 
@@ -153,6 +157,7 @@ fn get_local_entries(directory: &Path, tracked_files: &[String]) -> Vec<String> 
         all_entries.push(file_name);
     }
     all_entries.sort();
+
     all_entries
 }
 
@@ -162,7 +167,6 @@ fn parse_index(content: &str) -> Option<Vec<String>> {
 
     let index_section = &content[header_pos..];
     let mut indexed_files = Vec::new();
-
     let mut first_line = true;
 
     for line in index_section.split('\n') {
@@ -170,6 +174,7 @@ fn parse_index(content: &str) -> Option<Vec<String>> {
             break;
         }
         first_line = false;
+
         if let Some(start) = line.find('[') {
             if let Some(end) = line[start..].find(']') {
                 let name = &line[start + 1..start + end];
