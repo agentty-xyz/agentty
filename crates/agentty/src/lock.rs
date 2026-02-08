@@ -2,8 +2,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
 use std::path::Path;
 
-use fs2::FileExt;
-
 #[derive(Debug)]
 pub enum LockError {
     AlreadyRunning { pid: String },
@@ -30,8 +28,7 @@ impl std::fmt::Display for LockError {
 /// Acquire an exclusive session lock.
 ///
 /// Returns the lock file handle which must be kept alive for the entire process
-/// lifetime. The OS releases the `flock` automatically on process exit or
-/// crash.
+/// lifetime. The OS releases the lock automatically on process exit or crash.
 pub fn acquire_lock(path: &Path) -> Result<File, LockError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -44,17 +41,19 @@ pub fn acquire_lock(path: &Path) -> Result<File, LockError> {
         .truncate(false)
         .open(path)?;
 
-    if let Err(err) = file.try_lock_exclusive() {
-        if err.kind() == io::ErrorKind::WouldBlock {
-            let mut pid = String::new();
-            let mut reader = &file;
-            let _ = reader.read_to_string(&mut pid);
-            return Err(LockError::AlreadyRunning {
-                pid: pid.trim().to_string(),
-            });
-        }
+    if let Err(err) = file.try_lock() {
+        return match err {
+            std::fs::TryLockError::WouldBlock => {
+                let mut pid = String::new();
+                let mut reader = &file;
+                let _ = reader.read_to_string(&mut pid);
 
-        return Err(LockError::Io(err));
+                Err(LockError::AlreadyRunning {
+                    pid: pid.trim().to_string(),
+                })
+            }
+            std::fs::TryLockError::Error(error) => Err(LockError::Io(error)),
+        };
     }
 
     // Write our PID into the lock file
