@@ -1,7 +1,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
-use std::os::unix::io::AsRawFd;
 use std::path::Path;
+
+use fs2::FileExt;
 
 #[derive(Debug)]
 pub enum LockError {
@@ -43,13 +44,7 @@ pub fn acquire_lock(path: &Path) -> Result<File, LockError> {
         .truncate(false)
         .open(path)?;
 
-    // SAFETY: flock is a standard POSIX advisory lock syscall operating on a
-    // valid file descriptor. No memory-safety concerns.
-    #[allow(unsafe_code)]
-    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-
-    if ret != 0 {
-        let err = io::Error::last_os_error();
+    if let Err(err) = file.try_lock_exclusive() {
         if err.kind() == io::ErrorKind::WouldBlock {
             let mut pid = String::new();
             let mut reader = &file;
@@ -58,6 +53,7 @@ pub fn acquire_lock(path: &Path) -> Result<File, LockError> {
                 pid: pid.trim().to_string(),
             });
         }
+
         return Err(LockError::Io(err));
     }
 

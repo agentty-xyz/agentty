@@ -190,6 +190,8 @@ impl Status {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -228,7 +230,7 @@ mod tests {
     #[test]
     fn test_append_output() {
         // Arrange
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let dir = tempdir().expect("failed to create temp dir");
         let data_dir = dir.path().join(SESSION_DATA_DIR);
         std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         std::fs::write(data_dir.join("output.txt"), "").expect("failed to write output");

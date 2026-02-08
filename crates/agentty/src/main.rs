@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -42,17 +42,8 @@ async fn main() -> io::Result<()> {
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let git_branch = agentty::git::detect_git_info(&working_dir);
     let lock_path = base_path.join("lock");
-    let _lock = match agentty::lock::acquire_lock(&lock_path) {
-        Ok(file) => file,
-        Err(e) => {
-            #[allow(clippy::print_stderr)]
-            {
-                let _ = writeln!(io::stderr(), "Error: {e}");
-            }
-            #[allow(clippy::exit)]
-            std::process::exit(1);
-        }
-    };
+    let _lock = agentty::lock::acquire_lock(&lock_path)
+        .map_err(|error| io::Error::other(format!("Error: {error}")))?;
 
     // setup terminal
     enable_raw_mode()?;
@@ -150,17 +141,19 @@ fn render_frame(
     terminal.draw(|f| {
         ui::render(
             f,
-            &app.mode,
-            &app.sessions,
-            &mut app.table_state,
-            current_agent_kind,
-            current_tab,
-            &current_working_dir,
-            current_git_branch.as_deref(),
-            current_git_status,
-            &health_checks,
-            &app.projects,
-            current_active_project_id,
+            ui::RenderContext {
+                active_project_id: current_active_project_id,
+                agent_kind: current_agent_kind,
+                current_tab,
+                git_branch: current_git_branch.as_deref(),
+                git_status: current_git_status,
+                health_checks: &health_checks,
+                mode: &app.mode,
+                projects: &app.projects,
+                sessions: &app.sessions,
+                table_state: &mut app.table_state,
+                working_dir: &current_working_dir,
+            },
         );
     })?;
 
@@ -429,12 +422,10 @@ async fn handle_key_event(
                 let prompt = input.clone();
                 app.mode = AppMode::List;
                 if !prompt.is_empty() {
-                    if let Err(e) = app.add_session(prompt).await {
-                        #[allow(clippy::print_stderr)]
-                        {
-                            eprintln!("Error creating session: {e}");
-                        }
-                        // TODO: Add proper error display in TUI
+                    if let Err(error) = app.add_session(prompt).await {
+                        app.mode = AppMode::Prompt {
+                            input: format!("Error: {error}"),
+                        };
                     }
                 }
             }

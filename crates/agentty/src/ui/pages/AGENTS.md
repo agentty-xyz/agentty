@@ -9,4 +9,4 @@ Full-screen page implementations implementing the `Page` trait.
 - [new_session.rs](new_session.rs) - New session creation page.
 - [roadmap.rs](roadmap.rs) - Roadmap view page.
 - [session_chat.rs](session_chat.rs) - Main chat interface page.
-- [sessions_list.rs](sessions_list.rs) - List of active sessions page.
+- [session_list.rs](session_list.rs) - List of active sessions page.

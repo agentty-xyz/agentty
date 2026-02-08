@@ -101,7 +101,7 @@ mod tests {
 
         // Assert
         assert!(result.is_err());
-        let err = result.unwrap_err();
+        let err = result.expect_err("expected duplicate prefix error");
         assert!(err.contains("Duplicate migration prefix `001`"), "{err}");
         assert!(err.contains("001_create_orders.sql"), "{err}");
         assert!(err.contains("001_create_users.sql"), "{err}");

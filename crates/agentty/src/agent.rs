@@ -179,7 +179,7 @@ mod tests {
         let backend = GeminiBackend;
 
         // Act
-        backend.setup(dir.path());
+        AgentBackend::setup(&backend, dir.path());
 
         // Assert
         assert_eq!(
@@ -197,7 +197,7 @@ mod tests {
         let backend = GeminiBackend;
 
         // Act
-        let cmd = backend.build_resume_command(dir.path(), "follow-up");
+        let cmd = AgentBackend::build_resume_command(&backend, dir.path(), "follow-up");
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -214,7 +214,7 @@ mod tests {
         let backend = GeminiBackend;
 
         // Act
-        let cmd = backend.build_start_command(dir.path(), "hello");
+        let cmd = AgentBackend::build_start_command(&backend, dir.path(), "hello");
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -234,7 +234,7 @@ mod tests {
         let backend = ClaudeBackend;
 
         // Act
-        backend.setup(dir.path());
+        AgentBackend::setup(&backend, dir.path());
 
         // Assert
         assert_eq!(
@@ -252,7 +252,7 @@ mod tests {
         let backend = ClaudeBackend;
 
         // Act
-        let cmd = backend.build_start_command(dir.path(), "hello");
+        let cmd = AgentBackend::build_start_command(&backend, dir.path(), "hello");
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -271,7 +271,7 @@ mod tests {
         let backend = ClaudeBackend;
 
         // Act
-        let cmd = backend.build_resume_command(dir.path(), "follow-up");
+        let cmd = AgentBackend::build_resume_command(&backend, dir.path(), "follow-up");
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -290,7 +290,7 @@ mod tests {
         let backend = CodexBackend;
 
         // Act
-        backend.setup(dir.path());
+        AgentBackend::setup(&backend, dir.path());
 
         // Assert
         assert_eq!(
@@ -308,7 +308,7 @@ mod tests {
         let backend = CodexBackend;
 
         // Act
-        let cmd = backend.build_start_command(dir.path(), "hello");
+        let cmd = AgentBackend::build_start_command(&backend, dir.path(), "hello");
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -327,7 +327,7 @@ mod tests {
         let backend = CodexBackend;
 
         // Act
-        let cmd = backend.build_resume_command(dir.path(), "follow-up");
+        let cmd = AgentBackend::build_resume_command(&backend, dir.path(), "follow-up");
 
         // Assert
         let debug = format!("{cmd:?}");

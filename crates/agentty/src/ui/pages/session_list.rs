@@ -8,12 +8,12 @@ use crate::model::Session;
 use crate::ui::Page;
 use crate::ui::util::centered_horizontal_layout;
 
-pub struct SessionsListPage<'a> {
+pub struct SessionListPage<'a> {
     pub sessions: &'a [Session],
     pub table_state: &'a mut TableState,
 }
 
-impl<'a> SessionsListPage<'a> {
+impl<'a> SessionListPage<'a> {
     pub fn new(sessions: &'a [Session], table_state: &'a mut TableState) -> Self {
         Self {
             sessions,
@@ -22,7 +22,7 @@ impl<'a> SessionsListPage<'a> {
     }
 }
 
-impl Page for SessionsListPage<'_> {
+impl Page for SessionListPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .constraints([Constraint::Min(0), Constraint::Length(1)])

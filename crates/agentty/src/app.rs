@@ -362,38 +362,6 @@ impl App {
         self.reply_with_backend(session_index, prompt, backend.as_ref());
     }
 
-    fn reply_with_backend(
-        &mut self,
-        session_index: usize,
-        prompt: &str,
-        backend: &dyn AgentBackend,
-    ) {
-        let Some(session) = self.sessions.get_mut(session_index) else {
-            return;
-        };
-
-        let reply_line = format!("\n › {prompt}\n\n");
-        session.append_output(&reply_line);
-
-        let folder = session.folder.clone();
-        let output = Arc::clone(&session.output);
-        let status = Arc::clone(&session.status);
-        let name = session.name.clone();
-        let db = self.db.clone();
-
-        {
-            let status = Arc::clone(&status);
-            let db = db.clone();
-            let name = name.clone();
-            tokio::spawn(async move {
-                Self::update_status(&status, &db, &name, Status::InProgress).await;
-            });
-        }
-
-        let cmd = backend.build_resume_command(&folder, prompt);
-        Self::spawn_session_task(folder, cmd, output, status, db, name);
-    }
-
     pub fn selected_session(&self) -> Option<&Session> {
         self.table_state
             .selected()
@@ -568,6 +536,38 @@ impl App {
         Ok(())
     }
 
+    fn reply_with_backend(
+        &mut self,
+        session_index: usize,
+        prompt: &str,
+        backend: &dyn AgentBackend,
+    ) {
+        let Some(session) = self.sessions.get_mut(session_index) else {
+            return;
+        };
+
+        let reply_line = format!("\n › {prompt}\n\n");
+        session.append_output(&reply_line);
+
+        let folder = session.folder.clone();
+        let output = Arc::clone(&session.output);
+        let status = Arc::clone(&session.status);
+        let name = session.name.clone();
+        let db = self.db.clone();
+
+        {
+            let status = Arc::clone(&status);
+            let db = db.clone();
+            let name = name.clone();
+            tokio::spawn(async move {
+                Self::update_status(&status, &db, &name, Status::InProgress).await;
+            });
+        }
+
+        let cmd = backend.build_resume_command(&folder, prompt);
+        Self::spawn_session_task(folder, cmd, output, status, db, name);
+    }
+
     async fn rollback_failed_session_creation(
         &self,
         folder: &Path,
@@ -735,17 +735,17 @@ impl App {
                     let mut handles = Vec::new();
 
                     if let Some(stdout) = stdout {
-                        let out_clone = Arc::clone(&output);
-                        let file_clone = Arc::clone(&file);
+                        let output = Arc::clone(&output);
+                        let file = Arc::clone(&file);
                         handles.push(tokio::spawn(async move {
-                            Self::process_output(stdout, &file_clone, &out_clone).await;
+                            Self::process_output(stdout, &file, &output).await;
                         }));
                     }
                     if let Some(stderr) = stderr {
-                        let out_clone = Arc::clone(&output);
-                        let file_clone = Arc::clone(&file);
+                        let output = Arc::clone(&output);
+                        let file = Arc::clone(&file);
                         handles.push(tokio::spawn(async move {
-                            Self::process_output(stderr, &file_clone, &out_clone).await;
+                            Self::process_output(stderr, &file, &output).await;
                         }));
                     }
 
@@ -794,7 +794,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Stdio;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
 
     use tempfile::tempdir;
 
@@ -1684,7 +1686,8 @@ mod tests {
 
         // Assert
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Project not found"));
+        let error = result.expect_err("expected missing project error");
+        assert!(error.contains("Project not found"));
     }
 
     #[tokio::test]

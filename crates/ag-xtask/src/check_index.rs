@@ -188,8 +188,10 @@ fn parse_index(content: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::os::unix::process::ExitStatusExt;
-    use std::process::ExitStatus;
+    use std::path::Path;
+    use std::process::{Command, ExitStatus, Output};
 
     use tempfile::tempdir;
 
@@ -429,10 +431,15 @@ mod tests {
 
     #[test]
     fn test_real_command_runner() {
+        // Arrange
         let runner = RealCommandRunner;
         let mut cmd = Command::new("echo");
         cmd.arg("hello");
-        let result = runner.run(&mut cmd);
+
+        // Act
+        let result = CommandRunner::run(&runner, &mut cmd);
+
+        // Assert
         assert!(result.is_ok());
     }
 }

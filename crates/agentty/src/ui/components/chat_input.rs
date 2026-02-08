@@ -8,13 +8,13 @@ use crate::ui::Component;
 use crate::ui::util::compute_input_layout;
 
 pub struct ChatInput<'a> {
-    title: &'a str,
     input: &'a str,
+    title: &'a str,
 }
 
 impl<'a> ChatInput<'a> {
     pub fn new(title: &'a str, input: &'a str) -> Self {
-        Self { title, input }
+        Self { input, title }
     }
 }
 

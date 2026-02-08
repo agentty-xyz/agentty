@@ -2,6 +2,7 @@ pub mod components;
 pub mod pages;
 pub mod util;
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ratatui::Frame;
@@ -22,21 +23,35 @@ pub trait Component {
     fn render(&self, f: &mut Frame, area: Rect);
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn render(
-    f: &mut Frame,
-    mode: &AppMode,
-    sessions: &[Session],
-    table_state: &mut TableState,
-    agent_kind: AgentKind,
-    current_tab: Tab,
-    working_dir: &std::path::Path,
-    git_branch: Option<&str>,
-    git_status: Option<(u32, u32)>,
-    health_checks: &Arc<Mutex<Vec<HealthEntry>>>,
-    projects: &[Project],
-    active_project_id: i64,
-) {
+pub struct RenderContext<'a> {
+    pub active_project_id: i64,
+    pub agent_kind: AgentKind,
+    pub current_tab: Tab,
+    pub git_branch: Option<&'a str>,
+    pub git_status: Option<(u32, u32)>,
+    pub health_checks: &'a Arc<Mutex<Vec<HealthEntry>>>,
+    pub mode: &'a AppMode,
+    pub projects: &'a [Project],
+    pub sessions: &'a [Session],
+    pub table_state: &'a mut TableState,
+    pub working_dir: &'a Path,
+}
+
+pub fn render(f: &mut Frame, context: RenderContext<'_>) {
+    let RenderContext {
+        active_project_id,
+        agent_kind,
+        current_tab,
+        git_branch,
+        git_status,
+        health_checks,
+        mode,
+        projects,
+        sessions,
+        table_state,
+        working_dir,
+    } = context;
+
     let area = f.area();
 
     // Three-section layout: top status bar, content area, footer bar
@@ -140,11 +155,11 @@ fn render_list_background(
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
 
-    components::tabs::Tabs::new(current_tab).render(f, chunks[0]);
+    components::tab::Tabs::new(current_tab).render(f, chunks[0]);
 
     match current_tab {
         Tab::Sessions => {
-            pages::sessions_list::SessionsListPage::new(sessions, table_state).render(f, chunks[1]);
+            pages::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
         }
         Tab::Roadmap => {
             pages::roadmap::RoadmapPage.render(f, chunks[1]);

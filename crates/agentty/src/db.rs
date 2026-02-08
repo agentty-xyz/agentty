@@ -312,7 +312,11 @@ mod tests {
 
         // Assert
         assert!(id > 0);
-        let project = db.get_project(id).await.expect("failed to get").unwrap();
+        let project = db
+            .get_project(id)
+            .await
+            .expect("failed to get")
+            .expect("expected project to exist");
         assert_eq!(project.path, "/tmp/project");
         assert_eq!(project.git_branch, Some("main".to_string()));
     }
@@ -338,7 +342,7 @@ mod tests {
             .get_project(id_second)
             .await
             .expect("failed to get")
-            .unwrap();
+            .expect("expected project to exist");
         assert_eq!(project.git_branch, Some("develop".to_string()));
     }
 
@@ -390,7 +394,7 @@ mod tests {
 
         // Assert
         assert!(project.is_some());
-        let project = project.unwrap();
+        let project = project.expect("expected project to exist");
         assert_eq!(project.id, id);
         assert_eq!(project.path, "/tmp/project");
     }

@@ -9,17 +9,17 @@ use crate::ui::Page;
 use crate::ui::util::wrap_lines;
 
 pub struct DiffPage<'a> {
-    pub session: &'a Session,
     pub diff: String,
     pub scroll_offset: u16,
+    pub session: &'a Session,
 }
 
 impl<'a> DiffPage<'a> {
     pub fn new(session: &'a Session, diff: String, scroll_offset: u16) -> Self {
         Self {
-            session,
             diff,
             scroll_offset,
+            session,
         }
     }
 }

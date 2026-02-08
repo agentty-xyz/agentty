@@ -11,10 +11,10 @@ use crate::ui::util::{calculate_input_height, wrap_lines};
 use crate::ui::{Component, Page};
 
 pub struct SessionChatPage<'a> {
-    pub sessions: &'a [Session],
-    pub session_index: usize,
-    pub scroll_offset: Option<u16>,
     pub mode: &'a AppMode,
+    pub scroll_offset: Option<u16>,
+    pub session_index: usize,
+    pub sessions: &'a [Session],
 }
 
 impl<'a> SessionChatPage<'a> {
@@ -25,10 +25,10 @@ impl<'a> SessionChatPage<'a> {
         mode: &'a AppMode,
     ) -> Self {
         Self {
-            sessions,
-            session_index,
-            scroll_offset,
             mode,
+            scroll_offset,
+            session_index,
+            sessions,
         }
     }
 }

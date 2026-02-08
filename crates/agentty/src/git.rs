@@ -434,8 +434,6 @@ pub fn create_pr(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use tempfile::tempdir;
 
     use super::*;

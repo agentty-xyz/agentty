@@ -83,9 +83,6 @@ impl Component for FooterBar {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
     use super::*;
 
     #[test]
@@ -120,8 +117,8 @@ mod tests {
     #[test]
     fn test_footer_bar_render_with_git_branch() {
         // Arrange
-        let backend = TestBackend::new(80, 3);
-        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+        let backend = ratatui::backend::TestBackend::new(80, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let path = if let Some(home) = dirs::home_dir() {
             home.join("project").to_string_lossy().to_string()
         } else {
@@ -133,7 +130,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                footer.render(f, area);
+                crate::ui::Component::render(&footer, f, area);
             })
             .expect("failed to draw");
 
@@ -152,8 +149,8 @@ mod tests {
     #[test]
     fn test_footer_bar_render_with_git_status() {
         // Arrange
-        let backend = TestBackend::new(80, 3);
-        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+        let backend = ratatui::backend::TestBackend::new(80, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let path = "/tmp/project".to_string();
         // 1 ahead, 2 behind
         let footer = FooterBar::new(path, Some("main".to_string()), Some((1, 2)));
@@ -162,7 +159,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                footer.render(f, area);
+                crate::ui::Component::render(&footer, f, area);
             })
             .expect("failed to draw");
 
@@ -177,8 +174,8 @@ mod tests {
     #[test]
     fn test_footer_bar_render_without_git_branch() {
         // Arrange
-        let backend = TestBackend::new(80, 3);
-        let mut terminal = Terminal::new(backend).expect("failed to create terminal");
+        let backend = ratatui::backend::TestBackend::new(80, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let path = "/tmp/other-project".to_string();
         let footer = FooterBar::new(path, None, None);
 
@@ -186,7 +183,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                footer.render(f, area);
+                crate::ui::Component::render(&footer, f, area);
             })
             .expect("failed to draw");
 

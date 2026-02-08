@@ -8,4 +8,4 @@ Reusable UI widgets implementing the `Component` trait.
 - [footer_bar.rs](footer_bar.rs) - Footer bar component.
 - [mod.rs](mod.rs) - Component module exports.
 - [status_bar.rs](status_bar.rs) - Status bar component.
-- [tabs.rs](tabs.rs) - Tabs navigation component.
+- [tab.rs](tab.rs) - Tabs navigation component.
