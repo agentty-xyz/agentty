@@ -93,72 +93,7 @@ async fn main() -> io::Result<()> {
     let mut tick = tokio::time::interval(tick_rate);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    'main: loop {
-        let current_agent_kind = match &app.mode {
-            AppMode::CommandOption {
-                command: PaletteCommand::Agents,
-                selected_index,
-            } => AgentKind::ALL
-                .get(*selected_index)
-                .copied()
-                .unwrap_or_else(|| app.agent_kind()),
-            _ => app.agent_kind(),
-        };
-        let current_tab = app.current_tab;
-        let current_working_dir = app.working_dir().clone();
-        let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
-        let current_git_status = app.git_status_info();
-        let health_checks = app.health_checks().clone();
-        let current_active_project_id = app.active_project_id();
-
-        terminal.draw(|f| {
-            ui::render(
-                f,
-                &app.mode,
-                &app.sessions,
-                &mut app.table_state,
-                current_agent_kind,
-                current_tab,
-                &current_working_dir,
-                current_git_branch.as_deref(),
-                current_git_status,
-                &health_checks,
-                &app.projects,
-                current_active_project_id,
-            );
-        })?;
-
-        // Wait for either a terminal event or the next tick (for redraws).
-        // This yields to tokio so spawned tasks (agent output, git status) can
-        // make progress on this worker thread.
-        let maybe_event = tokio::select! {
-            biased;
-            event = event_rx.recv() => event,
-            _ = tick.tick() => None,
-        };
-
-        if let Some(Event::Key(key)) = maybe_event {
-            if matches!(
-                handle_key_event(&mut app, &mut terminal, key).await?,
-                EventResult::Quit
-            ) {
-                break 'main;
-            }
-        }
-
-        // Drain remaining queued events before re-rendering so rapid key
-        // presses are processed immediately instead of one-per-frame.
-        while let Ok(event) = event_rx.try_recv() {
-            if let Event::Key(key) = event {
-                if matches!(
-                    handle_key_event(&mut app, &mut terminal, key).await?,
-                    EventResult::Quit
-                ) {
-                    break 'main;
-                }
-            }
-        }
-    }
+    run_main_loop(&mut app, &mut terminal, &mut event_rx, &mut tick).await?;
 
     terminal.show_cursor()?;
 
@@ -168,6 +103,116 @@ async fn main() -> io::Result<()> {
 enum EventResult {
     Continue,
     Quit,
+}
+
+async fn run_main_loop(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    event_rx: &mut mpsc::UnboundedReceiver<Event>,
+    tick: &mut tokio::time::Interval,
+) -> io::Result<()> {
+    loop {
+        render_frame(app, terminal)?;
+
+        if matches!(
+            process_events(app, terminal, event_rx, tick).await?,
+            EventResult::Quit
+        ) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn render_frame(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> io::Result<()> {
+    let current_agent_kind = match &app.mode {
+        AppMode::CommandOption {
+            command: PaletteCommand::Agents,
+            selected_index,
+        } => AgentKind::ALL
+            .get(*selected_index)
+            .copied()
+            .unwrap_or_else(|| app.agent_kind()),
+        _ => app.agent_kind(),
+    };
+
+    let current_tab = app.current_tab;
+    let current_working_dir = app.working_dir().clone();
+    let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
+    let current_git_status = app.git_status_info();
+    let health_checks = app.health_checks().clone();
+    let current_active_project_id = app.active_project_id();
+
+    terminal.draw(|f| {
+        ui::render(
+            f,
+            &app.mode,
+            &app.sessions,
+            &mut app.table_state,
+            current_agent_kind,
+            current_tab,
+            &current_working_dir,
+            current_git_branch.as_deref(),
+            current_git_status,
+            &health_checks,
+            &app.projects,
+            current_active_project_id,
+        );
+    })?;
+
+    Ok(())
+}
+
+async fn process_events(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    event_rx: &mut mpsc::UnboundedReceiver<Event>,
+    tick: &mut tokio::time::Interval,
+) -> io::Result<EventResult> {
+    // Wait for either a terminal event or the next tick (for redraws).
+    // This yields to tokio so spawned tasks (agent output, git status) can
+    // make progress on this worker thread.
+    let maybe_event = tokio::select! {
+        biased;
+        event = event_rx.recv() => event,
+        _ = tick.tick() => None,
+    };
+
+    if matches!(
+        process_event(app, terminal, maybe_event).await?,
+        EventResult::Quit
+    ) {
+        return Ok(EventResult::Quit);
+    }
+
+    // Drain remaining queued events before re-rendering so rapid key
+    // presses are processed immediately instead of one-per-frame.
+    while let Ok(event) = event_rx.try_recv() {
+        if matches!(
+            process_event(app, terminal, Some(event)).await?,
+            EventResult::Quit
+        ) {
+            return Ok(EventResult::Quit);
+        }
+    }
+
+    Ok(EventResult::Continue)
+}
+
+async fn process_event(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    event: Option<Event>,
+) -> io::Result<EventResult> {
+    if let Some(Event::Key(key)) = event {
+        return handle_key_event(app, terminal, key).await;
+    }
+
+    Ok(EventResult::Continue)
 }
 
 async fn handle_key_event(
