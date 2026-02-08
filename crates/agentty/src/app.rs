@@ -2278,11 +2278,7 @@ mod tests {
             .expect("failed to create session");
 
         // Assert — session belongs to the active project
-        let sessions = app
-            .db
-            .load_sessions_for_project(project_id)
-            .await
-            .expect("failed to load");
+        let sessions = app.db.load_sessions().await.expect("failed to load");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].project_id, Some(project_id));
     }

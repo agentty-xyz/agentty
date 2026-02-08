@@ -199,33 +199,6 @@ impl Database {
             .collect())
     }
 
-    pub async fn load_sessions_for_project(
-        &self,
-        project_id: i64,
-    ) -> Result<Vec<SessionRow>, String> {
-        let rows = sqlx::query(
-            "SELECT name, agent, base_branch, status, project_id, created_at, updated_at FROM \
-             session WHERE project_id = ? ORDER BY updated_at DESC, name",
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load sessions for project: {err}"))?;
-
-        Ok(rows
-            .iter()
-            .map(|row| SessionRow {
-                agent: row.get("agent"),
-                base_branch: row.get("base_branch"),
-                created_at: row.get("created_at"),
-                name: row.get("name"),
-                project_id: row.get("project_id"),
-                status: row.get("status"),
-                updated_at: row.get("updated_at"),
-            })
-            .collect())
-    }
-
     pub async fn update_session_status(&self, name: &str, status: &str) -> Result<(), String> {
         sqlx::query("UPDATE session SET status = ? WHERE name = ?")
             .bind(status)
@@ -441,12 +414,10 @@ mod tests {
             .expect("failed to backfill");
 
         // Assert
-        let sessions = db
-            .load_sessions_for_project(project_id)
-            .await
-            .expect("failed to load");
+        let sessions = db.load_sessions().await.expect("failed to load");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].name, "orphan");
+        assert_eq!(sessions[0].project_id, Some(project_id));
     }
 
     #[tokio::test]
@@ -573,7 +544,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_sessions_for_project() {
+    async fn test_load_sessions_include_project_ids() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
         let project_a = db
@@ -592,15 +563,20 @@ mod tests {
             .expect("failed to insert");
 
         // Act
-        let sessions = db
-            .load_sessions_for_project(project_a)
-            .await
-            .expect("failed to load");
+        let sessions = db.load_sessions().await.expect("failed to load");
 
         // Assert
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].name, "sess1");
-        assert_eq!(sessions[0].project_id, Some(project_a));
+        assert_eq!(sessions.len(), 2);
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.name == "sess1" && session.project_id == Some(project_a))
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.name == "sess2" && session.project_id == Some(project_b))
+        );
     }
 
     #[tokio::test]
