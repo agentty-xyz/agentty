@@ -229,14 +229,18 @@ impl App {
         self.table_state.select(Some(i));
     }
 
-    pub async fn add_session(&mut self, prompt: String) -> Result<(), String> {
+    /// Creates a blank session with an empty prompt and output.
+    ///
+    /// Returns the index of the newly created session in the sorted list.
+    /// The session is created with `New` status and no agent is started —
+    /// call [`start_session`] to submit a prompt and launch the agent.
+    pub async fn create_session(&mut self) -> Result<usize, String> {
         let base_branch = self
             .git_branch
             .as_deref()
             .ok_or_else(|| "Git branch is required to create a session".to_string())?;
 
         let mut hasher = DefaultHasher::new();
-        prompt.hash(&mut hasher);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -282,7 +286,7 @@ impl App {
             ));
         }
 
-        if let Err(err) = std::fs::write(data_dir.join("prompt.txt"), &prompt) {
+        if let Err(err) = std::fs::write(data_dir.join("prompt.txt"), "") {
             self.rollback_failed_session_creation(
                 &folder,
                 &repo_root,
@@ -295,13 +299,26 @@ impl App {
             return Err(format!("Failed to write session prompt: {err}"));
         }
 
+        if let Err(err) = std::fs::write(data_dir.join("output.txt"), "") {
+            self.rollback_failed_session_creation(
+                &folder,
+                &repo_root,
+                &name,
+                &worktree_branch,
+                false,
+            )
+            .await;
+
+            return Err(format!("Failed to write session output: {err}"));
+        }
+
         if let Err(err) = self
             .db
             .insert_session(
                 &name,
                 &self.agent_kind.to_string(),
                 base_branch,
-                &Status::Review.to_string(),
+                &Status::New.to_string(),
                 self.active_project_id,
             )
             .await
@@ -318,35 +335,10 @@ impl App {
             return Err(format!("Failed to save session metadata: {err}"));
         }
 
-        let initial_output = format!(" › {prompt}\n\n[Git worktree: agentty/{hash}]\n\n");
-        if let Err(err) = std::fs::write(data_dir.join("output.txt"), &initial_output) {
-            self.rollback_failed_session_creation(
-                &folder,
-                &repo_root,
-                &name,
-                &worktree_branch,
-                true,
-            )
-            .await;
-
-            return Err(format!("Failed to write session output: {err}"));
-        }
-
         self.backend.setup(&folder);
 
-        let output = Arc::new(Mutex::new(initial_output));
-        let status = Arc::new(Mutex::new(Status::Review));
-        let _ = Self::update_status(&status, &self.db, &name, Status::InProgress).await;
-
-        let cmd = self.backend.build_start_command(&folder, &prompt);
-        Self::spawn_session_task(
-            folder.clone(),
-            cmd,
-            Arc::clone(&output),
-            Arc::clone(&status),
-            self.db.clone(),
-            name.clone(),
-        );
+        let output = Arc::new(Mutex::new(String::new()));
+        let status = Arc::new(Mutex::new(Status::New));
 
         let project_name = self
             .working_dir
@@ -359,14 +351,52 @@ impl App {
             name: name.clone(),
             output,
             project_name,
-            prompt,
+            prompt: String::new(),
             status,
         });
         self.sessions.sort_by(|a, b| a.name.cmp(&b.name));
 
-        if let Some(index) = self.sessions.iter().position(|a| a.name == name) {
-            self.table_state.select(Some(index));
-        }
+        let index = self
+            .sessions
+            .iter()
+            .position(|a| a.name == name)
+            .unwrap_or(0);
+        self.table_state.select(Some(index));
+
+        Ok(index)
+    }
+
+    /// Submits the first prompt for a blank session and starts the agent.
+    pub async fn start_session(
+        &mut self,
+        session_index: usize,
+        prompt: String,
+    ) -> Result<(), String> {
+        let session = self
+            .sessions
+            .get_mut(session_index)
+            .ok_or_else(|| "Session not found".to_string())?;
+
+        session.prompt = prompt.clone();
+
+        let data_dir = session.folder.join(SESSION_DATA_DIR);
+        std::fs::write(data_dir.join("prompt.txt"), &prompt)
+            .map_err(|err| format!("Failed to write session prompt: {err}"))?;
+
+        let hash = session.name.clone();
+        let initial_output = format!(" › {prompt}\n\n[Git worktree: agentty/{hash}]\n\n");
+        session.append_output(&initial_output);
+
+        let folder = session.folder.clone();
+        let output = Arc::clone(&session.output);
+        let status = Arc::clone(&session.status);
+        let name = session.name.clone();
+        let db = self.db.clone();
+
+        let _ = Self::update_status(&status, &db, &name, Status::InProgress).await;
+
+        let cmd = self.backend.build_start_command(&folder, &prompt);
+        Self::spawn_session_task(folder, cmd, output, status, db, name);
 
         Ok(())
     }
@@ -818,10 +848,21 @@ impl App {
         let Some(session) = self.sessions.get_mut(session_index) else {
             return;
         };
-        if session.status() != Status::Review {
+
+        // If the session was persisted with a blank prompt (e.g. app closed
+        // before first message), treat the first reply as the initial start.
+        let is_first_message = session.prompt.is_empty();
+        let allowed = session.status() == Status::Review
+            || (is_first_message && session.status() == Status::New);
+        if !allowed {
             session.append_output("\n[Reply Error] Session must be in review status\n");
 
             return;
+        }
+        if is_first_message {
+            session.prompt = prompt.to_string();
+            let data_dir = session.folder.join(SESSION_DATA_DIR);
+            let _ = std::fs::write(data_dir.join("prompt.txt"), prompt);
         }
 
         let reply_line = format!("\n › {prompt}\n\n");
@@ -842,7 +883,11 @@ impl App {
             });
         }
 
-        let cmd = backend.build_resume_command(&folder, prompt);
+        let cmd = if is_first_message {
+            backend.build_start_command(&folder, prompt)
+        } else {
+            backend.build_resume_command(&folder, prompt)
+        };
         Self::spawn_session_task(folder, cmd, output, status, db, name);
     }
 
@@ -1232,6 +1277,18 @@ mod tests {
         }
     }
 
+    /// Helper: creates a session and starts it with the given prompt (two-step
+    /// flow).
+    async fn create_and_start_session(app: &mut App, prompt: &str) {
+        let index = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.start_session(index, prompt.to_string())
+            .await
+            .expect("failed to start session");
+    }
+
     async fn wait_for_status(session: &Session, expected: Status) {
         for _ in 0..40 {
             if session.status() == expected {
@@ -1336,12 +1393,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("A".to_string())
-            .await
-            .expect("failed to add session");
-        app.add_session("B".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "A").await;
+        create_and_start_session(&mut app, "B").await;
 
         // Act & Assert (Next)
         app.table_state.select(Some(0));
@@ -1376,9 +1429,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("A".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "A").await;
 
         // Act & Assert — next recovers from None
         app.table_state.select(None);
@@ -1392,19 +1443,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_session() {
+    async fn test_create_session() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
 
         // Act
-        app.add_session("Hello".to_string())
+        let index = app
+            .create_session()
             .await
-            .expect("failed to add session");
+            .expect("failed to create session");
 
-        // Assert
+        // Assert — blank session
         assert_eq!(app.sessions.len(), 1);
-        assert_eq!(app.sessions[0].prompt, "Hello");
+        assert_eq!(index, 0);
+        assert!(app.sessions[0].prompt.is_empty());
+        assert_eq!(app.sessions[0].status(), Status::New);
         assert_eq!(app.table_state.selected(), Some(0));
         assert_eq!(app.sessions[0].agent, "gemini");
 
@@ -1414,12 +1468,73 @@ mod tests {
         assert!(session_dir.exists());
         assert!(data_dir.join("prompt.txt").exists());
         assert!(data_dir.join("output.txt").exists());
+        let prompt_content =
+            std::fs::read_to_string(data_dir.join("prompt.txt")).expect("failed to read prompt");
+        assert!(prompt_content.is_empty());
+        let output_content =
+            std::fs::read_to_string(data_dir.join("output.txt")).expect("failed to read output");
+        assert!(output_content.is_empty());
 
         // Check DB
         let db_sessions = app.db.load_sessions().await.expect("failed to load");
         assert_eq!(db_sessions.len(), 1);
         assert_eq!(db_sessions[0].agent, "gemini");
         assert_eq!(db_sessions[0].base_branch, "main");
+        assert_eq!(db_sessions[0].status, "New");
+    }
+
+    #[tokio::test]
+    async fn test_start_session() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let index = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+
+        // Act
+        app.start_session(index, "Hello".to_string())
+            .await
+            .expect("failed to start session");
+
+        // Assert
+        assert_eq!(app.sessions[0].prompt, "Hello");
+        let output = app.sessions[0]
+            .output
+            .lock()
+            .expect("failed to lock output")
+            .clone();
+        assert!(output.contains("Hello"));
+        assert!(output.contains("Git worktree"));
+
+        // Check filesystem
+        let data_dir = app.sessions[0].folder.join(SESSION_DATA_DIR);
+        let prompt_content =
+            std::fs::read_to_string(data_dir.join("prompt.txt")).expect("failed to read prompt");
+        assert_eq!(prompt_content, "Hello");
+    }
+
+    #[tokio::test]
+    async fn test_esc_deletes_blank_session() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let index = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_folder = app.sessions[index].folder.clone();
+        assert!(session_folder.exists());
+
+        // Act — simulate Esc: delete the blank session
+        app.delete_selected_session().await;
+
+        // Assert
+        assert!(app.sessions.is_empty());
+        assert!(!session_folder.exists());
+        let db_sessions = app.db.load_sessions().await.expect("failed to load");
+        assert!(db_sessions.is_empty());
     }
 
     #[tokio::test]
@@ -1427,9 +1542,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("Initial".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "Initial").await;
 
         // Act
         app.reply(0, "Reply");
@@ -1445,9 +1558,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("Test".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "Test").await;
 
         // Act & Assert
         assert!(app.selected_session().is_some());
@@ -1461,9 +1572,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("A".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "A").await;
         let session_folder = app.sessions[0].folder.clone();
 
         // Act
@@ -1482,12 +1591,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("1".to_string())
-            .await
-            .expect("failed to add session");
-        app.add_session("2".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "1").await;
+        create_and_start_session(&mut app, "2").await;
 
         // Act & Assert — index out of bounds
         app.table_state.select(Some(99));
@@ -1505,12 +1610,8 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("1".to_string())
-            .await
-            .expect("failed to add session");
-        app.add_session("2".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "1").await;
+        create_and_start_session(&mut app, "2").await;
 
         // Act & Assert — delete last item
         app.table_state.select(Some(1));
@@ -1653,10 +1754,8 @@ mod tests {
         )
         .await;
 
-        // Act — add session (start command)
-        app.add_session("SpawnInit".to_string())
-            .await
-            .expect("failed to add session");
+        // Act — create and start session (start command)
+        create_and_start_session(&mut app, "SpawnInit").await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Assert
@@ -1755,13 +1854,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_session_without_git() {
+    async fn test_create_session_without_git() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf()).await;
 
         // Act
-        let result = app.add_session("Test".to_string()).await;
+        let result = app.create_session().await;
 
         // Assert
         assert!(result.is_err());
@@ -1774,7 +1873,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_session_with_git_no_actual_repo() {
+    async fn test_create_session_with_git_no_actual_repo() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let db = Database::open_in_memory()
@@ -1792,7 +1891,7 @@ mod tests {
         .await;
 
         // Act
-        let result = app.add_session("Test".to_string()).await;
+        let result = app.create_session().await;
 
         // Assert - should fail because git repo doesn't actually exist
         assert!(result.is_err());
@@ -1804,7 +1903,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_session_cleans_up_on_error() {
+    async fn test_create_session_cleans_up_on_error() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let db = Database::open_in_memory()
@@ -1822,7 +1921,7 @@ mod tests {
         .await;
 
         // Act
-        let result = app.add_session("Test".to_string()).await;
+        let result = app.create_session().await;
 
         // Assert - session should not be created
         assert!(result.is_err());
@@ -1928,9 +2027,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("Local merge cleanup".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "Local merge cleanup").await;
         wait_for_status(&app.sessions[0], Status::Review).await;
         app.commit_session(0)
             .await
@@ -2150,9 +2247,7 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.add_session("Session A".to_string())
-            .await
-            .expect("failed to add session");
+        create_and_start_session(&mut app, "Session A").await;
         assert_eq!(app.sessions.len(), 1);
 
         let other_id = app
@@ -2172,16 +2267,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_session_scoped_to_project() {
+    async fn test_create_session_scoped_to_project() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         let project_id = app.active_project_id();
 
         // Act
-        app.add_session("Scoped".to_string())
+        app.create_session()
             .await
-            .expect("failed to add session");
+            .expect("failed to create session");
 
         // Assert — session belongs to the active project
         let sessions = app

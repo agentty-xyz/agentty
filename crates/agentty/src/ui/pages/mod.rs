@@ -1,6 +1,5 @@
 pub mod diff;
 pub mod health;
-pub mod new_session;
 pub mod roadmap;
 pub mod session_chat;
 pub mod session_list;

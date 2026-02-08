@@ -19,8 +19,7 @@ The UI is built using [Ratatui](https://ratatui.rs/) and follows a **separation 
 - **`mod.rs`**: Main entry point containing the top-level `render` function that dispatches to pages based on `AppMode`. Defines the `Page` and `Component` traits.
 - **`pages/`**: Each page is a separate module implementing the `Page` trait.
     - `session_list.rs` - Session list view (`AppMode::List`)
-    - `session_chat.rs` - Session detail and reply interface (`AppMode::View`, `AppMode::Reply`)
-    - `new_session.rs` - New session prompt (`AppMode::Prompt`)
+    - `session_chat.rs` - Session chat interface (`AppMode::View`, `AppMode::Prompt`)
 - **`components/`**: Reusable widgets implementing the `Component` trait.
     - `status_bar.rs` - Top status bar with version and agent type
     - `chat_input.rs` - Chat input box with cursor positioning

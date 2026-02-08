@@ -84,7 +84,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
             session_index,
             scroll_offset,
         }
-        | AppMode::Reply {
+        | AppMode::Prompt {
             session_index,
             scroll_offset,
             ..
@@ -96,9 +96,6 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
                 mode,
             )
             .render(f, content_area);
-        }
-        AppMode::Prompt { input } => {
-            pages::new_session::NewSessionPage::new(input).render(f, content_area);
         }
         AppMode::Diff {
             session_index,

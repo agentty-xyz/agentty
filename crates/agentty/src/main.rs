@@ -227,9 +227,13 @@ async fn handle_key_event(
                 };
             }
             KeyCode::Char('a') => {
-                app.mode = AppMode::Prompt {
-                    input: InputState::new(),
-                };
+                if let Ok(session_index) = app.create_session().await {
+                    app.mode = AppMode::Prompt {
+                        session_index,
+                        input: InputState::new(),
+                        scroll_offset: None,
+                    };
+                }
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 app.next();
@@ -289,7 +293,7 @@ async fn handle_key_event(
                     app.mode = AppMode::List;
                 }
                 KeyCode::Char('r') => {
-                    app.mode = AppMode::Reply {
+                    app.mode = AppMode::Prompt {
                         session_index: session_idx,
                         input: InputState::new(),
                         scroll_offset: new_scroll,
@@ -378,38 +382,54 @@ async fn handle_key_event(
                 *scroll_offset = new_scroll;
             }
         }
-        AppMode::Reply {
+        AppMode::Prompt {
             session_index,
             input,
             scroll_offset,
         } => {
-            let session_index = *session_index;
+            let session_idx = *session_index;
             let scroll_snapshot = *scroll_offset;
+            let is_new_session = app
+                .sessions
+                .get(session_idx)
+                .map(|s| s.prompt.is_empty())
+                .unwrap_or(false);
+
             match key.code {
                 KeyCode::Enter if should_insert_newline(key) => {
                     input.insert_newline();
                 }
                 KeyCode::Enter => {
                     let prompt = input.take_text();
-                    app.mode = AppMode::View {
-                        session_index,
-                        scroll_offset: None,
-                    };
                     if !prompt.is_empty() {
-                        app.reply(session_index, &prompt);
+                        if is_new_session {
+                            if let Err(error) = app.start_session(session_idx, prompt).await {
+                                if let Some(session) = app.sessions.get(session_idx) {
+                                    session.append_output(&format!("\n[Error] {error}\n"));
+                                }
+                            }
+                        } else {
+                            app.reply(session_idx, &prompt);
+                        }
+                        app.mode = AppMode::View {
+                            session_index: session_idx,
+                            scroll_offset: None,
+                        };
                     }
                 }
-                KeyCode::Esc => {
-                    app.mode = AppMode::View {
-                        session_index,
-                        scroll_offset: scroll_snapshot,
-                    };
-                }
-                KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                    app.mode = AppMode::View {
-                        session_index,
-                        scroll_offset: scroll_snapshot,
-                    };
+                KeyCode::Esc | KeyCode::Char('c')
+                    if key.code == KeyCode::Esc
+                        || key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                {
+                    if is_new_session {
+                        app.delete_selected_session().await;
+                        app.mode = AppMode::List;
+                    } else {
+                        app.mode = AppMode::View {
+                            session_index: session_idx,
+                            scroll_offset: scroll_snapshot,
+                        };
+                    }
                 }
                 KeyCode::Left => {
                     input.move_left();
@@ -441,56 +461,6 @@ async fn handle_key_event(
                 _ => {}
             }
         }
-        AppMode::Prompt { input } => match key.code {
-            KeyCode::Enter if should_insert_newline(key) => {
-                input.insert_newline();
-            }
-            KeyCode::Enter => {
-                let prompt = input.take_text();
-                app.mode = AppMode::List;
-                if !prompt.is_empty() {
-                    if let Err(error) = app.add_session(prompt).await {
-                        app.mode = AppMode::Prompt {
-                            input: InputState::with_text(format!("Error: {error}")),
-                        };
-                    }
-                }
-            }
-            KeyCode::Esc => {
-                app.mode = AppMode::List;
-            }
-            KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                app.mode = AppMode::List;
-            }
-            KeyCode::Left => {
-                input.move_left();
-            }
-            KeyCode::Right => {
-                input.move_right();
-            }
-            KeyCode::Up => {
-                input.move_up();
-            }
-            KeyCode::Down => {
-                input.move_down();
-            }
-            KeyCode::Home => {
-                input.move_home();
-            }
-            KeyCode::End => {
-                input.move_end();
-            }
-            KeyCode::Backspace => {
-                input.delete_backward();
-            }
-            KeyCode::Delete => {
-                input.delete_forward();
-            }
-            KeyCode::Char(c) => {
-                input.insert_char(c);
-            }
-            _ => {}
-        },
         AppMode::Diff {
             session_index,
             diff: _,

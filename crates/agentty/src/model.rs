@@ -22,6 +22,7 @@ pub enum Tab {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
+    New,
     InProgress,
     Review,
     PullRequest,
@@ -31,6 +32,7 @@ pub enum Status {
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Status::New => write!(f, "New"),
             Status::InProgress => write!(f, "InProgress"),
             Status::Review => write!(f, "Review"),
             Status::PullRequest => write!(f, "PullRequest"),
@@ -44,6 +46,7 @@ impl std::str::FromStr for Status {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "New" => Ok(Status::New),
             "InProgress" => Ok(Status::InProgress),
             "Review" => Ok(Status::Review),
             "PullRequest" => Ok(Status::PullRequest),
@@ -243,15 +246,12 @@ impl Default for InputState {
 pub enum AppMode {
     List,
     Prompt {
+        session_index: usize,
         input: InputState,
+        scroll_offset: Option<u16>,
     },
     View {
         session_index: usize,
-        scroll_offset: Option<u16>,
-    },
-    Reply {
-        session_index: usize,
-        input: InputState,
         scroll_offset: Option<u16>,
     },
     Diff {
@@ -369,16 +369,19 @@ impl Status {
 
         matches!(
             (self, next),
-            (
-                Status::Review,
-                Status::InProgress | Status::PullRequest | Status::Done
-            ) | (Status::InProgress, Status::Review)
+            (Status::New, Status::InProgress)
+                | (
+                    Status::Review,
+                    Status::InProgress | Status::PullRequest | Status::Done
+                )
+                | (Status::InProgress, Status::Review)
                 | (Status::PullRequest, Status::Done)
         )
     }
 
     pub fn icon(self) -> Icon {
         match self {
+            Status::New => Icon::Pending,
             Status::InProgress | Status::PullRequest => Icon::current_spinner(),
             Status::Review => Icon::Pending,
             Status::Done => Icon::Check,
@@ -387,6 +390,7 @@ impl Status {
 
     pub fn color(self) -> Color {
         match self {
+            Status::New => Color::DarkGray,
             Status::InProgress => Color::Yellow,
             Status::Review => Color::LightBlue,
             Status::PullRequest => Color::Cyan,
@@ -469,6 +473,7 @@ mod tests {
     #[test]
     fn test_status_icon() {
         // Arrange & Act & Assert
+        assert_eq!(Status::New.icon(), Icon::Pending);
         assert!(matches!(Status::InProgress.icon(), Icon::Spinner(_)));
         assert_eq!(Status::Review.icon(), Icon::Pending);
         assert!(matches!(Status::PullRequest.icon(), Icon::Spinner(_)));
@@ -478,6 +483,7 @@ mod tests {
     #[test]
     fn test_status_color() {
         // Arrange & Act & Assert
+        assert_eq!(Status::New.color(), Color::DarkGray);
         assert_eq!(Status::InProgress.color(), Color::Yellow);
         assert_eq!(Status::Review.color(), Color::LightBlue);
         assert_eq!(Status::PullRequest.color(), Color::Cyan);
@@ -496,6 +502,9 @@ mod tests {
     #[test]
     fn test_status_transition_rules() {
         // Arrange & Act & Assert
+        assert!(Status::New.can_transition_to(Status::InProgress));
+        assert!(!Status::New.can_transition_to(Status::Review));
+        assert!(!Status::New.can_transition_to(Status::Done));
         assert!(Status::Review.can_transition_to(Status::InProgress));
         assert!(Status::Review.can_transition_to(Status::PullRequest));
         assert!(Status::Review.can_transition_to(Status::Done));
