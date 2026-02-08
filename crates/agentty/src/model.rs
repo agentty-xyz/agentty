@@ -23,7 +23,8 @@ pub enum Tab {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     InProgress,
-    Processing,
+    Review,
+    PullRequest,
     Done,
 }
 
@@ -31,7 +32,8 @@ impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Status::InProgress => write!(f, "InProgress"),
-            Status::Processing => write!(f, "Processing"),
+            Status::Review => write!(f, "Review"),
+            Status::PullRequest => write!(f, "PullRequest"),
             Status::Done => write!(f, "Done"),
         }
     }
@@ -43,7 +45,9 @@ impl std::str::FromStr for Status {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "InProgress" => Ok(Status::InProgress),
-            "Processing" => Ok(Status::Processing),
+            "Review" => Ok(Status::Review),
+            "PullRequest" => Ok(Status::PullRequest),
+            "Processing" => Ok(Status::PullRequest),
             "Done" => Ok(Status::Done),
             _ => Err(format!("Unknown status: {s}")),
         }
@@ -134,11 +138,10 @@ impl InputState {
             return;
         }
 
-        let mut char_index = 0;
         let mut current_line = 0;
         let mut line_start = 0;
 
-        for ch in self.text.chars() {
+        for (char_index, ch) in self.text.chars().enumerate() {
             if current_line == line - 1 {
                 break;
             }
@@ -146,7 +149,6 @@ impl InputState {
                 current_line += 1;
                 line_start = char_index + 1;
             }
-            char_index += 1;
         }
 
         let prev_line_start = line_start;
@@ -360,9 +362,25 @@ impl Tab {
 }
 
 impl Status {
+    pub fn can_transition_to(self, next: Status) -> bool {
+        if self == next {
+            return true;
+        }
+
+        matches!(
+            (self, next),
+            (
+                Status::Review,
+                Status::InProgress | Status::PullRequest | Status::Done
+            ) | (Status::InProgress, Status::Review)
+                | (Status::PullRequest, Status::Done)
+        )
+    }
+
     pub fn icon(self) -> Icon {
         match self {
-            Status::InProgress | Status::Processing => Icon::current_spinner(),
+            Status::InProgress | Status::PullRequest => Icon::current_spinner(),
+            Status::Review => Icon::Pending,
             Status::Done => Icon::Check,
         }
     }
@@ -370,7 +388,8 @@ impl Status {
     pub fn color(self) -> Color {
         match self {
             Status::InProgress => Color::Yellow,
-            Status::Processing => Color::Cyan,
+            Status::Review => Color::LightBlue,
+            Status::PullRequest => Color::Cyan,
             Status::Done => Color::Green,
         }
     }
@@ -392,27 +411,27 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: "prompt".to_string(),
-            status: Arc::new(Mutex::new(Status::InProgress)),
+            status: Arc::new(Mutex::new(Status::Review)),
         };
 
-        // Act & Assert (InProgress)
+        // Act & Assert (Review)
+        assert_eq!(session.status(), Status::Review);
+
+        // Act
+        if let Ok(mut status) = session.status.lock() {
+            *status = Status::InProgress;
+        }
+
+        // Assert (InProgress)
         assert_eq!(session.status(), Status::InProgress);
 
         // Act
         if let Ok(mut status) = session.status.lock() {
-            *status = Status::Done;
+            *status = Status::Review;
         }
 
-        // Assert (Done)
-        assert_eq!(session.status(), Status::Done);
-
-        // Act
-        if let Ok(mut status) = session.status.lock() {
-            *status = Status::Processing;
-        }
-
-        // Assert (Processing because creating PR)
-        assert_eq!(session.status(), Status::Processing);
+        // Assert (Review)
+        assert_eq!(session.status(), Status::Review);
     }
 
     #[test]
@@ -451,7 +470,8 @@ mod tests {
     fn test_status_icon() {
         // Arrange & Act & Assert
         assert!(matches!(Status::InProgress.icon(), Icon::Spinner(_)));
-        assert!(matches!(Status::Processing.icon(), Icon::Spinner(_)));
+        assert_eq!(Status::Review.icon(), Icon::Pending);
+        assert!(matches!(Status::PullRequest.icon(), Icon::Spinner(_)));
         assert_eq!(Status::Done.icon(), Icon::Check);
     }
 
@@ -459,8 +479,30 @@ mod tests {
     fn test_status_color() {
         // Arrange & Act & Assert
         assert_eq!(Status::InProgress.color(), Color::Yellow);
-        assert_eq!(Status::Processing.color(), Color::Cyan);
+        assert_eq!(Status::Review.color(), Color::LightBlue);
+        assert_eq!(Status::PullRequest.color(), Color::Cyan);
         assert_eq!(Status::Done.color(), Color::Green);
+    }
+
+    #[test]
+    fn test_status_from_str_legacy_processing_maps_to_pull_request() {
+        // Arrange & Act
+        let status = "Processing".parse::<Status>().expect("failed to parse");
+
+        // Assert
+        assert_eq!(status, Status::PullRequest);
+    }
+
+    #[test]
+    fn test_status_transition_rules() {
+        // Arrange & Act & Assert
+        assert!(Status::Review.can_transition_to(Status::InProgress));
+        assert!(Status::Review.can_transition_to(Status::PullRequest));
+        assert!(Status::Review.can_transition_to(Status::Done));
+        assert!(Status::InProgress.can_transition_to(Status::Review));
+        assert!(Status::PullRequest.can_transition_to(Status::Done));
+        assert!(!Status::InProgress.can_transition_to(Status::Done));
+        assert!(!Status::Done.can_transition_to(Status::InProgress));
     }
 
     #[test]

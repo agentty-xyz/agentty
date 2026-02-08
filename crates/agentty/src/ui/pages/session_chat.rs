@@ -53,7 +53,8 @@ impl Page for SessionChatPage<'_> {
             let status = session.status();
             let status_label = match status {
                 Status::InProgress => "In Progress",
-                Status::Processing => "Processing",
+                Status::Review => "Review",
+                Status::PullRequest => "Pull Request",
                 Status::Done => "Done",
             };
             let title = format!(" {} — {} ", session.name, status_label);
@@ -67,15 +68,17 @@ impl Page for SessionChatPage<'_> {
             let inner_width = output_area.width.saturating_sub(2) as usize;
             let mut lines = wrap_lines(&output_text, inner_width);
 
-            if status != Status::Done {
+            if matches!(status, Status::InProgress | Status::PullRequest) {
                 while lines.last().is_some_and(|last| last.width() == 0) {
                     lines.pop();
                 }
                 lines.push(Line::from(""));
 
                 let msg = match status {
-                    Status::Processing => "Creating PR...",
-                    _ => "Thinking...",
+                    Status::InProgress => "Thinking...",
+                    Status::Review => "",
+                    Status::PullRequest => "Waiting for PR merge...",
+                    Status::Done => "",
                 };
 
                 lines.push(Line::from(vec![Span::styled(

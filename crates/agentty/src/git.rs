@@ -359,6 +359,41 @@ pub fn get_ahead_behind(repo_path: &Path) -> Result<(u32, u32), String> {
     }
 }
 
+/// Returns the origin repository URL normalized to HTTPS form when possible.
+///
+/// # Arguments
+/// * `repo_path` - Path to a git repository or worktree
+///
+/// # Returns
+/// Ok(url) on success, Err(msg) with detailed error message on failure
+pub fn repo_url(repo_path: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git remote get-url: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git remote get-url failed: {}", stderr.trim()));
+    }
+
+    let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(normalize_repo_url(&remote))
+}
+
+fn normalize_repo_url(remote: &str) -> String {
+    let trimmed = remote.trim_end_matches(".git");
+    if let Some(path) = trimmed.strip_prefix("git@github.com:") {
+        return format!("https://github.com/{path}");
+    }
+    if let Some(path) = trimmed.strip_prefix("ssh://git@github.com/") {
+        return format!("https://github.com/{path}");
+    }
+
+    trimmed.to_string()
+}
+
 /// Pushes the source branch to origin and creates a Pull Request via GitHub
 /// CLI.
 ///
@@ -430,6 +465,41 @@ pub fn create_pr(
     }
 
     Err(format!("GitHub CLI failed: {}", stderr.trim()))
+}
+
+/// Returns whether the PR for `source_branch` has been merged.
+///
+/// # Arguments
+/// * `repo_path` - Path to a git repository or worktree
+/// * `source_branch` - Branch used to create the PR (e.g., `agentty/abc123`)
+///
+/// # Returns
+/// Ok(true) when merged, Ok(false) when still open, Err(msg) on failure
+pub fn is_pr_merged(repo_path: &Path, source_branch: &str) -> Result<bool, String> {
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            source_branch,
+            "--json",
+            "mergedAt",
+            "--jq",
+            ".mergedAt != null",
+        ])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute gh pr view: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("GitHub CLI failed: {}", stderr.trim()));
+    }
+
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        value => Err(format!("Unexpected output from gh pr view: {value}")),
+    }
 }
 
 #[cfg(test)]
@@ -977,6 +1047,30 @@ mod tests {
 
         // Act — no git repo at all
         let result = create_pr(dir.path(), "some-branch", "main", "Test PR");
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_repo_url_invalid_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // Act
+        let result = repo_url(dir.path());
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_pr_merged_invalid_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // Act
+        let result = is_pr_merged(dir.path(), "agentty/test123");
 
         // Assert
         assert!(result.is_err());

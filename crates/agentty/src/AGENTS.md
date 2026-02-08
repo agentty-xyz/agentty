@@ -2,6 +2,15 @@
 
 ## Local Conventions
 - Avoid near-identical local variable names in the same function (for example, `gitdir` and `git_dir`). Use one clear naming style with distinct, descriptive names.
+- PR lifecycle status flow:
+  - Status state machine is: `InProgress` -> `Review` -> (`InProgress` or `PullRequest` or `Done`) and `PullRequest` -> `Done`.
+  - `create_pr_session()` is allowed only while session status is `Review`.
+  - `InProgress` can only be entered from `Review`.
+  - `PullRequest` can only be entered from `Review`.
+  - `Done` can only be entered from `Review` (local merge) or `PullRequest` (merged PR).
+  - When agent response finishes, set status to `Review`.
+  - While agent is preparing a response, status is `InProgress`.
+  - Do not stop polling PR status for previously tracked sessions on project switch.
 
 ## Directory Index
 - [ui/](ui/) - User Interface module.

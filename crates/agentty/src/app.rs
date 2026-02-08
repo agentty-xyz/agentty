@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::io::Write as _;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::widgets::TableState;
 use tokio::io::{AsyncBufReadExt as _, AsyncRead};
@@ -19,6 +19,8 @@ use crate::health::{self, HealthEntry};
 use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, Status, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
+const PR_MERGE_POLL_INTERVAL: Duration = Duration::from_secs(30);
+type SessionHandles = (Arc<Mutex<String>>, Arc<Mutex<Status>>);
 
 pub struct App {
     pub current_tab: Tab,
@@ -35,6 +37,8 @@ pub struct App {
     git_status: Arc<Mutex<Option<(u32, u32)>>>,
     git_status_cancel: Arc<AtomicBool>,
     health_checks: Arc<Mutex<Vec<HealthEntry>>>,
+    pr_creation_in_flight: Arc<Mutex<HashSet<String>>>,
+    pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     working_dir: PathBuf,
 }
 
@@ -59,7 +63,7 @@ impl App {
         let projects = Self::load_projects_from_db(&db).await;
 
         let mut table_state = TableState::default();
-        let sessions = Self::load_sessions(&base_path, &db, &projects).await;
+        let sessions = Self::load_sessions(&base_path, &db, &projects, &[]).await;
         if sessions.is_empty() {
             table_state.select(None);
         } else {
@@ -68,6 +72,8 @@ impl App {
 
         let git_status = Arc::new(Mutex::new(None));
         let git_status_cancel = Arc::new(AtomicBool::new(false));
+        let pr_creation_in_flight = Arc::new(Mutex::new(HashSet::new()));
+        let pr_poll_cancel = Arc::new(Mutex::new(HashMap::new()));
 
         if git_branch.is_some() {
             Self::spawn_git_status_task(
@@ -77,7 +83,7 @@ impl App {
             );
         }
 
-        Self {
+        let app = Self {
             current_tab: Tab::Sessions,
             mode: AppMode::List,
             sessions,
@@ -91,9 +97,14 @@ impl App {
             git_status,
             git_status_cancel,
             health_checks: Arc::new(Mutex::new(Vec::new())),
+            pr_creation_in_flight,
+            pr_poll_cancel,
             projects,
             working_dir,
-        }
+        };
+
+        app.start_pr_polling_for_pull_request_sessions();
+        app
     }
 
     pub fn active_project_id(&self) -> i64 {
@@ -163,7 +174,15 @@ impl App {
 
         // Refresh project list and reload all sessions
         self.projects = Self::load_projects_from_db(&self.db).await;
-        self.sessions = Self::load_sessions(&self.base_path, &self.db, &self.projects).await;
+        let existing_sessions = std::mem::take(&mut self.sessions);
+        self.sessions = Self::load_sessions(
+            &self.base_path,
+            &self.db,
+            &self.projects,
+            &existing_sessions,
+        )
+        .await;
+        self.start_pr_polling_for_pull_request_sessions();
         if self.sessions.is_empty() {
             self.table_state.select(None);
         } else {
@@ -283,7 +302,7 @@ impl App {
                 &name,
                 &self.agent_kind.to_string(),
                 base_branch,
-                &Status::InProgress.to_string(),
+                &Status::Review.to_string(),
                 self.active_project_id,
             )
             .await
@@ -317,7 +336,8 @@ impl App {
         self.backend.setup(&folder);
 
         let output = Arc::new(Mutex::new(initial_output));
-        let status = Arc::new(Mutex::new(Status::InProgress));
+        let status = Arc::new(Mutex::new(Status::Review));
+        let _ = Self::update_status(&status, &self.db, &name, Status::InProgress).await;
 
         let cmd = self.backend.build_start_command(&folder, &prompt);
         Self::spawn_session_task(
@@ -378,6 +398,8 @@ impl App {
         let session = self.sessions.remove(i);
 
         let _ = self.db.delete_session(&session.name).await;
+        self.cancel_pr_polling_for_session(&session.name);
+        self.clear_pr_creation_in_flight(&session.name);
 
         // Remove git worktree and branch if in a git repo
         if self.git_branch.is_some() {
@@ -434,6 +456,9 @@ impl App {
             .sessions
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
+        if !matches!(session.status(), Status::Review | Status::PullRequest) {
+            return Err("Session must be in review or pull request status".to_string());
+        }
 
         // Read base branch from DB
         let base_branch = self
@@ -464,6 +489,10 @@ impl App {
             .map_err(|err| format!("Failed to merge: {err}"))?;
         }
 
+        if !Self::update_status(&session.status, &self.db, &session.name, Status::Done).await {
+            return Err("Invalid status transition to Done".to_string());
+        }
+
         Ok(format!(
             "Successfully merged {source_branch} into {base_branch}"
         ))
@@ -475,8 +504,16 @@ impl App {
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
 
-        if session.status() != Status::Done {
-            return Err("Already processing a request".to_string());
+        if session.status() != Status::Review {
+            return Err("Session must be in review to create a pull request".to_string());
+        }
+
+        if self.is_pr_creation_in_flight(&session.name) {
+            return Err("Pull request creation is already in progress".to_string());
+        }
+
+        if self.is_pr_polling_active(&session.name) {
+            return Err("Pull request is already being tracked".to_string());
         }
 
         // Read base branch from DB
@@ -485,10 +522,6 @@ impl App {
             .get_base_branch(&session.name)
             .await?
             .ok_or_else(|| "No git worktree for this session".to_string())?;
-
-        // Find repo root
-        let repo_root = git::find_git_repo_root(&self.working_dir)
-            .ok_or_else(|| "Failed to find git repository root".to_string())?;
 
         // Build source branch name
         let source_branch = format!("agentty/{}", session.name);
@@ -501,39 +534,201 @@ impl App {
             .unwrap_or("New Session")
             .to_string();
 
+        self.mark_pr_creation_in_flight(&session.name)?;
+
         let status = Arc::clone(&session.status);
         let output = Arc::clone(&session.output);
         let folder = session.folder.clone();
         let db = self.db.clone();
         let name = session.name.clone();
+        let repo_url = {
+            let folder = folder.clone();
+            match tokio::task::spawn_blocking(move || git::repo_url(&folder)).await {
+                Ok(Ok(url)) => url,
+                _ => "this repository".to_string(),
+            }
+        };
 
-        {
-            let status = Arc::clone(&status);
-            let db = db.clone();
-            let name = name.clone();
-            tokio::spawn(async move {
-                Self::update_status(&status, &db, &name, Status::Processing).await;
-            });
-        }
+        Session::write_output(
+            &output,
+            &folder,
+            &format!("\n[PR] Creating PR in {repo_url}\n"),
+        );
+
+        let pr_creation_in_flight = Arc::clone(&self.pr_creation_in_flight);
+        let pr_poll_cancel = Arc::clone(&self.pr_poll_cancel);
 
         // Perform PR creation in background
         tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                git::create_pr(&repo_root, &source_branch, &base_branch, &title)
-            })
-            .await;
-
-            let result_message = match result {
-                Ok(Ok(msg)) => format!("\n[PR] {msg}\n"),
-                Ok(Err(err)) => format!("\n[PR Error] {err}\n"),
-                Err(e) => format!("\n[PR Error] Join error: {e}\n"),
+            let result = {
+                let folder = folder.clone();
+                let source_branch = source_branch.clone();
+                tokio::task::spawn_blocking(move || {
+                    git::create_pr(&folder, &source_branch, &base_branch, &title)
+                })
+                .await
             };
 
-            Session::write_output(&output, &folder, &result_message);
-            Self::update_status(&status, &db, &name, Status::Done).await;
+            match result {
+                Ok(Ok(message)) => {
+                    Session::write_output(&output, &folder, &format!("\n[PR] {message}\n"));
+                    if Self::update_status(&status, &db, &name, Status::PullRequest).await {
+                        Self::spawn_pr_poll_task(
+                            db,
+                            folder,
+                            name.clone(),
+                            output,
+                            status,
+                            source_branch,
+                            pr_poll_cancel,
+                        );
+                    } else {
+                        Session::write_output(
+                            &output,
+                            &folder,
+                            "\n[PR Error] Invalid status transition to PullRequest\n",
+                        );
+                    }
+                }
+                Ok(Err(error)) => {
+                    Session::write_output(&output, &folder, &format!("\n[PR Error] {error}\n"));
+                }
+                Err(error) => {
+                    Session::write_output(
+                        &output,
+                        &folder,
+                        &format!("\n[PR Error] Join error: {error}\n"),
+                    );
+                }
+            }
+
+            if let Ok(mut in_flight) = pr_creation_in_flight.lock() {
+                in_flight.remove(&name);
+            }
         });
 
         Ok(())
+    }
+
+    fn start_pr_polling_for_pull_request_sessions(&self) {
+        for session in &self.sessions {
+            if session.status() != Status::PullRequest {
+                continue;
+            }
+
+            let source_branch = format!("agentty/{}", session.name);
+            Self::spawn_pr_poll_task(
+                self.db.clone(),
+                session.folder.clone(),
+                session.name.clone(),
+                Arc::clone(&session.output),
+                Arc::clone(&session.status),
+                source_branch,
+                Arc::clone(&self.pr_poll_cancel),
+            );
+        }
+    }
+
+    fn mark_pr_creation_in_flight(&self, name: &str) -> Result<(), String> {
+        let mut in_flight = self
+            .pr_creation_in_flight
+            .lock()
+            .map_err(|_| "Failed to lock PR creation state".to_string())?;
+
+        if in_flight.contains(name) {
+            return Err("Pull request creation is already in progress".to_string());
+        }
+
+        in_flight.insert(name.to_string());
+
+        Ok(())
+    }
+
+    fn is_pr_creation_in_flight(&self, name: &str) -> bool {
+        self.pr_creation_in_flight
+            .lock()
+            .map(|in_flight| in_flight.contains(name))
+            .unwrap_or(false)
+    }
+
+    fn is_pr_polling_active(&self, name: &str) -> bool {
+        self.pr_poll_cancel
+            .lock()
+            .map(|polling| polling.contains_key(name))
+            .unwrap_or(false)
+    }
+
+    fn clear_pr_creation_in_flight(&self, name: &str) {
+        if let Ok(mut in_flight) = self.pr_creation_in_flight.lock() {
+            in_flight.remove(name);
+        }
+    }
+
+    fn cancel_pr_polling_for_session(&self, name: &str) {
+        if let Ok(mut polling) = self.pr_poll_cancel.lock() {
+            if let Some(cancel) = polling.remove(name) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn spawn_pr_poll_task(
+        db: Database,
+        folder: PathBuf,
+        name: String,
+        output: Arc<Mutex<String>>,
+        status: Arc<Mutex<Status>>,
+        source_branch: String,
+        pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    ) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        if let Ok(mut polling) = pr_poll_cancel.lock() {
+            if polling.contains_key(&name) {
+                return;
+            }
+            polling.insert(name.clone(), Arc::clone(&cancel));
+        } else {
+            return;
+        }
+
+        tokio::spawn(async move {
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let merged = {
+                    let folder = folder.clone();
+                    let source_branch = source_branch.clone();
+                    tokio::task::spawn_blocking(move || git::is_pr_merged(&folder, &source_branch))
+                        .await
+                        .ok()
+                        .and_then(std::result::Result::ok)
+                };
+
+                if merged == Some(true) {
+                    Session::write_output(
+                        &output,
+                        &folder,
+                        &format!("\n[PR] Pull request from `{source_branch}` was merged\n"),
+                    );
+                    Self::update_status(&status, &db, &name, Status::Done).await;
+
+                    break;
+                }
+
+                for _ in 0..PR_MERGE_POLL_INTERVAL.as_secs() {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+
+            if let Ok(mut polling) = pr_poll_cancel.lock() {
+                polling.remove(&name);
+            }
+        });
     }
 
     fn reply_with_backend(
@@ -545,6 +740,11 @@ impl App {
         let Some(session) = self.sessions.get_mut(session_index) else {
             return;
         };
+        if session.status() != Status::Review {
+            session.append_output("\n[Reply Error] Session must be in review status\n");
+
+            return;
+        }
 
         let reply_line = format!("\n › {prompt}\n\n");
         session.append_output(&reply_line);
@@ -594,12 +794,26 @@ impl App {
         let _ = std::fs::remove_dir_all(folder);
     }
 
-    async fn load_sessions(base: &Path, db: &Database, projects: &[Project]) -> Vec<Session> {
+    async fn load_sessions(
+        base: &Path,
+        db: &Database,
+        projects: &[Project],
+        existing_sessions: &[Session],
+    ) -> Vec<Session> {
         let project_names: HashMap<i64, String> = projects
             .iter()
             .filter_map(|project| {
                 let name = project.path.file_name()?.to_string_lossy().to_string();
                 Some((project.id, name))
+            })
+            .collect();
+        let existing_sessions_by_name: HashMap<String, SessionHandles> = existing_sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.name.clone(),
+                    (Arc::clone(&session.output), Arc::clone(&session.status)),
+                )
             })
             .collect();
 
@@ -621,14 +835,30 @@ impl App {
                     .and_then(|id| project_names.get(&id))
                     .cloned()
                     .unwrap_or_default();
+                let (output, status) = if let Some((existing_output, existing_status)) =
+                    existing_sessions_by_name.get(&row.name)
+                {
+                    if let Ok(mut output_buffer) = existing_output.lock() {
+                        *output_buffer = output_text;
+                    }
+                    if let Ok(mut status_value) = existing_status.lock() {
+                        *status_value = status;
+                    }
+                    (Arc::clone(existing_output), Arc::clone(existing_status))
+                } else {
+                    (
+                        Arc::new(Mutex::new(output_text)),
+                        Arc::new(Mutex::new(status)),
+                    )
+                };
                 Some(Session {
                     agent: row.agent,
                     folder,
                     name: row.name,
-                    output: Arc::new(Mutex::new(output_text)),
+                    output,
                     project_name,
                     prompt,
-                    status: Arc::new(Mutex::new(status)),
+                    status,
                 })
             })
             .collect();
@@ -761,15 +991,27 @@ impl App {
                 }
             }
 
-            Self::update_status(&status, &db, &name, Status::Done).await;
+            Self::update_status(&status, &db, &name, Status::Review).await;
         });
     }
 
-    async fn update_status(status: &Mutex<Status>, db: &Database, name: &str, new: Status) {
-        if let Ok(mut s) = status.lock() {
-            *s = new;
+    async fn update_status(status: &Mutex<Status>, db: &Database, name: &str, new: Status) -> bool {
+        let should_update = if let Ok(mut current) = status.lock() {
+            if (*current).can_transition_to(new) {
+                *current = new;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !should_update {
+            return false;
         }
         let _ = db.update_session_status(name, &new.to_string()).await;
+
+        true
     }
 
     async fn process_output<R: AsyncRead + Unpin>(
@@ -796,6 +1038,7 @@ impl App {
 mod tests {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
     use tempfile::tempdir;
@@ -904,7 +1147,7 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: prompt.to_string(),
-            status: Arc::new(Mutex::new(Status::Done)),
+            status: Arc::new(Mutex::new(Status::Review)),
         });
         if app.table_state.selected().is_none() {
             app.table_state.select(Some(0));
@@ -1338,7 +1581,7 @@ mod tests {
             assert!(output.contains("--prompt"));
             assert!(output.contains("SpawnInit"));
             assert!(!output.contains("--resume"));
-            assert_eq!(session.status(), Status::Done);
+            assert_eq!(session.status(), Status::Review);
         }
 
         // Act — reply (resume command)
@@ -1372,7 +1615,7 @@ mod tests {
             assert!(output.contains("SpawnReply"));
             assert!(output.contains("--resume"));
             assert!(output.contains("latest"));
-            assert_eq!(session.status(), Status::Done);
+            assert_eq!(session.status(), Status::Review);
         }
     }
 
@@ -1611,6 +1854,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_pr_session_requires_review_status() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
+        add_manual_session(&mut app, dir.path(), "manual01", "Test");
+        if let Ok(mut status) = app.sessions[0].status.lock() {
+            *status = Status::Done;
+        }
+
+        // Act
+        let result = app.create_pr_session(0).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("must be in review")
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_pr_session_invalid_index() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -1673,6 +1938,30 @@ mod tests {
         assert_eq!(app.working_dir(), &PathBuf::from("/tmp/other"));
         assert_eq!(app.git_branch(), Some("develop"));
         assert!(app.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_switch_project_keeps_existing_pr_polling_sessions() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
+        let other_id = app
+            .db
+            .upsert_project("/tmp/other", None)
+            .await
+            .expect("failed to upsert");
+        if let Ok(mut polling) = app.pr_poll_cancel.lock() {
+            polling.insert("manual01".to_string(), Arc::new(AtomicBool::new(false)));
+        }
+
+        // Act
+        app.switch_project(other_id)
+            .await
+            .expect("failed to switch");
+
+        // Assert
+        let polling = app.pr_poll_cancel.lock().expect("failed to lock polling");
+        assert!(polling.contains_key("manual01"));
     }
 
     #[tokio::test]
