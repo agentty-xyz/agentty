@@ -52,9 +52,11 @@ pub struct ProjectRow {
 pub struct SessionRow {
     pub agent: String,
     pub base_branch: String,
+    pub created_at: i64,
     pub name: String,
     pub project_id: Option<i64>,
     pub status: String,
+    pub updated_at: i64,
 }
 
 impl Database {
@@ -176,7 +178,8 @@ impl Database {
 
     pub async fn load_sessions(&self) -> Result<Vec<SessionRow>, String> {
         let rows = sqlx::query(
-            "SELECT name, agent, base_branch, status, project_id FROM session ORDER BY name",
+            "SELECT name, agent, base_branch, status, project_id, created_at, updated_at FROM \
+             session ORDER BY updated_at DESC, name",
         )
         .fetch_all(&self.pool)
         .await
@@ -187,9 +190,11 @@ impl Database {
             .map(|row| SessionRow {
                 agent: row.get("agent"),
                 base_branch: row.get("base_branch"),
+                created_at: row.get("created_at"),
                 name: row.get("name"),
                 project_id: row.get("project_id"),
                 status: row.get("status"),
+                updated_at: row.get("updated_at"),
             })
             .collect())
     }
@@ -199,8 +204,8 @@ impl Database {
         project_id: i64,
     ) -> Result<Vec<SessionRow>, String> {
         let rows = sqlx::query(
-            "SELECT name, agent, base_branch, status, project_id FROM session WHERE project_id = \
-             ? ORDER by name",
+            "SELECT name, agent, base_branch, status, project_id, created_at, updated_at FROM \
+             session WHERE project_id = ? ORDER BY updated_at DESC, name",
         )
         .bind(project_id)
         .fetch_all(&self.pool)
@@ -212,9 +217,11 @@ impl Database {
             .map(|row| SessionRow {
                 agent: row.get("agent"),
                 base_branch: row.get("base_branch"),
+                created_at: row.get("created_at"),
                 name: row.get("name"),
                 project_id: row.get("project_id"),
                 status: row.get("status"),
+                updated_at: row.get("updated_at"),
             })
             .collect())
     }
@@ -458,6 +465,11 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
+
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].created_at > 0);
+        assert!(sessions[0].updated_at > 0);
     }
 
     #[tokio::test]
@@ -494,7 +506,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_sessions_ordered_by_name() {
+    async fn test_load_sessions_ordered_by_updated_at_desc() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
         let project_id = db
@@ -507,20 +519,28 @@ mod tests {
         db.insert_session("alpha", "gemini", "develop", "InProgress", project_id)
             .await
             .expect("failed to insert");
+        sqlx::query("UPDATE session SET updated_at = 1 WHERE name = 'alpha'")
+            .execute(db.pool())
+            .await
+            .expect("failed to set alpha timestamp");
+        sqlx::query("UPDATE session SET updated_at = 2 WHERE name = 'beta'")
+            .execute(db.pool())
+            .await
+            .expect("failed to set beta timestamp");
 
         // Act
         let sessions = db.load_sessions().await.expect("failed to load");
 
         // Assert
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].name, "alpha");
-        assert_eq!(sessions[0].agent, "gemini");
-        assert_eq!(sessions[0].base_branch, "develop");
-        assert_eq!(sessions[0].status, "InProgress");
-        assert_eq!(sessions[1].name, "beta");
-        assert_eq!(sessions[1].agent, "claude");
-        assert_eq!(sessions[1].base_branch, "main");
-        assert_eq!(sessions[1].status, "Done");
+        assert_eq!(sessions[0].name, "beta");
+        assert_eq!(sessions[0].agent, "claude");
+        assert_eq!(sessions[0].base_branch, "main");
+        assert_eq!(sessions[0].status, "Done");
+        assert_eq!(sessions[1].name, "alpha");
+        assert_eq!(sessions[1].agent, "gemini");
+        assert_eq!(sessions[1].base_branch, "develop");
+        assert_eq!(sessions[1].status, "InProgress");
     }
 
     #[tokio::test]
@@ -535,13 +555,21 @@ mod tests {
             .await
             .expect("failed to insert");
 
+        let initial_sessions = db.load_sessions().await.expect("failed to load");
+        let initial_updated_at = initial_sessions[0].updated_at;
+
         // Act
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let result = db.update_session_status("sess1", "Done").await;
 
         // Assert
         assert!(result.is_ok());
         let sessions = db.load_sessions().await.expect("failed to load");
         assert_eq!(sessions[0].status, "Done");
+        assert!(
+            sessions[0].updated_at > initial_updated_at,
+            "updated_at should be updated by trigger"
+        );
     }
 
     #[tokio::test]
