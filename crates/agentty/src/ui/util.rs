@@ -2,6 +2,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+/// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
         .direction(Direction::Horizontal)
@@ -13,6 +14,8 @@ pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
         .split(area)
 }
 
+/// Calculate the full chat input widget height, including borders and prompt
+/// padding.
 pub fn calculate_input_height(width: u16, input: &str) -> u16 {
     let char_count = input.chars().count();
     let (_, _, cursor_y) = compute_input_layout(input, width, char_count);
@@ -20,6 +23,11 @@ pub fn calculate_input_height(width: u16, input: &str) -> u16 {
     cursor_y + 3
 }
 
+/// Compute chat input lines and the cursor position for rendering.
+///
+/// The first line starts with the visible prompt prefix (` › `). Continuation
+/// lines (from wrapping or explicit newlines) keep the same horizontal padding
+/// as spaces, so text never appears under the prompt icon.
 pub fn compute_input_layout(
     input: &str,
     width: u16,
@@ -34,6 +42,7 @@ pub fn compute_input_layout(
             .add_modifier(Modifier::BOLD),
     );
     let prefix_width = prefix_span.width();
+    let continuation_padding = " ".repeat(prefix_width);
 
     let mut display_lines = Vec::new();
     let mut current_line_spans = vec![prefix_span];
@@ -45,16 +54,16 @@ pub fn compute_input_layout(
     let mut line_index: usize = 0;
 
     for (char_index, ch) in input.chars().enumerate() {
-        if char_index == cursor {
-            cursor_x = current_width;
-            cursor_y = line_index;
-            cursor_set = true;
-        }
-
         if ch == '\n' {
+            if char_index == cursor {
+                cursor_x = current_width;
+                cursor_y = line_index;
+                cursor_set = true;
+            }
+
             display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            current_line_spans = Vec::new();
-            current_width = 0;
+            current_line_spans = vec![Span::raw(continuation_padding.clone())];
+            current_width = prefix_width;
             line_index += 1;
 
             continue;
@@ -66,8 +75,15 @@ pub fn compute_input_layout(
 
         if current_width + char_width > inner_width {
             display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            current_width = 0;
+            current_line_spans = vec![Span::raw(continuation_padding.clone())];
+            current_width = prefix_width;
             line_index += 1;
+        }
+
+        if char_index == cursor {
+            cursor_x = current_width;
+            cursor_y = line_index;
+            cursor_set = true;
         }
 
         current_line_spans.push(char_span);
@@ -76,7 +92,7 @@ pub fn compute_input_layout(
 
     if !cursor_set {
         if current_width >= inner_width {
-            cursor_x = 0;
+            cursor_x = prefix_width;
             cursor_y = line_index + 1;
         } else {
             cursor_x = current_width;
@@ -99,6 +115,7 @@ pub fn compute_input_layout(
     )
 }
 
+/// Wrap plain text into terminal-width lines for output panes.
 pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
     let mut wrapped = Vec::new();
     for line in text.split('\n') {
@@ -194,7 +211,7 @@ mod tests {
         // Assert
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].width(), 10);
-        assert_eq!(cursor_x, 0);
+        assert_eq!(cursor_x, 3);
         assert_eq!(cursor_y, 1);
     }
 
@@ -211,9 +228,9 @@ mod tests {
         // Assert
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].width(), 10);
-        assert_eq!(lines[1].width(), 1);
-        assert_eq!(lines[1].to_string(), "8");
-        assert_eq!(cursor_x, 1);
+        assert_eq!(lines[1].width(), 4);
+        assert_eq!(lines[1].to_string(), "   8");
+        assert_eq!(cursor_x, 4);
         assert_eq!(cursor_y, 1);
     }
 
@@ -228,10 +245,11 @@ mod tests {
         let (lines, cursor_x, cursor_y) = compute_input_layout(&input, width, cursor);
 
         // Assert
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].width(), 10);
         assert_eq!(lines[1].width(), 10);
-        assert_eq!(cursor_x, 0);
+        assert_eq!(lines[2].width(), 6);
+        assert_eq!(cursor_x, 6);
         assert_eq!(cursor_y, 2);
     }
 
@@ -264,6 +282,20 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_input_layout_cursor_before_wrapped_char() {
+        // Arrange
+        let input = "12345678";
+        let width = 12;
+
+        // Act
+        let (_, cursor_x, cursor_y) = compute_input_layout(input, width, 7);
+
+        // Assert
+        assert_eq!(cursor_x, 3);
+        assert_eq!(cursor_y, 1);
+    }
+
+    #[test]
     fn test_compute_input_layout_explicit_newline() {
         // Arrange
         let input = "ab\ncd";
@@ -275,7 +307,8 @@ mod tests {
 
         // Assert
         assert_eq!(lines.len(), 2);
-        assert_eq!(cursor_x, 2); // "cd" on second line, no prefix
+        assert_eq!(lines[1].to_string(), "   cd");
+        assert_eq!(cursor_x, 5); // continuation padding + "cd"
         assert_eq!(cursor_y, 1);
     }
 
@@ -289,9 +322,10 @@ mod tests {
         // Act
         let (lines, cursor_x, cursor_y) = compute_input_layout(input, width, cursor);
 
-        // Assert — 3 lines: "a", "", "b"
+        // Assert — 3 lines: "a", padded continuation line, "b"
         assert_eq!(lines.len(), 3);
-        assert_eq!(cursor_x, 1);
+        assert_eq!(lines[1].to_string(), "   ");
+        assert_eq!(cursor_x, 4);
         assert_eq!(cursor_y, 2);
     }
 
@@ -305,7 +339,7 @@ mod tests {
         let (_, cursor_x, cursor_y) = compute_input_layout(input, width, 3);
 
         // Assert
-        assert_eq!(cursor_x, 0);
+        assert_eq!(cursor_x, 3);
         assert_eq!(cursor_y, 1);
     }
 
