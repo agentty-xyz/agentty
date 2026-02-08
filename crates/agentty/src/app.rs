@@ -479,10 +479,12 @@ impl App {
 
         // Perform squash merge
         {
-            let source = source_branch.clone();
-            let base = base_branch.clone();
+            let repo_root = repo_root.clone();
+            let source_branch = source_branch.clone();
+            let base_branch = base_branch.clone();
+            let commit_message = commit_message.clone();
             tokio::task::spawn_blocking(move || {
-                git::squash_merge(&repo_root, &source, &base, &commit_message)
+                git::squash_merge(&repo_root, &source_branch, &base_branch, &commit_message)
             })
             .await
             .map_err(|e| format!("Join error: {e}"))?
@@ -492,6 +494,16 @@ impl App {
         if !Self::update_status(&session.status, &self.db, &session.name, Status::Done).await {
             return Err("Invalid status transition to Done".to_string());
         }
+
+        self.cancel_pr_polling_for_session(&session.name);
+        self.clear_pr_creation_in_flight(&session.name);
+        Self::cleanup_merged_session_worktree(
+            session.folder.clone(),
+            source_branch.clone(),
+            Some(repo_root),
+        )
+        .await
+        .map_err(|error| format!("Merged successfully but failed to remove worktree: {error}"))?;
 
         Ok(format!(
             "Successfully merged {source_branch} into {base_branch}"
@@ -573,6 +585,7 @@ impl App {
                 Ok(Ok(message)) => {
                     Session::write_output(&output, &folder, &format!("\n[PR] {message}\n"));
                     if Self::update_status(&status, &db, &name, Status::PullRequest).await {
+                        let repo_root = Self::resolve_repo_root_from_worktree(&folder);
                         Self::spawn_pr_poll_task(
                             db,
                             folder,
@@ -580,6 +593,7 @@ impl App {
                             output,
                             status,
                             source_branch,
+                            repo_root,
                             pr_poll_cancel,
                         );
                     } else {
@@ -624,6 +638,7 @@ impl App {
                 Arc::clone(&session.output),
                 Arc::clone(&session.status),
                 source_branch,
+                Self::resolve_repo_root_from_worktree(&session.folder),
                 Arc::clone(&self.pr_poll_cancel),
             );
         }
@@ -679,6 +694,7 @@ impl App {
         output: Arc<Mutex<String>>,
         status: Arc<Mutex<Status>>,
         source_branch: String,
+        repo_root: Option<PathBuf>,
         pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
@@ -712,7 +728,26 @@ impl App {
                         &folder,
                         &format!("\n[PR] Pull request from `{source_branch}` was merged\n"),
                     );
-                    Self::update_status(&status, &db, &name, Status::Done).await;
+                    if !Self::update_status(&status, &db, &name, Status::Done).await {
+                        Session::write_output(
+                            &output,
+                            &folder,
+                            "\n[PR Error] Invalid status transition to Done\n",
+                        );
+                    }
+                    if let Err(error) = Self::cleanup_merged_session_worktree(
+                        folder.clone(),
+                        source_branch.clone(),
+                        repo_root.clone(),
+                    )
+                    .await
+                    {
+                        Session::write_output(
+                            &output,
+                            &folder,
+                            &format!("\n[PR Error] Failed to remove merged worktree: {error}\n"),
+                        );
+                    }
 
                     break;
                 }
@@ -729,6 +764,50 @@ impl App {
                 polling.remove(&name);
             }
         });
+    }
+
+    async fn cleanup_merged_session_worktree(
+        folder: PathBuf,
+        source_branch: String,
+        repo_root: Option<PathBuf>,
+    ) -> Result<(), String> {
+        tokio::task::spawn_blocking(move || {
+            let repo_root = repo_root.or_else(|| Self::resolve_repo_root_from_worktree(&folder));
+
+            git::remove_worktree(&folder)?;
+
+            if let Some(repo_root) = repo_root {
+                git::delete_branch(&repo_root, &source_branch)?;
+            }
+
+            let _ = std::fs::remove_dir_all(&folder);
+
+            Ok(())
+        })
+        .await
+        .map_err(|error| format!("Join error: {error}"))?
+    }
+
+    fn resolve_repo_root_from_worktree(worktree_path: &Path) -> Option<PathBuf> {
+        let git_path = worktree_path.join(".git");
+        if git_path.is_dir() {
+            return Some(worktree_path.to_path_buf());
+        }
+
+        if !git_path.is_file() {
+            return None;
+        }
+
+        let git_file = std::fs::read_to_string(git_path).ok()?;
+        let git_dir_line = git_file.lines().find(|line| line.starts_with("gitdir:"))?;
+        let git_dir = PathBuf::from(git_dir_line.trim_start_matches("gitdir:").trim());
+        let git_dir = if git_dir.is_absolute() {
+            git_dir
+        } else {
+            worktree_path.join(git_dir)
+        };
+
+        git_dir.parent()?.parent()?.parent().map(Path::to_path_buf)
     }
 
     fn reply_with_backend(
@@ -1152,6 +1231,17 @@ mod tests {
         if app.table_state.selected().is_none() {
             app.table_state.select(Some(0));
         }
+    }
+
+    async fn wait_for_status(session: &Session, expected: Status) {
+        for _ in 0..40 {
+            if session.status() == expected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        panic!("session did not reach status {expected}");
     }
 
     #[tokio::test]
@@ -1835,6 +1925,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_session_removes_worktree_and_branch_after_success() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        app.add_session("Local merge cleanup".to_string())
+            .await
+            .expect("failed to add session");
+        wait_for_status(&app.sessions[0], Status::Review).await;
+        app.commit_session(0)
+            .await
+            .expect("failed to commit session");
+        let session_folder = app.sessions[0].folder.clone();
+        let session_name = app.sessions[0].name.clone();
+        let branch_name = format!("agentty/{session_name}");
+
+        // Act
+        let result = app.merge_session(0).await;
+
+        // Assert
+        assert!(result.is_ok(), "merge should succeed: {:?}", result.err());
+        assert_eq!(app.sessions[0].status(), Status::Done);
+        assert!(!session_folder.exists(), "worktree should be removed");
+
+        let branch_output = Command::new("git")
+            .args(["branch", "--list", &branch_name])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to list branches");
+        let branches = String::from_utf8_lossy(&branch_output.stdout);
+        assert!(
+            branches.trim().is_empty(),
+            "branch should be removed after merge"
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_pr_session_no_git() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -1890,6 +2016,47 @@ mod tests {
             result
                 .expect_err("should be error")
                 .contains("Session not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_merged_session_worktree_without_repo_hint() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        let worktree_folder = dir.path().join("merged-worktree");
+        let branch_name = "agentty/cleanup123";
+        git::create_worktree(dir.path(), &worktree_folder, branch_name, "main")
+            .expect("failed to create worktree");
+        assert!(
+            worktree_folder.exists(),
+            "worktree should exist before cleanup"
+        );
+
+        // Act
+        let result = App::cleanup_merged_session_worktree(
+            worktree_folder.clone(),
+            branch_name.to_string(),
+            None,
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok(), "cleanup should succeed: {:?}", result.err());
+        assert!(
+            !worktree_folder.exists(),
+            "worktree should be removed after cleanup"
+        );
+
+        let branch_output = Command::new("git")
+            .args(["branch", "--list", branch_name])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to list branches");
+        let branches = String::from_utf8_lossy(&branch_output.stdout);
+        assert!(
+            branches.trim().is_empty(),
+            "branch should be removed after cleanup"
         );
     }
 
