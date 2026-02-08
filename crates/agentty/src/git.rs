@@ -247,7 +247,7 @@ pub fn commit_all(repo_path: &Path, commit_message: &str) -> Result<(), String> 
 
     // Commit (skip pre-commit hooks)
     let output = Command::new("git")
-        .args(["commit", "--no-verify", "-m", commit_message])
+        .args(["commit", "-m", commit_message])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("Failed to execute git: {e}"))?;
