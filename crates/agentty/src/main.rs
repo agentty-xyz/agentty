@@ -8,6 +8,7 @@ use agentty::app::{AGENTTY_WORKSPACE, App};
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::model::{AppMode, InputState, PaletteCommand, PaletteFocus};
 use agentty::ui;
+use agentty::ui::util::{move_input_cursor_down, move_input_cursor_up};
 use crossterm::cursor::Show;
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::execute;
@@ -438,10 +439,15 @@ async fn handle_key_event(
                     input.move_right();
                 }
                 KeyCode::Up => {
-                    input.move_up();
+                    let input_width = prompt_input_width(terminal)?;
+                    let next_cursor = move_input_cursor_up(input.text(), input_width, input.cursor);
+                    input.cursor = next_cursor;
                 }
                 KeyCode::Down => {
-                    input.move_down();
+                    let input_width = prompt_input_width(terminal)?;
+                    let next_cursor =
+                        move_input_cursor_down(input.text(), input_width, input.cursor);
+                    input.cursor = next_cursor;
                 }
                 KeyCode::Home => {
                     input.move_home();
@@ -616,6 +622,12 @@ fn should_insert_newline(key: KeyEvent) -> bool {
 
 fn is_enter_key(key_code: KeyCode) -> bool {
     matches!(key_code, KeyCode::Enter | KeyCode::Char('\r' | '\n'))
+}
+
+fn prompt_input_width(terminal: &Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<u16> {
+    let terminal_width = terminal.size()?.width;
+
+    Ok(terminal_width.saturating_sub(2))
 }
 
 #[cfg(test)]

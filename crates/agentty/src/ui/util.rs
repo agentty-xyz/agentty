@@ -33,86 +33,25 @@ pub fn compute_input_layout(
     width: u16,
     cursor: usize,
 ) -> (Vec<Line<'static>>, u16, u16) {
-    let inner_width = width.saturating_sub(2) as usize;
-    let prefix = " › ";
-    let prefix_span = Span::styled(
-        prefix,
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    );
-    let prefix_width = prefix_span.width();
-    let continuation_padding = " ".repeat(prefix_width);
-
-    let mut display_lines = Vec::new();
-    let mut current_line_spans = vec![prefix_span];
-    let mut current_width = prefix_width;
-
-    let mut cursor_x: usize = 0;
-    let mut cursor_y: usize = 0;
-    let mut cursor_set = false;
-    let mut line_index: usize = 0;
-
-    for (char_index, ch) in input.chars().enumerate() {
-        if ch == '\n' {
-            if char_index == cursor {
-                cursor_x = current_width;
-                cursor_y = line_index;
-                cursor_set = true;
-            }
-
-            display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            current_line_spans = vec![Span::raw(continuation_padding.clone())];
-            current_width = prefix_width;
-            line_index += 1;
-
-            continue;
-        }
-
-        let char_str = ch.to_string();
-        let char_span = Span::raw(char_str);
-        let char_width = char_span.width();
-
-        if current_width + char_width > inner_width {
-            display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
-            current_line_spans = vec![Span::raw(continuation_padding.clone())];
-            current_width = prefix_width;
-            line_index += 1;
-        }
-
-        if char_index == cursor {
-            cursor_x = current_width;
-            cursor_y = line_index;
-            cursor_set = true;
-        }
-
-        current_line_spans.push(char_span);
-        current_width += char_width;
-    }
-
-    if !cursor_set {
-        if current_width >= inner_width {
-            cursor_x = prefix_width;
-            cursor_y = line_index + 1;
-        } else {
-            cursor_x = current_width;
-            cursor_y = line_index;
-        }
-    }
-
-    if !current_line_spans.is_empty() {
-        display_lines.push(Line::from(current_line_spans));
-    }
-
-    if display_lines.is_empty() {
-        display_lines.push(Line::from(""));
-    }
+    let input_layout = compute_input_layout_data(input, width);
+    let clamped_cursor = cursor.min(input_layout.cursor_positions.len().saturating_sub(1));
+    let (cursor_x, cursor_y) = input_layout.cursor_positions[clamped_cursor];
 
     (
-        display_lines,
+        input_layout.display_lines,
         u16::try_from(cursor_x).unwrap_or(u16::MAX),
         u16::try_from(cursor_y).unwrap_or(u16::MAX),
     )
+}
+
+/// Move the cursor one visual line up in the wrapped chat input layout.
+pub fn move_input_cursor_up(input: &str, width: u16, cursor: usize) -> usize {
+    move_input_cursor_vertical(input, width, cursor, VerticalDirection::Up)
+}
+
+/// Move the cursor one visual line down in the wrapped chat input layout.
+pub fn move_input_cursor_down(input: &str, width: u16, cursor: usize) -> usize {
+    move_input_cursor_vertical(input, width, cursor, VerticalDirection::Down)
 }
 
 /// Wrap plain text into terminal-width lines for output panes.
@@ -152,6 +91,169 @@ pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
         }
     }
     wrapped
+}
+
+fn move_input_cursor_vertical(
+    input: &str,
+    width: u16,
+    cursor: usize,
+    direction: VerticalDirection,
+) -> usize {
+    let input_layout = compute_input_layout_data(input, width);
+    let clamped_cursor = cursor.min(input_layout.cursor_positions.len().saturating_sub(1));
+    let (current_x, current_y) = input_layout.cursor_positions[clamped_cursor];
+
+    let Some(target_y) = target_line_index(current_y, &input_layout.cursor_positions, direction)
+    else {
+        return clamped_cursor;
+    };
+
+    let target_line_width = input_layout
+        .display_lines
+        .get(target_y)
+        .map(Line::width)
+        .unwrap_or(0);
+    let target_x = current_x.min(target_line_width);
+
+    select_cursor_on_line(
+        target_y,
+        target_x,
+        &input_layout.cursor_positions,
+        clamped_cursor,
+    )
+}
+
+fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
+    let inner_width = width.saturating_sub(2) as usize;
+    let prefix = " › ";
+    let prefix_span = Span::styled(
+        prefix,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
+    let prefix_width = prefix_span.width();
+    let continuation_padding = " ".repeat(prefix_width);
+
+    let mut display_lines = Vec::new();
+    let mut cursor_positions = Vec::with_capacity(input.chars().count() + 1);
+    let mut current_line_spans = vec![prefix_span];
+    let mut current_width = prefix_width;
+    let mut line_index: usize = 0;
+
+    for ch in input.chars() {
+        if ch == '\n' {
+            cursor_positions.push((current_width, line_index));
+            display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
+            current_line_spans = vec![Span::raw(continuation_padding.clone())];
+            current_width = prefix_width;
+            line_index += 1;
+
+            continue;
+        }
+
+        let char_span = Span::raw(ch.to_string());
+        let char_width = char_span.width();
+
+        if current_width + char_width > inner_width {
+            display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
+            current_line_spans = vec![Span::raw(continuation_padding.clone())];
+            current_width = prefix_width;
+            line_index += 1;
+        }
+
+        cursor_positions.push((current_width, line_index));
+        current_line_spans.push(char_span);
+        current_width += char_width;
+    }
+
+    if current_width >= inner_width {
+        cursor_positions.push((prefix_width, line_index + 1));
+    } else {
+        cursor_positions.push((current_width, line_index));
+    }
+
+    if !current_line_spans.is_empty() {
+        display_lines.push(Line::from(current_line_spans));
+    }
+
+    if display_lines.is_empty() {
+        display_lines.push(Line::from(""));
+    }
+
+    InputLayout {
+        cursor_positions,
+        display_lines,
+    }
+}
+
+fn target_line_index(
+    current_y: usize,
+    cursor_positions: &[(usize, usize)],
+    direction: VerticalDirection,
+) -> Option<usize> {
+    match direction {
+        VerticalDirection::Up => current_y.checked_sub(1),
+        VerticalDirection::Down => {
+            let max_y = cursor_positions
+                .iter()
+                .map(|(_, cursor_y)| *cursor_y)
+                .max()
+                .unwrap_or(0);
+            if current_y >= max_y {
+                None
+            } else {
+                Some(current_y + 1)
+            }
+        }
+    }
+}
+
+fn select_cursor_on_line(
+    target_y: usize,
+    target_x: usize,
+    cursor_positions: &[(usize, usize)],
+    fallback_cursor: usize,
+) -> usize {
+    let mut best_cursor_on_left: Option<(usize, usize)> = None;
+    let mut nearest_cursor_on_right: Option<(usize, usize)> = None;
+
+    for (cursor_index, (cursor_x, cursor_y)) in cursor_positions.iter().copied().enumerate() {
+        if cursor_y != target_y {
+            continue;
+        }
+
+        if cursor_x <= target_x {
+            match best_cursor_on_left {
+                Some((_, best_x)) if cursor_x < best_x => {}
+                _ => {
+                    best_cursor_on_left = Some((cursor_index, cursor_x));
+                }
+            }
+        } else {
+            match nearest_cursor_on_right {
+                Some((_, nearest_x)) if cursor_x > nearest_x => {}
+                _ => {
+                    nearest_cursor_on_right = Some((cursor_index, cursor_x));
+                }
+            }
+        }
+    }
+
+    best_cursor_on_left
+        .or(nearest_cursor_on_right)
+        .map(|(cursor_index, _)| cursor_index)
+        .unwrap_or(fallback_cursor)
+}
+
+struct InputLayout {
+    cursor_positions: Vec<(usize, usize)>,
+    display_lines: Vec<Line<'static>>,
+}
+
+enum VerticalDirection {
+    Up,
+    Down,
 }
 
 #[cfg(test)]
@@ -293,6 +395,34 @@ mod tests {
         // Assert
         assert_eq!(cursor_x, 3);
         assert_eq!(cursor_y, 1);
+    }
+
+    #[test]
+    fn test_move_input_cursor_up_on_wrapped_layout() {
+        // Arrange
+        let input = "12345678";
+        let width = 12;
+        let cursor = input.chars().count();
+
+        // Act
+        let cursor = move_input_cursor_up(input, width, cursor);
+
+        // Assert
+        assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn test_move_input_cursor_down_on_wrapped_layout() {
+        // Arrange
+        let input = "12345678";
+        let width = 12;
+        let cursor = 1;
+
+        // Act
+        let cursor = move_input_cursor_down(input, width, cursor);
+
+        // Assert
+        assert_eq!(cursor, input.chars().count());
     }
 
     #[test]
