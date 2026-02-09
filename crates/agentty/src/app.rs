@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::widgets::TableState;
 use tokio::io::{AsyncBufReadExt as _, AsyncRead};
@@ -20,14 +20,41 @@ use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, Status, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
 const PR_MERGE_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 type SessionHandles = (Arc<Mutex<String>>, Arc<Mutex<Status>>);
+
+/// Holds all in-memory state related to session listing and refresh tracking.
+pub struct SessionState {
+    pub sessions: Vec<Session>,
+    pub table_state: TableState,
+    refresh_deadline: Instant,
+    row_count: i64,
+    updated_at_max: i64,
+}
+
+impl SessionState {
+    /// Creates a new [`SessionState`] with initial refresh metadata.
+    pub fn new(
+        sessions: Vec<Session>,
+        table_state: TableState,
+        row_count: i64,
+        updated_at_max: i64,
+    ) -> Self {
+        Self {
+            sessions,
+            table_state,
+            refresh_deadline: Instant::now() + SESSION_REFRESH_INTERVAL,
+            row_count,
+            updated_at_max,
+        }
+    }
+}
 
 pub struct App {
     pub current_tab: Tab,
     pub mode: AppMode,
     pub projects: Vec<Project>,
-    pub sessions: Vec<Session>,
-    pub table_state: TableState,
+    pub session_state: SessionState,
     active_project_id: i64,
     agent_kind: AgentKind,
     backend: Box<dyn AgentBackend>,
@@ -64,6 +91,8 @@ impl App {
 
         let mut table_state = TableState::default();
         let sessions = Self::load_sessions(&base_path, &db, &projects, &[]).await;
+        let (sessions_row_count, sessions_updated_at_max) =
+            db.load_sessions_metadata().await.unwrap_or((0, 0));
         if sessions.is_empty() {
             table_state.select(None);
         } else {
@@ -86,8 +115,12 @@ impl App {
         let app = Self {
             current_tab: Tab::Sessions,
             mode: AppMode::List,
-            sessions,
-            table_state,
+            session_state: SessionState::new(
+                sessions,
+                table_state,
+                sessions_row_count,
+                sessions_updated_at_max,
+            ),
             active_project_id,
             agent_kind,
             backend,
@@ -173,8 +206,8 @@ impl App {
 
         // Refresh project list and reload all sessions
         self.projects = Self::load_projects_from_db(&self.db).await;
-        let existing_sessions = std::mem::take(&mut self.sessions);
-        self.sessions = Self::load_sessions(
+        let existing_sessions = std::mem::take(&mut self.session_state.sessions);
+        self.session_state.sessions = Self::load_sessions(
             &self.base_path,
             &self.db,
             &self.projects,
@@ -182,13 +215,56 @@ impl App {
         )
         .await;
         self.start_pr_polling_for_pull_request_sessions();
-        if self.sessions.is_empty() {
-            self.table_state.select(None);
+        if self.session_state.sessions.is_empty() {
+            self.session_state.table_state.select(None);
         } else {
-            self.table_state.select(Some(0));
+            self.session_state.table_state.select(Some(0));
         }
+        self.update_sessions_metadata_cache().await;
 
         Ok(())
+    }
+
+    /// Refreshes in-memory sessions from the database when `session` metadata
+    /// changes.
+    pub async fn refresh_sessions_if_needed(&mut self) {
+        if !self.is_session_refresh_due() {
+            return;
+        }
+
+        self.session_state.refresh_deadline = Instant::now() + SESSION_REFRESH_INTERVAL;
+
+        let Ok((sessions_row_count, sessions_updated_at_max)) =
+            self.db.load_sessions_metadata().await
+        else {
+            return;
+        };
+        if sessions_row_count == self.session_state.row_count
+            && sessions_updated_at_max == self.session_state.updated_at_max
+        {
+            return;
+        }
+
+        let selected_index = self.session_state.table_state.selected();
+        let selected_session_name = selected_index
+            .and_then(|index| self.session_state.sessions.get(index))
+            .map(|session| session.name.clone());
+        let mode_session_name = self.active_mode_session_name();
+
+        let existing_sessions = std::mem::take(&mut self.session_state.sessions);
+        self.session_state.sessions = Self::load_sessions(
+            &self.base_path,
+            &self.db,
+            &self.projects,
+            &existing_sessions,
+        )
+        .await;
+        self.start_pr_polling_for_pull_request_sessions();
+        self.restore_table_selection(selected_session_name.as_deref(), selected_index);
+        self.restore_mode_session(mode_session_name.as_deref());
+
+        self.session_state.row_count = sessions_row_count;
+        self.session_state.updated_at_max = sessions_updated_at_max;
     }
 
     pub fn next_tab(&mut self) {
@@ -196,12 +272,12 @@ impl App {
     }
 
     pub fn next(&mut self) {
-        if self.sessions.is_empty() {
+        if self.session_state.sessions.is_empty() {
             return;
         }
-        let i = match self.table_state.selected() {
+        let i = match self.session_state.table_state.selected() {
             Some(i) => {
-                if i >= self.sessions.len() - 1 {
+                if i >= self.session_state.sessions.len() - 1 {
                     0
                 } else {
                     i + 1
@@ -209,24 +285,24 @@ impl App {
             }
             None => 0,
         };
-        self.table_state.select(Some(i));
+        self.session_state.table_state.select(Some(i));
     }
 
     pub fn previous(&mut self) {
-        if self.sessions.is_empty() {
+        if self.session_state.sessions.is_empty() {
             return;
         }
-        let i = match self.table_state.selected() {
+        let i = match self.session_state.table_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.sessions.len() - 1
+                    self.session_state.sessions.len() - 1
                 } else {
                     i - 1
                 }
             }
             None => 0,
         };
-        self.table_state.select(Some(i));
+        self.session_state.table_state.select(Some(i));
     }
 
     /// Creates a blank session with an empty prompt and output.
@@ -337,21 +413,23 @@ impl App {
 
         self.backend.setup(&folder);
 
-        let existing_sessions = std::mem::take(&mut self.sessions);
-        self.sessions = Self::load_sessions(
+        let existing_sessions = std::mem::take(&mut self.session_state.sessions);
+        self.session_state.sessions = Self::load_sessions(
             &self.base_path,
             &self.db,
             &self.projects,
             &existing_sessions,
         )
         .await;
+        self.update_sessions_metadata_cache().await;
 
         let index = self
+            .session_state
             .sessions
             .iter()
             .position(|a| a.name == name)
             .unwrap_or(0);
-        self.table_state.select(Some(index));
+        self.session_state.table_state.select(Some(index));
 
         Ok(index)
     }
@@ -363,6 +441,7 @@ impl App {
         prompt: String,
     ) -> Result<(), String> {
         let session = self
+            .session_state
             .sessions
             .get_mut(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
@@ -396,6 +475,7 @@ impl App {
 
     pub fn reply(&mut self, session_index: usize, prompt: &str) {
         let session_agent = self
+            .session_state
             .sessions
             .get(session_index)
             .and_then(|s| s.agent.parse::<AgentKind>().ok())
@@ -405,19 +485,20 @@ impl App {
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
-        self.table_state
+        self.session_state
+            .table_state
             .selected()
-            .and_then(|i| self.sessions.get(i))
+            .and_then(|i| self.session_state.sessions.get(i))
     }
 
     pub async fn delete_selected_session(&mut self) {
-        let Some(i) = self.table_state.selected() else {
+        let Some(i) = self.session_state.table_state.selected() else {
             return;
         };
-        if i >= self.sessions.len() {
+        if i >= self.session_state.sessions.len() {
             return;
         }
-        let session = self.sessions.remove(i);
+        let session = self.session_state.sessions.remove(i);
 
         let _ = self.db.delete_session(&session.name).await;
         self.cancel_pr_polling_for_session(&session.name);
@@ -445,15 +526,19 @@ impl App {
         }
 
         let _ = std::fs::remove_dir_all(&session.folder);
-        if self.sessions.is_empty() {
-            self.table_state.select(None);
-        } else if i >= self.sessions.len() {
-            self.table_state.select(Some(self.sessions.len() - 1));
+        if self.session_state.sessions.is_empty() {
+            self.session_state.table_state.select(None);
+        } else if i >= self.session_state.sessions.len() {
+            self.session_state
+                .table_state
+                .select(Some(self.session_state.sessions.len() - 1));
         }
+        self.update_sessions_metadata_cache().await;
     }
 
     pub async fn commit_session(&self, session_index: usize) -> Result<String, String> {
         let session = self
+            .session_state
             .sessions
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
@@ -475,6 +560,7 @@ impl App {
 
     pub async fn merge_session(&self, session_index: usize) -> Result<String, String> {
         let session = self
+            .session_state
             .sessions
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
@@ -534,6 +620,7 @@ impl App {
 
     pub async fn create_pr_session(&self, session_index: usize) -> Result<(), String> {
         let session = self
+            .session_state
             .sessions
             .get(session_index)
             .ok_or_else(|| "Session not found".to_string())?;
@@ -647,7 +734,7 @@ impl App {
     }
 
     fn start_pr_polling_for_pull_request_sessions(&self) {
-        for session in &self.sessions {
+        for session in &self.session_state.sessions {
             if session.status() != Status::PullRequest {
                 continue;
             }
@@ -838,7 +925,7 @@ impl App {
         prompt: &str,
         backend: &dyn AgentBackend,
     ) {
-        let Some(session) = self.sessions.get_mut(session_index) else {
+        let Some(session) = self.session_state.sessions.get_mut(session_index) else {
             return;
         };
 
@@ -929,6 +1016,95 @@ impl App {
         }
 
         let _ = std::fs::remove_dir_all(folder);
+    }
+
+    fn is_session_refresh_due(&self) -> bool {
+        Instant::now() >= self.session_state.refresh_deadline
+    }
+
+    fn restore_table_selection(
+        &mut self,
+        selected_session_name: Option<&str>,
+        selected_index: Option<usize>,
+    ) {
+        if self.session_state.sessions.is_empty() {
+            self.session_state.table_state.select(None);
+
+            return;
+        }
+
+        if let Some(session_name) = selected_session_name {
+            if let Some(index) = self
+                .session_state
+                .sessions
+                .iter()
+                .position(|session| session.name == session_name)
+            {
+                self.session_state.table_state.select(Some(index));
+
+                return;
+            }
+        }
+
+        let restored_index =
+            selected_index.map(|index| index.min(self.session_state.sessions.len() - 1));
+        self.session_state.table_state.select(restored_index);
+    }
+
+    fn active_mode_session_name(&self) -> Option<String> {
+        match &self.mode {
+            AppMode::Prompt { session_index, .. }
+            | AppMode::View { session_index, .. }
+            | AppMode::Diff { session_index, .. } => self
+                .session_state
+                .sessions
+                .get(*session_index)
+                .map(|session| session.name.clone()),
+            _ => None,
+        }
+    }
+
+    fn restore_mode_session(&mut self, session_name: Option<&str>) {
+        let Some(session_name) = session_name else {
+            return;
+        };
+        let Some(session_index) = self
+            .session_state
+            .sessions
+            .iter()
+            .position(|session| session.name == session_name)
+        else {
+            self.mode = AppMode::List;
+
+            return;
+        };
+
+        match &mut self.mode {
+            AppMode::Prompt {
+                session_index: mode_index,
+                ..
+            }
+            | AppMode::View {
+                session_index: mode_index,
+                ..
+            }
+            | AppMode::Diff {
+                session_index: mode_index,
+                ..
+            } => {
+                *mode_index = session_index;
+            }
+            _ => {}
+        }
+    }
+
+    async fn update_sessions_metadata_cache(&mut self) {
+        if let Ok((sessions_row_count, sessions_updated_at_max)) =
+            self.db.load_sessions_metadata().await
+        {
+            self.session_state.row_count = sessions_row_count;
+            self.session_state.updated_at_max = sessions_updated_at_max;
+        }
     }
 
     async fn load_sessions(
@@ -1278,7 +1454,7 @@ mod tests {
         std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         std::fs::write(data_dir.join("prompt.txt"), prompt).expect("failed to write prompt");
         std::fs::write(data_dir.join("output.txt"), "").expect("failed to write output");
-        app.sessions.push(Session {
+        app.session_state.sessions.push(Session {
             agent: "gemini".to_string(),
             folder,
             name: name.to_string(),
@@ -1288,8 +1464,8 @@ mod tests {
             status: Arc::new(Mutex::new(Status::Review)),
             title: Some(App::summarize_title(prompt)),
         });
-        if app.table_state.selected().is_none() {
-            app.table_state.select(Some(0));
+        if app.session_state.table_state.selected().is_none() {
+            app.session_state.table_state.select(Some(0));
         }
     }
 
@@ -1325,8 +1501,8 @@ mod tests {
         let app = new_test_app(dir.path().to_path_buf()).await;
 
         // Assert
-        assert!(app.sessions.is_empty());
-        assert_eq!(app.table_state.selected(), None);
+        assert!(app.session_state.sessions.is_empty());
+        assert_eq!(app.session_state.table_state.selected(), None);
     }
 
     #[tokio::test]
@@ -1413,17 +1589,17 @@ mod tests {
         create_and_start_session(&mut app, "B").await;
 
         // Act & Assert (Next)
-        app.table_state.select(Some(0));
+        app.session_state.table_state.select(Some(0));
         app.next();
-        assert_eq!(app.table_state.selected(), Some(1));
+        assert_eq!(app.session_state.table_state.selected(), Some(1));
         app.next();
-        assert_eq!(app.table_state.selected(), Some(0)); // Loop back
+        assert_eq!(app.session_state.table_state.selected(), Some(0)); // Loop back
 
         // Act & Assert (Previous)
         app.previous();
-        assert_eq!(app.table_state.selected(), Some(1)); // Loop back
+        assert_eq!(app.session_state.table_state.selected(), Some(1)); // Loop back
         app.previous();
-        assert_eq!(app.table_state.selected(), Some(0));
+        assert_eq!(app.session_state.table_state.selected(), Some(0));
     }
 
     #[tokio::test]
@@ -1434,10 +1610,10 @@ mod tests {
 
         // Act & Assert
         app.next();
-        assert_eq!(app.table_state.selected(), None);
+        assert_eq!(app.session_state.table_state.selected(), None);
 
         app.previous();
-        assert_eq!(app.table_state.selected(), None);
+        assert_eq!(app.session_state.table_state.selected(), None);
     }
 
     #[tokio::test]
@@ -1448,14 +1624,14 @@ mod tests {
         create_and_start_session(&mut app, "A").await;
 
         // Act & Assert — next recovers from None
-        app.table_state.select(None);
+        app.session_state.table_state.select(None);
         app.next();
-        assert_eq!(app.table_state.selected(), Some(0));
+        assert_eq!(app.session_state.table_state.selected(), Some(0));
 
         // Act & Assert — previous recovers from None
-        app.table_state.select(None);
+        app.session_state.table_state.select(None);
         app.previous();
-        assert_eq!(app.table_state.selected(), Some(0));
+        assert_eq!(app.session_state.table_state.selected(), Some(0));
     }
 
     #[tokio::test]
@@ -1471,17 +1647,17 @@ mod tests {
             .expect("failed to create session");
 
         // Assert — blank session
-        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.session_state.sessions.len(), 1);
         assert_eq!(index, 0);
-        assert!(app.sessions[0].prompt.is_empty());
-        assert_eq!(app.sessions[0].title, None);
-        assert_eq!(app.sessions[0].display_title(), "No title");
-        assert_eq!(app.sessions[0].status(), Status::New);
-        assert_eq!(app.table_state.selected(), Some(0));
-        assert_eq!(app.sessions[0].agent, "gemini");
+        assert!(app.session_state.sessions[0].prompt.is_empty());
+        assert_eq!(app.session_state.sessions[0].title, None);
+        assert_eq!(app.session_state.sessions[0].display_title(), "No title");
+        assert_eq!(app.session_state.sessions[0].status(), Status::New);
+        assert_eq!(app.session_state.table_state.selected(), Some(0));
+        assert_eq!(app.session_state.sessions[0].agent, "gemini");
 
         // Check filesystem
-        let session_dir = &app.sessions[0].folder;
+        let session_dir = &app.session_state.sessions[0].folder;
         let data_dir = session_dir.join(SESSION_DATA_DIR);
         assert!(session_dir.exists());
         assert!(data_dir.join("prompt.txt").exists());
@@ -1517,9 +1693,12 @@ mod tests {
             .expect("failed to start session");
 
         // Assert
-        assert_eq!(app.sessions[0].prompt, "Hello");
-        assert_eq!(app.sessions[0].title, Some("Hello".to_string()));
-        let output = app.sessions[0]
+        assert_eq!(app.session_state.sessions[0].prompt, "Hello");
+        assert_eq!(
+            app.session_state.sessions[0].title,
+            Some("Hello".to_string())
+        );
+        let output = app.session_state.sessions[0]
             .output
             .lock()
             .expect("failed to lock output")
@@ -1527,7 +1706,7 @@ mod tests {
         assert!(output.contains("Hello"));
 
         // Check filesystem
-        let data_dir = app.sessions[0].folder.join(SESSION_DATA_DIR);
+        let data_dir = app.session_state.sessions[0].folder.join(SESSION_DATA_DIR);
         let prompt_content =
             std::fs::read_to_string(data_dir.join("prompt.txt")).expect("failed to read prompt");
         assert_eq!(prompt_content, "Hello");
@@ -1542,14 +1721,14 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
-        let session_folder = app.sessions[index].folder.clone();
+        let session_folder = app.session_state.sessions[index].folder.clone();
         assert!(session_folder.exists());
 
         // Act — simulate Esc: delete the blank session
         app.delete_selected_session().await;
 
         // Assert
-        assert!(app.sessions.is_empty());
+        assert!(app.session_state.sessions.is_empty());
         assert!(!session_folder.exists());
         let db_sessions = app.db.load_sessions().await.expect("failed to load");
         assert!(db_sessions.is_empty());
@@ -1566,7 +1745,7 @@ mod tests {
         app.reply(0, "Reply");
 
         // Assert
-        let session = &app.sessions[0];
+        let session = &app.session_state.sessions[0];
         let output = session.output.lock().expect("failed to lock output");
         assert!(output.contains("Reply"));
     }
@@ -1581,7 +1760,7 @@ mod tests {
         // Act & Assert
         assert!(app.selected_session().is_some());
 
-        app.table_state.select(None);
+        app.session_state.table_state.select(None);
         assert!(app.selected_session().is_none());
     }
 
@@ -1591,14 +1770,14 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "A").await;
-        let session_folder = app.sessions[0].folder.clone();
+        let session_folder = app.session_state.sessions[0].folder.clone();
 
         // Act
         app.delete_selected_session().await;
 
         // Assert
-        assert!(app.sessions.is_empty());
-        assert_eq!(app.table_state.selected(), None);
+        assert!(app.session_state.sessions.is_empty());
+        assert_eq!(app.session_state.table_state.selected(), None);
         assert!(!session_folder.exists());
         let db_sessions = app.db.load_sessions().await.expect("failed to load");
         assert!(db_sessions.is_empty());
@@ -1613,14 +1792,14 @@ mod tests {
         create_and_start_session(&mut app, "2").await;
 
         // Act & Assert — index out of bounds
-        app.table_state.select(Some(99));
+        app.session_state.table_state.select(Some(99));
         app.delete_selected_session().await;
-        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.session_state.sessions.len(), 2);
 
         // Act & Assert — None selected
-        app.table_state.select(None);
+        app.session_state.table_state.select(None);
         app.delete_selected_session().await;
-        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.session_state.sessions.len(), 2);
     }
 
     #[tokio::test]
@@ -1632,15 +1811,15 @@ mod tests {
         create_and_start_session(&mut app, "2").await;
 
         // Act & Assert — delete last item
-        app.table_state.select(Some(1));
+        app.session_state.table_state.select(Some(1));
         app.delete_selected_session().await;
-        assert_eq!(app.sessions.len(), 1);
-        assert_eq!(app.table_state.selected(), Some(0));
+        assert_eq!(app.session_state.sessions.len(), 1);
+        assert_eq!(app.session_state.table_state.selected(), Some(0));
 
         // Act & Assert — delete remaining item
         app.delete_selected_session().await;
-        assert!(app.sessions.is_empty());
-        assert_eq!(app.table_state.selected(), None);
+        assert!(app.session_state.sessions.is_empty());
+        assert_eq!(app.session_state.table_state.selected(), None);
     }
 
     #[tokio::test]
@@ -1677,11 +1856,11 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(app.sessions.len(), 1);
-        assert_eq!(app.sessions[0].name, "12345678");
-        assert_eq!(app.sessions[0].prompt, "Existing");
-        assert_eq!(app.sessions[0].agent, "claude");
-        assert_eq!(app.table_state.selected(), Some(0));
+        assert_eq!(app.session_state.sessions.len(), 1);
+        assert_eq!(app.session_state.sessions[0].name, "12345678");
+        assert_eq!(app.session_state.sessions[0].prompt, "Existing");
+        assert_eq!(app.session_state.sessions[0].agent, "claude");
+        assert_eq!(app.session_state.table_state.selected(), Some(0));
     }
 
     #[tokio::test]
@@ -1749,11 +1928,163 @@ WHERE name = ?
 
         // Assert
         let session_names: Vec<&str> = app
+            .session_state
             .sessions
             .iter()
             .map(|session| session.name.as_str())
             .collect();
         assert_eq!(session_names, vec!["beta", "alpha"]);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("alpha", "gemini", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert alpha");
+        db.insert_session("beta", "claude", "main", "Done", project_id)
+            .await
+            .expect("failed to insert beta");
+        sqlx::query(
+            r#"
+UPDATE session
+SET updated_at = 1
+WHERE name = 'alpha'
+"#,
+        )
+        .execute(db.pool())
+        .await
+        .expect("failed to set alpha timestamp");
+        sqlx::query(
+            r#"
+UPDATE session
+SET updated_at = 2
+WHERE name = 'beta'
+"#,
+        )
+        .execute(db.pool())
+        .await
+        .expect("failed to set beta timestamp");
+        for session_name in ["alpha", "beta"] {
+            let session_dir = dir.path().join(session_name);
+            let data_dir = session_dir.join(SESSION_DATA_DIR);
+            std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+            std::fs::write(data_dir.join("prompt.txt"), session_name)
+                .expect("failed to write prompt");
+            std::fs::write(data_dir.join("output.txt"), "output").expect("failed to write output");
+        }
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            None,
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+            db,
+        )
+        .await;
+        app.session_state.table_state.select(Some(1));
+
+        // Act
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        app.db
+            .update_session_status("alpha", "Done")
+            .await
+            .expect("failed to update session status");
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        app.refresh_sessions_if_needed().await;
+
+        // Assert
+        assert_eq!(app.session_state.sessions[0].name, "alpha");
+        let selected_index = app
+            .session_state
+            .table_state
+            .selected()
+            .expect("missing selection");
+        assert_eq!(app.session_state.sessions[selected_index].name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn test_refresh_sessions_if_needed_remaps_view_mode_index() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("alpha", "gemini", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert alpha");
+        db.insert_session("beta", "claude", "main", "Done", project_id)
+            .await
+            .expect("failed to insert beta");
+        sqlx::query(
+            r#"
+UPDATE session
+SET updated_at = 1
+WHERE name = 'alpha'
+"#,
+        )
+        .execute(db.pool())
+        .await
+        .expect("failed to set alpha timestamp");
+        sqlx::query(
+            r#"
+UPDATE session
+SET updated_at = 2
+WHERE name = 'beta'
+"#,
+        )
+        .execute(db.pool())
+        .await
+        .expect("failed to set beta timestamp");
+        for session_name in ["alpha", "beta"] {
+            let session_dir = dir.path().join(session_name);
+            let data_dir = session_dir.join(SESSION_DATA_DIR);
+            std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+            std::fs::write(data_dir.join("prompt.txt"), session_name)
+                .expect("failed to write prompt");
+            std::fs::write(data_dir.join("output.txt"), "output").expect("failed to write output");
+        }
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            None,
+            AgentKind::Gemini,
+            Box::new(create_mock_backend()),
+            db,
+        )
+        .await;
+        app.mode = AppMode::View {
+            session_index: 1,
+            scroll_offset: None,
+        };
+
+        // Act
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        app.db
+            .update_session_status("alpha", "Done")
+            .await
+            .expect("failed to update session status");
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        app.refresh_sessions_if_needed().await;
+
+        // Assert
+        assert_eq!(app.session_state.sessions[0].name, "alpha");
+        match app.mode {
+            AppMode::View { session_index, .. } => assert_eq!(session_index, 0),
+            _ => panic!("expected view mode"),
+        }
     }
 
     #[tokio::test]
@@ -1765,7 +2096,7 @@ WHERE name = ?
         let app = new_test_app(path).await;
 
         // Assert
-        assert!(app.sessions.is_empty());
+        assert!(app.session_state.sessions.is_empty());
     }
 
     #[tokio::test]
@@ -1795,7 +2126,7 @@ WHERE name = ?
         .await;
 
         // Assert — session is skipped because folder doesn't exist
-        assert!(app.sessions.is_empty());
+        assert!(app.session_state.sessions.is_empty());
     }
 
     #[tokio::test]
@@ -1850,7 +2181,7 @@ WHERE name = ?
 
         // Assert
         {
-            let session = &app.sessions[0];
+            let session = &app.session_state.sessions[0];
             let output = session
                 .output
                 .lock()
@@ -1884,7 +2215,7 @@ WHERE name = ?
 
         // Assert
         {
-            let session = &app.sessions[0];
+            let session = &app.session_state.sessions[0];
             let output = session
                 .output
                 .lock()
@@ -1959,7 +2290,7 @@ WHERE name = ?
                 .expect_err("should be error")
                 .contains("Git branch is required")
         );
-        assert!(app.sessions.is_empty());
+        assert!(app.session_state.sessions.is_empty());
     }
 
     #[tokio::test]
@@ -2015,7 +2346,7 @@ WHERE name = ?
 
         // Assert - session should not be created
         assert!(result.is_err());
-        assert_eq!(app.sessions.len(), 0);
+        assert_eq!(app.session_state.sessions.len(), 0);
 
         // Verify no session folder was left behind
         let entries = std::fs::read_dir(dir.path())
@@ -2035,7 +2366,7 @@ WHERE name = ?
         app.delete_selected_session().await;
 
         // Assert
-        assert_eq!(app.sessions.len(), 0);
+        assert_eq!(app.session_state.sessions.len(), 0);
     }
 
     #[tokio::test]
@@ -2118,12 +2449,12 @@ WHERE name = ?
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "Local merge cleanup").await;
-        wait_for_status(&app.sessions[0], Status::Review).await;
+        wait_for_status(&app.session_state.sessions[0], Status::Review).await;
         app.commit_session(0)
             .await
             .expect("failed to commit session");
-        let session_folder = app.sessions[0].folder.clone();
-        let session_name = app.sessions[0].name.clone();
+        let session_folder = app.session_state.sessions[0].folder.clone();
+        let session_name = app.session_state.sessions[0].name.clone();
         let branch_name = format!("agentty/{session_name}");
 
         // Act
@@ -2131,7 +2462,7 @@ WHERE name = ?
 
         // Assert
         assert!(result.is_ok(), "merge should succeed: {:?}", result.err());
-        assert_eq!(app.sessions[0].status(), Status::Done);
+        assert_eq!(app.session_state.sessions[0].status(), Status::Done);
         assert!(!session_folder.exists(), "worktree should be removed");
 
         let branch_output = Command::new("git")
@@ -2171,7 +2502,7 @@ WHERE name = ?
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app(dir.path().to_path_buf()).await;
         add_manual_session(&mut app, dir.path(), "manual01", "Test");
-        if let Ok(mut status) = app.sessions[0].status.lock() {
+        if let Ok(mut status) = app.session_state.sessions[0].status.lock() {
             *status = Status::Done;
         }
 
@@ -2290,7 +2621,7 @@ WHERE name = ?
         assert_eq!(app.active_project_id(), other_id);
         assert_eq!(app.working_dir(), &PathBuf::from("/tmp/other"));
         assert_eq!(app.git_branch(), Some("develop"));
-        assert!(app.sessions.is_empty());
+        assert!(app.session_state.sessions.is_empty());
     }
 
     #[tokio::test]
@@ -2338,7 +2669,7 @@ WHERE name = ?
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "Session A").await;
-        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.session_state.sessions.len(), 1);
 
         let other_id = app
             .db
@@ -2352,7 +2683,7 @@ WHERE name = ?
             .expect("failed to switch");
 
         // Assert — all sessions still visible after switching projects
-        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.session_state.sessions.len(), 1);
         assert_eq!(app.active_project_id(), other_id);
     }
 

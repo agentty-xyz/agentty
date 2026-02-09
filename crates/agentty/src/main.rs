@@ -151,8 +151,8 @@ fn render_frame(
                 health_checks: &health_checks,
                 mode: &app.mode,
                 projects: &app.projects,
-                sessions: &app.sessions,
-                table_state: &mut app.table_state,
+                sessions: &app.session_state.sessions,
+                table_state: &mut app.session_state.table_state,
                 working_dir: &current_working_dir,
             },
         );
@@ -167,13 +167,25 @@ async fn process_events(
     event_rx: &mut mpsc::UnboundedReceiver<Event>,
     tick: &mut tokio::time::Interval,
 ) -> io::Result<EventResult> {
+    enum LoopSignal {
+        Event(Option<Event>),
+        Tick,
+    }
+
     // Wait for either a terminal event or the next tick (for redraws).
     // This yields to tokio so spawned tasks (agent output, git status) can
     // make progress on this worker thread.
-    let maybe_event = tokio::select! {
+    let signal = tokio::select! {
         biased;
-        event = event_rx.recv() => event,
-        _ = tick.tick() => None,
+        event = event_rx.recv() => LoopSignal::Event(event),
+        _ = tick.tick() => LoopSignal::Tick,
+    };
+    let maybe_event = match signal {
+        LoopSignal::Event(event) => event,
+        LoopSignal::Tick => {
+            app.refresh_sessions_if_needed().await;
+            None
+        }
     };
 
     if matches!(
@@ -243,8 +255,8 @@ async fn handle_key_event(
                 app.previous();
             }
             KeyCode::Enter => {
-                if let Some(i) = app.table_state.selected() {
-                    if i < app.sessions.len() {
+                if let Some(i) = app.session_state.table_state.selected() {
+                    if i < app.session_state.sessions.len() {
                         app.mode = AppMode::View {
                             session_index: i,
                             scroll_offset: None,
@@ -281,7 +293,8 @@ async fn handle_key_event(
             let term_height = terminal.size()?.height;
             let view_height = term_height.saturating_sub(5);
             let total_lines = u16::try_from(
-                app.sessions
+                app.session_state
+                    .sessions
                     .get(session_idx)
                     .and_then(|a| a.output.lock().ok())
                     .map(|o| o.lines().count())
@@ -337,7 +350,7 @@ async fn handle_key_event(
                     new_scroll = Some(current.saturating_sub(view_height / 2));
                 }
                 KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                    if let Some(session) = app.sessions.get(session_idx) {
+                    if let Some(session) = app.session_state.sessions.get(session_idx) {
                         let folder = session.folder.clone();
                         let diff = tokio::task::spawn_blocking(move || agentty::git::diff(&folder))
                             .await
@@ -351,7 +364,7 @@ async fn handle_key_event(
                     }
                 }
                 KeyCode::Char('c') => {
-                    if let Some(session) = app.sessions.get(session_idx) {
+                    if let Some(session) = app.session_state.sessions.get(session_idx) {
                         let result_message = match app.commit_session(session_idx).await {
                             Ok(msg) => format!("\n[Commit] {msg}\n"),
                             Err(err) => format!("\n[Commit Error] {err}\n"),
@@ -360,7 +373,7 @@ async fn handle_key_event(
                     }
                 }
                 KeyCode::Char('m') => {
-                    if let Some(session) = app.sessions.get(session_idx) {
+                    if let Some(session) = app.session_state.sessions.get(session_idx) {
                         let result_message = match app.merge_session(session_idx).await {
                             Ok(msg) => format!("\n[Merge] {msg}\n"),
                             Err(err) => format!("\n[Merge Error] {err}\n"),
@@ -370,7 +383,7 @@ async fn handle_key_event(
                 }
                 KeyCode::Char('p') => {
                     if let Err(e) = app.create_pr_session(session_idx).await {
-                        if let Some(session) = app.sessions.get(session_idx) {
+                        if let Some(session) = app.session_state.sessions.get(session_idx) {
                             session.append_output(&format!("\n[PR Error] {e}\n"));
                         }
                     }
@@ -391,6 +404,7 @@ async fn handle_key_event(
             let session_idx = *session_index;
             let scroll_snapshot = *scroll_offset;
             let is_new_session = app
+                .session_state
                 .sessions
                 .get(session_idx)
                 .map(|s| s.prompt.is_empty())
@@ -405,7 +419,7 @@ async fn handle_key_event(
                     if !prompt.is_empty() {
                         if is_new_session {
                             if let Err(error) = app.start_session(session_idx, prompt).await {
-                                if let Some(session) = app.sessions.get(session_idx) {
+                                if let Some(session) = app.session_state.sessions.get(session_idx) {
                                     session.append_output(&format!("\n[Error] {error}\n"));
                                 }
                             }

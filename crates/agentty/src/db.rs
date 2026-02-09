@@ -235,6 +235,27 @@ ORDER BY updated_at DESC, name
             .collect())
     }
 
+    /// Loads lightweight session metadata used for cheap change detection.
+    ///
+    /// Returns `(session_count, max_updated_at)` from the `session` table so
+    /// callers can decide whether a full `load_sessions()` refresh is needed.
+    pub async fn load_sessions_metadata(&self) -> Result<(i64, i64), String> {
+        let row = sqlx::query(
+            r#"
+SELECT COUNT(*) AS session_count, COALESCE(MAX(updated_at), 0) AS max_updated_at
+FROM session
+"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to load session metadata: {err}"))?;
+
+        let session_count = row.get("session_count");
+        let max_updated_at = row.get("max_updated_at");
+
+        Ok((session_count, max_updated_at))
+    }
+
     pub async fn update_session_status(&self, name: &str, status: &str) -> Result<(), String> {
         sqlx::query(
             r#"
@@ -599,6 +620,66 @@ WHERE name = 'beta'
         assert_eq!(sessions[1].agent, "gemini");
         assert_eq!(sessions[1].base_branch, "develop");
         assert_eq!(sessions[1].status, "InProgress");
+    }
+
+    #[tokio::test]
+    async fn test_load_sessions_metadata_empty() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+
+        // Act
+        let metadata = db
+            .load_sessions_metadata()
+            .await
+            .expect("failed to load metadata");
+
+        // Assert
+        assert_eq!(metadata, (0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_load_sessions_metadata_with_rows() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("alpha", "gemini", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert alpha");
+        db.insert_session("beta", "claude", "main", "Done", project_id)
+            .await
+            .expect("failed to insert beta");
+        sqlx::query(
+            r#"
+UPDATE session
+SET updated_at = 100
+WHERE name = 'alpha'
+"#,
+        )
+        .execute(db.pool())
+        .await
+        .expect("failed to set alpha timestamp");
+        sqlx::query(
+            r#"
+UPDATE session
+SET updated_at = 200
+WHERE name = 'beta'
+"#,
+        )
+        .execute(db.pool())
+        .await
+        .expect("failed to set beta timestamp");
+
+        // Act
+        let metadata = db
+            .load_sessions_metadata()
+            .await
+            .expect("failed to load metadata");
+
+        // Assert
+        assert_eq!(metadata, (2, 200));
     }
 
     #[tokio::test]
