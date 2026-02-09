@@ -24,28 +24,33 @@ tracing-subscriber = "0.3"
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]
-unsafe_code = "warn"
+unsafe_code = "deny"
 unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -2 }
+# Keep noise low
 must_use_candidate = "allow"
-# Disallowed restriction lints
+
+# High-signal safety/correctness
+unwrap_used = "warn"
+expect_used = "warn"
+get_unwrap = "warn"
+dbg_macro = "warn"
 print_stdout = "warn"
 print_stderr = "warn"
-dbg_macro = "warn"
-empty_drop = "warn"
-empty_structs_with_brackets = "warn"
+todo = "warn"
+unimplemented = "warn"
+panic = "warn"
 exit = "warn"
-get_unwrap = "warn"
-rc_buffer = "warn"
 rc_mutex = "warn"
-rest_pat_in_fully_bound_structs = "warn"
-unwrap_used = "warn"
-# Nursery rules
+rc_buffer = "warn"
+
+# Practical cleanup/perf
 redundant_clone = "warn"
-debug_assert_with_mut_call = "warn"
+unused_async = "warn"
 unused_peekable = "warn"
+debug_assert_with_mut_call = "warn"
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
