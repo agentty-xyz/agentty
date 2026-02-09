@@ -191,6 +191,7 @@ git worktree prune
 - Structure tests using "Arrange, Act, Assert" comments to clearly separate setup, execution, and verification phases.
 - When creating a new `AGENTS.md` file in any directory, always create corresponding symlinks: `ln -s AGENTS.md CLAUDE.md && ln -s AGENTS.md GEMINI.md` in the same directory.
 - Keep the root `README.md` up to date whenever new information is relevant to end users (e.g., new crates, features, usage instructions, or prerequisites).
+- **Changelog:** Update `CHANGELOG.md` when releasing a new version. Follow the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
 ## Directory Index
 - [.claude/](.claude/) - Claude AI specific settings.
