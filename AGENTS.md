@@ -35,6 +35,10 @@ TUI tool to manage agents.
 - **Return Spacing:** Always add an empty line before return statements, both explicit (`return`) and implicit (last expression). Exception: single-line blocks where the return is the only statement.
 - **Impl Placement:** Place each standalone/inherent `impl StructName { ... }` block immediately below its `struct` declaration, then place trait impls (e.g., `impl Trait for StructName`) after it.
 - **Helper Placement:** Place helper functions used by only one struct inside that struct’s `impl`; keep only shared helpers at file scope.
+- **Testability via DI:** Prefer trait-based dependency injection for external boundaries (terminal events, git/process calls, clocks/timers, filesystem, network) so logic can be tested deterministically.
+  - Keep runtime wiring in production implementations and inject trait objects/generics into orchestration functions.
+  - Use `#[cfg_attr(test, mockall::automock)]` on internal traits where mocking is needed.
+  - Prefer testing behavior through injected fakes/mocks over end-to-end terminal/process dependencies when unit coverage is the goal.
 
 ## Database Standards (SQLx + SQLite)
 
