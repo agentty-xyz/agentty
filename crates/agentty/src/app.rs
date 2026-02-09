@@ -15,7 +15,7 @@ use crate::agent::{AgentBackend, AgentKind};
 use crate::db::Database;
 use crate::git;
 use crate::health::{self, HealthEntry};
-use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, SessionId, Status, Tab};
+use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, Status, Tab};
 
 pub const AGENTTY_WORKSPACE: &str = "/var/tmp/.agentty";
 const PR_MERGE_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -308,7 +308,7 @@ impl App {
     /// Returns the identifier of the newly created session.
     /// The session is created with `New` status and no agent is started —
     /// call [`start_session`] to submit a prompt and launch the agent.
-    pub async fn create_session(&mut self) -> Result<SessionId, String> {
+    pub async fn create_session(&mut self) -> Result<String, String> {
         let base_branch = self
             .git_branch
             .as_deref()
@@ -485,7 +485,7 @@ impl App {
     }
 
     /// Returns the session identifier for the given list index.
-    pub fn session_id_for_index(&self, session_index: usize) -> Option<SessionId> {
+    pub fn session_id_for_index(&self, session_index: usize) -> Option<String> {
         self.session_state
             .sessions
             .get(session_index)

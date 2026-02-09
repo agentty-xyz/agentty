@@ -246,16 +246,16 @@ impl Default for InputState {
 pub enum AppMode {
     List,
     Prompt {
-        session_id: SessionId,
+        session_id: String,
         input: InputState,
         scroll_offset: Option<u16>,
     },
     View {
-        session_id: SessionId,
+        session_id: String,
         scroll_offset: Option<u16>,
     },
     Diff {
-        session_id: SessionId,
+        session_id: String,
         diff: String,
         scroll_offset: u16,
     },
@@ -270,9 +270,6 @@ pub enum AppMode {
     },
     Health,
 }
-
-/// Stable session identifier used by app modes and routing.
-pub type SessionId = String;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PaletteFocus {
