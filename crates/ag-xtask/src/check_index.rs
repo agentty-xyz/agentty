@@ -175,11 +175,11 @@ fn parse_index(content: &str) -> Option<Vec<String>> {
         }
         first_line = false;
 
-        if let Some(start) = line.find('[') {
-            if let Some(end) = line[start..].find(']') {
-                let name = &line[start + 1..start + end];
-                indexed_files.push(name.to_string());
-            }
+        if let Some(start) = line.find('[')
+            && let Some(end) = line[start..].find(']')
+        {
+            let name = &line[start + 1..start + end];
+            indexed_files.push(name.to_string());
         }
     }
 

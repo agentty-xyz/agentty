@@ -50,8 +50,7 @@ impl std::str::FromStr for Status {
             "New" => Ok(Status::New),
             "InProgress" => Ok(Status::InProgress),
             "Review" => Ok(Status::Review),
-            "PullRequest" => Ok(Status::PullRequest),
-            "Processing" => Ok(Status::PullRequest),
+            "PullRequest" | "Processing" => Ok(Status::PullRequest),
             "Done" => Ok(Status::Done),
             _ => Err(format!("Unknown status: {s}")),
         }
@@ -214,8 +213,7 @@ impl InputState {
         self.text
             .char_indices()
             .nth(char_index)
-            .map(|(i, _)| i)
-            .unwrap_or(self.text.len())
+            .map_or(self.text.len(), |(index, _)| index)
     }
 
     fn line_column(&self) -> (usize, usize) {
@@ -424,9 +422,8 @@ impl Status {
 
     pub fn icon(self) -> Icon {
         match self {
-            Status::New => Icon::Pending,
+            Status::New | Status::Review => Icon::Pending,
             Status::InProgress | Status::PullRequest => Icon::current_spinner(),
-            Status::Review => Icon::Pending,
             Status::Done => Icon::Check,
         }
     }

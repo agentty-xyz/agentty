@@ -111,8 +111,9 @@ impl<'a> SessionChatPage<'a> {
                 slash_state.selected_agent,
                 session,
             )
-            .map(|menu| menu.options.len() + usize::from(!menu.title.is_empty()))
-            .unwrap_or(0);
+            .map_or(0, |menu| {
+                menu.options.len() + usize::from(!menu.title.is_empty())
+            });
 
             return calculate_input_height(area.width.saturating_sub(2), input.text())
                 .saturating_add(u16::try_from(slash_option_count).unwrap_or(u16::MAX));

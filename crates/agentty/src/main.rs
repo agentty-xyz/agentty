@@ -69,10 +69,10 @@ async fn main() -> io::Result<()> {
         loop {
             match crossterm::event::poll(Duration::from_millis(250)) {
                 Ok(true) => {
-                    if let Ok(evt) = crossterm::event::read() {
-                        if event_tx.send(evt).is_err() {
-                            break;
-                        }
+                    if let Ok(evt) = crossterm::event::read()
+                        && event_tx.send(evt).is_err()
+                    {
+                        break;
                     }
                 }
                 Ok(false) => {}
@@ -254,13 +254,13 @@ async fn handle_list_key_event(app: &mut App, key: KeyEvent) -> io::Result<Event
             app.previous();
         }
         KeyCode::Enter => {
-            if let Some(session_index) = app.session_state.table_state.selected() {
-                if let Some(session_id) = app.session_id_for_index(session_index) {
-                    app.mode = AppMode::View {
-                        session_id,
-                        scroll_offset: None,
-                    };
-                }
+            if let Some(session_index) = app.session_state.table_state.selected()
+                && let Some(session_id) = app.session_id_for_index(session_index)
+            {
+                app.mode = AppMode::View {
+                    session_id,
+                    scroll_offset: None,
+                };
             }
         }
         KeyCode::Char('d') => {
@@ -378,8 +378,7 @@ fn view_metrics(
             .sessions
             .get(session_index)
             .and_then(|session| session.output.lock().ok())
-            .map(|output| output.lines().count())
-            .unwrap_or(0),
+            .map_or(0, |output| output.lines().count()),
     )
     .unwrap_or(0);
 
@@ -568,8 +567,7 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
         .session_state
         .sessions
         .get(session_index)
-        .map(|session| session.prompt.is_empty())
-        .unwrap_or(false);
+        .is_some_and(|session| session.prompt.is_empty());
 
     Some(PromptContext {
         is_new_session,

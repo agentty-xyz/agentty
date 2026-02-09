@@ -819,15 +819,13 @@ impl App {
     fn is_pr_creation_in_flight(&self, id: &str) -> bool {
         self.pr_creation_in_flight
             .lock()
-            .map(|in_flight| in_flight.contains(id))
-            .unwrap_or(false)
+            .is_ok_and(|in_flight| in_flight.contains(id))
     }
 
     fn is_pr_polling_active(&self, id: &str) -> bool {
         self.pr_poll_cancel
             .lock()
-            .map(|polling| polling.contains_key(id))
-            .unwrap_or(false)
+            .is_ok_and(|polling| polling.contains_key(id))
     }
 
     fn clear_pr_creation_in_flight(&self, id: &str) {
@@ -837,10 +835,10 @@ impl App {
     }
 
     fn cancel_pr_polling_for_session(&self, id: &str) {
-        if let Ok(mut polling) = self.pr_poll_cancel.lock() {
-            if let Some(cancel) = polling.remove(id) {
-                cancel.store(true, Ordering::Relaxed);
-            }
+        if let Ok(mut polling) = self.pr_poll_cancel.lock()
+            && let Some(cancel) = polling.remove(id)
+        {
+            cancel.store(true, Ordering::Relaxed);
         }
     }
 
@@ -1099,17 +1097,16 @@ impl App {
             return;
         }
 
-        if let Some(session_name) = selected_session_name {
-            if let Some(index) = self
+        if let Some(session_name) = selected_session_name
+            && let Some(index) = self
                 .session_state
                 .sessions
                 .iter()
                 .position(|session| session.id == session_name)
-            {
-                self.session_state.table_state.select(Some(index));
+        {
+            self.session_state.table_state.select(Some(index));
 
-                return;
-            }
+            return;
         }
 
         let restored_index =
@@ -1376,10 +1373,10 @@ impl App {
     ) {
         let mut reader = tokio::io::BufReader::new(source).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            if let Ok(mut f_guard) = file.lock() {
-                if let Some(f) = f_guard.as_mut() {
-                    let _ = writeln!(f, "{line}");
-                }
+            if let Ok(mut f_guard) = file.lock()
+                && let Some(f) = f_guard.as_mut()
+            {
+                let _ = writeln!(f, "{line}");
             }
             if let Ok(mut buf) = output.lock() {
                 buf.push_str(&line);

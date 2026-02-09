@@ -30,14 +30,8 @@ unreachable_pub = "warn"
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -2 }
 # Allowed pedantic lints
-collapsible_else_if = "allow"
-collapsible_if = "allow"
-map_unwrap_or = "allow"
-match_same_arms = "allow"
 missing_errors_doc = "allow"
-missing_panics_doc = "allow"
 must_use_candidate = "allow"
-similar_names = "allow"
 # Without the hashes we run into a `rustfmt` bug in some snapshot tests, see #13250
 needless_raw_string_hashes = "allow"
 # Disallowed restriction lints

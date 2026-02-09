@@ -290,20 +290,20 @@ fn update_status(
     status: HealthStatus,
     message: &str,
 ) {
-    if let Ok(mut lock) = entries.lock() {
-        if let Some(entry) = lock.get_mut(index) {
-            entry.message = message.to_string();
-            entry.status = status;
-        }
+    if let Ok(mut lock) = entries.lock()
+        && let Some(entry) = lock.get_mut(index)
+    {
+        entry.message = message.to_string();
+        entry.status = status;
     }
 }
 
 fn apply_result(entries: &Arc<Mutex<Vec<HealthEntry>>>, index: usize, result: HealthResult) {
-    if let Ok(mut lock) = entries.lock() {
-        if let Some(entry) = lock.get_mut(index) {
-            entry.message = result.message;
-            entry.status = result.status;
-        }
+    if let Ok(mut lock) = entries.lock()
+        && let Some(entry) = lock.get_mut(index)
+    {
+        entry.message = result.message;
+        entry.status = result.status;
     }
 }
 

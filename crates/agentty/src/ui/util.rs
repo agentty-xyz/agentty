@@ -71,12 +71,10 @@ pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
             let word_len = word.chars().count();
             let space_len = usize::from(current_width != 0);
 
-            if current_width + space_len + word_len > width {
-                if !current_line.is_empty() {
-                    wrapped.push(Line::from(current_line));
-                    current_line = String::new();
-                    current_width = 0;
-                }
+            if current_width + space_len + word_len > width && !current_line.is_empty() {
+                wrapped.push(Line::from(current_line));
+                current_line = String::new();
+                current_width = 0;
             }
 
             if current_width > 0 {
@@ -111,8 +109,7 @@ fn move_input_cursor_vertical(
     let target_line_width = input_layout
         .display_lines
         .get(target_y)
-        .map(Line::width)
-        .unwrap_or(0);
+        .map_or(0, Line::width);
     let target_x = current_x.min(target_line_width);
 
     select_cursor_on_line(
@@ -242,8 +239,7 @@ fn select_cursor_on_line(
 
     best_cursor_on_left
         .or(nearest_cursor_on_right)
-        .map(|(cursor_index, _)| cursor_index)
-        .unwrap_or(fallback_cursor)
+        .map_or(fallback_cursor, |(cursor_index, _)| cursor_index)
 }
 
 struct InputLayout {
