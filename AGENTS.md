@@ -204,6 +204,7 @@ git worktree prune
 - [AGENTS.md](AGENTS.md) - Context and instructions for AI agents.
 - [Cargo.lock](Cargo.lock) - Exact version pins for dependencies.
 - [Cargo.toml](Cargo.toml) - Workspace root configuration and dependency definitions.
+- [CHANGELOG.md](CHANGELOG.md) - Project changelog.
 - [CLAUDE.md](CLAUDE.md) - Symlink to AGENTS.md.
 - [dist-workspace.toml](dist-workspace.toml) - Release configuration for cargo-dist.
 - [GEMINI.md](GEMINI.md) - Symlink to AGENTS.md.
