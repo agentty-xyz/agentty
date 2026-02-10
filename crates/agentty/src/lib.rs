@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod app;
 pub mod db;
+pub(crate) mod gh;
 pub mod git;
 pub mod health;
 pub mod icon;
