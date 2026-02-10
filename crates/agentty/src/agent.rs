@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 #[cfg(test)]
 use mockall::automock;
+use serde::Deserialize;
 
 #[cfg_attr(test, automock)]
 pub trait AgentBackend: Send + Sync {
@@ -261,6 +262,34 @@ impl AgentModel {
     }
 }
 
+/// Claude CLI JSON response shape (`--output-format json`).
+#[derive(Deserialize)]
+struct ClaudeResponse {
+    result: Option<String>,
+}
+
+/// Gemini CLI JSON response shape (`--output-format json`).
+#[derive(Deserialize)]
+struct GeminiResponse {
+    response: Option<String>,
+}
+
+/// Single NDJSON event emitted by Codex CLI (`--json`).
+#[derive(Deserialize)]
+struct CodexEvent {
+    #[serde(rename = "type")]
+    event_type: Option<String>,
+    item: Option<CodexItem>,
+}
+
+/// Nested `item` inside a Codex event.
+#[derive(Deserialize)]
+struct CodexItem {
+    #[serde(rename = "type")]
+    item_type: Option<String>,
+    text: Option<String>,
+}
+
 impl AgentKind {
     /// All available agent kinds, in display order.
     pub const ALL: &[AgentKind] = &[AgentKind::Gemini, AgentKind::Claude, AgentKind::Codex];
@@ -339,21 +368,15 @@ impl AgentKind {
     }
 
     fn parse_claude_response(stdout: &str) -> Option<String> {
-        let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
-
-        value
-            .get("result")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        serde_json::from_str::<ClaudeResponse>(stdout.trim())
+            .ok()?
+            .result
     }
 
     fn parse_gemini_response(stdout: &str) -> Option<String> {
-        let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
-
-        value
-            .get("response")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        serde_json::from_str::<GeminiResponse>(stdout.trim())
+            .ok()?
+            .response
     }
 
     fn parse_codex_response(stdout: &str) -> Option<String> {
@@ -363,20 +386,20 @@ impl AgentKind {
             if trimmed.is_empty() {
                 continue;
             }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            let Ok(event) = serde_json::from_str::<CodexEvent>(trimmed) else {
                 continue;
             };
-            if value.get("type").and_then(|v| v.as_str()) != Some("item.completed") {
+            if event.event_type.as_deref() != Some("item.completed") {
                 continue;
             }
-            let Some(item) = value.get("item") else {
+            let Some(item) = event.item else {
                 continue;
             };
-            if item.get("type").and_then(|v| v.as_str()) != Some("agent_message") {
+            if item.item_type.as_deref() != Some("agent_message") {
                 continue;
             }
-            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                last_message = Some(text.to_string());
+            if let Some(text) = item.text {
+                last_message = Some(text);
             }
         }
 
