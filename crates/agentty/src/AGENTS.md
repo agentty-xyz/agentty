@@ -3,14 +3,17 @@
 ## Local Conventions
 - Avoid near-identical local variable names in the same function (for example, `gitdir` and `git_dir`). Use one clear naming style with distinct, descriptive names.
 - PR lifecycle status flow:
-  - Status state machine is: `New` -> `InProgress` -> `Review` -> (`InProgress` or `PullRequest` or `Done`) and `PullRequest` -> `Done`.
+  - Status state machine is: `New` -> `InProgress`, `Review` -> (`InProgress` | `Committing` | `CreatingPullRequest` | `PullRequest` | `Done`), (`InProgress` | `Committing`) -> `Review`, `CreatingPullRequest` -> (`PullRequest` | `Review`), and `PullRequest` -> `Done`.
   - `New` is set when `create_session()` creates a blank session before the user types a prompt.
-  - `create_pr_session()` is allowed only while session status is `Review`.
   - `InProgress` can be entered from `New` (first prompt) or `Review` (reply).
-  - `PullRequest` can only be entered from `Review`.
+  - `Committing` can only be entered from `Review` while `spawn_commit_session()` is running.
+  - `CreatingPullRequest` can only be entered from `Review` while `create_pr_session()` is running.
+  - `PullRequest` is entered after successful PR creation and remains active while merge polling runs.
   - `Done` can only be entered from `Review` (local merge) or `PullRequest` (merged PR).
   - When agent response finishes, set status to `Review`.
   - While agent is preparing a response, status is `InProgress`.
+  - While commit creation runs, status is `Committing`.
+  - While PR creation runs, status is `CreatingPullRequest`.
   - Do not stop polling PR status for previously tracked sessions on project switch.
 
 ## Directory Index
