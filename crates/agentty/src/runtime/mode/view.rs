@@ -172,12 +172,6 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
 }
 
 fn commit_view_session(app: &mut App, session_id: &str) {
-    append_output_for_session(
-        app,
-        session_id,
-        "\n[Commit] summarizing commit info via agent\n",
-    );
-
     if let Err(error) = app.spawn_commit_session(session_id) {
         append_output_for_session(app, session_id, &format!("\n[Commit Error] {error}\n"));
     }
@@ -218,6 +212,7 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::model::Status;
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -292,16 +287,14 @@ mod tests {
         (app, base_dir, session_id)
     }
 
-    async fn wait_for_output_fragment(app: &App, fragment: &str) -> bool {
+    async fn wait_for_session_status(app: &App, expected_status: Status) -> bool {
         for _ in 0..40 {
-            let output = app
+            let status = app
                 .session_state
                 .sessions
                 .first()
-                .and_then(|session| session.output.lock().ok())
-                .map(|buffer| buffer.clone())
-                .unwrap_or_default();
-            if output.contains(fragment) {
+                .map_or(Status::New, crate::model::Session::status);
+            if status == expected_status {
                 return true;
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -437,20 +430,19 @@ mod tests {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
         let mut app = app;
+        if let Some(session) = app.session_state.sessions.first()
+            && let Ok(mut status) = session.status.lock()
+        {
+            *status = Status::Review;
+        }
 
         // Act
         commit_view_session(&mut app, &session_id);
 
         // Assert
-        let output = app.session_state.sessions[0]
-            .output
-            .lock()
-            .expect("lock poisoned")
-            .clone();
-        assert!(output.contains("summarizing commit info via agent"));
         assert!(
-            wait_for_output_fragment(&app, "[Commit").await,
-            "expected eventual commit output"
+            wait_for_session_status(&app, Status::Committing).await,
+            "expected session status to transition to committing"
         );
     }
 
