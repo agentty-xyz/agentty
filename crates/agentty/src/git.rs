@@ -279,6 +279,37 @@ pub fn commit_all(repo_path: &Path, commit_message: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Returns the short hash of the current `HEAD` commit.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// The short commit hash as a string.
+///
+/// # Errors
+/// Returns an error if resolving `HEAD` fails.
+pub fn head_short_hash(repo_path: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        return Err(format!("Failed to resolve HEAD hash: {}", stderr.trim()));
+    }
+
+    let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if hash.is_empty() {
+        return Err("Failed to resolve HEAD hash: empty output".to_string());
+    }
+
+    Ok(hash)
+}
+
 /// Deletes a git branch.
 ///
 /// Uses -D to force deletion even if not merged.
@@ -1046,6 +1077,20 @@ mod tests {
             error.contains("Nothing to commit"),
             "Expected 'Nothing to commit', got: {error}"
         );
+    }
+
+    #[test]
+    fn test_head_short_hash_returns_current_commit_hash() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+
+        // Act
+        let result = head_short_hash(dir.path());
+
+        // Assert
+        let hash = result.expect("should succeed");
+        assert!(!hash.is_empty());
     }
 
     #[test]

@@ -74,7 +74,7 @@ pub(crate) async fn handle(
             show_diff_for_view_session(app, &view_context).await;
         }
         KeyCode::Char('c') => {
-            commit_view_session(app, &view_context.session_id).await;
+            commit_view_session(app, &view_context.session_id);
         }
         KeyCode::Char('m') => {
             merge_view_session(app, &view_context.session_id).await;
@@ -171,13 +171,16 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
     };
 }
 
-async fn commit_view_session(app: &mut App, session_id: &str) {
-    let result_message = match app.commit_session(session_id).await {
-        Ok(message) => format!("\n[Commit] {message}\n"),
-        Err(error) => format!("\n[Commit Error] {error}\n"),
-    };
+fn commit_view_session(app: &mut App, session_id: &str) {
+    append_output_for_session(
+        app,
+        session_id,
+        "\n[Commit] summarizing commit info via agent\n",
+    );
 
-    append_output_for_session(app, session_id, &result_message);
+    if let Err(error) = app.spawn_commit_session(session_id) {
+        append_output_for_session(app, session_id, &format!("\n[Commit Error] {error}\n"));
+    }
 }
 
 async fn merge_view_session(app: &mut App, session_id: &str) {
@@ -287,6 +290,24 @@ mod tests {
             .expect("failed to create session");
 
         (app, base_dir, session_id)
+    }
+
+    async fn wait_for_output_fragment(app: &App, fragment: &str) -> bool {
+        for _ in 0..40 {
+            let output = app
+                .session_state
+                .sessions
+                .first()
+                .and_then(|session| session.output.lock().ok())
+                .map(|buffer| buffer.clone())
+                .unwrap_or_default();
+            if output.contains(fragment) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        false
     }
 
     #[tokio::test]
@@ -418,7 +439,7 @@ mod tests {
         let mut app = app;
 
         // Act
-        commit_view_session(&mut app, &session_id).await;
+        commit_view_session(&mut app, &session_id);
 
         // Assert
         let output = app.session_state.sessions[0]
@@ -426,7 +447,11 @@ mod tests {
             .lock()
             .expect("lock poisoned")
             .clone();
-        assert!(output.contains("[Commit"));
+        assert!(output.contains("summarizing commit info via agent"));
+        assert!(
+            wait_for_output_fragment(&app, "[Commit").await,
+            "expected eventual commit output"
+        );
     }
 
     #[tokio::test]
