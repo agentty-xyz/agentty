@@ -37,6 +37,8 @@ impl AgentBackend for GeminiBackend {
             .arg(model)
             .arg("--approval-mode")
             .arg("auto_edit")
+            .arg("--output-format")
+            .arg("json")
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -57,6 +59,8 @@ impl AgentBackend for ClaudeBackend {
             .arg(prompt)
             .arg("--allowedTools")
             .arg("Edit")
+            .arg("--output-format")
+            .arg("json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -71,6 +75,8 @@ impl AgentBackend for ClaudeBackend {
             .arg(prompt)
             .arg("--allowedTools")
             .arg("Edit")
+            .arg("--output-format")
+            .arg("json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -97,6 +103,7 @@ impl AgentBackend for CodexBackend {
             .arg("--model")
             .arg(model)
             .arg("--full-auto")
+            .arg("--json")
             .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -112,6 +119,7 @@ impl AgentBackend for CodexBackend {
             .arg("--model")
             .arg(model)
             .arg("--full-auto")
+            .arg("--json")
             .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -315,6 +323,75 @@ impl AgentKind {
         }
     }
 
+    /// Extracts the response message from raw agent JSON output.
+    ///
+    /// Each agent CLI produces a different JSON schema. This method
+    /// dispatches to the appropriate parser and falls back to raw text
+    /// when JSON parsing fails.
+    pub fn parse_response(self, stdout: &str, stderr: &str) -> String {
+        let parsed = match self {
+            Self::Claude => Self::parse_claude_response(stdout),
+            Self::Gemini => Self::parse_gemini_response(stdout),
+            Self::Codex => Self::parse_codex_response(stdout),
+        };
+
+        parsed.unwrap_or_else(|| Self::fallback_response(stdout, stderr))
+    }
+
+    fn parse_claude_response(stdout: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+
+        value
+            .get("result")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    }
+
+    fn parse_gemini_response(stdout: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+
+        value
+            .get("response")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    }
+
+    fn parse_codex_response(stdout: &str) -> Option<String> {
+        let mut last_message: Option<String> = None;
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            if value.get("type").and_then(|v| v.as_str()) != Some("item.completed") {
+                continue;
+            }
+            let Some(item) = value.get("item") else {
+                continue;
+            };
+            if item.get("type").and_then(|v| v.as_str()) != Some("agent_message") {
+                continue;
+            }
+            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                last_message = Some(text.to_string());
+            }
+        }
+
+        last_message
+    }
+
+    fn fallback_response(stdout: &str, stderr: &str) -> String {
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() {
+            return stderr.trim().to_string();
+        }
+
+        trimmed.to_string()
+    }
+
     /// Parses a provider-specific model string for this agent kind.
     pub fn parse_model(self, value: &str) -> Option<AgentModel> {
         match self {
@@ -405,6 +482,8 @@ mod tests {
         assert!(debug.contains("--resume"));
         assert!(debug.contains("latest"));
         assert!(debug.contains("gemini-3-pro-preview"));
+        assert!(debug.contains("--output-format"));
+        assert!(debug.contains("\"json\""));
     }
 
     #[test]
@@ -429,6 +508,8 @@ mod tests {
         assert!(debug.contains("gemini-3-flash-preview"));
         assert!(debug.contains("--approval-mode"));
         assert!(debug.contains("auto_edit"));
+        assert!(debug.contains("--output-format"));
+        assert!(debug.contains("\"json\""));
         assert!(!debug.contains("--resume"));
     }
 
@@ -467,6 +548,8 @@ mod tests {
         assert!(debug.contains("hello"));
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
+        assert!(debug.contains("--output-format"));
+        assert!(debug.contains("\"json\""));
         assert!(!debug.contains("-c"));
         assert_eq!(
             command_env_value(&cmd, "ANTHROPIC_MODEL"),
@@ -496,6 +579,8 @@ mod tests {
         assert!(debug.contains("follow-up"));
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
+        assert!(debug.contains("--output-format"));
+        assert!(debug.contains("\"json\""));
         assert_eq!(
             command_env_value(&cmd, "ANTHROPIC_MODEL"),
             Some("claude-haiku-4-5-20251001".to_string())
@@ -536,6 +621,7 @@ mod tests {
         assert!(debug.contains("hello"));
         assert!(debug.contains("gpt-5.3-codex"));
         assert!(debug.contains("--full-auto"));
+        assert!(debug.contains("--json"));
         assert!(!debug.contains("--dangerously-bypass-approvals-and-sandbox"));
         assert!(!debug.contains("resume"));
     }
@@ -558,6 +644,7 @@ mod tests {
         assert!(debug.contains("--last"));
         assert!(debug.contains("gpt-5.2-codex"));
         assert!(debug.contains("--full-auto"));
+        assert!(debug.contains("--json"));
         assert!(debug.contains("follow-up"));
         assert!(!debug.contains("--dangerously-bypass-approvals-and-sandbox"));
     }
@@ -751,5 +838,118 @@ mod tests {
         // Assert
         assert_eq!(valid, Some("gemini-3-flash-preview"));
         assert_eq!(invalid, None);
+    }
+
+    #[test]
+    fn test_claude_parse_response_valid_json() {
+        // Arrange
+        let stdout = r#"{"type":"result","subtype":"success","result":"Hello world","cost_usd":0.05,"is_error":false}"#;
+
+        // Act
+        let result = AgentKind::Claude.parse_response(stdout, "");
+
+        // Assert
+        assert_eq!(result, "Hello world");
+    }
+
+    #[test]
+    fn test_gemini_parse_response_valid_json() {
+        // Arrange
+        let stdout = r#"{"response":"Hello from Gemini","stats":{},"error":null}"#;
+
+        // Act
+        let result = AgentKind::Gemini.parse_response(stdout, "");
+
+        // Assert
+        assert_eq!(result, "Hello from Gemini");
+    }
+
+    #[test]
+    fn test_codex_parse_response_valid_ndjson() {
+        // Arrange
+        let stdout = r#"{"type":"thread.started","thread_id":"abc123"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"First message"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Final answer"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":50}}"#;
+
+        // Act
+        let result = AgentKind::Codex.parse_response(stdout, "");
+
+        // Assert
+        assert_eq!(result, "Final answer");
+    }
+
+    #[test]
+    fn test_codex_parse_response_no_agent_message() {
+        // Arrange
+        let stdout = r#"{"type":"thread.started","thread_id":"abc123"}
+{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":50}}"#;
+
+        // Act
+        let result = AgentKind::Codex.parse_response(stdout, "");
+
+        // Assert — falls back to raw stdout
+        assert!(result.contains("thread.started"));
+    }
+
+    #[test]
+    fn test_parse_response_invalid_json_falls_back() {
+        // Arrange
+        let stdout = "This is not JSON output\nJust plain text";
+
+        // Act
+        let result = AgentKind::Claude.parse_response(stdout, "");
+
+        // Assert
+        assert_eq!(result, "This is not JSON output\nJust plain text");
+    }
+
+    #[test]
+    fn test_parse_response_empty_stdout_falls_back_to_stderr() {
+        // Arrange
+        let stderr = "Error: agent binary not found";
+
+        // Act
+        let result = AgentKind::Claude.parse_response("", stderr);
+
+        // Assert
+        assert_eq!(result, "Error: agent binary not found");
+    }
+
+    #[test]
+    fn test_parse_response_whitespace_only_stdout_falls_back_to_stderr() {
+        // Arrange
+        let stderr = "Connection failed";
+
+        // Act
+        let result = AgentKind::Gemini.parse_response("  \n  ", stderr);
+
+        // Assert
+        assert_eq!(result, "Connection failed");
+    }
+
+    #[test]
+    fn test_claude_parse_response_missing_result_field() {
+        // Arrange — valid JSON but no "result" key
+        let stdout = r#"{"type":"error","message":"Something went wrong"}"#;
+
+        // Act
+        let result = AgentKind::Claude.parse_response(stdout, "");
+
+        // Assert — falls back to raw stdout
+        assert!(result.contains("Something went wrong"));
+    }
+
+    #[test]
+    fn test_gemini_parse_response_null_response_field() {
+        // Arrange — response is null (error case)
+        let stdout = r#"{"response":null,"error":{"type":"ApiError","message":"Rate limited"}}"#;
+
+        // Act
+        let result = AgentKind::Gemini.parse_response(stdout, "");
+
+        // Assert — falls back to raw stdout since response is null
+        assert!(result.contains("Rate limited"));
     }
 }

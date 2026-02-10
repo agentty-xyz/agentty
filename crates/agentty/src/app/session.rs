@@ -259,7 +259,7 @@ impl App {
             &prompt,
             session_model.as_str(),
         );
-        Self::spawn_session_task(folder, cmd, output, status, db, name);
+        Self::spawn_session_task(folder, cmd, output, status, db, name, session_agent);
 
         Ok(())
     }
@@ -570,6 +570,10 @@ impl App {
         let status = Arc::clone(&session.status);
         let name = session.id.clone();
         let db = self.db.clone();
+        let agent = session
+            .agent
+            .parse::<AgentKind>()
+            .unwrap_or(AgentKind::Gemini);
 
         {
             let status = Arc::clone(&status);
@@ -585,7 +589,7 @@ impl App {
         } else {
             backend.build_resume_command(&folder, prompt, model)
         };
-        Self::spawn_session_task(folder, cmd, output, status, db, name);
+        Self::spawn_session_task(folder, cmd, output, status, db, name, agent);
     }
 
     async fn rollback_failed_session_creation(
@@ -1637,35 +1641,18 @@ WHERE id = 'beta'
     }
 
     #[tokio::test]
-    async fn test_process_output() {
+    async fn test_capture_raw_output() {
         // Arrange
-        let output = Arc::new(Mutex::new(String::new()));
-        let file: Arc<Mutex<Option<std::io::BufWriter<std::fs::File>>>> =
-            Arc::new(Mutex::new(None));
+        let buffer = Arc::new(Mutex::new(String::new()));
         let source = "Line 1\nLine 2".as_bytes();
 
         // Act
-        App::process_output(source, &file, &output).await;
+        App::capture_raw_output(source, &buffer).await;
 
         // Assert
-        let out = output.lock().expect("failed to lock output").clone();
+        let out = buffer.lock().expect("failed to lock buffer").clone();
         assert!(out.contains("Line 1"));
         assert!(out.contains("Line 2"));
-
-        // Arrange — with file
-        let dir = tempdir().expect("failed to create temp dir");
-        let file_path = dir.path().join("out.txt");
-        let f = std::fs::File::create(&file_path).expect("failed to create file");
-        let file = Arc::new(Mutex::new(Some(std::io::BufWriter::new(f))));
-        let source_file = "File Line".as_bytes();
-
-        // Act
-        App::process_output(source_file, &file, &output).await;
-
-        // Assert
-        drop(file);
-        let content = std::fs::read_to_string(file_path).expect("failed to read file");
-        assert!(content.contains("File Line"));
     }
 
     #[tokio::test]

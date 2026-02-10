@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,10 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncBufReadExt as _, AsyncRead};
 
+use crate::agent::AgentKind;
 use crate::app::App;
 use crate::db::Database;
 use crate::git;
-use crate::model::{SESSION_DATA_DIR, Status};
+use crate::model::{Session, Status};
 
 impl App {
     pub(super) fn spawn_git_status_task(
@@ -56,6 +55,7 @@ impl App {
         status: Arc<Mutex<Status>>,
         db: Database,
         id: String,
+        agent: AgentKind,
     ) {
         let mut tokio_cmd = tokio::process::Command::from(cmd);
         // Prevent the child process from inheriting the TUI's terminal on
@@ -63,32 +63,25 @@ impl App {
         // settings, causing the event reader to stall and the UI to freeze.
         tokio_cmd.stdin(std::process::Stdio::null());
         tokio::spawn(async move {
-            let file = std::fs::OpenOptions::new()
-                .append(true)
-                .open(folder.join(SESSION_DATA_DIR).join("output.txt"))
-                .ok()
-                .map(std::io::BufWriter::new);
-            let file = Arc::new(Mutex::new(file));
-
             match tokio_cmd.spawn() {
                 Ok(mut child) => {
                     let stdout = child.stdout.take();
                     let stderr = child.stderr.take();
 
+                    let raw_stdout = Arc::new(Mutex::new(String::new()));
+                    let raw_stderr = Arc::new(Mutex::new(String::new()));
                     let mut handles = Vec::new();
 
                     if let Some(stdout) = stdout {
-                        let output = Arc::clone(&output);
-                        let file = Arc::clone(&file);
+                        let buffer = Arc::clone(&raw_stdout);
                         handles.push(tokio::spawn(async move {
-                            Self::process_output(stdout, &file, &output).await;
+                            Self::capture_raw_output(stdout, &buffer).await;
                         }));
                     }
                     if let Some(stderr) = stderr {
-                        let output = Arc::clone(&output);
-                        let file = Arc::clone(&file);
+                        let buffer = Arc::clone(&raw_stderr);
                         handles.push(tokio::spawn(async move {
-                            Self::process_output(stderr, &file, &output).await;
+                            Self::capture_raw_output(stderr, &buffer).await;
                         }));
                     }
 
@@ -96,11 +89,15 @@ impl App {
                         let _ = handle.await;
                     }
                     let _ = child.wait().await;
+
+                    let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
+                    let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
+                    let parsed = agent.parse_response(&stdout_text, &stderr_text);
+                    Session::write_output(&output, &folder, &parsed);
                 }
                 Err(e) => {
-                    if let Ok(mut buf) = output.lock() {
-                        let _ = writeln!(buf, "Failed to spawn process: {e}");
-                    }
+                    let message = format!("Failed to spawn process: {e}\n");
+                    Session::write_output(&output, &folder, &message);
                 }
             }
 
@@ -132,19 +129,14 @@ impl App {
         true
     }
 
-    pub(super) async fn process_output<R: AsyncRead + Unpin>(
+    /// Captures raw output from a stream into an in-memory buffer.
+    pub(super) async fn capture_raw_output<R: AsyncRead + Unpin>(
         source: R,
-        file: &Arc<Mutex<Option<std::io::BufWriter<std::fs::File>>>>,
-        output: &Arc<Mutex<String>>,
+        buffer: &Arc<Mutex<String>>,
     ) {
         let mut reader = tokio::io::BufReader::new(source).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            if let Ok(mut f_guard) = file.lock()
-                && let Some(f) = f_guard.as_mut()
-            {
-                let _ = writeln!(f, "{line}");
-            }
-            if let Ok(mut buf) = output.lock() {
+            if let Ok(mut buf) = buffer.lock() {
                 buf.push_str(&line);
                 buf.push('\n');
             }
