@@ -159,7 +159,10 @@ impl<'a> SessionChatPage<'a> {
 
         if matches!(
             status,
-            Status::InProgress | Status::PullRequest | Status::Committing
+            Status::InProgress
+                | Status::PullRequest
+                | Status::Committing
+                | Status::CreatingPullRequest
         ) {
             while lines.last().is_some_and(|line| line.width() == 0) {
                 lines.pop();
@@ -181,6 +184,7 @@ impl<'a> SessionChatPage<'a> {
     fn status_message(status: Status) -> &'static str {
         match status {
             Status::InProgress => "Thinking...",
+            Status::CreatingPullRequest => "Creating PR...",
             Status::PullRequest => "Waiting for PR merge...",
             Status::Committing => "Committing...",
             Status::New | Status::Review | Status::Done => "",

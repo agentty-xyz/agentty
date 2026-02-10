@@ -27,6 +27,7 @@ pub enum Status {
     InProgress,
     Review,
     Committing,
+    CreatingPullRequest,
     PullRequest,
     Done,
 }
@@ -38,6 +39,7 @@ impl std::fmt::Display for Status {
             Status::InProgress => write!(f, "InProgress"),
             Status::Review => write!(f, "Review"),
             Status::Committing => write!(f, "Committing"),
+            Status::CreatingPullRequest => write!(f, "CreatingPullRequest"),
             Status::PullRequest => write!(f, "PullRequest"),
             Status::Done => write!(f, "Done"),
         }
@@ -53,6 +55,7 @@ impl std::str::FromStr for Status {
             "InProgress" => Ok(Status::InProgress),
             "Review" => Ok(Status::Review),
             "Committing" => Ok(Status::Committing),
+            "CreatingPullRequest" => Ok(Status::CreatingPullRequest),
             "PullRequest" | "Processing" => Ok(Status::PullRequest),
             "Done" => Ok(Status::Done),
             _ => Err(format!("Unknown status: {s}")),
@@ -416,9 +419,17 @@ impl Status {
             (Status::New, Status::InProgress)
                 | (
                     Status::Review,
-                    Status::InProgress | Status::PullRequest | Status::Done | Status::Committing
+                    Status::InProgress
+                        | Status::PullRequest
+                        | Status::Done
+                        | Status::Committing
+                        | Status::CreatingPullRequest
                 )
                 | (Status::Committing | Status::InProgress, Status::Review)
+                | (
+                    Status::CreatingPullRequest,
+                    Status::PullRequest | Status::Review
+                )
                 | (Status::PullRequest, Status::Done)
         )
     }
@@ -426,9 +437,10 @@ impl Status {
     pub fn icon(self) -> Icon {
         match self {
             Status::New | Status::Review => Icon::Pending,
-            Status::InProgress | Status::PullRequest | Status::Committing => {
-                Icon::current_spinner()
-            }
+            Status::InProgress
+            | Status::PullRequest
+            | Status::Committing
+            | Status::CreatingPullRequest => Icon::current_spinner(),
             Status::Done => Icon::Check,
         }
     }
@@ -438,7 +450,7 @@ impl Status {
             Status::New => Color::DarkGray,
             Status::InProgress | Status::Committing => Color::Yellow,
             Status::Review => Color::LightBlue,
-            Status::PullRequest => Color::Cyan,
+            Status::PullRequest | Status::CreatingPullRequest => Color::Cyan,
             Status::Done => Color::Green,
         }
     }
@@ -564,6 +576,10 @@ mod tests {
         assert!(matches!(Status::InProgress.icon(), Icon::Spinner(_)));
         assert_eq!(Status::Review.icon(), Icon::Pending);
         assert!(matches!(Status::Committing.icon(), Icon::Spinner(_)));
+        assert!(matches!(
+            Status::CreatingPullRequest.icon(),
+            Icon::Spinner(_)
+        ));
         assert!(matches!(Status::PullRequest.icon(), Icon::Spinner(_)));
         assert_eq!(Status::Done.icon(), Icon::Check);
     }
@@ -575,6 +591,7 @@ mod tests {
         assert_eq!(Status::InProgress.color(), Color::Yellow);
         assert_eq!(Status::Review.color(), Color::LightBlue);
         assert_eq!(Status::Committing.color(), Color::Yellow);
+        assert_eq!(Status::CreatingPullRequest.color(), Color::Cyan);
         assert_eq!(Status::PullRequest.color(), Color::Cyan);
         assert_eq!(Status::Done.color(), Color::Green);
     }
@@ -597,9 +614,12 @@ mod tests {
         assert!(Status::Review.can_transition_to(Status::InProgress));
         assert!(Status::Review.can_transition_to(Status::PullRequest));
         assert!(Status::Review.can_transition_to(Status::Committing));
+        assert!(Status::Review.can_transition_to(Status::CreatingPullRequest));
         assert!(Status::Review.can_transition_to(Status::Done));
         assert!(Status::Committing.can_transition_to(Status::Review));
         assert!(!Status::Committing.can_transition_to(Status::Done));
+        assert!(Status::CreatingPullRequest.can_transition_to(Status::PullRequest));
+        assert!(Status::CreatingPullRequest.can_transition_to(Status::Review));
         assert!(Status::InProgress.can_transition_to(Status::Review));
         assert!(Status::PullRequest.can_transition_to(Status::Done));
         assert!(!Status::InProgress.can_transition_to(Status::Done));

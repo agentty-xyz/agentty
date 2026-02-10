@@ -73,19 +73,11 @@ impl App {
         let folder = session.folder.clone();
         let db = self.db.clone();
         let name = session.id.clone();
-        let repo_url = {
-            let folder = folder.clone();
-            match tokio::task::spawn_blocking(move || git::repo_url(&folder)).await {
-                Ok(Ok(url)) => url,
-                _ => "this repository".to_string(),
-            }
-        };
+        if !Self::update_status(&status, &db, &name, Status::CreatingPullRequest).await {
+            self.clear_pr_creation_in_flight(&name);
 
-        Session::write_output(
-            &output,
-            &folder,
-            &format!("\n[PR] Creating PR in {repo_url}\n"),
-        );
+            return Err("Invalid status transition to CreatingPullRequest".to_string());
+        }
 
         let pr_creation_in_flight = Arc::clone(&self.pr_creation_in_flight);
         let pr_poll_cancel = Arc::clone(&self.pr_poll_cancel);
@@ -122,10 +114,12 @@ impl App {
                             &folder,
                             "\n[PR Error] Invalid status transition to PullRequest\n",
                         );
+                        let _ = Self::update_status(&status, &db, &name, Status::Review).await;
                     }
                 }
                 Ok(Err(error)) => {
                     Session::write_output(&output, &folder, &format!("\n[PR Error] {error}\n"));
+                    let _ = Self::update_status(&status, &db, &name, Status::Review).await;
                 }
                 Err(error) => {
                     Session::write_output(
@@ -133,6 +127,7 @@ impl App {
                         &folder,
                         &format!("\n[PR Error] Join error: {error}\n"),
                     );
+                    let _ = Self::update_status(&status, &db, &name, Status::Review).await;
                 }
             }
 
