@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Deserialize;
+
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
 pub fn detect_git_info(dir: &Path) -> Option<String> {
@@ -543,19 +545,10 @@ pub fn create_pr(
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // 3. If PR already exists, fetch its URL
-    if stderr.contains("already exists") {
-        let view_output = Command::new("gh")
-            .args(["pr", "view", source_branch, "--json", "url", "--jq", ".url"])
-            .current_dir(repo_path)
-            .output()
-            .map_err(|e| format!("Failed to execute gh pr view: {e}"))?;
-
-        if view_output.status.success() {
-            let url = String::from_utf8_lossy(&view_output.stdout)
-                .trim()
-                .to_string();
-            return Ok(format!("Updated existing PR: {url}"));
-        }
+    if stderr.contains("already exists")
+        && let Ok(url) = pull_request_url(repo_path, source_branch)
+    {
+        return Ok(format!("Updated existing PR: {url}"));
     }
 
     Err(format!("GitHub CLI failed: {}", stderr.trim()))
@@ -575,7 +568,7 @@ pub fn create_pr(
 pub fn is_pr_merged(repo_path: &Path, source_branch: &str) -> Result<bool, String> {
     let state = pull_request_state(repo_path, source_branch)?;
 
-    Ok(state == "MERGED")
+    Ok(state == PullRequestState::Merged)
 }
 
 /// Returns whether the PR for `source_branch` has been closed without merge.
@@ -593,20 +586,44 @@ pub fn is_pr_merged(repo_path: &Path, source_branch: &str) -> Result<bool, Strin
 pub fn is_pr_closed(repo_path: &Path, source_branch: &str) -> Result<bool, String> {
     let state = pull_request_state(repo_path, source_branch)?;
 
-    Ok(state == "CLOSED")
+    Ok(state == PullRequestState::Closed)
 }
 
-fn pull_request_state(repo_path: &Path, source_branch: &str) -> Result<String, String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+enum PullRequestState {
+    Open,
+    Merged,
+    Closed,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestView {
+    state: Option<PullRequestState>,
+    url: Option<String>,
+}
+
+fn pull_request_url(repo_path: &Path, source_branch: &str) -> Result<String, String> {
+    let view = pull_request_view(repo_path, source_branch, "url")?;
+
+    view.url
+        .ok_or_else(|| "Missing `url` in gh pr view response".to_string())
+}
+
+fn pull_request_state(repo_path: &Path, source_branch: &str) -> Result<PullRequestState, String> {
+    let view = pull_request_view(repo_path, source_branch, "state")?;
+
+    view.state
+        .ok_or_else(|| "Missing `state` in gh pr view response".to_string())
+}
+
+fn pull_request_view(
+    repo_path: &Path,
+    source_branch: &str,
+    fields: &str,
+) -> Result<PullRequestView, String> {
     let output = Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            source_branch,
-            "--json",
-            "state",
-            "--jq",
-            ".state",
-        ])
+        .args(["pr", "view", source_branch, "--json", fields])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("Failed to execute gh pr view: {e}"))?;
@@ -616,12 +633,12 @@ fn pull_request_state(repo_path: &Path, source_branch: &str) -> Result<String, S
         return Err(format!("GitHub CLI failed: {}", stderr.trim()));
     }
 
-    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_pull_request_view(&output.stdout)
+}
 
-    match state.as_str() {
-        "OPEN" | "MERGED" | "CLOSED" => Ok(state),
-        value => Err(format!("Unexpected output from gh pr view: {value}")),
-    }
+fn parse_pull_request_view(stdout: &[u8]) -> Result<PullRequestView, String> {
+    serde_json::from_slice::<PullRequestView>(stdout)
+        .map_err(|error| format!("Failed to parse gh pr view JSON: {error}"))
 }
 
 #[cfg(test)]
@@ -1275,6 +1292,47 @@ mod tests {
 
         // Act
         let result = is_pr_closed(dir.path(), "agentty/test123");
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_pull_request_view_state() {
+        // Arrange
+        let payload = br#"{"state":"MERGED"}"#;
+
+        // Act
+        let view = parse_pull_request_view(payload).expect("failed to parse payload");
+
+        // Assert
+        assert_eq!(view.state, Some(PullRequestState::Merged));
+        assert_eq!(view.url, None);
+    }
+
+    #[test]
+    fn test_parse_pull_request_view_url() {
+        // Arrange
+        let payload = br#"{"url":"https://github.com/opencloudtool/agentty/pull/1"}"#;
+
+        // Act
+        let view = parse_pull_request_view(payload).expect("failed to parse payload");
+
+        // Assert
+        assert_eq!(
+            view.url,
+            Some("https://github.com/opencloudtool/agentty/pull/1".to_string())
+        );
+        assert_eq!(view.state, None);
+    }
+
+    #[test]
+    fn test_parse_pull_request_view_invalid_json() {
+        // Arrange
+        let payload = br"not-json";
+
+        // Act
+        let result = parse_pull_request_view(payload);
 
         // Assert
         assert!(result.is_err());
