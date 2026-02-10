@@ -267,6 +267,32 @@ impl App {
                     break;
                 }
 
+                let closed = {
+                    let folder = folder.clone();
+                    let source_branch = source_branch.clone();
+                    tokio::task::spawn_blocking(move || git::is_pr_closed(&folder, &source_branch))
+                        .await
+                        .ok()
+                        .and_then(std::result::Result::ok)
+                };
+
+                if closed == Some(true) {
+                    Session::write_output(
+                        &output,
+                        &folder,
+                        &format!("\n[PR] Pull request from `{source_branch}` was closed\n"),
+                    );
+                    if !Self::update_status(&status, &db, &id, Status::Canceled).await {
+                        Session::write_output(
+                            &output,
+                            &folder,
+                            "\n[PR Error] Invalid status transition to Canceled\n",
+                        );
+                    }
+
+                    break;
+                }
+
                 for _ in 0..PR_MERGE_POLL_INTERVAL.as_secs() {
                     if cancel.load(Ordering::Relaxed) {
                         break;

@@ -187,7 +187,7 @@ impl<'a> SessionChatPage<'a> {
             Status::CreatingPullRequest => "Creating PR...",
             Status::PullRequest => "Waiting for PR merge...",
             Status::Committing => "Committing...",
-            Status::New | Status::Review | Status::Done => "",
+            Status::New | Status::Review | Status::Done | Status::Canceled => "",
         }
     }
 

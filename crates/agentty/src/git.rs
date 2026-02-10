@@ -573,15 +573,39 @@ pub fn create_pr(
 /// # Errors
 /// Returns an error if `gh pr view` fails or returns an unexpected value.
 pub fn is_pr_merged(repo_path: &Path, source_branch: &str) -> Result<bool, String> {
+    let state = pull_request_state(repo_path, source_branch)?;
+
+    Ok(state == "MERGED")
+}
+
+/// Returns whether the PR for `source_branch` has been closed without merge.
+///
+/// # Arguments
+/// * `repo_path` - Path to a git repository or worktree
+/// * `source_branch` - Branch used to create the PR (e.g., `agentty/abc123`)
+///
+/// # Returns
+/// Ok(true) when closed, Ok(false) when still open or merged, Err(msg) on
+/// failure.
+///
+/// # Errors
+/// Returns an error if `gh pr view` fails or returns an unexpected value.
+pub fn is_pr_closed(repo_path: &Path, source_branch: &str) -> Result<bool, String> {
+    let state = pull_request_state(repo_path, source_branch)?;
+
+    Ok(state == "CLOSED")
+}
+
+fn pull_request_state(repo_path: &Path, source_branch: &str) -> Result<String, String> {
     let output = Command::new("gh")
         .args([
             "pr",
             "view",
             source_branch,
             "--json",
-            "mergedAt",
+            "state",
             "--jq",
-            ".mergedAt != null",
+            ".state",
         ])
         .current_dir(repo_path)
         .output()
@@ -592,9 +616,10 @@ pub fn is_pr_merged(repo_path: &Path, source_branch: &str) -> Result<bool, Strin
         return Err(format!("GitHub CLI failed: {}", stderr.trim()));
     }
 
-    match String::from_utf8_lossy(&output.stdout).trim() {
-        "true" => Ok(true),
-        "false" => Ok(false),
+    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    match state.as_str() {
+        "OPEN" | "MERGED" | "CLOSED" => Ok(state),
         value => Err(format!("Unexpected output from gh pr view: {value}")),
     }
 }
@@ -1238,6 +1263,18 @@ mod tests {
 
         // Act
         let result = is_pr_merged(dir.path(), "agentty/test123");
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_pr_closed_invalid_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+
+        // Act
+        let result = is_pr_closed(dir.path(), "agentty/test123");
 
         // Assert
         assert!(result.is_err());

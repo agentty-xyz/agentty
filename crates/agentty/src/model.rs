@@ -30,6 +30,7 @@ pub enum Status {
     CreatingPullRequest,
     PullRequest,
     Done,
+    Canceled,
 }
 
 impl std::fmt::Display for Status {
@@ -42,6 +43,7 @@ impl std::fmt::Display for Status {
             Status::CreatingPullRequest => write!(f, "CreatingPullRequest"),
             Status::PullRequest => write!(f, "PullRequest"),
             Status::Done => write!(f, "Done"),
+            Status::Canceled => write!(f, "Canceled"),
         }
     }
 }
@@ -58,6 +60,7 @@ impl std::str::FromStr for Status {
             "CreatingPullRequest" => Ok(Status::CreatingPullRequest),
             "PullRequest" | "Processing" => Ok(Status::PullRequest),
             "Done" => Ok(Status::Done),
+            "Canceled" | "Cancelled" => Ok(Status::Canceled),
             _ => Err(format!("Unknown status: {s}")),
         }
     }
@@ -422,6 +425,7 @@ impl Status {
                     Status::InProgress
                         | Status::PullRequest
                         | Status::Done
+                        | Status::Canceled
                         | Status::Committing
                         | Status::CreatingPullRequest
                 )
@@ -430,7 +434,7 @@ impl Status {
                     Status::CreatingPullRequest,
                     Status::PullRequest | Status::Review
                 )
-                | (Status::PullRequest, Status::Done)
+                | (Status::PullRequest, Status::Done | Status::Canceled)
         )
     }
 
@@ -442,6 +446,7 @@ impl Status {
             | Status::Committing
             | Status::CreatingPullRequest => Icon::current_spinner(),
             Status::Done => Icon::Check,
+            Status::Canceled => Icon::Cross,
         }
     }
 
@@ -452,6 +457,7 @@ impl Status {
             Status::Review => Color::LightBlue,
             Status::PullRequest | Status::CreatingPullRequest => Color::Cyan,
             Status::Done => Color::Green,
+            Status::Canceled => Color::Red,
         }
     }
 }
@@ -582,6 +588,7 @@ mod tests {
         ));
         assert!(matches!(Status::PullRequest.icon(), Icon::Spinner(_)));
         assert_eq!(Status::Done.icon(), Icon::Check);
+        assert_eq!(Status::Canceled.icon(), Icon::Cross);
     }
 
     #[test]
@@ -594,6 +601,7 @@ mod tests {
         assert_eq!(Status::CreatingPullRequest.color(), Color::Cyan);
         assert_eq!(Status::PullRequest.color(), Color::Cyan);
         assert_eq!(Status::Done.color(), Color::Green);
+        assert_eq!(Status::Canceled.color(), Color::Red);
     }
 
     #[test]
@@ -603,6 +611,15 @@ mod tests {
 
         // Assert
         assert_eq!(status, Status::PullRequest);
+    }
+
+    #[test]
+    fn test_status_from_str_canceled() {
+        // Arrange & Act
+        let status = "Canceled".parse::<Status>().expect("failed to parse");
+
+        // Assert
+        assert_eq!(status, Status::Canceled);
     }
 
     #[test]
@@ -616,14 +633,22 @@ mod tests {
         assert!(Status::Review.can_transition_to(Status::Committing));
         assert!(Status::Review.can_transition_to(Status::CreatingPullRequest));
         assert!(Status::Review.can_transition_to(Status::Done));
+        assert!(Status::Review.can_transition_to(Status::Canceled));
         assert!(Status::Committing.can_transition_to(Status::Review));
         assert!(!Status::Committing.can_transition_to(Status::Done));
+        assert!(!Status::Committing.can_transition_to(Status::Canceled));
         assert!(Status::CreatingPullRequest.can_transition_to(Status::PullRequest));
         assert!(Status::CreatingPullRequest.can_transition_to(Status::Review));
+        assert!(!Status::CreatingPullRequest.can_transition_to(Status::Canceled));
         assert!(Status::InProgress.can_transition_to(Status::Review));
+        assert!(!Status::InProgress.can_transition_to(Status::Canceled));
         assert!(Status::PullRequest.can_transition_to(Status::Done));
+        assert!(Status::PullRequest.can_transition_to(Status::Canceled));
+        assert!(!Status::New.can_transition_to(Status::Canceled));
         assert!(!Status::InProgress.can_transition_to(Status::Done));
         assert!(!Status::Done.can_transition_to(Status::InProgress));
+        assert!(!Status::Done.can_transition_to(Status::Canceled));
+        assert!(!Status::Canceled.can_transition_to(Status::InProgress));
     }
 
     #[test]
