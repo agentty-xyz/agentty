@@ -89,7 +89,7 @@ impl App {
         }
 
         let selected_index = self.session_state.table_state.selected();
-        let selected_session_name = selected_index
+        let selected_session_id = selected_index
             .and_then(|index| self.session_state.sessions.get(index))
             .map(|session| session.id.clone());
 
@@ -102,7 +102,7 @@ impl App {
         )
         .await;
         self.start_pr_polling_for_pull_request_sessions();
-        self.restore_table_selection(selected_session_name.as_deref(), selected_index);
+        self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists();
 
         self.session_state.row_count = sessions_row_count;
@@ -281,18 +281,18 @@ impl App {
         let folder = session.folder.clone();
         let output = Arc::clone(&session.output);
         let status = Arc::clone(&session.status);
-        let name = session.id.clone();
+        let id = session.id.clone();
         let db = self.db.clone();
         let (session_agent, session_model) = Self::resolve_session_agent_and_model(session);
 
-        let _ = Self::update_status(&status, &db, &name, Status::InProgress).await;
+        let _ = Self::update_status(&status, &db, &id, Status::InProgress).await;
 
         let cmd = session_agent.create_backend().build_start_command(
             &folder,
             &prompt,
             session_model.as_str(),
         );
-        Self::spawn_session_task(folder, cmd, output, status, db, name, session_agent);
+        Self::spawn_session_task(folder, cmd, output, status, db, id, session_agent);
 
         Ok(())
     }
@@ -795,11 +795,11 @@ impl App {
         if !allowed {
             session.append_output("\n[Reply Error] Session must be in review status\n");
             let db = self.db.clone();
-            let name = session.id.clone();
+            let id = session.id.clone();
             tokio::spawn(async move {
                 let _ = db
                     .append_session_output(
-                        &name,
+                        &id,
                         "\n[Reply Error] Session must be in review status\n",
                     )
                     .await;
@@ -812,11 +812,11 @@ impl App {
             let title = Self::summarize_title(prompt);
             session.title = Some(title.clone());
             let db = self.db.clone();
-            let name = session.id.clone();
+            let id = session.id.clone();
             let prompt = prompt.to_string();
             tokio::spawn(async move {
-                let _ = db.update_session_title(&name, &title).await;
-                let _ = db.update_session_prompt(&name, &prompt).await;
+                let _ = db.update_session_title(&id, &title).await;
+                let _ = db.update_session_prompt(&id, &prompt).await;
             });
         }
 
@@ -824,17 +824,17 @@ impl App {
         session.append_output(&reply_line);
         {
             let db = self.db.clone();
-            let name = session.id.clone();
+            let id = session.id.clone();
             let reply_line = reply_line;
             tokio::spawn(async move {
-                let _ = db.append_session_output(&name, &reply_line).await;
+                let _ = db.append_session_output(&id, &reply_line).await;
             });
         }
 
         let folder = session.folder.clone();
         let output = Arc::clone(&session.output);
         let status = Arc::clone(&session.status);
-        let name = session.id.clone();
+        let id = session.id.clone();
         let db = self.db.clone();
         let agent = session
             .agent
@@ -844,9 +844,9 @@ impl App {
         {
             let status = Arc::clone(&status);
             let db = db.clone();
-            let name = name.clone();
+            let id = id.clone();
             tokio::spawn(async move {
-                Self::update_status(&status, &db, &name, Status::InProgress).await;
+                Self::update_status(&status, &db, &id, Status::InProgress).await;
             });
         }
 
@@ -855,19 +855,19 @@ impl App {
         } else {
             backend.build_resume_command(&folder, prompt, model)
         };
-        Self::spawn_session_task(folder, cmd, output, status, db, name, agent);
+        Self::spawn_session_task(folder, cmd, output, status, db, id, agent);
     }
 
     async fn rollback_failed_session_creation(
         &self,
         folder: &Path,
         repo_root: &Path,
-        session_name: &str,
+        session_id: &str,
         worktree_branch: &str,
         session_saved: bool,
     ) {
         if session_saved {
-            let _ = self.db.delete_session(session_name).await;
+            let _ = self.db.delete_session(session_id).await;
         }
 
         {
@@ -890,7 +890,7 @@ impl App {
 
     fn restore_table_selection(
         &mut self,
-        selected_session_name: Option<&str>,
+        selected_session_id: Option<&str>,
         selected_index: Option<usize>,
     ) {
         if self.session_state.sessions.is_empty() {
@@ -899,12 +899,12 @@ impl App {
             return;
         }
 
-        if let Some(session_name) = selected_session_name
+        if let Some(session_id) = selected_session_id
             && let Some(index) = self
                 .session_state
                 .sessions
                 .iter()
-                .position(|session| session.id == session_name)
+                .position(|session| session.id == session_id)
         {
             self.session_state.table_state.select(Some(index));
 
@@ -2221,8 +2221,7 @@ WHERE id = 'beta'
             .expect("failed to write worktree change");
         git::commit_all(&session_folder, "Test merge commit")
             .expect("failed to commit session changes");
-        let session_name = app.session_state.sessions[0].id.clone();
-        let branch_name = format!("agentty/{session_name}");
+        let branch_name = format!("agentty/{session_id}");
 
         // Act
         let result = app.merge_session(&session_id).await;

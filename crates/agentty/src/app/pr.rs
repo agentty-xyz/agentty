@@ -72,9 +72,9 @@ impl App {
         let output = Arc::clone(&session.output);
         let folder = session.folder.clone();
         let db = self.db.clone();
-        let name = session.id.clone();
-        if !Self::update_status(&status, &db, &name, Status::CreatingPullRequest).await {
-            self.clear_pr_creation_in_flight(&name);
+        let id = session.id.clone();
+        if !Self::update_status(&status, &db, &id, Status::CreatingPullRequest).await {
+            self.clear_pr_creation_in_flight(&id);
 
             return Err("Invalid status transition to CreatingPullRequest".to_string());
         }
@@ -96,13 +96,13 @@ impl App {
             match result {
                 Ok(Ok(message)) => {
                     let message = format!("\n[PR] {message}\n");
-                    Self::append_session_output(&output, &folder, &db, &name, &message).await;
-                    if Self::update_status(&status, &db, &name, Status::PullRequest).await {
+                    Self::append_session_output(&output, &folder, &db, &id, &message).await;
+                    if Self::update_status(&status, &db, &id, Status::PullRequest).await {
                         let repo_root = Self::resolve_repo_root_from_worktree(&folder);
                         Self::spawn_pr_poll_task(PrPollTaskInput {
                             db,
                             folder,
-                            id: name.clone(),
+                            id: id.clone(),
                             output,
                             status,
                             source_branch,
@@ -114,27 +114,27 @@ impl App {
                             &output,
                             &folder,
                             &db,
-                            &name,
+                            &id,
                             "\n[PR Error] Invalid status transition to PullRequest\n",
                         )
                         .await;
-                        let _ = Self::update_status(&status, &db, &name, Status::Review).await;
+                        let _ = Self::update_status(&status, &db, &id, Status::Review).await;
                     }
                 }
                 Ok(Err(error)) => {
                     let message = format!("\n[PR Error] {error}\n");
-                    Self::append_session_output(&output, &folder, &db, &name, &message).await;
-                    let _ = Self::update_status(&status, &db, &name, Status::Review).await;
+                    Self::append_session_output(&output, &folder, &db, &id, &message).await;
+                    let _ = Self::update_status(&status, &db, &id, Status::Review).await;
                 }
                 Err(error) => {
                     let message = format!("\n[PR Error] Join error: {error}\n");
-                    Self::append_session_output(&output, &folder, &db, &name, &message).await;
-                    let _ = Self::update_status(&status, &db, &name, Status::Review).await;
+                    Self::append_session_output(&output, &folder, &db, &id, &message).await;
+                    let _ = Self::update_status(&status, &db, &id, Status::Review).await;
                 }
             }
 
             if let Ok(mut in_flight) = pr_creation_in_flight.lock() {
-                in_flight.remove(&name);
+                in_flight.remove(&id);
             }
         });
 
