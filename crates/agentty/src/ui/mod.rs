@@ -161,7 +161,7 @@ fn render_list_background(
             pages::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
         }
         Tab::Stats => {
-            pages::stats::StatsPage.render(f, chunks[1]);
+            pages::stats::StatsPage::new(sessions).render(f, chunks[1]);
         }
     }
 }

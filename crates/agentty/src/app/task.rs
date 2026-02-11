@@ -93,7 +93,9 @@ impl App {
                     let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
                     let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
                     let parsed = agent.parse_response(&stdout_text, &stderr_text);
-                    Self::append_session_output(&output, &folder, &db, &id, &parsed).await;
+                    Self::append_session_output(&output, &folder, &db, &id, &parsed.content).await;
+
+                    let _ = db.update_session_stats(&id, &parsed.stats).await;
                 }
                 Err(e) => {
                     let message = format!("Failed to spawn process: {e}\n");

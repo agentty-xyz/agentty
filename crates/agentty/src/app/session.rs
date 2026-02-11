@@ -10,7 +10,7 @@ use crate::agent::{AgentBackend, AgentKind, AgentModel};
 use crate::app::App;
 use crate::db::Database;
 use crate::git;
-use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, Status};
+use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, SessionStats, Status};
 
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const COMMIT_SUMMARY_BEGIN: &str = "BEGIN_COMMIT_MESSAGE";
@@ -1029,6 +1029,10 @@ impl App {
                     output,
                     project_name,
                     prompt: row.prompt,
+                    stats: SessionStats {
+                        input_tokens: row.input_tokens,
+                        output_tokens: row.output_tokens,
+                    },
                     status,
                     title: row.title,
                 })
@@ -1133,6 +1137,7 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: prompt.to_string(),
+            stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::Review)),
             title: Some(App::summarize_title(prompt)),
         });

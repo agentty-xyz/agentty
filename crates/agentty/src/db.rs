@@ -35,6 +35,8 @@ use std::path::Path;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+use crate::model::SessionStats;
+
 pub const DB_DIR: &str = "db";
 pub const DB_FILE: &str = "agentty.db";
 
@@ -54,8 +56,10 @@ pub struct SessionRow {
     pub base_branch: String,
     pub created_at: i64,
     pub id: String,
+    pub input_tokens: Option<i64>,
     pub model: String,
     pub output: String,
+    pub output_tokens: Option<i64>,
     pub project_id: Option<i64>,
     pub prompt: String,
     pub status: String,
@@ -247,7 +251,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     pub async fn load_sessions(&self) -> Result<Vec<SessionRow>, String> {
         let rows = sqlx::query(
             r"
-SELECT id, agent, model, base_branch, status, title, project_id, prompt, output, created_at, updated_at
+SELECT id, agent, model, base_branch, status, title, project_id, prompt, output,
+       created_at, updated_at, input_tokens, output_tokens
 FROM session
 ORDER BY updated_at DESC, id
 ",
@@ -263,8 +268,10 @@ ORDER BY updated_at DESC, id
                 base_branch: row.get("base_branch"),
                 created_at: row.get("created_at"),
                 id: row.get("id"),
+                input_tokens: row.get("input_tokens"),
                 model: row.get("model"),
                 output: row.get("output"),
+                output_tokens: row.get("output_tokens"),
                 project_id: row.get("project_id"),
                 prompt: row.get("prompt"),
                 status: row.get("status"),
@@ -377,6 +384,28 @@ WHERE id = ?
         .execute(&self.pool)
         .await
         .map_err(|err| format!("Failed to update session title: {err}"))?;
+
+        Ok(())
+    }
+
+    /// Updates token statistics for a session.
+    ///
+    /// # Errors
+    /// Returns an error if the stats update fails.
+    pub async fn update_session_stats(&self, id: &str, stats: &SessionStats) -> Result<(), String> {
+        sqlx::query(
+            r"
+UPDATE session
+SET input_tokens = ?, output_tokens = ?
+WHERE id = ?
+",
+        )
+        .bind(stats.input_tokens)
+        .bind(stats.output_tokens)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to update session stats: {err}"))?;
 
         Ok(())
     }
@@ -1133,5 +1162,65 @@ WHERE id = 'beta'
 
         // Assert
         assert_eq!(branch, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_session_stats() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Done",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let stats = SessionStats {
+            input_tokens: Some(1000),
+            output_tokens: Some(500),
+        };
+        let result = db.update_session_stats("sess1", &stats).await;
+
+        // Assert
+        assert!(result.is_ok());
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].input_tokens, Some(1000));
+        assert_eq!(sessions[0].output_tokens, Some(500));
+    }
+
+    #[tokio::test]
+    async fn test_load_sessions_stats_null_by_default() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Done",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let sessions = db.load_sessions().await.expect("failed to load");
+
+        // Assert
+        assert_eq!(sessions[0].input_tokens, None);
+        assert_eq!(sessions[0].output_tokens, None);
     }
 }

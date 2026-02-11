@@ -253,6 +253,30 @@ enum VerticalDirection {
     Down,
 }
 
+/// Formats a token count for display: "500", "1.5k", "1.5M".
+pub fn format_token_count(count: i64) -> String {
+    if count >= 1_000_000 {
+        let millions = count as f64 / 1_000_000.0;
+
+        return format!("{millions:.1}M");
+    }
+    if count >= 1_000 {
+        let thousands = count as f64 / 1_000.0;
+
+        return format!("{thousands:.1}k");
+    }
+
+    count.to_string()
+}
+
+/// Formats an optional token count, returning "-" when absent.
+pub fn format_optional_tokens(value: Option<i64>) -> String {
+    match value {
+        Some(count) => format_token_count(count),
+        None => "-".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,5 +521,37 @@ mod tests {
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].to_string(), "hello");
         assert_eq!(wrapped[1].to_string(), "world");
+    }
+
+    #[test]
+    fn test_format_token_count_small() {
+        // Arrange & Act & Assert
+        assert_eq!(format_token_count(0), "0");
+        assert_eq!(format_token_count(500), "500");
+        assert_eq!(format_token_count(999), "999");
+    }
+
+    #[test]
+    fn test_format_token_count_thousands() {
+        // Arrange & Act & Assert
+        assert_eq!(format_token_count(1000), "1.0k");
+        assert_eq!(format_token_count(1500), "1.5k");
+        assert_eq!(format_token_count(12345), "12.3k");
+        assert_eq!(format_token_count(999_999), "1000.0k");
+    }
+
+    #[test]
+    fn test_format_token_count_millions() {
+        // Arrange & Act & Assert
+        assert_eq!(format_token_count(1_000_000), "1.0M");
+        assert_eq!(format_token_count(1_500_000), "1.5M");
+        assert_eq!(format_token_count(12_345_678), "12.3M");
+    }
+
+    #[test]
+    fn test_format_optional_tokens() {
+        // Arrange & Act & Assert
+        assert_eq!(format_optional_tokens(Some(1500)), "1.5k");
+        assert_eq!(format_optional_tokens(None), "-");
     }
 }

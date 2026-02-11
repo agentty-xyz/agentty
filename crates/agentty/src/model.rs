@@ -353,6 +353,13 @@ impl PaletteCommand {
     }
 }
 
+/// Per-session token statistics.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionStats {
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+}
+
 pub struct Session {
     pub agent: String,
     pub folder: PathBuf,
@@ -361,6 +368,7 @@ pub struct Session {
     pub output: Arc<Mutex<String>>,
     pub project_name: String,
     pub prompt: String,
+    pub stats: SessionStats,
     pub status: Arc<Mutex<Status>>,
     pub title: Option<String>,
 }
@@ -474,6 +482,7 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: String::new(),
+            stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::New)),
             title: Some("Fix the login bug".to_string()),
         };
@@ -493,6 +502,7 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: String::new(),
+            stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::New)),
             title: None,
         };
@@ -512,6 +522,7 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: "prompt".to_string(),
+            stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::Review)),
             title: None,
         };
@@ -548,6 +559,7 @@ mod tests {
             output: Arc::new(Mutex::new(String::new())),
             project_name: String::new(),
             prompt: "prompt".to_string(),
+            stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::Done)),
             title: None,
         };
