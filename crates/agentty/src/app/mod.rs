@@ -11,7 +11,7 @@ use crate::model::{AppMode, Project, Session, Tab};
 
 mod pr;
 mod project;
-mod session;
+pub(crate) mod session;
 mod task;
 mod title;
 

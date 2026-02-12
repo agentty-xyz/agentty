@@ -9,6 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
+use crate::app::session::session_branch;
 use crate::health::HealthEntry;
 use crate::model::{AppMode, Project, Session, Tab};
 
@@ -78,7 +79,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     let (footer_dir, footer_branch, footer_status) = match session_for_footer {
         Some(session) => (
             session.folder.to_string_lossy().to_string(),
-            Some(format!("agentty/{}", session.id)),
+            Some(session_branch(&session.id)),
             None,
         ),
         None => (

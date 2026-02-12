@@ -35,6 +35,18 @@ Do not output anything before or after this block."
 });
 type SessionHandles = (Arc<Mutex<String>>, Arc<Mutex<Status>>, Arc<Mutex<i64>>);
 
+/// Returns the folder path for a session under the given base directory.
+fn session_folder(base: &Path, session_id: &str) -> PathBuf {
+    let len = session_id.len().min(8);
+    base.join(&session_id[..len])
+}
+
+/// Returns the worktree branch name for a session.
+pub(crate) fn session_branch(session_id: &str) -> String {
+    let len = session_id.len().min(8);
+    format!("agentty/{}", &session_id[..len])
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CommitMessage {
     body: String,
@@ -163,13 +175,13 @@ impl App {
             .ok_or_else(|| "Git branch is required to create a session".to_string())?;
 
         let session_id = Uuid::new_v4().to_string();
-        let folder = self.base_path.join(&session_id);
+        let folder = session_folder(&self.base_path, &session_id);
         if folder.exists() {
             return Err(format!("Session folder {session_id} already exists"));
         }
 
         // Create git worktree
-        let worktree_branch = format!("agentty/{session_id}");
+        let worktree_branch = session_branch(&session_id);
         let repo_root = git::find_git_repo_root(&self.working_dir)
             .ok_or_else(|| "Failed to find git repository root".to_string())?;
 
@@ -385,7 +397,7 @@ impl App {
 
         // Remove git worktree and branch if in a git repo
         if self.git_branch.is_some() {
-            let branch_name = format!("agentty/{}", session.id);
+            let branch_name = session_branch(&session.id);
 
             // Find repo root for branch deletion
             if let Some(repo_root) = git::find_git_repo_root(&self.working_dir) {
@@ -500,7 +512,7 @@ impl App {
             .ok_or_else(|| "Failed to find git repository root".to_string())?;
 
         // Build source branch name
-        let source_branch = format!("agentty/{}", session.id);
+        let source_branch = session_branch(&session.id);
 
         // Build commit message from session prompt
         let commit_message = format!("Merge session: {}", session.prompt);
@@ -997,7 +1009,7 @@ impl App {
         let sessions: Vec<Session> = db_rows
             .into_iter()
             .filter_map(|row| {
-                let folder = base.join(&row.id);
+                let folder = session_folder(base, &row.id);
                 let status = row.status.parse::<Status>().unwrap_or(Status::Done);
                 let keep_without_folder = matches!(status, Status::Done | Status::Canceled);
                 if !folder.is_dir() && !keep_without_folder {
@@ -1148,7 +1160,7 @@ mod tests {
     }
 
     fn add_manual_session(app: &mut App, base_path: &Path, id: &str, prompt: &str) {
-        let folder = base_path.join(id);
+        let folder = session_folder(base_path, id);
         let data_dir = folder.join(SESSION_DATA_DIR);
         std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         app.session_state.sessions.push(Session {
@@ -1562,7 +1574,7 @@ mod tests {
             .await
             .expect("failed to upsert project");
         db.insert_session(
-            "alpha",
+            "alpha000",
             "claude",
             "claude-opus-4-6",
             "main",
@@ -1570,9 +1582,9 @@ mod tests {
             project_id,
         )
         .await
-        .expect("failed to insert alpha");
+        .expect("failed to insert alpha000");
         db.insert_session(
-            "beta",
+            "beta0000",
             "gemini",
             "gemini-3-flash-preview",
             "main",
@@ -1580,7 +1592,7 @@ mod tests {
             project_id,
         )
         .await
-        .expect("failed to insert beta");
+        .expect("failed to insert beta0000");
 
         sqlx::query(
             r"
@@ -1590,10 +1602,10 @@ WHERE id = ?
 ",
         )
         .bind(1_i64)
-        .bind("alpha")
+        .bind("alpha000")
         .execute(db.pool())
         .await
-        .expect("failed to update alpha timestamp");
+        .expect("failed to update alpha000 timestamp");
         sqlx::query(
             r"
 UPDATE session
@@ -1602,13 +1614,13 @@ WHERE id = ?
 ",
         )
         .bind(2_i64)
-        .bind("beta")
+        .bind("beta0000")
         .execute(db.pool())
         .await
-        .expect("failed to update beta timestamp");
+        .expect("failed to update beta0000 timestamp");
 
-        for session_name in ["alpha", "beta"] {
-            let session_dir = dir.path().join(session_name);
+        for session_id in ["alpha000", "beta0000"] {
+            let session_dir = session_folder(dir.path(), session_id);
             let data_dir = session_dir.join(SESSION_DATA_DIR);
             std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         }
@@ -1629,7 +1641,7 @@ WHERE id = ?
             .iter()
             .map(|session| session.id.as_str())
             .collect();
-        assert_eq!(session_names, vec!["beta", "alpha"]);
+        assert_eq!(session_names, vec!["beta0000", "alpha000"]);
     }
 
     #[tokio::test]
@@ -1644,7 +1656,7 @@ WHERE id = ?
             .await
             .expect("failed to upsert project");
         db.insert_session(
-            "alpha",
+            "alpha000",
             "gemini",
             "gemini-3-flash-preview",
             "main",
@@ -1652,9 +1664,9 @@ WHERE id = ?
             project_id,
         )
         .await
-        .expect("failed to insert alpha");
+        .expect("failed to insert alpha000");
         db.insert_session(
-            "beta",
+            "beta0000",
             "claude",
             "claude-opus-4-6",
             "main",
@@ -1662,29 +1674,29 @@ WHERE id = ?
             project_id,
         )
         .await
-        .expect("failed to insert beta");
+        .expect("failed to insert beta0000");
         sqlx::query(
             r"
 UPDATE session
 SET updated_at = 1
-WHERE id = 'alpha'
+WHERE id = 'alpha000'
 ",
         )
         .execute(db.pool())
         .await
-        .expect("failed to set alpha timestamp");
+        .expect("failed to set alpha000 timestamp");
         sqlx::query(
             r"
 UPDATE session
 SET updated_at = 2
-WHERE id = 'beta'
+WHERE id = 'beta0000'
 ",
         )
         .execute(db.pool())
         .await
-        .expect("failed to set beta timestamp");
-        for session_name in ["alpha", "beta"] {
-            let session_dir = dir.path().join(session_name);
+        .expect("failed to set beta0000 timestamp");
+        for session_id in ["alpha000", "beta0000"] {
+            let session_dir = session_folder(dir.path(), session_id);
             let data_dir = session_dir.join(SESSION_DATA_DIR);
             std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         }
@@ -1700,20 +1712,20 @@ WHERE id = 'beta'
         // Act
         tokio::time::sleep(Duration::from_secs(1)).await;
         app.db
-            .update_session_status("alpha", "Done")
+            .update_session_status("alpha000", "Done")
             .await
             .expect("failed to update session status");
         tokio::time::sleep(Duration::from_millis(600)).await;
         app.refresh_sessions_if_needed().await;
 
         // Assert
-        assert_eq!(app.session_state.sessions[0].id, "alpha");
+        assert_eq!(app.session_state.sessions[0].id, "alpha000");
         let selected_index = app
             .session_state
             .table_state
             .selected()
             .expect("missing selection");
-        assert_eq!(app.session_state.sessions[selected_index].id, "alpha");
+        assert_eq!(app.session_state.sessions[selected_index].id, "alpha000");
     }
 
     #[tokio::test]
@@ -1728,7 +1740,7 @@ WHERE id = 'beta'
             .await
             .expect("failed to upsert project");
         db.insert_session(
-            "alpha",
+            "alpha000",
             "gemini",
             "gemini-3-flash-preview",
             "main",
@@ -1736,9 +1748,9 @@ WHERE id = 'beta'
             project_id,
         )
         .await
-        .expect("failed to insert alpha");
+        .expect("failed to insert alpha000");
         db.insert_session(
-            "beta",
+            "beta0000",
             "claude",
             "claude-opus-4-6",
             "main",
@@ -1746,29 +1758,29 @@ WHERE id = 'beta'
             project_id,
         )
         .await
-        .expect("failed to insert beta");
+        .expect("failed to insert beta0000");
         sqlx::query(
             r"
 UPDATE session
 SET updated_at = 1
-WHERE id = 'alpha'
+WHERE id = 'alpha000'
 ",
         )
         .execute(db.pool())
         .await
-        .expect("failed to set alpha timestamp");
+        .expect("failed to set alpha000 timestamp");
         sqlx::query(
             r"
 UPDATE session
 SET updated_at = 2
-WHERE id = 'beta'
+WHERE id = 'beta0000'
 ",
         )
         .execute(db.pool())
         .await
-        .expect("failed to set beta timestamp");
-        for session_name in ["alpha", "beta"] {
-            let session_dir = dir.path().join(session_name);
+        .expect("failed to set beta0000 timestamp");
+        for session_id in ["alpha000", "beta0000"] {
+            let session_dir = session_folder(dir.path(), session_id);
             let data_dir = session_dir.join(SESSION_DATA_DIR);
             std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         }
@@ -1788,14 +1800,14 @@ WHERE id = 'beta'
         // Act
         tokio::time::sleep(Duration::from_secs(1)).await;
         app.db
-            .update_session_status("alpha", "Done")
+            .update_session_status("alpha000", "Done")
             .await
             .expect("failed to update session status");
         tokio::time::sleep(Duration::from_millis(600)).await;
         app.refresh_sessions_if_needed().await;
 
         // Assert
-        assert_eq!(app.session_state.sessions[0].id, "alpha");
+        assert_eq!(app.session_state.sessions[0].id, "alpha000");
         match app.mode {
             AppMode::View { session_id, .. } => assert_eq!(session_id, selected_session_id),
             _ => panic!("expected view mode"),
@@ -2249,7 +2261,7 @@ WHERE id = 'beta'
             .expect("failed to write worktree change");
         git::commit_all(&session_folder, "Test merge commit")
             .expect("failed to commit session changes");
-        let branch_name = format!("agentty/{session_id}");
+        let branch_name = session_branch(&session_id);
 
         // Act
         let result = app.merge_session(&session_id).await;
@@ -2588,5 +2600,32 @@ WHERE id = 'beta'
     fn test_summarize_title_empty() {
         // Arrange & Act & Assert
         assert_eq!(App::summarize_title(""), "");
+    }
+
+    // --- session_folder / session_branch ---
+
+    #[test]
+    fn test_session_folder_uses_first_8_chars() {
+        // Arrange
+        let base = Path::new("/var/tmp/.agentty");
+        let session_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        // Act
+        let folder = session_folder(base, session_id);
+
+        // Assert
+        assert_eq!(folder, PathBuf::from("/var/tmp/.agentty/a1b2c3d4"));
+    }
+
+    #[test]
+    fn test_session_branch_uses_first_8_chars() {
+        // Arrange
+        let session_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        // Act
+        let branch = session_branch(session_id);
+
+        // Assert
+        assert_eq!(branch, "agentty/a1b2c3d4");
     }
 }

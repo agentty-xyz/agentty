@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::app::App;
+use crate::app::session::session_branch;
 use crate::db::Database;
 use crate::git;
 use crate::model::Status;
@@ -56,7 +57,7 @@ impl App {
             .ok_or_else(|| "No git worktree for this session".to_string())?;
 
         // Build source branch name
-        let source_branch = format!("agentty/{}", session.id);
+        let source_branch = session_branch(&session.id);
 
         // Build PR title from session prompt (first line only)
         let title = session
@@ -147,7 +148,7 @@ impl App {
                 continue;
             }
 
-            let source_branch = format!("agentty/{}", session.id);
+            let source_branch = session_branch(&session.id);
             Self::spawn_pr_poll_task(PrPollTaskInput {
                 db: self.db.clone(),
                 folder: session.folder.clone(),
