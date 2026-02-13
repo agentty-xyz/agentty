@@ -73,9 +73,6 @@ pub(crate) async fn handle(
         KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
             show_diff_for_view_session(app, &view_context).await;
         }
-        KeyCode::Char('c') => {
-            commit_view_session(app, &view_context.session_id).await;
-        }
         KeyCode::Char('m') => {
             merge_view_session(app, &view_context.session_id).await;
         }
@@ -171,13 +168,6 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
     };
 }
 
-async fn commit_view_session(app: &mut App, session_id: &str) {
-    if let Err(error) = app.spawn_commit_session(session_id) {
-        let message = format!("\n[Commit Error] {error}\n");
-        app.append_output_for_session(session_id, &message).await;
-    }
-}
-
 async fn merge_view_session(app: &mut App, session_id: &str) {
     let result_message = match app.merge_session(session_id).await {
         Ok(message) => format!("\n[Merge] {message}\n"),
@@ -204,7 +194,6 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
-    use crate::model::Status;
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -277,22 +266,6 @@ mod tests {
             .expect("failed to create session");
 
         (app, base_dir, session_id)
-    }
-
-    async fn wait_for_session_status(app: &App, expected_status: Status) -> bool {
-        for _ in 0..40 {
-            let status = app
-                .session_state
-                .sessions
-                .first()
-                .map_or(Status::New, crate::model::Session::status);
-            if status == expected_status {
-                return true;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-
-        false
     }
 
     #[tokio::test]
@@ -416,27 +389,6 @@ mod tests {
             .expect("lock poisoned")
             .clone();
         assert_eq!(output, "line one");
-    }
-
-    #[tokio::test]
-    async fn test_commit_view_session_appends_commit_result_output() {
-        // Arrange
-        let (app, _base_dir, session_id) = new_test_app_with_session().await;
-        let mut app = app;
-        if let Some(session) = app.session_state.sessions.first()
-            && let Ok(mut status) = session.status.lock()
-        {
-            *status = Status::Review;
-        }
-
-        // Act
-        commit_view_session(&mut app, &session_id).await;
-
-        // Assert
-        assert!(
-            wait_for_session_status(&app, Status::Committing).await,
-            "expected session status to transition to committing"
-        );
     }
 
     #[tokio::test]

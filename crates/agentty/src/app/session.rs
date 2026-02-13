@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -13,26 +12,7 @@ use crate::git;
 use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, SessionStats, Status};
 
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
-const COMMIT_SUMMARY_BEGIN: &str = "BEGIN_COMMIT_MESSAGE";
-const COMMIT_SUMMARY_END: &str = "END_COMMIT_MESSAGE";
-static COMMIT_SUMMARY_PROMPT: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "\
-Review the current git changes and write a commit title/body that follows AGENTS.md rules.
-Rules:
-- The title is concise and in present simple tense.
-- Use a blank line between title and body.
-- Use `-` bullet points in the body.
-Respond with this exact format only:
-{COMMIT_SUMMARY_BEGIN}
-TITLE: <title>
-BODY:
-- <body bullet 1>
-- <body bullet 2>
-{COMMIT_SUMMARY_END}
-Do not output anything before or after this block."
-    )
-});
+pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
 type SessionHandles = (Arc<Mutex<String>>, Arc<Mutex<Status>>, Arc<Mutex<i64>>);
 
 /// Returns the folder path for a session under the given base directory.
@@ -45,40 +25,6 @@ fn session_folder(base: &Path, session_id: &str) -> PathBuf {
 pub(crate) fn session_branch(session_id: &str) -> String {
     let len = session_id.len().min(8);
     format!("agentty/{}", &session_id[..len])
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct CommitMessage {
-    body: String,
-    title: String,
-}
-
-#[derive(Clone)]
-struct CommitSessionContext {
-    agent: AgentKind,
-    folder: PathBuf,
-    id: String,
-    model: AgentModel,
-    output: Arc<Mutex<String>>,
-    prompt: String,
-}
-
-impl CommitMessage {
-    fn as_git_message(&self) -> String {
-        if self.body.trim().is_empty() {
-            return self.title.clone();
-        }
-
-        format!("{}\n\n{}", self.title, self.body)
-    }
-
-    fn body_for_log(&self) -> &str {
-        if self.body.trim().is_empty() {
-            return "(empty)";
-        }
-
-        &self.body
-    }
 }
 
 impl App {
@@ -293,6 +239,7 @@ impl App {
         let folder = session.folder.clone();
         let output = Arc::clone(&session.output);
         let status = Arc::clone(&session.status);
+        let commit_count = Arc::clone(&session.commit_count);
         let id = session.id.clone();
         let db = self.db.clone();
         let (session_agent, session_model) = Self::resolve_session_agent_and_model(session);
@@ -304,7 +251,16 @@ impl App {
             &prompt,
             session_model.as_str(),
         );
-        Self::spawn_session_task(folder, cmd, output, status, db, id, session_agent);
+        Self::spawn_session_task(
+            folder,
+            cmd,
+            output,
+            status,
+            db,
+            id,
+            session_agent,
+            commit_count,
+        );
 
         Ok(())
     }
@@ -427,63 +383,6 @@ impl App {
         self.update_sessions_metadata_cache().await;
     }
 
-    /// Spawns a background commit for all changes in a session worktree.
-    ///
-    /// # Errors
-    /// Returns an error if the session has no worktree or the git commit
-    /// operation fails.
-    pub fn spawn_commit_session(&self, session_id: &str) -> Result<(), String> {
-        let context = self.build_commit_session_context(session_id)?;
-
-        let session = self
-            .session_state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .ok_or_else(|| "Session not found".to_string())?;
-        let status = Arc::clone(&session.status);
-        let commit_count = Arc::clone(&session.commit_count);
-        let id = session.id.clone();
-
-        let db = self.db.clone();
-        let output = Arc::clone(&context.output);
-        let folder = context.folder.clone();
-
-        tokio::spawn(async move {
-            Self::update_status(&status, &db, &id, Status::Committing).await;
-
-            let result_message = match Self::commit_session_with_context(db.clone(), context).await
-            {
-                Ok(message) => {
-                    if let Ok(mut count) = commit_count.lock() {
-                        *count += 1;
-                    }
-                    let _ = db.increment_commit_count(&id).await;
-
-                    format!("\n[Commit] {message}\n")
-                }
-                Err(error) => format!("\n[Commit Error] {error}\n"),
-            };
-
-            Self::append_session_output(&output, &folder, &db, &id, &result_message).await;
-
-            Self::update_status(&status, &db, &id, Status::Review).await;
-        });
-
-        Ok(())
-    }
-
-    /// Commits all changes in a session worktree and waits for completion.
-    ///
-    /// # Errors
-    /// Returns an error if the session has no worktree or the git commit
-    /// operation fails.
-    pub async fn commit_session(&self, session_id: &str) -> Result<String, String> {
-        let context = self.build_commit_session_context(session_id)?;
-
-        Self::commit_session_with_context(self.db.clone(), context).await
-    }
-
     /// Squash-merges a reviewed session branch into its base branch.
     ///
     /// # Errors
@@ -599,186 +498,16 @@ impl App {
         git_dir.parent()?.parent()?.parent().map(Path::to_path_buf)
     }
 
-    async fn build_commit_message(
-        session_folder: PathBuf,
-        session_prompt: String,
-        session_agent: AgentKind,
-        session_model: AgentModel,
-    ) -> CommitMessage {
-        match Self::summarize_commit_message_via_agent(session_folder, session_agent, session_model)
-            .await
-        {
-            Ok(message) => message,
-            Err(_) => Self::fallback_commit_message(&session_prompt),
-        }
-    }
-
-    async fn summarize_commit_message_via_agent(
-        session_folder: PathBuf,
-        session_agent: AgentKind,
-        session_model: AgentModel,
-    ) -> Result<CommitMessage, String> {
-        let backend = session_agent.create_backend();
-        let model = session_model.as_str().to_string();
-
-        let resume_command =
-            backend.build_resume_command(&session_folder, &COMMIT_SUMMARY_PROMPT, &model);
-        let output = if let Ok(output) = Self::run_agent_command(resume_command).await {
-            output
-        } else {
-            let start_command =
-                backend.build_start_command(&session_folder, &COMMIT_SUMMARY_PROMPT, &model);
-            Self::run_agent_command(start_command).await?
-        };
-
-        Self::parse_agent_commit_message(&output)
-            .ok_or_else(|| "Failed to parse commit title and body from agent output".to_string())
-    }
-
-    async fn run_agent_command(mut command: Command) -> Result<String, String> {
-        let output = tokio::task::spawn_blocking(move || command.output())
-            .await
-            .map_err(|error| format!("Failed to run agent command: {error}"))?
-            .map_err(|error| format!("Failed to execute agent command: {error}"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if !output.status.success() {
-            let details = stderr.trim();
-            if details.is_empty() {
-                return Err(format!("Agent command failed: {}", stdout.trim()));
-            }
-
-            return Err(format!("Agent command failed: {details}"));
-        }
-        if stdout.trim().is_empty() {
-            return Err("Agent command produced empty output".to_string());
-        }
-
-        Ok(stdout)
-    }
-
-    fn parse_agent_commit_message(output: &str) -> Option<CommitMessage> {
-        let block = Self::extract_commit_message_block(output)?;
-        let lines = block.lines().collect::<Vec<_>>();
-        let title_index = lines
-            .iter()
-            .position(|line| line.trim_start().to_ascii_lowercase().starts_with("title:"))?;
-        let title = lines
-            .get(title_index)?
-            .trim_start()
-            .split_once(':')
-            .map(|(_, value)| value.trim())
-            .unwrap_or_default()
-            .trim_matches('`')
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
-        if title.is_empty() {
-            return None;
-        }
-
-        let body = if let Some(body_index) = lines[title_index + 1..]
-            .iter()
-            .position(|line| line.trim_start().to_ascii_lowercase().starts_with("body:"))
-            .map(|offset| title_index + 1 + offset)
-        {
-            let remainder = lines[body_index]
-                .trim_start()
-                .split_once(':')
-                .map(|(_, value)| value.trim())
-                .unwrap_or_default()
-                .to_string();
-            let trailing_lines = lines[body_index + 1..]
-                .iter()
-                .map(|line| line.trim_end())
-                .collect::<Vec<_>>();
-            let trailing_body = trailing_lines.join("\n").trim().to_string();
-            if trailing_body.is_empty() {
-                remainder
-            } else if remainder.is_empty() {
-                trailing_body
-            } else {
-                format!("{remainder}\n{trailing_body}")
-            }
-        } else {
-            String::new()
-        };
-
-        Some(CommitMessage { body, title })
-    }
-
-    fn extract_commit_message_block(output: &str) -> Option<String> {
-        let start_index = output.find(COMMIT_SUMMARY_BEGIN)?;
-        let after_start = &output[start_index + COMMIT_SUMMARY_BEGIN.len()..];
-        let end_index = after_start.find(COMMIT_SUMMARY_END)?;
-        let block = after_start[..end_index].trim().to_string();
-
-        if block.is_empty() {
-            return None;
-        }
-
-        Some(block)
-    }
-
-    fn fallback_commit_message(session_prompt: &str) -> CommitMessage {
-        let prompt_title = Self::summarize_title(session_prompt);
-        let title = if prompt_title.is_empty() {
-            "Update session worktree".to_string()
-        } else {
-            format!("Update {}", prompt_title.trim())
-        };
-
-        let body = "- Commit current session worktree changes.".to_string();
-
-        CommitMessage { body, title }
-    }
-
-    fn build_commit_session_context(
-        &self,
+    /// Commits all changes in a session worktree using a fixed message.
+    pub(super) async fn commit_changes(
+        folder: &Path,
+        db: &Database,
         session_id: &str,
-    ) -> Result<CommitSessionContext, String> {
-        let session = self
-            .session_state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .ok_or_else(|| "Session not found".to_string())?;
-        let (agent, model) = Self::resolve_session_agent_and_model(session);
-
-        Ok(CommitSessionContext {
-            agent,
-            folder: session.folder.clone(),
-            id: session.id.clone(),
-            model,
-            output: Arc::clone(&session.output),
-            prompt: session.prompt.clone(),
-        })
-    }
-
-    async fn commit_session_with_context(
-        db: Database,
-        context: CommitSessionContext,
+        commit_count: &Arc<Mutex<i64>>,
     ) -> Result<String, String> {
-        // Verify this session has a git worktree via DB
-        if db.get_base_branch(&context.id).await?.is_none() {
-            return Err("No git worktree for this session".to_string());
-        }
-
-        let commit_message = Self::build_commit_message(
-            context.folder.clone(),
-            context.prompt,
-            context.agent,
-            context.model,
-        )
-        .await;
-
-        let git_commit_message = commit_message.as_git_message();
-
-        // Commit all changes in the worktree and capture the resulting hash.
-        let folder = context.folder;
+        let folder = folder.to_path_buf();
         let commit_hash = tokio::task::spawn_blocking(move || {
-            git::commit_all(&folder, &git_commit_message)?;
+            git::commit_all(&folder, COMMIT_MESSAGE)?;
 
             git::head_short_hash(&folder)
         })
@@ -786,11 +515,12 @@ impl App {
         .map_err(|error| format!("Join error: {error}"))?
         .map_err(|error| format!("Failed to commit: {error}"))?;
 
-        Ok(format!(
-            "committed with hash `{commit_hash}`\ntitle: `{}`\nbody:\n{}",
-            commit_message.title,
-            commit_message.body_for_log()
-        ))
+        if let Ok(mut count) = commit_count.lock() {
+            *count += 1;
+        }
+        let _ = db.increment_commit_count(session_id).await;
+
+        Ok(commit_hash)
     }
 
     fn reply_with_backend(
@@ -853,6 +583,7 @@ impl App {
         let folder = session.folder.clone();
         let output = Arc::clone(&session.output);
         let status = Arc::clone(&session.status);
+        let commit_count = Arc::clone(&session.commit_count);
         let id = session.id.clone();
         let db = self.db.clone();
         let agent = session
@@ -874,7 +605,7 @@ impl App {
         } else {
             backend.build_resume_command(&folder, prompt, model)
         };
-        Self::spawn_session_task(folder, cmd, output, status, db, id, agent);
+        Self::spawn_session_task(folder, cmd, output, status, db, id, agent, commit_count);
     }
 
     async fn rollback_failed_session_creation(
@@ -1990,6 +1721,113 @@ WHERE id = 'beta0000'
     }
 
     #[tokio::test]
+    async fn test_spawn_session_task_auto_commits_changes() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Some("main".to_string()),
+            db,
+        )
+        .await;
+
+        // Create a session that writes a file so commit_all has something to commit
+        let mut mock = MockAgentBackend::new();
+        mock.expect_build_start_command().returning(|folder, _, _| {
+            let target = folder.join("auto-committed.txt");
+            let mut cmd = Command::new("bash");
+            cmd.arg("-c")
+                .arg(format!("echo auto-content > '{}'", target.display()))
+                .current_dir(folder)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        });
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.reply_with_backend(&session_id, "AutoCommit", &mock, "gemini-3-flash-preview");
+
+        // Act — wait for agent to finish and auto-commit
+        wait_for_status(&app.session_state.sessions[0], Status::Review).await;
+
+        // Assert — output should contain commit confirmation
+        let session = &app.session_state.sessions[0];
+        let output = session
+            .output
+            .lock()
+            .expect("failed to lock output")
+            .clone();
+        assert!(
+            output.contains("[Commit] committed with hash"),
+            "expected auto-commit output, got: {output}"
+        );
+        let commit_count = session
+            .commit_count
+            .lock()
+            .expect("failed to lock commit count");
+        assert_eq!(*commit_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Some("main".to_string()),
+            db,
+        )
+        .await;
+
+        // Agent that produces no file changes
+        let mut mock = MockAgentBackend::new();
+        mock.expect_build_start_command().returning(|folder, _, _| {
+            let mut cmd = Command::new("echo");
+            cmd.arg("no-changes")
+                .current_dir(folder)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        });
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.reply_with_backend(&session_id, "NoChanges", &mock, "gemini-3-flash-preview");
+
+        // Act — wait for agent to finish
+        wait_for_status(&app.session_state.sessions[0], Status::Review).await;
+
+        // Assert — no commit output (nothing to commit is silently ignored)
+        let session = &app.session_state.sessions[0];
+        let output = session
+            .output
+            .lock()
+            .expect("failed to lock output")
+            .clone();
+        assert!(
+            !output.contains("[Commit]"),
+            "should not contain commit output when nothing to commit"
+        );
+        assert!(
+            !output.contains("[Commit Error]"),
+            "should not contain commit error when nothing to commit"
+        );
+    }
+
+    #[tokio::test]
     async fn test_capture_raw_output() {
         // Arrange
         let buffer = Arc::new(Mutex::new(String::new()));
@@ -2105,109 +1943,6 @@ WHERE id = 'beta0000'
 
         // Assert
         assert_eq!(app.session_state.sessions.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_commit_session_no_git() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf()).await;
-        add_manual_session(&mut app, dir.path(), "manual01", "Test");
-
-        // Act
-        let result = app.commit_session("manual01").await;
-
-        // Assert
-        assert!(result.is_err());
-        assert!(
-            result
-                .expect_err("should be error")
-                .contains("No git worktree")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_commit_session_invalid_id() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let app = new_test_app(dir.path().to_path_buf()).await;
-
-        // Act
-        let result = app.commit_session("missing").await;
-
-        // Assert
-        assert!(result.is_err());
-        assert!(
-            result
-                .expect_err("should be error")
-                .contains("Session not found")
-        );
-    }
-
-    #[test]
-    fn test_parse_agent_commit_message_reads_title_and_body_markers() {
-        // Arrange
-        let output = "BEGIN_COMMIT_MESSAGE\nTITLE: Update session chat commit flow\nBODY:\n- Ask \
-                      current agent for commit title/body.\n- Keep chat logs \
-                      high-level.\nEND_COMMIT_MESSAGE";
-
-        // Act
-        let message = App::parse_agent_commit_message(output).expect("should parse");
-
-        // Assert
-        assert_eq!(message.title, "Update session chat commit flow");
-        assert_eq!(
-            message.body,
-            "- Ask current agent for commit title/body.\n- Keep chat logs high-level."
-        );
-    }
-
-    #[test]
-    fn test_parse_agent_commit_message_returns_none_when_title_is_empty() {
-        // Arrange
-        let output = "BEGIN_COMMIT_MESSAGE\nTITLE:\nBODY:\n- Item\nEND_COMMIT_MESSAGE";
-
-        // Act
-        let message = App::parse_agent_commit_message(output);
-
-        // Assert
-        assert!(message.is_none());
-    }
-
-    #[test]
-    fn test_parse_agent_commit_message_ignores_noise_outside_block() {
-        // Arrange
-        let output = "Loaded cached credentials.\nBEGIN_COMMIT_MESSAGE\nTITLE: Improve commit \
-                      summary parsing\nBODY:\n- Parse only the commit message block.\n- Ignore \
-                      CLI noise outside markers.\nEND_COMMIT_MESSAGE\nError executing tool \
-                      run_shell_command: Tool not found.";
-
-        // Act
-        let message = App::parse_agent_commit_message(output).expect("should parse");
-
-        // Assert
-        assert_eq!(message.title, "Improve commit summary parsing");
-        assert_eq!(
-            message.body,
-            "- Parse only the commit message block.\n- Ignore CLI noise outside markers."
-        );
-    }
-
-    #[test]
-    fn test_fallback_commit_message_uses_prompt_summary() {
-        // Arrange
-        let prompt = "Implement commit flow updates";
-
-        // Act
-        let message = App::fallback_commit_message(prompt);
-
-        // Assert
-        assert!(message.title.contains("Implement commit flow updates"));
-        assert!(
-            message
-                .body
-                .contains("Commit current session worktree changes")
-        );
     }
 
     #[tokio::test]

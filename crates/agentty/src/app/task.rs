@@ -56,6 +56,7 @@ impl App {
         db: Database,
         id: String,
         agent: AgentKind,
+        commit_count: Arc<Mutex<i64>>,
     ) {
         let mut tokio_cmd = tokio::process::Command::from(cmd);
         // Prevent the child process from inheriting the TUI's terminal on
@@ -96,6 +97,19 @@ impl App {
                     Self::append_session_output(&output, &folder, &db, &id, &parsed.content).await;
 
                     let _ = db.update_session_stats(&id, &parsed.stats).await;
+
+                    // Auto-commit all changes after agent finishes
+                    match Self::commit_changes(&folder, &db, &id, &commit_count).await {
+                        Ok(hash) => {
+                            let message = format!("\n[Commit] committed with hash `{hash}`\n");
+                            Self::append_session_output(&output, &folder, &db, &id, &message).await;
+                        }
+                        Err(error) if error.contains("Nothing to commit") => {}
+                        Err(error) => {
+                            let message = format!("\n[Commit Error] {error}\n");
+                            Self::append_session_output(&output, &folder, &db, &id, &message).await;
+                        }
+                    }
                 }
                 Err(e) => {
                     let message = format!("Failed to spawn process: {e}\n");

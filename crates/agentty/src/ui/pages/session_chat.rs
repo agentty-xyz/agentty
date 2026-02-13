@@ -165,10 +165,7 @@ impl<'a> SessionChatPage<'a> {
 
         if matches!(
             status,
-            Status::InProgress
-                | Status::PullRequest
-                | Status::Committing
-                | Status::CreatingPullRequest
+            Status::InProgress | Status::PullRequest | Status::CreatingPullRequest
         ) {
             while lines.last().is_some_and(|line| line.width() == 0) {
                 lines.pop();
@@ -192,7 +189,6 @@ impl<'a> SessionChatPage<'a> {
             Status::InProgress => "Thinking...",
             Status::CreatingPullRequest => "Creating PR...",
             Status::PullRequest => "Waiting for PR merge...",
-            Status::Committing => "Committing...",
             Status::New | Status::Review | Status::Done | Status::Canceled => "",
         }
     }
@@ -241,10 +237,9 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_message = Paragraph::new(
-            "q: back | enter: reply | d: diff | c: commit | p: pr | m: merge | j/k: scroll",
-        )
-        .style(Style::default().fg(Color::Gray));
+        let help_message =
+            Paragraph::new("q: back | enter: reply | d: diff | p: pr | m: merge | j/k: scroll")
+                .style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, bottom_area);
     }
 }
