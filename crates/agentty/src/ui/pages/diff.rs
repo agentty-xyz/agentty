@@ -6,8 +6,19 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::model::Session;
 use crate::ui::Page;
-use crate::ui::util::{DiffLineKind, max_diff_line_number, parse_diff_lines};
+use crate::ui::util::{DiffLineKind, max_diff_line_number, parse_diff_lines, wrap_diff_content};
 
+const BORDER_HORIZONTAL_WIDTH: u16 = 2;
+const FOOTER_HEIGHT: u16 = 1;
+const GUTTER_EXTRA_WIDTH: usize = 2;
+const LINE_NUMBER_COLUMN_COUNT: usize = 2;
+const LAYOUT_MARGIN: u16 = 1;
+const MIN_GUTTER_WIDTH: usize = 1;
+const SCROLL_X_OFFSET: u16 = 0;
+const SIGN_COLUMN_WIDTH: usize = 1;
+const WRAPPED_CHUNK_START_INDEX: usize = 0;
+
+/// Renders the current session's git diff in a scrollable page.
 pub struct DiffPage<'a> {
     pub diff: String,
     pub scroll_offset: u16,
@@ -15,6 +26,7 @@ pub struct DiffPage<'a> {
 }
 
 impl<'a> DiffPage<'a> {
+    /// Creates a diff page for the given session and scroll position.
     pub fn new(session: &'a Session, diff: String, scroll_offset: u16) -> Self {
         Self {
             diff,
@@ -27,8 +39,8 @@ impl<'a> DiffPage<'a> {
 impl Page for DiffPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(1)])
-            .margin(1)
+            .constraints([Constraint::Min(0), Constraint::Length(FOOTER_HEIGHT)])
+            .margin(LAYOUT_MARGIN)
             .split(area);
 
         let output_area = chunks[0];
@@ -39,10 +51,16 @@ impl Page for DiffPage<'_> {
         let parsed = parse_diff_lines(&self.diff);
         let max_num = max_diff_line_number(&parsed);
         let gutter_width = if max_num == 0 {
-            1
+            MIN_GUTTER_WIDTH
         } else {
-            max_num.ilog10() as usize + 1
+            max_num.ilog10() as usize + MIN_GUTTER_WIDTH
         };
+
+        // gutter: "old│new " = gutter_width * 2 + 2 (separator + trailing space)
+        // sign column: 1 char
+        let prefix_width =
+            gutter_width * LINE_NUMBER_COLUMN_COUNT + GUTTER_EXTRA_WIDTH + SIGN_COLUMN_WIDTH;
+        let inner_width = output_area.width.saturating_sub(BORDER_HORIZONTAL_WIDTH) as usize;
 
         let gutter_style = Style::default().fg(Color::DarkGray);
 
@@ -83,11 +101,24 @@ impl Page for DiffPage<'_> {
                 None => " ".repeat(gutter_width),
             };
 
-            lines.push(Line::from(vec![
-                Span::styled(format!("{old_str}│{new_str} "), gutter_style),
-                Span::styled(sign, content_style),
-                Span::styled(diff_line.content, content_style),
-            ]));
+            let gutter_text = format!("{old_str}│{new_str} ");
+            let content_available = inner_width.saturating_sub(prefix_width);
+            let chunks = wrap_diff_content(diff_line.content, content_available);
+
+            for (idx, chunk) in chunks.iter().enumerate() {
+                if idx == WRAPPED_CHUNK_START_INDEX {
+                    lines.push(Line::from(vec![
+                        Span::styled(gutter_text.clone(), gutter_style),
+                        Span::styled(sign, content_style),
+                        Span::styled(*chunk, content_style),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled(" ".repeat(prefix_width), gutter_style),
+                        Span::styled(*chunk, content_style),
+                    ]));
+                }
+            }
         }
 
         if lines.is_empty() {
@@ -100,7 +131,7 @@ impl Page for DiffPage<'_> {
                     .borders(Borders::ALL)
                     .title(Span::styled(title, Style::default().fg(Color::Yellow))),
             )
-            .scroll((self.scroll_offset, 0));
+            .scroll((self.scroll_offset, SCROLL_X_OFFSET));
 
         f.render_widget(paragraph, output_area);
 

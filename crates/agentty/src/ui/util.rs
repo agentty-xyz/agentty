@@ -369,6 +369,38 @@ pub fn max_diff_line_number(lines: &[DiffLine<'_>]) -> u32 {
         .unwrap_or(0)
 }
 
+/// Split a diff content string into chunks that fit within `max_width`
+/// characters. Returns at least one chunk (empty string if content is empty).
+pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
+    if max_width == 0 {
+        return vec![content];
+    }
+
+    let mut chunks = Vec::new();
+    let mut remaining = content;
+
+    while !remaining.is_empty() {
+        if remaining.len() <= max_width {
+            chunks.push(remaining);
+
+            break;
+        }
+
+        let split_at = remaining
+            .char_indices()
+            .nth(max_width)
+            .map_or(remaining.len(), |(idx, _)| idx);
+        chunks.push(&remaining[..split_at]);
+        remaining = &remaining[split_at..];
+    }
+
+    if chunks.is_empty() {
+        chunks.push("");
+    }
+
+    chunks
+}
+
 /// Formats a token count for display: "500", "1.5k", "1.5M".
 pub fn format_token_count(count: i64) -> String {
     if count >= 1_000_000 {
@@ -802,5 +834,50 @@ index abc..def 100644
 
         // Assert
         assert_eq!(max_num, 0);
+    }
+
+    #[test]
+    fn test_wrap_diff_content_fits() {
+        // Arrange
+        let content = "short line";
+
+        // Act
+        let chunks = wrap_diff_content(content, 80);
+
+        // Assert
+        assert_eq!(chunks, vec!["short line"]);
+    }
+
+    #[test]
+    fn test_wrap_diff_content_wraps() {
+        // Arrange
+        let content = "abcdefghij";
+
+        // Act
+        let chunks = wrap_diff_content(content, 4);
+
+        // Assert
+        assert_eq!(chunks, vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn test_wrap_diff_content_empty() {
+        // Arrange & Act
+        let chunks = wrap_diff_content("", 10);
+
+        // Assert
+        assert_eq!(chunks, vec![""]);
+    }
+
+    #[test]
+    fn test_wrap_diff_content_exact() {
+        // Arrange
+        let content = "abcd";
+
+        // Act
+        let chunks = wrap_diff_content(content, 4);
+
+        // Assert
+        assert_eq!(chunks, vec!["abcd"]);
     }
 }
