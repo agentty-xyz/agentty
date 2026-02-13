@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.7] - 2026-02-12
+
+### Added
+- **UI:** Show session worktree path and branch in the footer bar for better context awareness.
+- **UI:** Display commit count in the session chat title.
+- **Stats:** Add session token usage statistics to the Stats page.
+
+### Changed
+- **Persistence:** Moved application data directory from `/var/tmp/.agentty` to `~/.agentty` for better persistence and standard compliance.
+- **UX:** Renamed "Roadmap" tab to "Stats" to better reflect its content.
+- **UX:** Use shortened 8-character UUIDs for session folders and git branches to reduce clutter.
+- **Internal:** Standardized session ID variable naming across the codebase.
+
 ## [v0.1.6] - 2026-02-10
 
 ### Added
