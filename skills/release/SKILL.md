@@ -24,18 +24,25 @@ This skill guides you through the process of releasing a new version of the proj
     *   Update `CHANGELOG.md`.
     *   Ensure there is an entry for the new version with the current date: `## [vX.Y.Z] - YYYY-MM-DD`.
     *   Ensure content adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+    *   Add a `### Contributors` section under the new release entry with a bullet list of GitHub usernames (example: `- @minev-dev`).
+    *   Build the contributor list from commits since the previous tag and deduplicate names.
 
-5.  **Commit**
+5.  **Contributors**
+    *   Generate the contributor username list from commit emails between tags:
+        `git log <previous_tag>..HEAD --format='%ae' | sed -nE 's/.*\\+([^@]+)@users\\.noreply\\.github\\.com/\\1/p' | sort -u | sed 's/^/- @/'`
+    *   If a contributor does not use a GitHub noreply email, map them manually to their GitHub username.
+
+6.  **Commit**
     *   Stage changes: `git add Cargo.toml Cargo.lock CHANGELOG.md`.
     *   Commit with message: `git commit -m "Release vX.Y.Z"`.
 
-6.  **Tagging**
+7.  **Tagging**
     *   Create a git tag **with the 'v' prefix**: `git tag vX.Y.Z`.
     *   **Important:** The release workflow depends on the `v` prefix (e.g., `v0.1.4`).
 
-7.  **Push**
+8.  **Push**
     *   Push the commit: `git push origin main`.
     *   Push the tag: `git push origin vX.Y.Z`.
 
-8.  **Completion**
+9.  **Completion**
     *   The GitHub Actions workflow will automatically create the release and publish artifacts.

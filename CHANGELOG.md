@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Error Handling:** Session creation errors in list mode are now surfaced instead of being silently ignored.
 - **UI:** Kept the footer visible during onboarding and simplified session list rendering to consistently use the table layout.
 
+### Contributors
+- @minev-dev
+
 ## [v0.1.7] - 2026-02-12
 
 ### Added
@@ -28,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **UX:** Renamed "Roadmap" tab to "Stats" to better reflect its content.
 - **UX:** Use shortened 8-character UUIDs for session folders and git branches to reduce clutter.
 - **Internal:** Standardized session ID variable naming across the codebase.
+
+### Contributors
+- @andagaev
+- @minev-dev
 
 ## [v0.1.6] - 2026-02-10
 
@@ -45,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Tests:** Stabilized merge cleanup testing to avoid environment-dependent blocking during release verification.
 
+### Contributors
+- @andagaev
+- @minev-dev
+
 ## [v0.1.5] - 2026-02-08
 
 ### Added
@@ -60,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linting:** Refined clippy lint configuration, tightening policies and re-enabling pedantic rules.
 - **Skills:** Symlinked the entire skills directory for agents and refactored release skill.
 - **Refactor:** Refactored long handlers to enforce clippy line limits.
+
+### Contributors
+- @minev-dev
 
 ## [v0.1.4] - 2026-02-08
 
@@ -83,6 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed git worktree suffix from initial session prompt.
 - Removed Reply mode; unified into session chat page.
 
+### Contributors
+- @minev-dev
+
 ## [v0.1.3] - 2026-02-08
 
 ### Added
@@ -105,6 +122,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed UI freezing on macOS during agent execution.
 - Clarified git worktree requirements in README.
 
+### Contributors
+- @andagaev
+- @minev-dev
+
 ## [v0.1.2] - 2026-02-08
 
 ### Added
@@ -124,6 +145,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Remove custom Gemini configuration creation.
 
+### Contributors
+- @minev-dev
+
 ## [v0.1.1] - 2026-02-08
 
 ### Added
@@ -139,6 +163,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **UI:** Use tilde for home directory in footer.
 - **Internal:** Reorder struct fields by visibility and name.
 
+### Contributors
+- @andagaev
+- @minev-dev
+
 ## [v0.1.0] - 2026-02-08
 
 - Initial release.
+
+### Contributors
+- @andagaev
+- @dependabot[bot]
+- @minev-dev
