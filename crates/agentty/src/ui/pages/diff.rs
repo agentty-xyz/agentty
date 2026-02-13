@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::model::Session;
 use crate::ui::Page;
-use crate::ui::util::wrap_lines;
+use crate::ui::util::{DiffLineKind, max_diff_line_number, parse_diff_lines};
 
 pub struct DiffPage<'a> {
     pub diff: String,
@@ -36,30 +36,58 @@ impl Page for DiffPage<'_> {
 
         let title = format!(" Diff — {} ", self.session.display_title());
 
-        let inner_width = output_area.width.saturating_sub(2) as usize;
-        let mut lines = Vec::new();
+        let parsed = parse_diff_lines(&self.diff);
+        let max_num = max_diff_line_number(&parsed);
+        let gutter_width = if max_num == 0 {
+            1
+        } else {
+            max_num.ilog10() as usize + 1
+        };
 
-        for line in self.diff.lines() {
-            let style = if line.starts_with('+') && !line.starts_with("+++") {
-                Style::default().fg(Color::Green)
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                Style::default().fg(Color::Red)
-            } else if line.starts_with("@@") {
-                Style::default().fg(Color::Cyan)
-            } else if line.starts_with("diff")
-                || line.starts_with("index")
-                || line.starts_with("---")
-                || line.starts_with("+++")
-            {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Gray)
+        let gutter_style = Style::default().fg(Color::DarkGray);
+
+        let mut lines: Vec<Line<'_>> = Vec::with_capacity(parsed.len());
+
+        for diff_line in &parsed {
+            let (sign, content_style) = match diff_line.kind {
+                DiffLineKind::FileHeader => {
+                    if diff_line.content.starts_with("diff ") && !lines.is_empty() {
+                        lines.push(Line::from(""));
+                    }
+                    lines.push(Line::from(Span::styled(
+                        diff_line.content,
+                        Style::default().fg(Color::Yellow),
+                    )));
+
+                    continue;
+                }
+                DiffLineKind::HunkHeader => {
+                    lines.push(Line::from(Span::styled(
+                        diff_line.content,
+                        Style::default().fg(Color::Cyan),
+                    )));
+
+                    continue;
+                }
+                DiffLineKind::Addition => ("+", Style::default().fg(Color::Green)),
+                DiffLineKind::Deletion => ("-", Style::default().fg(Color::Red)),
+                DiffLineKind::Context => (" ", Style::default().fg(Color::Gray)),
             };
 
-            let wrapped = wrap_lines(line, inner_width);
-            for w in wrapped {
-                lines.push(Line::from(vec![Span::styled(w.to_string(), style)]));
-            }
+            let old_str = match diff_line.old_line {
+                Some(num) => format!("{num:>gutter_width$}"),
+                None => " ".repeat(gutter_width),
+            };
+            let new_str = match diff_line.new_line {
+                Some(num) => format!("{num:>gutter_width$}"),
+                None => " ".repeat(gutter_width),
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("{old_str}│{new_str} "), gutter_style),
+                Span::styled(sign, content_style),
+                Span::styled(diff_line.content, content_style),
+            ]));
         }
 
         if lines.is_empty() {
