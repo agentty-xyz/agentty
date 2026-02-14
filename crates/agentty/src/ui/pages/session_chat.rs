@@ -5,8 +5,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::agent::{AgentKind, AgentSelectionMetadata};
+use crate::file_list;
 use crate::icon::Icon;
-use crate::model::{AppMode, PromptSlashStage, Session, Status};
+use crate::model::{
+    AppMode, PromptAtMentionState, PromptSlashStage, Session, Status, extract_at_mention_query,
+};
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::util::{calculate_input_height, wrap_lines};
 use crate::ui::{Component, Page};
@@ -107,6 +110,45 @@ impl<'a> SessionChatPage<'a> {
         }
     }
 
+    fn build_at_mention_menu(
+        input_text: &str,
+        cursor: usize,
+        at_mention_state: &PromptAtMentionState,
+    ) -> Option<SlashMenu<'static>> {
+        let (_, query) = extract_at_mention_query(input_text, cursor)?;
+        let filtered = file_list::filter_entries(&at_mention_state.all_entries, &query);
+
+        if filtered.is_empty() {
+            return None;
+        }
+
+        let max_visible = 10;
+        let window_start = at_mention_state
+            .selected_index
+            .saturating_sub(max_visible / 2);
+        let window_end = filtered.len().min(window_start + max_visible);
+        let window_start = window_end.saturating_sub(max_visible);
+
+        let options: Vec<SlashMenuOption> = filtered[window_start..window_end]
+            .iter()
+            .map(|entry| SlashMenuOption {
+                description: String::new(),
+                label: entry.path.clone(),
+            })
+            .collect();
+
+        let display_index = at_mention_state
+            .selected_index
+            .min(filtered.len().saturating_sub(1))
+            .saturating_sub(window_start);
+
+        Some(SlashMenu {
+            options,
+            selected_index: display_index,
+            title: "Files (\u{2191}\u{2193} move, Enter select, Esc dismiss)",
+        })
+    }
+
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
         let bottom_height = self.bottom_height(area, session);
         let chunks = Layout::default()
@@ -120,19 +162,29 @@ impl<'a> SessionChatPage<'a> {
 
     fn bottom_height(&self, area: Rect, session: &Session) -> u16 {
         if let AppMode::Prompt {
-            input, slash_state, ..
+            at_mention_state,
+            input,
+            slash_state,
+            ..
         } = self.mode
         {
-            let slash_option_count = Self::build_slash_menu(
-                input.text(),
-                slash_state.stage,
-                slash_state.selected_agent,
-                session,
-            )
-            .map_or(0, |menu| menu.options.len().saturating_add(2));
+            let dropdown_option_count = if input.text().starts_with('/') {
+                Self::build_slash_menu(
+                    input.text(),
+                    slash_state.stage,
+                    slash_state.selected_agent,
+                    session,
+                )
+                .map_or(0, |menu| menu.options.len().saturating_add(2))
+            } else if let Some(at_state) = at_mention_state {
+                Self::build_at_mention_menu(input.text(), input.cursor, at_state)
+                    .map_or(0, |menu| menu.options.len().saturating_add(2))
+            } else {
+                0
+            };
 
             return calculate_input_height(area.width.saturating_sub(2), input.text())
-                .saturating_add(u16::try_from(slash_option_count).unwrap_or(u16::MAX));
+                .saturating_add(u16::try_from(dropdown_option_count).unwrap_or(u16::MAX));
         }
 
         1
@@ -221,7 +273,10 @@ impl<'a> SessionChatPage<'a> {
 
     fn render_bottom_panel(&self, f: &mut Frame, bottom_area: Rect, session: &Session) {
         if let AppMode::Prompt {
-            input, slash_state, ..
+            at_mention_state,
+            input,
+            slash_state,
+            ..
         } = self.mode
         {
             let title = if session.prompt.is_empty() {
@@ -229,26 +284,27 @@ impl<'a> SessionChatPage<'a> {
             } else {
                 " Reply "
             };
-            let slash_menu = Self::build_slash_menu(
-                input.text(),
-                slash_state.stage,
-                slash_state.selected_agent,
-                session,
-            )
-            .map(|mut menu| {
-                let max_index = menu.options.len().saturating_sub(1);
-                menu.selected_index = slash_state.selected_index.min(max_index);
-                menu
-            });
 
-            ChatInput::new(
-                title,
-                input.text(),
-                input.cursor,
-                "Type your message",
-                slash_menu,
-            )
-            .render(f, bottom_area);
+            let menu = if input.text().starts_with('/') {
+                Self::build_slash_menu(
+                    input.text(),
+                    slash_state.stage,
+                    slash_state.selected_agent,
+                    session,
+                )
+                .map(|mut menu| {
+                    let max_index = menu.options.len().saturating_sub(1);
+                    menu.selected_index = slash_state.selected_index.min(max_index);
+                    menu
+                })
+            } else if let Some(at_state) = at_mention_state {
+                Self::build_at_mention_menu(input.text(), input.cursor, at_state)
+            } else {
+                None
+            };
+
+            ChatInput::new(title, input.text(), input.cursor, "Type your message", menu)
+                .render(f, bottom_area);
 
             return;
         }
@@ -275,6 +331,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::file_list::FileEntry;
     use crate::model::SessionStats;
 
     fn session_fixture() -> Session {
@@ -350,5 +407,116 @@ mod tests {
             menu.options[0].description,
             "Latest Codex model for coding quality."
         );
+    }
+
+    fn file_entries_fixture() -> Vec<FileEntry> {
+        vec![
+            FileEntry {
+                path: "Cargo.toml".to_string(),
+            },
+            FileEntry {
+                path: "README.md".to_string(),
+            },
+            FileEntry {
+                path: "src/lib.rs".to_string(),
+            },
+            FileEntry {
+                path: "src/main.rs".to_string(),
+            },
+            FileEntry {
+                path: "tests/integration.rs".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_with_matches() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu =
+            SessionChatPage::build_at_mention_menu("@src", 4, &state).expect("expected menu");
+
+        // Assert
+        assert_eq!(menu.options.len(), 2);
+        assert_eq!(menu.options[0].label, "src/lib.rs");
+        assert_eq!(menu.options[1].label, "src/main.rs");
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_no_matches() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu = SessionChatPage::build_at_mention_menu("@nonexistent", 12, &state);
+
+        // Assert
+        assert!(menu.is_none());
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_empty_query_returns_all() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu = SessionChatPage::build_at_mention_menu("@", 1, &state).expect("expected menu");
+
+        // Assert
+        assert_eq!(menu.options.len(), 5);
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_caps_at_10() {
+        // Arrange
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let state = PromptAtMentionState::new(entries);
+
+        // Act
+        let menu = SessionChatPage::build_at_mention_menu("@", 1, &state).expect("expected menu");
+
+        // Assert
+        assert_eq!(menu.options.len(), 10);
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_clamps_selected_index() {
+        // Arrange
+        let mut state = PromptAtMentionState::new(file_entries_fixture());
+        state.selected_index = 100; // Way beyond bounds
+
+        // Act
+        let menu =
+            SessionChatPage::build_at_mention_menu("@src", 4, &state).expect("expected menu");
+
+        // Assert — should clamp to last visible item
+        assert_eq!(menu.selected_index, 1);
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_scroll_window() {
+        // Arrange
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let mut state = PromptAtMentionState::new(entries);
+        state.selected_index = 15;
+
+        // Act
+        let menu = SessionChatPage::build_at_mention_menu("@", 1, &state).expect("expected menu");
+
+        // Assert — window should be centered around index 15
+        assert_eq!(menu.options.len(), 10);
+        assert_eq!(menu.options[0].label, "file_10.rs");
+        assert_eq!(menu.options[9].label, "file_19.rs");
+        assert_eq!(menu.selected_index, 5); // 15 - 10 = 5
     }
 }

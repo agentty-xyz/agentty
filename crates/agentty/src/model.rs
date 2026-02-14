@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use ratatui::style::Color;
 
 use crate::agent::AgentKind;
+use crate::file_list::FileEntry;
 use crate::icon::Icon;
 
 pub const SESSION_DATA_DIR: &str = ".agentty";
@@ -210,6 +211,23 @@ impl InputState {
         self.cursor = self.text.chars().count();
     }
 
+    /// Extracts the `@query` text at the current cursor position.
+    ///
+    /// Returns `Some((at_char_index, query))` if the cursor sits inside an
+    /// `@query` token where `@` is preceded by whitespace or is at position 0.
+    pub fn at_mention_query(&self) -> Option<(usize, String)> {
+        extract_at_mention_query(&self.text, self.cursor)
+    }
+
+    /// Replaces characters in `[start_char..end_char)` with `replacement`
+    /// and moves the cursor to the end of the inserted text.
+    pub fn replace_range(&mut self, start_char: usize, end_char: usize, replacement: &str) {
+        let start_byte = self.byte_offset_at(start_char);
+        let end_byte = self.byte_offset_at(end_char);
+        self.text.replace_range(start_byte..end_byte, replacement);
+        self.cursor = start_char + replacement.chars().count();
+    }
+
     fn byte_offset(&self) -> usize {
         self.byte_offset_at(self.cursor)
     }
@@ -247,9 +265,64 @@ impl Default for InputState {
     }
 }
 
+/// Extracts an `@query` pattern ending at `cursor` from `text`.
+///
+/// Returns `Some((at_char_index, query_string))` if the cursor sits inside
+/// an `@query` token where `@` is at a word boundary (position 0 or preceded
+/// by whitespace). Returns `None` if no active at-mention is detected.
+pub fn extract_at_mention_query(text: &str, cursor: usize) -> Option<(usize, String)> {
+    if cursor == 0 {
+        return None;
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut scan = cursor;
+
+    while scan > 0 {
+        scan -= 1;
+        let ch = *chars.get(scan)?;
+
+        if ch == '@' {
+            if scan == 0 || chars.get(scan - 1).is_some_and(|ch| ch.is_whitespace()) {
+                let query: String = chars[scan + 1..cursor].iter().collect();
+
+                return Some((scan, query));
+            }
+
+            return None;
+        }
+
+        if ch.is_whitespace() {
+            return None;
+        }
+    }
+
+    None
+}
+
+/// UI state for prompt `@` file mention selection.
+#[derive(Clone, Debug)]
+pub struct PromptAtMentionState {
+    /// Cached list of all files in the session directory.
+    pub all_entries: Vec<FileEntry>,
+    /// Currently selected index in the filtered dropdown.
+    pub selected_index: usize,
+}
+
+impl PromptAtMentionState {
+    /// Creates a new at-mention state with the given file entries.
+    pub fn new(all_entries: Vec<FileEntry>) -> Self {
+        Self {
+            all_entries,
+            selected_index: 0,
+        }
+    }
+}
+
 pub enum AppMode {
     List,
     Prompt {
+        at_mention_state: Option<PromptAtMentionState>,
         slash_state: PromptSlashState,
         session_id: String,
         input: InputState,
@@ -1356,5 +1429,130 @@ mod tests {
         // Arrange & Act & Assert
         assert_eq!(HelpContext::List.title(), "Keybindings");
         assert_eq!(HelpContext::Health.title(), "Keybindings");
+    }
+
+    #[test]
+    fn test_at_mention_query_at_start() {
+        // Arrange
+        let state = InputState::with_text("@foo".to_string());
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, Some((0, "foo".to_string())));
+    }
+
+    #[test]
+    fn test_at_mention_query_after_space() {
+        // Arrange
+        let state = InputState::with_text("hello @bar".to_string());
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, Some((6, "bar".to_string())));
+    }
+
+    #[test]
+    fn test_at_mention_query_empty_query() {
+        // Arrange
+        let state = InputState::with_text("hello @".to_string());
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, Some((6, String::new())));
+    }
+
+    #[test]
+    fn test_at_mention_query_no_at_sign() {
+        // Arrange
+        let state = InputState::with_text("hello".to_string());
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_at_mention_query_email_pattern() {
+        // Arrange
+        let state = InputState::with_text("email@test".to_string());
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_at_mention_query_cursor_before_at() {
+        // Arrange
+        let mut state = InputState::with_text("hello @foo".to_string());
+        state.cursor = 5; // cursor at "hello|"
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_at_mention_query_cursor_at_zero() {
+        // Arrange
+        let mut state = InputState::with_text("@foo".to_string());
+        state.cursor = 0;
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_at_mention_query_with_path() {
+        // Arrange
+        let state = InputState::with_text("look at @src/main.rs".to_string());
+
+        // Act
+        let result = state.at_mention_query();
+
+        // Assert
+        assert_eq!(result, Some((8, "src/main.rs".to_string())));
+    }
+
+    #[test]
+    fn test_replace_range_at_mention() {
+        // Arrange
+        let mut state = InputState::with_text("hello @que world".to_string());
+        state.cursor = 10; // after "que"
+
+        // Act
+        state.replace_range(6, 10, "@src/main.rs ");
+
+        // Assert
+        assert_eq!(state.text(), "hello @src/main.rs  world");
+        assert_eq!(state.cursor, 19); // after "@src/main.rs "
+    }
+
+    #[test]
+    fn test_replace_range_updates_cursor() {
+        // Arrange
+        let mut state = InputState::with_text("@ab".to_string());
+
+        // Act
+        state.replace_range(0, 3, "@src/lib.rs ");
+
+        // Assert
+        assert_eq!(state.text(), "@src/lib.rs ");
+        assert_eq!(state.cursor, 12);
     }
 }

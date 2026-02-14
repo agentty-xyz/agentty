@@ -4,11 +4,13 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 
 use crate::agent::AgentKind;
 use crate::app::App;
-use crate::model::{AppMode, PromptSlashStage};
+use crate::file_list;
+use crate::model::{AppMode, InputState, PromptAtMentionState, PromptSlashStage};
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::util::{move_input_cursor_down, move_input_cursor_up};
 
 struct PromptContext {
+    is_at_mention: bool,
     is_new_session: bool,
     is_slash_command: bool,
     scroll_offset: Option<u16>,
@@ -30,6 +32,21 @@ pub(crate) async fn handle(
     }
 
     match key.code {
+        KeyCode::Esc if prompt_context.is_at_mention => {
+            dismiss_at_mention(app);
+        }
+        KeyCode::Enter if prompt_context.is_at_mention && !should_insert_newline(key) => {
+            handle_at_mention_select(app);
+        }
+        KeyCode::Tab if prompt_context.is_at_mention => {
+            handle_at_mention_select(app);
+        }
+        KeyCode::Up if prompt_context.is_at_mention => {
+            handle_at_mention_up(app);
+        }
+        KeyCode::Down if prompt_context.is_at_mention => {
+            handle_at_mention_down(app);
+        }
         KeyCode::Enter if should_insert_newline(key) => {
             if let AppMode::Prompt { input, .. } = &mut app.mode {
                 input.insert_newline();
@@ -74,31 +91,13 @@ pub(crate) async fn handle(
             }
         }
         KeyCode::Backspace => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.delete_backward();
-                slash_state.reset();
-            }
+            handle_prompt_backspace(app);
         }
         KeyCode::Delete => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.delete_forward();
-                slash_state.reset();
-            }
+            handle_prompt_delete(app);
         }
         KeyCode::Char(character) => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.insert_char(character);
-                slash_state.reset();
-            }
+            handle_prompt_char(app, character, &prompt_context).await;
         }
         _ => {}
     }
@@ -107,13 +106,15 @@ pub(crate) async fn handle(
 }
 
 fn prompt_context(app: &mut App) -> Option<PromptContext> {
-    let (is_slash_command, scroll_offset, session_id) = match &app.mode {
+    let (is_at_mention, is_slash_command, scroll_offset, session_id) = match &app.mode {
         AppMode::Prompt {
+            at_mention_state,
             input,
             scroll_offset,
             session_id,
             ..
         } => (
+            is_active_at_mention(at_mention_state.as_ref(), input),
             input.text().starts_with('/'),
             *scroll_offset,
             session_id.clone(),
@@ -134,12 +135,20 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
         .is_some_and(|session| session.prompt.is_empty());
 
     Some(PromptContext {
+        is_at_mention,
         is_new_session,
         is_slash_command,
         scroll_offset,
         session_id,
         session_index,
     })
+}
+
+fn is_active_at_mention(
+    at_mention_state: Option<&PromptAtMentionState>,
+    input: &InputState,
+) -> bool {
+    at_mention_state.is_some() && input.at_mention_query().is_some()
 }
 
 fn reset_prompt_slash_state(app: &mut App) {
@@ -384,9 +393,253 @@ fn prompt_input_width(terminal: &TuiTerminal) -> io::Result<u16> {
     Ok(terminal_width.saturating_sub(2))
 }
 
+fn handle_prompt_backspace(app: &mut App) {
+    if let AppMode::Prompt {
+        input,
+        slash_state,
+        at_mention_state,
+        ..
+    } = &mut app.mode
+    {
+        input.delete_backward();
+        slash_state.reset();
+        if at_mention_state.is_some() && input.at_mention_query().is_none() {
+            *at_mention_state = None;
+        }
+    }
+}
+
+fn handle_prompt_delete(app: &mut App) {
+    if let AppMode::Prompt {
+        input,
+        slash_state,
+        at_mention_state,
+        ..
+    } = &mut app.mode
+    {
+        input.delete_forward();
+        slash_state.reset();
+        if at_mention_state.is_some() && input.at_mention_query().is_none() {
+            *at_mention_state = None;
+        }
+    }
+}
+
+async fn handle_prompt_char(app: &mut App, character: char, prompt_context: &PromptContext) {
+    let mut should_activate = false;
+
+    if let AppMode::Prompt {
+        input,
+        slash_state,
+        at_mention_state,
+        ..
+    } = &mut app.mode
+    {
+        input.insert_char(character);
+        slash_state.reset();
+
+        if character == ' ' || input.at_mention_query().is_none() {
+            *at_mention_state = None;
+        } else if character == '@' && at_mention_state.is_none() {
+            should_activate = true;
+        } else if let Some(state) = at_mention_state.as_mut() {
+            state.selected_index = 0;
+        }
+    }
+
+    if should_activate && !prompt_context.is_slash_command {
+        activate_at_mention(app, prompt_context).await;
+    }
+}
+
+/// Populates the at-mention file list from the session's worktree folder.
+async fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
+    let session_folder = app
+        .session_state
+        .sessions
+        .get(prompt_context.session_index)
+        .map_or_else(
+            || app.working_dir().clone(),
+            |session| session.folder.clone(),
+        );
+
+    let entries = tokio::task::spawn_blocking(move || file_list::list_files(&session_folder))
+        .await
+        .unwrap_or_default();
+
+    if let AppMode::Prompt {
+        at_mention_state, ..
+    } = &mut app.mode
+    {
+        *at_mention_state = Some(PromptAtMentionState::new(entries));
+    }
+}
+
+/// Clears the at-mention state.
+fn dismiss_at_mention(app: &mut App) {
+    if let AppMode::Prompt {
+        at_mention_state, ..
+    } = &mut app.mode
+    {
+        *at_mention_state = None;
+    }
+}
+
+/// Moves the at-mention selection up.
+fn handle_at_mention_up(app: &mut App) {
+    if let AppMode::Prompt {
+        at_mention_state: Some(state),
+        ..
+    } = &mut app.mode
+    {
+        state.selected_index = state.selected_index.saturating_sub(1);
+    }
+}
+
+/// Moves the at-mention selection down.
+fn handle_at_mention_down(app: &mut App) {
+    let filtered_count = match &app.mode {
+        AppMode::Prompt {
+            at_mention_state: Some(state),
+            input,
+            ..
+        } => {
+            let query = input
+                .at_mention_query()
+                .map_or(String::new(), |(_, query)| query);
+
+            file_list::filter_entries(&state.all_entries, &query).len()
+        }
+        _ => return,
+    };
+
+    if let AppMode::Prompt {
+        at_mention_state: Some(state),
+        ..
+    } = &mut app.mode
+    {
+        let max_index = filtered_count.saturating_sub(1);
+        state.selected_index = (state.selected_index + 1).min(max_index);
+    }
+}
+
+/// Selects the currently highlighted file and inserts it into the input.
+fn handle_at_mention_select(app: &mut App) {
+    let mut should_dismiss = false;
+    let replacement = match &app.mode {
+        AppMode::Prompt {
+            at_mention_state: Some(state),
+            input,
+            ..
+        } => {
+            if let Some((at_start, query)) = input.at_mention_query() {
+                let filtered = file_list::filter_entries(&state.all_entries, &query);
+                let clamped_index = state.selected_index.min(filtered.len().saturating_sub(1));
+
+                filtered
+                    .get(clamped_index)
+                    .map(|entry| (at_start, input.cursor, format!("@{} ", entry.path)))
+            } else {
+                should_dismiss = true;
+
+                None
+            }
+        }
+        _ => return,
+    };
+
+    if should_dismiss {
+        dismiss_at_mention(app);
+
+        return;
+    }
+
+    if let Some((at_start, cursor, text)) = replacement
+        && let AppMode::Prompt { input, .. } = &mut app.mode
+    {
+        input.replace_range(at_start, cursor, &text);
+    }
+
+    dismiss_at_mention(app);
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::process::Command;
+
+    use tempfile::tempdir;
+
     use super::*;
+    use crate::db::Database;
+    use crate::model::PromptAtMentionState;
+
+    fn setup_test_git_repo(path: &Path) {
+        Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("git init failed");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .expect("git config failed");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .expect("git config failed");
+        std::fs::write(path.join("README.md"), "test").expect("write failed");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .expect("git add failed");
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(path)
+            .output()
+            .expect("git commit failed");
+        Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(path)
+            .output()
+            .expect("git branch failed");
+    }
+
+    async fn new_test_prompt_app(
+        input_text: &str,
+        at_mention_state: Option<PromptAtMentionState>,
+    ) -> (App, tempfile::TempDir) {
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        setup_test_git_repo(base_dir.path());
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let mut app = App::new(
+            base_path.clone(),
+            base_path,
+            Some("main".to_string()),
+            database,
+        )
+        .await;
+
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.mode = AppMode::Prompt {
+            at_mention_state,
+            slash_state: crate::model::PromptSlashState::new(),
+            session_id,
+            input: InputState::with_text(input_text.to_string()),
+            scroll_offset: None,
+        };
+
+        (app, base_dir)
+    }
     #[test]
     fn test_should_insert_newline_for_alt_enter() {
         // Arrange
@@ -617,5 +870,101 @@ mod tests {
 
         // Assert
         assert_eq!(count, AgentKind::Claude.models().len());
+    }
+
+    #[test]
+    fn test_is_active_at_mention_true_for_valid_query() {
+        // Arrange
+        let at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
+        let input = InputState::with_text("@read".to_string());
+
+        // Act
+        let result = is_active_at_mention(at_mention_state.as_ref(), &input);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_active_at_mention_false_for_email_pattern() {
+        // Arrange
+        let at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
+        let input = InputState::with_text("email@test".to_string());
+
+        // Act
+        let result = is_active_at_mention(at_mention_state.as_ref(), &input);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_is_active_at_mention_false_without_state() {
+        // Arrange
+        let at_mention_state = None;
+        let input = InputState::with_text("@read".to_string());
+
+        // Act
+        let result = is_active_at_mention(at_mention_state.as_ref(), &input);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_prompt_context_marks_email_pattern_as_inactive_mention() {
+        // Arrange
+        let state = PromptAtMentionState::new(Vec::new());
+        let (mut app, _base_dir) = new_test_prompt_app("email@test", Some(state)).await;
+
+        // Act
+        let context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Assert
+        assert!(!context.is_at_mention);
+    }
+
+    #[tokio::test]
+    async fn test_handle_at_mention_select_dismisses_stale_mention_state() {
+        // Arrange
+        let state = PromptAtMentionState::new(vec![file_list::FileEntry {
+            path: "src/main.rs".to_string(),
+        }]);
+        let (mut app, _base_dir) = new_test_prompt_app("email@test", Some(state)).await;
+
+        // Act
+        handle_at_mention_select(&mut app);
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        if let AppMode::Prompt {
+            at_mention_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert!(at_mention_state.is_none());
+            assert_eq!(input.text(), "email@test");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_char_activates_and_clears_at_mention_state() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_char(&mut app, '@', &prompt_context).await;
+        handle_prompt_char(&mut app, ' ', &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        if let AppMode::Prompt {
+            at_mention_state, ..
+        } = &app.mode
+        {
+            assert!(at_mention_state.is_none());
+        }
     }
 }

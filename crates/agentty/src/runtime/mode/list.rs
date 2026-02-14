@@ -24,6 +24,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             let session_id = app.create_session().await.map_err(io::Error::other)?;
 
             app.mode = AppMode::Prompt {
+                at_mention_state: None,
                 slash_state: PromptSlashState::new(),
                 session_id,
                 input: InputState::new(),
@@ -41,6 +42,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 let session_id = app.create_session().await.map_err(io::Error::other)?;
 
                 app.mode = AppMode::Prompt {
+                    at_mention_state: None,
                     slash_state: PromptSlashState::new(),
                     session_id,
                     input: InputState::new(),

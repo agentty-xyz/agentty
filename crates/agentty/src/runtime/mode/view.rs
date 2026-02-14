@@ -38,6 +38,7 @@ pub(crate) async fn handle(
         }
         KeyCode::Enter => {
             app.mode = AppMode::Prompt {
+                at_mention_state: None,
                 slash_state: PromptSlashState::new(),
                 session_id: view_context.session_id.clone(),
                 input: InputState::new(),

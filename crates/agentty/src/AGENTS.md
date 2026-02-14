@@ -20,6 +20,7 @@
 - [ui/](ui/) - User Interface module.
 - [agent.rs](agent.rs) - `AgentBackend` trait and concrete backends (`GeminiBackend`, `ClaudeBackend`).
 - [db.rs](db.rs) - `Database` struct wrapping SQLx for session metadata persistence.
+- [file_list.rs](file_list.rs) - Gitignore-aware file listing for `@` mention dropdown.
 - [gh.rs](gh.rs) - GitHub CLI integration and PR response parsing.
 - [git.rs](git.rs) - Git integration and worktree management.
 - [health.rs](health.rs) - Health check domain logic.
