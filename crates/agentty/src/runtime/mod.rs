@@ -1,8 +1,9 @@
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use tachyonfx::EffectManager;
 use tokio::sync::mpsc;
 
 use crate::app::App;
@@ -49,8 +50,15 @@ async fn run_main_loop(
     event_rx: &mut mpsc::UnboundedReceiver<crossterm::event::Event>,
     tick: &mut tokio::time::Interval,
 ) -> io::Result<()> {
+    let mut effect_manager: EffectManager<&'static str> = EffectManager::default();
+    let mut last_frame = Instant::now();
+
     loop {
-        render_frame(app, terminal)?;
+        let now = Instant::now();
+        let frame_delta = now.duration_since(last_frame);
+        last_frame = now;
+
+        render_frame(app, terminal, &mut effect_manager, frame_delta)?;
 
         if matches!(
             event::process_events(app, terminal, event_rx, tick).await?,
@@ -63,7 +71,12 @@ async fn run_main_loop(
     Ok(())
 }
 
-fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
+fn render_frame(
+    app: &mut App,
+    terminal: &mut TuiTerminal,
+    effect_manager: &mut EffectManager<&'static str>,
+    frame_delta: Duration,
+) -> io::Result<()> {
     let current_tab = app.current_tab;
     let current_working_dir = app.working_dir().clone();
     let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
@@ -77,6 +90,8 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
             ui::RenderContext {
                 active_project_id: current_active_project_id,
                 current_tab,
+                effect_manager,
+                frame_delta,
                 git_branch: current_git_branch.as_deref(),
                 git_status: current_git_status,
                 health_checks: &health_checks,

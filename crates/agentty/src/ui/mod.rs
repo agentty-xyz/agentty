@@ -4,10 +4,12 @@ pub mod util;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
+use tachyonfx::EffectManager;
 
 use crate::app::session::session_branch;
 use crate::health::HealthEntry;
@@ -23,10 +25,12 @@ pub trait Component {
     fn render(&self, f: &mut Frame, area: Rect);
 }
 
-/// Immutable data required to draw a single UI frame.
+/// Mutable and immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
     pub active_project_id: i64,
     pub current_tab: Tab,
+    pub effect_manager: &'a mut EffectManager<&'static str>,
+    pub frame_delta: Duration,
     pub git_branch: Option<&'a str>,
     pub git_status: Option<(u32, u32)>,
     pub health_checks: &'a Arc<Mutex<Vec<HealthEntry>>>,
@@ -91,6 +95,8 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
         current_tab,
+        effect_manager,
+        frame_delta,
         health_checks,
         mode,
         projects,
@@ -121,6 +127,8 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
                     session_index,
                     *scroll_offset,
                     mode,
+                    effect_manager,
+                    frame_delta,
                 )
                 .render(f, area);
             }

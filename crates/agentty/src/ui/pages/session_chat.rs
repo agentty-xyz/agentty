@@ -1,17 +1,23 @@
+use std::time::Duration;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
+use tachyonfx::EffectManager;
 
 use crate::agent::AgentKind;
 use crate::icon::Icon;
 use crate::model::{AppMode, PromptSlashStage, Session, Status};
 use crate::ui::components::chat_input::{ChatInput, SlashMenu};
-use crate::ui::util::{calculate_input_height, wrap_lines};
+use crate::ui::components::eye::Eye;
+use crate::ui::util::{calculate_input_height, compute_input_layout, wrap_lines};
 use crate::ui::{Component, Page};
 
 pub struct SessionChatPage<'a> {
+    pub effect_manager: &'a mut EffectManager<&'static str>,
+    pub frame_delta: Duration,
     pub mode: &'a AppMode,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
@@ -24,8 +30,12 @@ impl<'a> SessionChatPage<'a> {
         session_index: usize,
         scroll_offset: Option<u16>,
         mode: &'a AppMode,
+        effect_manager: &'a mut EffectManager<&'static str>,
+        frame_delta: Duration,
     ) -> Self {
         Self {
+            effect_manager,
+            frame_delta,
             mode,
             scroll_offset,
             session_index,
@@ -89,7 +99,7 @@ impl<'a> SessionChatPage<'a> {
         })
     }
 
-    fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
+    fn render_session(&mut self, f: &mut Frame, area: Rect, session: &Session) {
         let bottom_height = self.bottom_height(area, session);
         let chunks = Layout::default()
             .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
@@ -122,7 +132,7 @@ impl<'a> SessionChatPage<'a> {
         1
     }
 
-    fn render_output_panel(&self, f: &mut Frame, output_area: Rect, session: &Session) {
+    fn render_output_panel(&mut self, f: &mut Frame, output_area: Rect, session: &Session) {
         let status = session.status();
         let commit_count = session.commit_count();
         let commits_label = if commit_count == 1 {
@@ -149,6 +159,54 @@ impl<'a> SessionChatPage<'a> {
             .scroll((final_scroll, 0));
 
         f.render_widget(paragraph, output_area);
+
+        if Self::should_show_eye(session, status) {
+            let inner_area = output_area.inner(ratatui::layout::Margin::new(1, 1));
+            let pupil_offset = self.pupil_offset(output_area.width);
+            Eye::new(pupil_offset).render(f, inner_area);
+
+            self.effect_manager.process_effects(
+                self.frame_delta.into(),
+                f.buffer_mut(),
+                inner_area,
+            );
+        }
+    }
+
+    /// Returns `true` when the eye should be rendered in the output panel.
+    fn should_show_eye(session: &Session, status: Status) -> bool {
+        status == Status::New
+            && session
+                .output
+                .lock()
+                .map_or(true, |buffer| buffer.is_empty())
+    }
+
+    /// Computes pupil offset `[-1.0, 1.0]` from the cursor's visual X
+    /// position within the panel.
+    fn pupil_offset(&self, panel_width: u16) -> f64 {
+        if let AppMode::Prompt { input, .. } = self.mode {
+            let inner_width = panel_width.saturating_sub(2);
+            if inner_width == 0 {
+                return 0.0;
+            }
+
+            let visual_cursor_x = if input.text().is_empty() {
+                // Empty input: cursor sits right after the " › " prefix.
+                3
+            } else {
+                let (_lines, cursor_x, _cursor_y) =
+                    compute_input_layout(input.text(), panel_width, input.cursor);
+                cursor_x
+            };
+
+            // Map visual X [0, inner_width] to [-1.0, 1.0].
+            let ratio = f64::from(visual_cursor_x) / f64::from(inner_width);
+
+            return ratio * 2.0 - 1.0;
+        }
+
+        0.0
     }
 
     fn output_lines(session: &Session, output_area: Rect, status: Status) -> Vec<Line<'static>> {
