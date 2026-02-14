@@ -98,9 +98,6 @@ mod tests {
         let result = acquire_lock(&lock_path);
 
         // Assert
-        match result {
-            Err(LockError::AlreadyRunning { .. }) => (),
-            _ => panic!("Expected AlreadyRunning error"),
-        }
+        assert!(matches!(result, Err(LockError::AlreadyRunning { .. })));
     }
 }

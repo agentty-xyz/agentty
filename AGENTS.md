@@ -207,6 +207,7 @@ git worktree prune
 - [.gitignore](.gitignore) - Git ignore patterns.
 - [.pre-commit-config.yaml](.pre-commit-config.yaml) - Pre-commit hooks configuration.
 - [.rustfmt.toml](.rustfmt.toml) - Rustfmt configuration.
+- [clippy.toml](clippy.toml) - Clippy lint configuration.
 - [crates/](crates/) - Workspace member crates.
 - [docs/](docs/) - Documentation and assets.
 - [AGENTS.md](AGENTS.md) - Context and instructions for AI agents.

@@ -937,7 +937,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        panic!("session did not reach status {expected}");
+        assert_eq!(session.status(), expected);
     }
 
     #[tokio::test]
@@ -1540,9 +1540,9 @@ WHERE id = 'beta0000'
 
         // Assert
         assert_eq!(app.session_state.sessions[0].id, "alpha000");
-        match app.mode {
-            AppMode::View { session_id, .. } => assert_eq!(session_id, selected_session_id),
-            _ => panic!("expected view mode"),
+        assert!(matches!(app.mode, AppMode::View { .. }));
+        if let AppMode::View { session_id, .. } = app.mode {
+            assert_eq!(session_id, selected_session_id);
         }
     }
 
