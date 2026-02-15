@@ -200,9 +200,8 @@ impl<'a> SessionChatPage<'a> {
             "commits"
         };
         let title = format!(
-            " {} — {status} - {commit_count} {commits_label} [{}:{}] ",
+            " {} — {status} - {commit_count} {commits_label} [{}] ",
             session.display_title(),
-            session.agent,
             session.model
         );
         let lines = Self::output_lines(session, output_area, status);
