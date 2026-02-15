@@ -76,7 +76,7 @@ pub fn filter_entries<'a>(entries: &'a [FileEntry], query: &str) -> Vec<&'a File
     let query_chars: Vec<char> = query.to_lowercase().chars().collect();
     let mut scored: Vec<(&FileEntry, i32)> = entries
         .iter()
-        .filter_map(|entry| fuzzy_score(&entry.path, &query_chars).map(|score| (entry, score)))
+        .filter_map(|entry| fuzzy_score_for_entry(entry, &query_chars).map(|score| (entry, score)))
         .collect();
 
     scored.sort_by(|first, second| {
@@ -90,6 +90,14 @@ pub fn filter_entries<'a>(entries: &'a [FileEntry], query: &str) -> Vec<&'a File
     prioritize_directories_for_trailing_slash(&mut filtered, query);
 
     filtered
+}
+
+fn fuzzy_score_for_entry(entry: &FileEntry, query_chars: &[char]) -> Option<i32> {
+    if entry.is_dir {
+        return fuzzy_score(&format!("{}/", entry.path), query_chars);
+    }
+
+    fuzzy_score(&entry.path, query_chars)
 }
 
 fn prioritize_directories_for_trailing_slash(entries: &mut Vec<&FileEntry>, query: &str) {
@@ -540,6 +548,31 @@ mod tests {
         assert_eq!(filtered[0].path, "src/zzz");
         assert!(filtered[0].is_dir);
         assert_eq!(filtered[1].path, "src/aaa.rs");
+        assert!(!filtered[1].is_dir);
+    }
+
+    #[test]
+    fn test_filter_entries_trailing_slash_matches_exact_directory() {
+        // Arrange
+        let entries = vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+        ];
+
+        // Act
+        let filtered = filter_entries(&entries, "src/");
+
+        // Assert
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].path, "src");
+        assert!(filtered[0].is_dir);
+        assert_eq!(filtered[1].path, "src/main.rs");
         assert!(!filtered[1].is_dir);
     }
 

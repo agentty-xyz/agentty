@@ -482,6 +482,22 @@ mod tests {
     }
 
     #[test]
+    fn test_build_at_mention_menu_with_trailing_slash_includes_exact_directory() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu =
+            SessionChatPage::build_at_mention_menu("@src/", 5, &state).expect("expected menu");
+
+        // Assert
+        assert_eq!(menu.options[0].label, "src/");
+        assert_eq!(menu.options[0].description, "folder");
+        assert_eq!(menu.options[1].label, "src/lib.rs");
+        assert_eq!(menu.options[2].label, "src/main.rs");
+    }
+
+    #[test]
     fn test_build_at_mention_menu_no_matches() {
         // Arrange
         let state = PromptAtMentionState::new(file_entries_fixture());
