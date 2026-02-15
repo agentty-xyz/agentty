@@ -21,6 +21,50 @@ pub enum Tab {
     Stats,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PermissionMode {
+    #[default]
+    AutoEdit,
+    Autonomous,
+}
+
+impl PermissionMode {
+    /// Returns the wire label used for persistence and display.
+    pub fn label(self) -> &'static str {
+        match self {
+            PermissionMode::AutoEdit => "auto_edit",
+            PermissionMode::Autonomous => "autonomous",
+        }
+    }
+
+    /// Toggles to the opposite permission mode.
+    #[must_use]
+    pub fn toggle(self) -> Self {
+        match self {
+            PermissionMode::AutoEdit => PermissionMode::Autonomous,
+            PermissionMode::Autonomous => PermissionMode::AutoEdit,
+        }
+    }
+}
+
+impl std::fmt::Display for PermissionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+impl std::str::FromStr for PermissionMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto_edit" => Ok(PermissionMode::AutoEdit),
+            "autonomous" => Ok(PermissionMode::Autonomous),
+            _ => Err(format!("Unknown permission mode: {s}")),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     New,
@@ -396,6 +440,7 @@ impl HelpContext {
                 ("p", "Create PR"),
                 ("m", "Merge"),
                 ("r", "Rebase"),
+                ("S-Tab", "Toggle permission mode"),
                 ("g", "Scroll to top"),
                 ("G", "Scroll to bottom"),
                 ("Ctrl+d", "Half page down"),
@@ -532,6 +577,7 @@ pub struct Session {
     pub id: String,
     pub model: String,
     pub output: Arc<Mutex<String>>,
+    pub permission_mode: PermissionMode,
     pub project_name: String,
     pub prompt: String,
     pub stats: SessionStats,
@@ -656,6 +702,7 @@ mod tests {
             id: "abc123".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: String::new(),
             stats: SessionStats::default(),
@@ -678,6 +725,7 @@ mod tests {
             id: "abc123".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: String::new(),
             stats: SessionStats::default(),
@@ -700,6 +748,7 @@ mod tests {
             id: "test".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: "prompt".to_string(),
             stats: SessionStats::default(),
@@ -739,6 +788,7 @@ mod tests {
             id: "test".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: "prompt".to_string(),
             stats: SessionStats::default(),
@@ -1597,5 +1647,81 @@ mod tests {
         // Assert
         assert_eq!(state.text(), "@src/lib.rs ");
         assert_eq!(state.cursor, 12);
+    }
+
+    #[test]
+    fn test_permission_mode_default() {
+        // Arrange & Act
+        let mode = PermissionMode::default();
+
+        // Assert
+        assert_eq!(mode, PermissionMode::AutoEdit);
+    }
+
+    #[test]
+    fn test_permission_mode_label() {
+        // Arrange & Act & Assert
+        assert_eq!(PermissionMode::AutoEdit.label(), "auto_edit");
+        assert_eq!(PermissionMode::Autonomous.label(), "autonomous");
+    }
+
+    #[test]
+    fn test_permission_mode_toggle() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            PermissionMode::AutoEdit.toggle(),
+            PermissionMode::Autonomous
+        );
+        assert_eq!(
+            PermissionMode::Autonomous.toggle(),
+            PermissionMode::AutoEdit
+        );
+    }
+
+    #[test]
+    fn test_permission_mode_display() {
+        // Arrange & Act & Assert
+        assert_eq!(PermissionMode::AutoEdit.to_string(), "auto_edit");
+        assert_eq!(PermissionMode::Autonomous.to_string(), "autonomous");
+    }
+
+    #[test]
+    fn test_permission_mode_from_str() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            "auto_edit".parse::<PermissionMode>().expect("parse"),
+            PermissionMode::AutoEdit
+        );
+        assert_eq!(
+            "autonomous".parse::<PermissionMode>().expect("parse"),
+            PermissionMode::Autonomous
+        );
+        assert!("unknown".parse::<PermissionMode>().is_err());
+    }
+
+    #[test]
+    fn test_permission_mode_roundtrip() {
+        // Arrange & Act & Assert
+        for mode in [PermissionMode::AutoEdit, PermissionMode::Autonomous] {
+            let label = mode.to_string();
+            let parsed: PermissionMode = label.parse().expect("roundtrip parse");
+            assert_eq!(parsed, mode);
+        }
+    }
+
+    #[test]
+    fn test_help_context_view_keybindings_include_shift_tab() {
+        // Arrange
+        let context = HelpContext::View {
+            is_done: false,
+            session_id: "s1".to_string(),
+            scroll_offset: None,
+        };
+
+        // Act
+        let bindings = context.keybindings();
+
+        // Assert
+        assert!(bindings.iter().any(|(key, _)| *key == "S-Tab"));
     }
 }

@@ -14,7 +14,9 @@ use crate::app::App;
 use crate::app::worker::SessionCommand;
 use crate::db::Database;
 use crate::git;
-use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, SessionStats, Status};
+use crate::model::{
+    AppMode, PermissionMode, Project, SESSION_DATA_DIR, Session, SessionStats, Status,
+};
 
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
@@ -236,7 +238,16 @@ impl App {
         let session_index = self
             .session_index_for_id(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
-        let (folder, output, persisted_session_id, session_agent, session_model, status, title) = {
+        let (
+            folder,
+            output,
+            permission_mode,
+            persisted_session_id,
+            session_agent,
+            session_model,
+            status,
+            title,
+        ) = {
             let session = self
                 .session_state
                 .sessions
@@ -252,6 +263,7 @@ impl App {
             (
                 session.folder.clone(),
                 Arc::clone(&session.output),
+                session.permission_mode,
                 session.id.clone(),
                 session_agent,
                 session_model,
@@ -286,6 +298,7 @@ impl App {
             &folder,
             &prompt,
             session_model.as_str(),
+            permission_mode,
         );
         let operation_id = Uuid::new_v4().to_string();
         self.enqueue_session_command(
@@ -347,6 +360,30 @@ impl App {
         let id = session_id.to_string();
         tokio::spawn(async move {
             let _ = db.update_session_agent_and_model(&id, &agent, &model).await;
+        });
+
+        Ok(())
+    }
+
+    /// Toggles the permission mode for a session and persists the change.
+    ///
+    /// # Errors
+    /// Returns an error if the session is not found.
+    pub fn toggle_session_permission_mode(&mut self, session_id: &str) -> Result<(), String> {
+        let Some(session_index) = self.session_index_for_id(session_id) else {
+            return Err("Session not found".to_string());
+        };
+        let Some(session) = self.session_state.sessions.get_mut(session_index) else {
+            return Err("Session not found".to_string());
+        };
+
+        session.permission_mode = session.permission_mode.toggle();
+        let mode_label = session.permission_mode.label().to_string();
+
+        let db = self.db.clone();
+        let id = session_id.to_string();
+        tokio::spawn(async move {
+            let _ = db.update_session_permission_mode(&id, &mode_label).await;
         });
 
         Ok(())
@@ -628,7 +665,7 @@ impl App {
     ) -> Result<String, String> {
         let backend = agent.create_backend();
         let output = backend
-            .build_start_command(folder, prompt, model)
+            .build_start_command(folder, prompt, model, PermissionMode::AutoEdit)
             .output()
             .map_err(|error| format!("Failed to run merge commit message model: {error}"))?;
 
@@ -767,6 +804,11 @@ impl App {
         let Some(session_index) = self.session_index_for_id(session_id) else {
             return;
         };
+        let permission_mode = self
+            .session_state
+            .sessions
+            .get(session_index)
+            .map_or(PermissionMode::default(), |session| session.permission_mode);
         let (agent, folder, is_first_message, output, persisted_session_id, status, title_to_save) = {
             let Some(session) = self.session_state.sessions.get_mut(session_index) else {
                 return;
@@ -821,6 +863,9 @@ impl App {
                 .db
                 .update_session_prompt(&persisted_session_id, prompt)
                 .await;
+            let _ =
+                Self::update_status(&status, &self.db, &persisted_session_id, Status::InProgress)
+                    .await;
         }
 
         let reply_line = format!("\n › {prompt}\n\n");
@@ -833,28 +878,17 @@ impl App {
         )
         .await;
 
-        if is_first_message {
-            let _ =
-                Self::update_status(&status, &self.db, &persisted_session_id, Status::InProgress)
-                    .await;
-        }
-
-        let cmd = if is_first_message {
-            backend.build_start_command(&folder, prompt, model)
-        } else {
-            backend.build_resume_command(&folder, prompt, model)
-        };
         let operation_id = Uuid::new_v4().to_string();
         let command = if is_first_message {
             SessionCommand::StartPrompt {
                 agent,
-                command: cmd,
+                command: backend.build_start_command(&folder, prompt, model, permission_mode),
                 operation_id,
             }
         } else {
             SessionCommand::Reply {
                 agent,
-                command: cmd,
+                command: backend.build_resume_command(&folder, prompt, model, permission_mode),
                 operation_id,
             }
         };
@@ -862,12 +896,13 @@ impl App {
             .enqueue_session_command(&persisted_session_id, command)
             .await
         {
+            let error_line = format!("\n[Reply Error] {error}\n");
             Self::append_session_output(
                 &output,
                 &folder,
                 &self.db,
                 &persisted_session_id,
-                &format!("\n[Reply Error] {error}\n"),
+                &error_line,
             )
             .await;
         }
@@ -1065,6 +1100,7 @@ impl App {
                     id: row.id,
                     model: session_model,
                     output,
+                    permission_mode: row.permission_mode.parse().unwrap_or_default(),
                     project_name,
                     prompt: row.prompt,
                     stats: SessionStats {
@@ -1096,14 +1132,15 @@ mod tests {
 
     fn create_mock_backend() -> MockAgentBackend {
         let mut mock = MockAgentBackend::new();
-        mock.expect_build_start_command().returning(|folder, _, _| {
-            let mut cmd = Command::new("echo");
-            cmd.arg("mock-start")
-                .current_dir(folder)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null());
-            cmd
-        });
+        mock.expect_build_start_command()
+            .returning(|folder, _, _, _| {
+                let mut cmd = Command::new("echo");
+                cmd.arg("mock-start")
+                    .current_dir(folder)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+                cmd
+            });
         mock
     }
 
@@ -1175,6 +1212,7 @@ mod tests {
             id: id.to_string(),
             model: "gemini-3-flash-preview".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: prompt.to_string(),
             stats: SessionStats::default(),
@@ -1914,7 +1952,7 @@ WHERE id = 'beta0000'
             .expect("failed to open in-memory db");
         let mut mock = MockAgentBackend::new();
         mock.expect_build_start_command()
-            .returning(|folder, prompt, _| {
+            .returning(|folder, prompt, _, _| {
                 let mut cmd = Command::new("echo");
                 cmd.arg("--prompt")
                     .arg(prompt)
@@ -1960,7 +1998,7 @@ WHERE id = 'beta0000'
         let mut resume_mock = MockAgentBackend::new();
         resume_mock
             .expect_build_resume_command()
-            .returning(|folder, prompt, _| {
+            .returning(|folder, prompt, _, _| {
                 let mut cmd = Command::new("echo");
                 cmd.arg("--prompt")
                     .arg(prompt)
@@ -2016,16 +2054,17 @@ WHERE id = 'beta0000'
 
         // Create a session that writes a file so commit_all has something to commit
         let mut mock = MockAgentBackend::new();
-        mock.expect_build_start_command().returning(|folder, _, _| {
-            let target = folder.join("auto-committed.txt");
-            let mut cmd = Command::new("bash");
-            cmd.arg("-c")
-                .arg(format!("echo auto-content > '{}'", target.display()))
-                .current_dir(folder)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null());
-            cmd
-        });
+        mock.expect_build_start_command()
+            .returning(|folder, _, _, _| {
+                let target = folder.join("auto-committed.txt");
+                let mut cmd = Command::new("bash");
+                cmd.arg("-c")
+                    .arg(format!("echo auto-content > '{}'", target.display()))
+                    .current_dir(folder)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+                cmd
+            });
         let session_id = app
             .create_session()
             .await
@@ -2072,14 +2111,15 @@ WHERE id = 'beta0000'
 
         // Agent that produces no file changes
         let mut mock = MockAgentBackend::new();
-        mock.expect_build_start_command().returning(|folder, _, _| {
-            let mut cmd = Command::new("echo");
-            cmd.arg("no-changes")
-                .current_dir(folder)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null());
-            cmd
-        });
+        mock.expect_build_start_command()
+            .returning(|folder, _, _, _| {
+                let mut cmd = Command::new("echo");
+                cmd.arg("no-changes")
+                    .current_dir(folder)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+                cmd
+            });
         let session_id = app
             .create_session()
             .await

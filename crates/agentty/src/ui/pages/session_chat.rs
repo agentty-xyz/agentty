@@ -200,9 +200,10 @@ impl<'a> SessionChatPage<'a> {
             "commits"
         };
         let title = format!(
-            " {} — {status} - {commit_count} {commits_label} [{}] ",
+            " {} — {status} - {commit_count} {commits_label} [{}] ({}) ",
             session.display_title(),
-            session.model
+            session.model,
+            session.permission_mode.label()
         );
         let lines = Self::output_lines(session, output_area, status);
         let final_scroll = self.final_scroll_offset(output_area, lines.len());
@@ -316,8 +317,8 @@ impl<'a> SessionChatPage<'a> {
         let help_text = if session.status() == Status::Done {
             "q: back | j/k: scroll | ?: help"
         } else {
-            "q: back | enter: reply | d: diff | p: pr | m: merge | r: rebase | j/k: scroll | ?: \
-             help"
+            "q: back | enter: reply | d: diff | p: pr | m: merge | r: rebase | S-Tab: mode | j/k: \
+             scroll | ?: help"
         };
         let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, bottom_area);
@@ -339,7 +340,7 @@ mod tests {
 
     use super::*;
     use crate::file_list::FileEntry;
-    use crate::model::SessionStats;
+    use crate::model::{PermissionMode, SessionStats};
 
     fn session_fixture() -> Session {
         Session {
@@ -350,6 +351,7 @@ mod tests {
             id: "session-id".to_string(),
             model: "gemini-3-flash-preview".to_string(),
             output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::default(),
             project_name: "project".to_string(),
             prompt: String::new(),
             stats: SessionStats::default(),

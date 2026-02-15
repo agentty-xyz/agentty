@@ -96,6 +96,9 @@ pub(crate) async fn handle(
         KeyCode::Delete => {
             handle_prompt_delete(app);
         }
+        KeyCode::BackTab => {
+            let _ = app.toggle_session_permission_mode(&prompt_context.session_id);
+        }
         KeyCode::Char(character) => {
             handle_prompt_char(app, character, &prompt_context).await;
         }

@@ -7,7 +7,7 @@ use std::str::FromStr;
 use mockall::automock;
 use serde::Deserialize;
 
-use crate::model::SessionStats;
+use crate::model::{PermissionMode, SessionStats};
 
 /// Parsed agent response including content text and usage statistics.
 pub struct ParsedResponse {
@@ -20,9 +20,21 @@ pub trait AgentBackend: Send + Sync {
     /// One-time setup in agent folder before first run (e.g. config files).
     fn setup(&self, folder: &Path);
     /// Build a Command for an initial task.
-    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command;
+    fn build_start_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command;
     /// Build a Command for resuming/replying.
-    fn build_resume_command(&self, folder: &Path, prompt: &str, model: &str) -> Command;
+    fn build_resume_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command;
 }
 
 pub struct GeminiBackend;
@@ -32,25 +44,43 @@ impl AgentBackend for GeminiBackend {
         // Gemini CLI needs no config files
     }
 
-    fn build_resume_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
-        let mut cmd = self.build_start_command(folder, prompt, model);
+    fn build_resume_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command {
+        let mut cmd = self.build_start_command(folder, prompt, model, permission_mode);
         cmd.arg("--resume").arg("latest");
+
         cmd
     }
 
-    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
+    fn build_start_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command {
+        let approval_mode = match permission_mode {
+            PermissionMode::AutoEdit => "auto_edit",
+            PermissionMode::Autonomous => "yolo",
+        };
         let mut cmd = Command::new("gemini");
         cmd.arg("--prompt")
             .arg(prompt)
             .arg("--model")
             .arg(model)
             .arg("--approval-mode")
-            .arg("auto_edit")
+            .arg(approval_mode)
             .arg("--output-format")
             .arg("json")
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
         cmd
     }
 }
@@ -62,35 +92,57 @@ impl AgentBackend for ClaudeBackend {
         // Claude Code needs no config files
     }
 
-    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
+    fn build_start_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command {
         let mut cmd = Command::new("claude");
-        cmd.arg("-p")
-            .arg(prompt)
-            .arg("--allowedTools")
-            .arg("Edit")
-            .arg("--output-format")
+        cmd.arg("-p").arg(prompt);
+        Self::apply_permission_args(&mut cmd, permission_mode);
+        cmd.arg("--output-format")
             .arg("json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
         cmd
     }
 
-    fn build_resume_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
+    fn build_resume_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command {
         let mut cmd = Command::new("claude");
-        cmd.arg("-c")
-            .arg("-p")
-            .arg(prompt)
-            .arg("--allowedTools")
-            .arg("Edit")
-            .arg("--output-format")
+        cmd.arg("-c").arg("-p").arg(prompt);
+        Self::apply_permission_args(&mut cmd, permission_mode);
+        cmd.arg("--output-format")
             .arg("json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
         cmd
+    }
+}
+
+impl ClaudeBackend {
+    fn apply_permission_args(cmd: &mut Command, permission_mode: PermissionMode) {
+        match permission_mode {
+            PermissionMode::AutoEdit => {
+                cmd.arg("--allowedTools").arg("Edit");
+            }
+            PermissionMode::Autonomous => {
+                cmd.arg("--dangerously-skip-permissions");
+            }
+        }
     }
 }
 
@@ -106,34 +158,59 @@ impl AgentBackend for CodexBackend {
         // Codex CLI needs no config files
     }
 
-    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
+    fn build_start_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command {
+        let approval_flag = Self::approval_flag(permission_mode);
         let mut cmd = Command::new("codex");
         cmd.arg("exec")
             .arg("--model")
             .arg(model)
-            .arg("--full-auto")
+            .arg(approval_flag)
             .arg("--json")
             .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
         cmd
     }
 
-    fn build_resume_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
+    fn build_resume_command(
+        &self,
+        folder: &Path,
+        prompt: &str,
+        model: &str,
+        permission_mode: PermissionMode,
+    ) -> Command {
+        let approval_flag = Self::approval_flag(permission_mode);
         let mut cmd = Command::new("codex");
         cmd.arg("exec")
             .arg("resume")
             .arg("--last")
             .arg("--model")
             .arg(model)
-            .arg("--full-auto")
+            .arg(approval_flag)
             .arg("--json")
             .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
         cmd
+    }
+}
+
+impl CodexBackend {
+    fn approval_flag(permission_mode: PermissionMode) -> &'static str {
+        match permission_mode {
+            PermissionMode::AutoEdit => "--full-auto",
+            PermissionMode::Autonomous => "--yolo",
+        }
     }
 }
 
@@ -679,6 +756,7 @@ mod tests {
             dir.path(),
             "follow-up",
             "gemini-3-pro-preview",
+            PermissionMode::AutoEdit,
         );
 
         // Assert
@@ -704,6 +782,7 @@ mod tests {
             dir.path(),
             "hello",
             "gemini-3-flash-preview",
+            PermissionMode::AutoEdit,
         );
 
         // Assert
@@ -744,8 +823,13 @@ mod tests {
         let backend = ClaudeBackend;
 
         // Act
-        let cmd =
-            AgentBackend::build_start_command(&backend, dir.path(), "hello", "claude-opus-4-6");
+        let cmd = AgentBackend::build_start_command(
+            &backend,
+            dir.path(),
+            "hello",
+            "claude-opus-4-6",
+            PermissionMode::AutoEdit,
+        );
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -775,6 +859,7 @@ mod tests {
             dir.path(),
             "follow-up",
             "claude-haiku-4-5-20251001",
+            PermissionMode::AutoEdit,
         );
 
         // Assert
@@ -818,7 +903,13 @@ mod tests {
         let backend = CodexBackend;
 
         // Act
-        let cmd = AgentBackend::build_start_command(&backend, dir.path(), "hello", "gpt-5.3-codex");
+        let cmd = AgentBackend::build_start_command(
+            &backend,
+            dir.path(),
+            "hello",
+            "gpt-5.3-codex",
+            PermissionMode::AutoEdit,
+        );
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -839,8 +930,13 @@ mod tests {
         let backend = CodexBackend;
 
         // Act
-        let cmd =
-            AgentBackend::build_resume_command(&backend, dir.path(), "follow-up", "gpt-5.2-codex");
+        let cmd = AgentBackend::build_resume_command(
+            &backend,
+            dir.path(),
+            "follow-up",
+            "gpt-5.2-codex",
+            PermissionMode::AutoEdit,
+        );
 
         // Assert
         let debug = format!("{cmd:?}");
@@ -1232,6 +1328,92 @@ mod tests {
         assert_eq!(result.content, "Done!");
         assert_eq!(result.stats.input_tokens, Some(1000));
         assert_eq!(result.stats.output_tokens, Some(200));
+    }
+
+    #[test]
+    fn test_gemini_start_command_autonomous_uses_yolo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let backend = GeminiBackend;
+
+        // Act
+        let cmd = AgentBackend::build_start_command(
+            &backend,
+            dir.path(),
+            "hello",
+            "gemini-3-flash-preview",
+            PermissionMode::Autonomous,
+        );
+
+        // Assert
+        let debug = format!("{cmd:?}");
+        assert!(debug.contains("--approval-mode"));
+        assert!(debug.contains("yolo"));
+        assert!(!debug.contains("auto_edit"));
+    }
+
+    #[test]
+    fn test_claude_start_command_autonomous_skips_permissions() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+
+        // Act
+        let cmd = AgentBackend::build_start_command(
+            &backend,
+            dir.path(),
+            "hello",
+            "claude-opus-4-6",
+            PermissionMode::Autonomous,
+        );
+
+        // Assert
+        let debug = format!("{cmd:?}");
+        assert!(debug.contains("--dangerously-skip-permissions"));
+        assert!(!debug.contains("--allowedTools"));
+    }
+
+    #[test]
+    fn test_claude_resume_command_autonomous_skips_permissions() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+
+        // Act
+        let cmd = AgentBackend::build_resume_command(
+            &backend,
+            dir.path(),
+            "follow-up",
+            "claude-opus-4-6",
+            PermissionMode::Autonomous,
+        );
+
+        // Assert
+        let debug = format!("{cmd:?}");
+        assert!(debug.contains("--dangerously-skip-permissions"));
+        assert!(!debug.contains("--allowedTools"));
+        assert!(debug.contains("-c"));
+    }
+
+    #[test]
+    fn test_codex_start_command_autonomous_uses_yolo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let backend = CodexBackend;
+
+        // Act
+        let cmd = AgentBackend::build_start_command(
+            &backend,
+            dir.path(),
+            "hello",
+            "gpt-5.3-codex",
+            PermissionMode::Autonomous,
+        );
+
+        // Assert
+        let debug = format!("{cmd:?}");
+        assert!(debug.contains("--yolo"));
+        assert!(!debug.contains("--full-auto"));
     }
 
     #[test]
