@@ -100,6 +100,7 @@ pub struct SessionRow {
     pub permission_mode: String,
     pub project_id: Option<i64>,
     pub prompt: String,
+    pub size: String,
     pub status: String,
     pub title: Option<String>,
     pub updated_at: i64,
@@ -286,7 +287,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         let rows = sqlx::query(
             r"
 SELECT id, agent, model, base_branch, status, title, project_id, prompt, output,
-       commit_count, created_at, updated_at, input_tokens, output_tokens, permission_mode
+       commit_count, created_at, updated_at, input_tokens, output_tokens, permission_mode, size
 FROM session
 ORDER BY updated_at DESC, id
 ",
@@ -310,6 +311,7 @@ ORDER BY updated_at DESC, id
                 permission_mode: row.get("permission_mode"),
                 project_id: row.get("project_id"),
                 prompt: row.get("prompt"),
+                size: row.get("size"),
                 status: row.get("status"),
                 title: row.get("title"),
                 updated_at: row.get("updated_at"),
@@ -376,6 +378,31 @@ WHERE id = ?
         .execute(&self.pool)
         .await
         .map_err(|err| format!("Failed to update session status: {err}"))?;
+        Ok(())
+    }
+
+    /// Updates the size bucket for a session row.
+    ///
+    /// The update is skipped when the stored value already matches `size`.
+    ///
+    /// # Errors
+    /// Returns an error if the size update fails.
+    pub async fn update_session_size(&self, id: &str, size: &str) -> Result<(), String> {
+        sqlx::query(
+            r"
+UPDATE session
+SET size = ?
+WHERE id = ?
+  AND size <> ?
+",
+        )
+        .bind(size)
+        .bind(id)
+        .bind(size)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to update session size: {err}"))?;
+
         Ok(())
     }
 
@@ -1100,6 +1127,7 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].model, "claude-opus-4-6");
         assert_eq!(sessions[0].permission_mode, "auto_edit");
+        assert_eq!(sessions[0].size, "XS");
         assert!(sessions[0].created_at > 0);
         assert!(sessions[0].updated_at > 0);
     }
@@ -1447,6 +1475,41 @@ WHERE id = 'beta'
         assert!(result.is_ok());
         let sessions = db.load_sessions().await.expect("failed to load");
         assert_eq!(sessions[0].status, "Merging");
+        assert!(
+            sessions[0].updated_at > initial_updated_at,
+            "updated_at should be updated by trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_session_size() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+        let initial_sessions = db.load_sessions().await.expect("failed to load");
+        let initial_updated_at = initial_sessions[0].updated_at;
+
+        // Act
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let result = db.update_session_size("sess1", "L").await;
+
+        // Assert
+        assert!(result.is_ok());
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].size, "L");
         assert!(
             sessions[0].updated_at > initial_updated_at,
             "updated_at should be updated by trigger"

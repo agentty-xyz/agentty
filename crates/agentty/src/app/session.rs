@@ -1187,8 +1187,9 @@ impl App {
         for row in db_rows {
             let folder = session_folder(base, &row.id);
             let status = row.status.parse::<Status>().unwrap_or(Status::Done);
-            let keep_without_folder = matches!(status, Status::Done | Status::Canceled);
-            if !folder.is_dir() && !keep_without_folder {
+            let persisted_size = row.size.parse::<SessionSize>().unwrap_or_default();
+            let is_terminal_status = matches!(status, Status::Done | Status::Canceled);
+            if !folder.is_dir() && !is_terminal_status {
                 continue;
             }
 
@@ -1229,7 +1230,16 @@ impl App {
                         Arc::new(Mutex::new(row.commit_count)),
                     )
                 };
-            let size = Self::session_size_for_folder(&folder, &row.base_branch).await;
+            let size = if is_terminal_status {
+                persisted_size
+            } else {
+                let computed_size = Self::session_size_for_folder(&folder, &row.base_branch).await;
+                let _ = db
+                    .update_session_size(&row.id, &computed_size.to_string())
+                    .await;
+
+                computed_size
+            };
 
             sessions.push(Session {
                 agent: row.agent,
@@ -2257,6 +2267,95 @@ WHERE id = 'beta0000'
 
         // Assert — non-terminal session is skipped because folder doesn't exist
         assert!(app.session_state.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_load_sessions_persists_size_for_non_terminal_status() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_index = app
+            .session_index_for_id(&session_id)
+            .expect("missing created session");
+        let session_folder = app.session_state.sessions[session_index].folder.clone();
+        let changed_lines = "line\n".repeat(20);
+        std::fs::write(session_folder.join("size-test.txt"), changed_lines)
+            .expect("failed to write test file");
+
+        // Act
+        let reloaded_sessions = App::load_sessions(
+            &app.base_path,
+            &app.db,
+            &app.projects,
+            &app.session_state.sessions,
+        )
+        .await;
+        let db_sessions = app.db.load_sessions().await.expect("failed to load");
+
+        // Assert
+        let reloaded_session = reloaded_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        let db_session = db_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing persisted session");
+        assert_eq!(reloaded_session.size, SessionSize::S);
+        assert_eq!(db_session.size, "S");
+    }
+
+    #[tokio::test]
+    async fn test_load_sessions_uses_persisted_size_for_done_status() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.db
+            .update_session_size(&session_id, "L")
+            .await
+            .expect("failed to update size");
+        app.db
+            .update_session_status(&session_id, "Done")
+            .await
+            .expect("failed to update status");
+        let session_index = app
+            .session_index_for_id(&session_id)
+            .expect("missing created session");
+        let session_folder = app.session_state.sessions[session_index].folder.clone();
+        let changed_lines = "line\n".repeat(700);
+        std::fs::write(session_folder.join("done-size-test.txt"), changed_lines)
+            .expect("failed to write test file");
+
+        // Act
+        let reloaded_sessions = App::load_sessions(
+            &app.base_path,
+            &app.db,
+            &app.projects,
+            &app.session_state.sessions,
+        )
+        .await;
+        let db_sessions = app.db.load_sessions().await.expect("failed to load");
+
+        // Assert
+        let reloaded_session = reloaded_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        let db_session = db_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing persisted session");
+        assert_eq!(reloaded_session.status(), Status::Done);
+        assert_eq!(reloaded_session.size, SessionSize::L);
+        assert_eq!(db_session.size, "L");
     }
 
     #[tokio::test]

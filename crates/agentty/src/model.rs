@@ -173,6 +173,22 @@ impl std::fmt::Display for SessionSize {
     }
 }
 
+impl std::str::FromStr for SessionSize {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "XS" | "Xs" | "xs" => Ok(SessionSize::Xs),
+            "S" | "s" => Ok(SessionSize::S),
+            "M" | "m" => Ok(SessionSize::M),
+            "L" | "l" => Ok(SessionSize::L),
+            "XL" | "Xl" | "xl" => Ok(SessionSize::Xl),
+            "XXL" | "Xxl" | "xxl" => Ok(SessionSize::Xxl),
+            _ => Err(format!("Unknown session size: {s}")),
+        }
+    }
+}
+
 pub struct InputState {
     pub cursor: usize,
     text: String,
@@ -920,6 +936,35 @@ mod tests {
         assert_eq!(SessionSize::from_diff(&extra_large_diff), SessionSize::Xl);
         assert_eq!(
             SessionSize::from_diff(&double_extra_large_diff),
+            SessionSize::Xxl
+        );
+    }
+
+    #[test]
+    fn test_session_size_from_str() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            "XS".parse::<SessionSize>().expect("failed to parse"),
+            SessionSize::Xs
+        );
+        assert_eq!(
+            "S".parse::<SessionSize>().expect("failed to parse"),
+            SessionSize::S
+        );
+        assert_eq!(
+            "M".parse::<SessionSize>().expect("failed to parse"),
+            SessionSize::M
+        );
+        assert_eq!(
+            "L".parse::<SessionSize>().expect("failed to parse"),
+            SessionSize::L
+        );
+        assert_eq!(
+            "XL".parse::<SessionSize>().expect("failed to parse"),
+            SessionSize::Xl
+        );
+        assert_eq!(
+            "XXL".parse::<SessionSize>().expect("failed to parse"),
             SessionSize::Xxl
         );
     }
