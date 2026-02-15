@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::model::Session;
 use crate::ui::Page;
+use crate::ui::pages::session_list::{model_column_width, project_column_width};
 use crate::ui::util::format_optional_tokens;
 
 /// Stats dashboard showing per-session token statistics.
@@ -30,7 +31,9 @@ impl Page for StatsPage<'_> {
 
         let selected_style = Style::default().bg(Color::DarkGray);
         let normal_style = Style::default().bg(Color::Gray).fg(Color::Black);
-        let header_cells = ["Title", "Input", "Output"].iter().map(|h| Cell::from(*h));
+        let header_cells = ["Session", "Project", "Model", "Input", "Output"]
+            .iter()
+            .map(|h| Cell::from(*h));
         let header = Row::new(header_cells)
             .style(normal_style)
             .height(1)
@@ -38,13 +41,9 @@ impl Page for StatsPage<'_> {
 
         let rows = self.sessions.iter().map(|session| {
             let cells = vec![
-                Cell::from(format!(
-                    "\"{}\" [{}][{}:{}]",
-                    session.display_title(),
-                    session.project_name,
-                    session.agent,
-                    session.model
-                )),
+                Cell::from(session.display_title().to_string()),
+                Cell::from(session.project_name.clone()),
+                Cell::from(session.model.clone()),
                 Cell::from(format_optional_tokens(session.stats.input_tokens)),
                 Cell::from(format_optional_tokens(session.stats.output_tokens)),
             ];
@@ -56,6 +55,8 @@ impl Page for StatsPage<'_> {
             rows,
             [
                 Constraint::Min(0),
+                project_column_width(self.sessions),
+                model_column_width(self.sessions),
                 Constraint::Length(10),
                 Constraint::Length(10),
             ],

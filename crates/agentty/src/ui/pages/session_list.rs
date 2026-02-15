@@ -75,14 +75,14 @@ impl Page for SessionListPage<'_> {
     }
 }
 
-fn project_column_width(sessions: &[Session]) -> Constraint {
+pub(crate) fn project_column_width(sessions: &[Session]) -> Constraint {
     text_column_width(
         "Project",
         sessions.iter().map(|session| session.project_name.as_str()),
     )
 }
 
-fn model_column_width(sessions: &[Session]) -> Constraint {
+pub(crate) fn model_column_width(sessions: &[Session]) -> Constraint {
     text_column_width(
         "Model",
         sessions.iter().map(|session| session.model.as_str()),
