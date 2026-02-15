@@ -410,10 +410,10 @@ pub fn extract_at_mention_query(text: &str, cursor: usize) -> Option<(usize, Str
     None
 }
 
-/// UI state for prompt `@` file mention selection.
+/// UI state for prompt `@` file and directory mention selection.
 #[derive(Clone, Debug)]
 pub struct PromptAtMentionState {
-    /// Cached list of all files in the session directory.
+    /// Cached list of all files and directories in the session directory.
     pub all_entries: Vec<FileEntry>,
     /// Currently selected index in the filtered dropdown.
     pub selected_index: usize,

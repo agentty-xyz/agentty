@@ -132,9 +132,21 @@ impl<'a> SessionChatPage<'a> {
 
         let options: Vec<SlashMenuOption> = filtered[window_start..window_end]
             .iter()
-            .map(|entry| SlashMenuOption {
-                description: String::new(),
-                label: entry.path.clone(),
+            .map(|entry| {
+                let label = if entry.is_dir {
+                    format!("{}/", entry.path)
+                } else {
+                    entry.path.clone()
+                };
+
+                SlashMenuOption {
+                    description: if entry.is_dir {
+                        "folder".to_string()
+                    } else {
+                        String::new()
+                    },
+                    label,
+                }
             })
             .collect();
 
@@ -422,18 +434,31 @@ mod tests {
     fn file_entries_fixture() -> Vec<FileEntry> {
         vec![
             FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: true,
+                path: "tests".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
                 path: "Cargo.toml".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "README.md".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "src/lib.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "src/main.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "tests/integration.rs".to_string(),
             },
         ]
@@ -449,9 +474,11 @@ mod tests {
             SessionChatPage::build_at_mention_menu("@src", 4, &state).expect("expected menu");
 
         // Assert
-        assert_eq!(menu.options.len(), 2);
-        assert_eq!(menu.options[0].label, "src/lib.rs");
-        assert_eq!(menu.options[1].label, "src/main.rs");
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(menu.options[0].label, "src/");
+        assert_eq!(menu.options[0].description, "folder");
+        assert_eq!(menu.options[1].label, "src/lib.rs");
+        assert_eq!(menu.options[2].label, "src/main.rs");
     }
 
     #[test]
@@ -475,7 +502,7 @@ mod tests {
         let menu = SessionChatPage::build_at_mention_menu("@", 1, &state).expect("expected menu");
 
         // Assert
-        assert_eq!(menu.options.len(), 5);
+        assert_eq!(menu.options.len(), 7);
     }
 
     #[test]
@@ -483,6 +510,7 @@ mod tests {
         // Arrange
         let entries: Vec<FileEntry> = (0..20)
             .map(|index| FileEntry {
+                is_dir: false,
                 path: format!("file_{index:02}.rs"),
             })
             .collect();
@@ -506,7 +534,7 @@ mod tests {
             SessionChatPage::build_at_mention_menu("@src", 4, &state).expect("expected menu");
 
         // Assert — should clamp to last visible item
-        assert_eq!(menu.selected_index, 1);
+        assert_eq!(menu.selected_index, 2);
     }
 
     #[test]
@@ -514,6 +542,7 @@ mod tests {
         // Arrange
         let entries: Vec<FileEntry> = (0..20)
             .map(|index| FileEntry {
+                is_dir: false,
                 path: format!("file_{index:02}.rs"),
             })
             .collect();
@@ -528,6 +557,32 @@ mod tests {
         assert_eq!(menu.options[0].label, "file_10.rs");
         assert_eq!(menu.options[9].label, "file_19.rs");
         assert_eq!(menu.selected_index, 5); // 15 - 10 = 5
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_directory_has_trailing_slash() {
+        // Arrange
+        let entries = vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+        ];
+        let state = PromptAtMentionState::new(entries);
+
+        // Act
+        let menu =
+            SessionChatPage::build_at_mention_menu("@src", 4, &state).expect("expected menu");
+
+        // Assert
+        assert_eq!(menu.options[0].label, "src/");
+        assert_eq!(menu.options[0].description, "folder");
+        assert_eq!(menu.options[1].label, "src/main.rs");
+        assert_eq!(menu.options[1].description, "");
     }
 
     #[test]

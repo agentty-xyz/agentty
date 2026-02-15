@@ -556,9 +556,15 @@ fn handle_at_mention_select(app: &mut App) {
                 let filtered = file_list::filter_entries(&state.all_entries, &query);
                 let clamped_index = state.selected_index.min(filtered.len().saturating_sub(1));
 
-                filtered
-                    .get(clamped_index)
-                    .map(|entry| (at_start, input.cursor, format!("@{} ", entry.path)))
+                filtered.get(clamped_index).map(|entry| {
+                    let path = if entry.is_dir {
+                        format!("@{}/ ", entry.path)
+                    } else {
+                        format!("@{} ", entry.path)
+                    };
+
+                    (at_start, input.cursor, path)
+                })
             } else {
                 should_dismiss = true;
 
@@ -966,6 +972,7 @@ mod tests {
     async fn test_handle_at_mention_select_dismisses_stale_mention_state() {
         // Arrange
         let state = PromptAtMentionState::new(vec![file_list::FileEntry {
+            is_dir: false,
             path: "src/main.rs".to_string(),
         }]);
         let (mut app, _base_dir) = new_test_prompt_app("email@test", Some(state)).await;
@@ -983,6 +990,25 @@ mod tests {
         {
             assert!(at_mention_state.is_none());
             assert_eq!(input.text(), "email@test");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_at_mention_select_inserts_directory_with_trailing_slash() {
+        // Arrange
+        let state = PromptAtMentionState::new(vec![file_list::FileEntry {
+            is_dir: true,
+            path: "src".to_string(),
+        }]);
+        let (mut app, _base_dir) = new_test_prompt_app("@src", Some(state)).await;
+
+        // Act
+        handle_at_mention_select(&mut app);
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        if let AppMode::Prompt { input, .. } = &app.mode {
+            assert_eq!(input.text(), "@src/ ");
         }
     }
 

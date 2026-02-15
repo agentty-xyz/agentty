@@ -3,19 +3,23 @@ use std::path::Path;
 use ignore::WalkBuilder;
 
 const MAX_DEPTH: usize = 10;
-const MAX_FILES: usize = 500;
+const MAX_ENTRIES: usize = 500;
 
-/// A single file entry for the `@` mention dropdown.
+/// A single file or directory entry for the `@` mention dropdown.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileEntry {
+    /// Whether this entry is a directory.
+    pub is_dir: bool,
     /// Relative path from the listing root (e.g., `src/main.rs`).
     pub path: String,
 }
 
-/// Lists files recursively under `root`, respecting `.gitignore`.
+/// Lists files and directories recursively under `root`, respecting
+/// `.gitignore`.
 ///
-/// Returns at most [`MAX_FILES`] entries with a maximum depth of
-/// [`MAX_DEPTH`]. Results are sorted alphabetically by path.
+/// Returns at most [`MAX_ENTRIES`] entries with a maximum depth of
+/// [`MAX_DEPTH`]. Directories sort before files; within each group,
+/// results are sorted alphabetically by path.
 pub fn list_files(root: &Path) -> Vec<FileEntry> {
     let walker = WalkBuilder::new(root)
         .max_depth(Some(MAX_DEPTH))
@@ -24,15 +28,22 @@ pub fn list_files(root: &Path) -> Vec<FileEntry> {
 
     let mut entries: Vec<FileEntry> = walker
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
-        .filter_map(|entry| {
+        .filter(|entry| {
             entry
-                .path()
-                .strip_prefix(root)
-                .ok()
-                .map(|relative| FileEntry {
-                    path: relative.to_string_lossy().to_string(),
-                })
+                .file_type()
+                .is_some_and(|ft| ft.is_file() || ft.is_dir())
+        })
+        .filter_map(|entry| {
+            let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+
+            entry.path().strip_prefix(root).ok().and_then(|relative| {
+                let path = relative.to_string_lossy().to_string();
+                if path.is_empty() {
+                    return None;
+                }
+
+                Some(FileEntry { is_dir, path })
+            })
         })
         .collect();
 
@@ -42,8 +53,13 @@ pub fn list_files(root: &Path) -> Vec<FileEntry> {
 }
 
 fn sort_and_limit_entries(entries: &mut Vec<FileEntry>) {
-    entries.sort_by(|first, second| first.path.cmp(&second.path));
-    entries.truncate(MAX_FILES);
+    entries.sort_by(|first, second| {
+        second
+            .is_dir
+            .cmp(&first.is_dir)
+            .then(first.path.cmp(&second.path))
+    });
+    entries.truncate(MAX_ENTRIES);
 }
 
 /// Fuzzy-filters entries and returns them sorted by best match.
@@ -167,8 +183,9 @@ mod tests {
         let entries = list_files(temp_dir.path());
 
         // Assert
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path, "src/main.rs");
+        let file_entries: Vec<_> = entries.iter().filter(|entry| !entry.is_dir).collect();
+        assert_eq!(file_entries.len(), 1);
+        assert_eq!(file_entries[0].path, "src/main.rs");
     }
 
     #[test]
@@ -220,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_files_excludes_directories() {
+    fn test_list_files_includes_directories() {
         // Arrange
         let temp_dir = TempDir::new().expect("test expectation should hold");
         fs::create_dir_all(temp_dir.path().join("subdir")).expect("test expectation should hold");
@@ -230,15 +247,48 @@ mod tests {
         let entries = list_files(temp_dir.path());
 
         // Assert
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path, "file.txt");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, "subdir");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].path, "file.txt");
+        assert!(!entries[1].is_dir);
     }
 
     #[test]
-    fn test_list_files_respects_max_files() {
+    fn test_list_files_excludes_root_directory() {
         // Arrange
         let temp_dir = TempDir::new().expect("test expectation should hold");
-        for index in 0..MAX_FILES + 50 {
+        fs::write(temp_dir.path().join("file.txt"), "").expect("test expectation should hold");
+
+        // Act
+        let entries = list_files(temp_dir.path());
+
+        // Assert
+        assert!(!entries.iter().any(|entry| entry.path.is_empty()));
+    }
+
+    #[test]
+    fn test_list_files_sorts_directories_before_files() {
+        // Arrange
+        let temp_dir = TempDir::new().expect("test expectation should hold");
+        fs::write(temp_dir.path().join("aaa_file.txt"), "").expect("test expectation should hold");
+        fs::create_dir_all(temp_dir.path().join("zzz_dir")).expect("test expectation should hold");
+
+        // Act
+        let entries = list_files(temp_dir.path());
+
+        // Assert — directory sorts before file despite alphabetical order
+        assert_eq!(entries[0].path, "zzz_dir");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].path, "aaa_file.txt");
+        assert!(!entries[1].is_dir);
+    }
+
+    #[test]
+    fn test_list_files_respects_max_entries() {
+        // Arrange
+        let temp_dir = TempDir::new().expect("test expectation should hold");
+        for index in 0..MAX_ENTRIES + 50 {
             fs::write(temp_dir.path().join(format!("file_{index:04}.txt")), "")
                 .expect("test expectation should hold");
         }
@@ -247,15 +297,16 @@ mod tests {
         let entries = list_files(temp_dir.path());
 
         // Assert
-        assert_eq!(entries.len(), MAX_FILES);
+        assert_eq!(entries.len(), MAX_ENTRIES);
     }
 
     #[test]
     fn test_sort_and_limit_entries_truncates_after_sort() {
         // Arrange
-        let mut entries: Vec<FileEntry> = (0..MAX_FILES + 20)
+        let mut entries: Vec<FileEntry> = (0..MAX_ENTRIES + 20)
             .rev()
             .map(|index| FileEntry {
+                is_dir: false,
                 path: format!("file_{index:04}.txt"),
             })
             .collect();
@@ -264,7 +315,7 @@ mod tests {
         sort_and_limit_entries(&mut entries);
 
         // Assert
-        assert_eq!(entries.len(), MAX_FILES);
+        assert_eq!(entries.len(), MAX_ENTRIES);
         assert_eq!(
             entries.first().map(|entry| entry.path.as_str()),
             Some("file_0000.txt")
@@ -301,9 +352,11 @@ mod tests {
         // Arrange
         let entries = vec![
             FileEntry {
+                is_dir: false,
                 path: "src/Main.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "README.md".to_string(),
             },
         ];
@@ -321,9 +374,11 @@ mod tests {
         // Arrange
         let entries = vec![
             FileEntry {
+                is_dir: false,
                 path: "a.txt".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "b.txt".to_string(),
             },
         ];
@@ -339,6 +394,7 @@ mod tests {
     fn test_filter_entries_no_match() {
         // Arrange
         let entries = vec![FileEntry {
+            is_dir: false,
             path: "hello.txt".to_string(),
         }];
 
@@ -354,9 +410,11 @@ mod tests {
         // Arrange
         let entries = vec![
             FileEntry {
+                is_dir: false,
                 path: "src/main.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "src/model.rs".to_string(),
             },
         ];
@@ -373,9 +431,11 @@ mod tests {
         // Arrange
         let entries = vec![
             FileEntry {
+                is_dir: false,
                 path: "src/xmxaxixn.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "src/main.rs".to_string(),
             },
         ];
@@ -392,9 +452,11 @@ mod tests {
         // Arrange
         let entries = vec![
             FileEntry {
+                is_dir: false,
                 path: "docs/domain.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "src/db.rs".to_string(),
             },
         ];
@@ -411,6 +473,7 @@ mod tests {
     fn test_filter_entries_fuzzy_no_match_wrong_order() {
         // Arrange
         let entries = vec![FileEntry {
+            is_dir: false,
             path: "abc.txt".to_string(),
         }];
 
@@ -426,9 +489,11 @@ mod tests {
         // Arrange
         let entries = vec![
             FileEntry {
+                is_dir: false,
                 path: "src/app/mod.rs".to_string(),
             },
             FileEntry {
+                is_dir: false,
                 path: "tests/unit.rs".to_string(),
             },
         ];
