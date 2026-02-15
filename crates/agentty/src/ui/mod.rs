@@ -251,8 +251,8 @@ fn render_footer_bar(
     let session_id = match mode {
         AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }
-        | AppMode::Diff { session_id, .. } => Some(session_id.as_str()),
-        AppMode::Help {
+        | AppMode::Diff { session_id, .. }
+        | AppMode::Help {
             context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
             ..
         } => Some(session_id.as_str()),

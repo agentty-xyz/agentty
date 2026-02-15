@@ -404,14 +404,10 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
 /// Formats a token count for display: "500", "1.5k", "1.5M".
 pub fn format_token_count(count: i64) -> String {
     if count >= 1_000_000 {
-        let millions = count as f64 / 1_000_000.0;
-
-        return format!("{millions:.1}M");
+        return format_scaled_token_count(count, 1_000_000, "M");
     }
     if count >= 1_000 {
-        let thousands = count as f64 / 1_000.0;
-
-        return format!("{thousands:.1}k");
+        return format_scaled_token_count(count, 1_000, "k");
     }
 
     count.to_string()
@@ -423,6 +419,15 @@ pub fn format_optional_tokens(value: Option<i64>) -> String {
         Some(count) => format_token_count(count),
         None => "-".to_string(),
     }
+}
+
+fn format_scaled_token_count(count: i64, divisor: i64, suffix: &str) -> String {
+    let scaled_tenths =
+        ((i128::from(count) * 10) + (i128::from(divisor) / 2)) / i128::from(divisor);
+    let whole = scaled_tenths / 10;
+    let decimal = scaled_tenths % 10;
+
+    format!("{whole}.{decimal}{suffix}")
 }
 
 #[cfg(test)]

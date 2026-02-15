@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn test_list_files_empty_directory() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
 
         // Act
         let entries = list_files(temp_dir.path());
@@ -143,10 +143,10 @@ mod tests {
     #[test]
     fn test_list_files_returns_sorted_entries() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
-        fs::write(temp_dir.path().join("banana.txt"), "").unwrap();
-        fs::write(temp_dir.path().join("apple.txt"), "").unwrap();
-        fs::write(temp_dir.path().join("cherry.txt"), "").unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
+        fs::write(temp_dir.path().join("banana.txt"), "").expect("test expectation should hold");
+        fs::write(temp_dir.path().join("apple.txt"), "").expect("test expectation should hold");
+        fs::write(temp_dir.path().join("cherry.txt"), "").expect("test expectation should hold");
 
         // Act
         let entries = list_files(temp_dir.path());
@@ -159,9 +159,9 @@ mod tests {
     #[test]
     fn test_list_files_returns_relative_paths() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
-        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
-        fs::write(temp_dir.path().join("src/main.rs"), "").unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
+        fs::create_dir_all(temp_dir.path().join("src")).expect("test expectation should hold");
+        fs::write(temp_dir.path().join("src/main.rs"), "").expect("test expectation should hold");
 
         // Act
         let entries = list_files(temp_dir.path());
@@ -174,15 +174,16 @@ mod tests {
     #[test]
     fn test_list_files_respects_gitignore() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
         std::process::Command::new("git")
             .args(["init", "-q"])
             .current_dir(temp_dir.path())
             .output()
-            .unwrap();
-        fs::write(temp_dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
-        fs::write(temp_dir.path().join("kept.txt"), "").unwrap();
-        fs::write(temp_dir.path().join("ignored.txt"), "").unwrap();
+            .expect("test expectation should hold");
+        fs::write(temp_dir.path().join(".gitignore"), "ignored.txt\n")
+            .expect("test expectation should hold");
+        fs::write(temp_dir.path().join("kept.txt"), "").expect("test expectation should hold");
+        fs::write(temp_dir.path().join("ignored.txt"), "").expect("test expectation should hold");
 
         // Act
         let entries = list_files(temp_dir.path());
@@ -196,9 +197,9 @@ mod tests {
     #[test]
     fn test_list_files_excludes_directories() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
-        fs::create_dir_all(temp_dir.path().join("subdir")).unwrap();
-        fs::write(temp_dir.path().join("file.txt"), "").unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
+        fs::create_dir_all(temp_dir.path().join("subdir")).expect("test expectation should hold");
+        fs::write(temp_dir.path().join("file.txt"), "").expect("test expectation should hold");
 
         // Act
         let entries = list_files(temp_dir.path());
@@ -211,9 +212,10 @@ mod tests {
     #[test]
     fn test_list_files_respects_max_files() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
         for index in 0..MAX_FILES + 50 {
-            fs::write(temp_dir.path().join(format!("file_{index:04}.txt")), "").unwrap();
+            fs::write(temp_dir.path().join(format!("file_{index:04}.txt")), "")
+                .expect("test expectation should hold");
         }
 
         // Act
@@ -251,14 +253,14 @@ mod tests {
     #[test]
     fn test_list_files_respects_max_depth() {
         // Arrange
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().expect("test expectation should hold");
         let mut deep_path = temp_dir.path().to_path_buf();
         for level in 0..MAX_DEPTH + 2 {
             deep_path = deep_path.join(format!("d{level}"));
         }
-        fs::create_dir_all(&deep_path).unwrap();
-        fs::write(deep_path.join("deep.txt"), "").unwrap();
-        fs::write(temp_dir.path().join("shallow.txt"), "").unwrap();
+        fs::create_dir_all(&deep_path).expect("test expectation should hold");
+        fs::write(deep_path.join("deep.txt"), "").expect("test expectation should hold");
+        fs::write(temp_dir.path().join("shallow.txt"), "").expect("test expectation should hold");
 
         // Act
         let entries = list_files(temp_dir.path());
@@ -439,6 +441,9 @@ mod tests {
         let scattered = fuzzy_score("my_archive_index_name.rs", &['m', 'a', 'i', 'n']);
 
         // Assert
-        assert!(consecutive.unwrap() > scattered.unwrap());
+        assert!(
+            consecutive.expect("test expectation should hold")
+                > scattered.expect("test expectation should hold")
+        );
     }
 }

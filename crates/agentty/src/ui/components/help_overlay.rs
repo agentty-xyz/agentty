@@ -18,7 +18,6 @@ const MIN_OVERLAY_HEIGHT: u16 = 10;
 const SCROLL_X_OFFSET: u16 = 0;
 
 /// Centered popup overlay showing keybindings for the current page.
-
 pub struct HelpOverlay<'a> {
     context: &'a HelpContext,
 
@@ -27,7 +26,6 @@ pub struct HelpOverlay<'a> {
 
 impl<'a> HelpOverlay<'a> {
     /// Creates a help overlay for the given context and scroll position.
-
     pub fn new(context: &'a HelpContext, scroll_offset: u16) -> Self {
         Self {
             context,
@@ -91,7 +89,6 @@ impl Component for HelpOverlay<'_> {
 }
 
 /// Computes a centered rectangle within the given `area`.
-
 fn centered_rect(area: Rect) -> Rect {
     let popup_width = (area.width * OVERLAY_WIDTH_PERCENT / 100).max(MIN_OVERLAY_WIDTH);
 
@@ -109,9 +106,7 @@ fn centered_rect(area: Rect) -> Rect {
 }
 
 #[cfg(test)]
-
 mod tests {
-
     use super::*;
 
     #[test]

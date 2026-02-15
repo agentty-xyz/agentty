@@ -14,6 +14,18 @@ use crate::db::Database;
 use crate::git;
 use crate::model::{Session, Status};
 
+/// Inputs needed to execute one session command.
+pub(super) struct RunSessionTaskInput {
+    pub(super) agent: AgentKind,
+    pub(super) cmd: Command,
+    pub(super) commit_count: Arc<Mutex<i64>>,
+    pub(super) db: Database,
+    pub(super) folder: PathBuf,
+    pub(super) id: String,
+    pub(super) output: Arc<Mutex<String>>,
+    pub(super) status: Arc<Mutex<Status>>,
+}
+
 impl App {
     /// Spawns a background loop that periodically refreshes ahead/behind info.
     pub(super) fn spawn_git_status_task(
@@ -57,16 +69,18 @@ impl App {
     ///
     /// # Errors
     /// Returns an error when process spawning fails.
-    pub(super) async fn run_session_task(
-        folder: PathBuf,
-        cmd: Command,
-        output: Arc<Mutex<String>>,
-        status: Arc<Mutex<Status>>,
-        db: Database,
-        id: String,
-        agent: AgentKind,
-        commit_count: Arc<Mutex<i64>>,
-    ) -> Result<(), String> {
+    pub(super) async fn run_session_task(input: RunSessionTaskInput) -> Result<(), String> {
+        let RunSessionTaskInput {
+            agent,
+            cmd,
+            commit_count,
+            db,
+            folder,
+            id,
+            output,
+            status,
+        } = input;
+
         let mut tokio_cmd = tokio::process::Command::from(cmd);
         // Prevent the child process from inheriting the TUI's terminal on
         // stdin. On macOS the child can otherwise disturb crossterm's raw-mode

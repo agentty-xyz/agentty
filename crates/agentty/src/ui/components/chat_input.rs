@@ -47,7 +47,7 @@ impl<'a> ChatInput<'a> {
         }
     }
 
-    fn render_slash_dropdown(&self, f: &mut Frame, area: Rect, slash_menu: &SlashMenu<'_>) {
+    fn render_slash_dropdown(f: &mut Frame, area: Rect, slash_menu: &SlashMenu<'_>) {
         let rows = slash_menu
             .options
             .iter()
@@ -139,7 +139,7 @@ impl Component for ChatInput<'_> {
                 .constraints([Constraint::Length(dropdown_height), Constraint::Min(0)])
                 .split(area);
 
-            self.render_slash_dropdown(f, sections[0], slash_menu);
+            Self::render_slash_dropdown(f, sections[0], slash_menu);
             self.render_input(f, sections[1]);
 
             return;

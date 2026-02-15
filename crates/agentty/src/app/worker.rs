@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::AgentKind;
 use crate::app::App;
+use crate::app::task::RunSessionTaskInput;
 use crate::db::Database;
 use crate::model::Status;
 
@@ -152,16 +153,16 @@ impl App {
 
                 let result = match command {
                     SessionCommand::StartPrompt { agent, command, .. } => {
-                        App::run_session_task(
-                            context.folder.clone(),
-                            command,
-                            Arc::clone(&context.output),
-                            Arc::clone(&context.status),
-                            context.db.clone(),
-                            context.session_id.clone(),
+                        App::run_session_task(RunSessionTaskInput {
                             agent,
-                            Arc::clone(&context.commit_count),
-                        )
+                            cmd: command,
+                            commit_count: Arc::clone(&context.commit_count),
+                            db: context.db.clone(),
+                            folder: context.folder.clone(),
+                            id: context.session_id.clone(),
+                            output: Arc::clone(&context.output),
+                            status: Arc::clone(&context.status),
+                        })
                         .await
                     }
                     SessionCommand::Reply { agent, command, .. } => {
@@ -173,16 +174,16 @@ impl App {
                         )
                         .await;
 
-                        App::run_session_task(
-                            context.folder.clone(),
-                            command,
-                            Arc::clone(&context.output),
-                            Arc::clone(&context.status),
-                            context.db.clone(),
-                            context.session_id.clone(),
+                        App::run_session_task(RunSessionTaskInput {
                             agent,
-                            Arc::clone(&context.commit_count),
-                        )
+                            cmd: command,
+                            commit_count: Arc::clone(&context.commit_count),
+                            db: context.db.clone(),
+                            folder: context.folder.clone(),
+                            id: context.session_id.clone(),
+                            output: Arc::clone(&context.output),
+                            status: Arc::clone(&context.status),
+                        })
                         .await
                     }
                 };

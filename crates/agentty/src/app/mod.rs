@@ -20,14 +20,12 @@ mod worker;
 pub const AGENTTY_WT_DIR: &str = "wt";
 
 /// Returns the agentty home directory (`~/.agentty`).
-///
-/// # Panics
-///
-/// Panics if the home directory cannot be determined.
 pub fn agentty_home() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".agentty")
+    if let Some(home_dir) = dirs::home_dir() {
+        return home_dir.join(".agentty");
+    }
+
+    PathBuf::from(".agentty")
 }
 
 /// Holds all in-memory state related to session listing and refresh tracking.

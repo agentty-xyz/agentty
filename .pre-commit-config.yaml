@@ -23,10 +23,17 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: clippy-fix
+        name: clippy fix
+        description: Auto-fix clippy lints where possible.
+        entry: cargo clippy --fix --allow-dirty -q --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
       - id: clippy
         name: clippy
-        description: Lint and auto-fix the code using clippy.
-        entry: cargo clippy --fix --allow-dirty -q --all-targets --all-features -- -D warnings
+        description: Lint the code and fail on any warnings.
+        entry: cargo clippy -q --all-targets --all-features -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
