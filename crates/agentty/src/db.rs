@@ -419,15 +419,24 @@ WHERE id = ?
         Ok(())
     }
 
-    /// Updates token statistics for a session.
+    /// Accumulates token statistics for a session.
+    ///
+    /// Each call **adds** the provided values to the existing totals so that
+    /// per-invocation stats reported by the agent CLI are summed over the
+    /// lifetime of the session.
     ///
     /// # Errors
     /// Returns an error if the stats update fails.
     pub async fn update_session_stats(&self, id: &str, stats: &SessionStats) -> Result<(), String> {
+        if stats.input_tokens.is_none() && stats.output_tokens.is_none() {
+            return Ok(());
+        }
+
         sqlx::query(
             r"
 UPDATE session
-SET input_tokens = ?, output_tokens = ?
+SET input_tokens = COALESCE(input_tokens, 0) + COALESCE(?, 0),
+    output_tokens = COALESCE(output_tokens, 0) + COALESCE(?, 0)
 WHERE id = ?
 ",
         )
@@ -511,8 +520,8 @@ WHERE id = ?
 
     /// Clears a session's chat history, resetting it to a fresh state.
     ///
-    /// Resets output, prompt, title, status, and token statistics while
-    /// preserving the session identity, worktree, agent, and model.
+    /// Resets output, prompt, title, and status while preserving the session
+    /// identity, worktree, agent, model, and accumulated token statistics.
     ///
     /// # Errors
     /// Returns an error if the session row cannot be updated.
@@ -1475,6 +1484,81 @@ WHERE id = 'beta'
         let sessions = db.load_sessions().await.expect("failed to load");
         assert_eq!(sessions[0].input_tokens, Some(1000));
         assert_eq!(sessions[0].output_tokens, Some(500));
+    }
+
+    #[tokio::test]
+    async fn test_update_session_stats_sums_across_calls() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Done",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let first = SessionStats {
+            input_tokens: Some(1000),
+            output_tokens: Some(500),
+        };
+        db.update_session_stats("sess1", &first)
+            .await
+            .expect("first update");
+
+        let second = SessionStats {
+            input_tokens: Some(2000),
+            output_tokens: Some(700),
+        };
+        db.update_session_stats("sess1", &second)
+            .await
+            .expect("second update");
+
+        // Assert
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].input_tokens, Some(3000));
+        assert_eq!(sessions[0].output_tokens, Some(1200));
+    }
+
+    #[tokio::test]
+    async fn test_update_session_stats_noop_when_both_none() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Done",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let stats = SessionStats {
+            input_tokens: None,
+            output_tokens: None,
+        };
+        let result = db.update_session_stats("sess1", &stats).await;
+
+        // Assert
+        assert!(result.is_ok());
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].input_tokens, None);
+        assert_eq!(sessions[0].output_tokens, None);
     }
 
     #[tokio::test]

@@ -347,9 +347,9 @@ impl App {
 
     /// Clears a session's chat history and resets it to a fresh state.
     ///
-    /// Preserves the session identity, worktree, commit count, agent, and
-    /// model. Resets output, prompt, title, status, and token statistics so
-    /// the next prompt starts the agent without `--resume`.
+    /// Preserves the session identity, worktree, commit count, agent, model,
+    /// and accumulated token statistics. Resets output, prompt, title, and
+    /// status so the next prompt starts the agent without `--resume`.
     ///
     /// # Errors
     /// Returns an error if the session is not found or the database update
