@@ -18,8 +18,6 @@ use crate::model::{AppMode, Project, SESSION_DATA_DIR, Session, SessionStats, St
 
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
-pub(super) const MERGE_COMMIT_CO_AUTHORED_BY: &str =
-    "Co-Authored-By: [Agentty](https://github.com/opencloudtool/agentty)";
 type SessionHandles = (Arc<Mutex<String>>, Arc<Mutex<Status>>, Arc<Mutex<i64>>);
 
 #[derive(Deserialize)]
@@ -600,7 +598,7 @@ impl App {
             )
         };
 
-        Some(Self::append_merge_commit_co_authored_by(message))
+        Some(message)
     }
 
     fn generate_merge_commit_message_with_model(
@@ -654,34 +652,15 @@ impl App {
              tense.\n- Do not use Conventional Commit prefixes like `feat:` or `fix:`.\n- \
              `description` is commit body text and may be an empty string when no body is \
              needed.\n- If `description` is not empty, write in present simple tense and use `-` \
-             bullets when listing multiple points.\n- Include `{MERGE_COMMIT_CO_AUTHORED_BY}` \
-             exactly once at the end of the final message.\n- Use only the diff content.\n- Do \
-             not wrap the JSON in markdown fences.\n\nDiff:\n{diff}"
+             bullets when listing multiple points.\n- Include `Co-Authored-By: \
+             [Agentty](https://github.com/opencloudtool/agentty)` at the end of the final \
+             message.\n- Use only the diff content.\n- Do not wrap the JSON in markdown \
+             fences.\n\nDiff:\n{diff}"
         )
     }
 
     fn fallback_merge_commit_message(source_branch: &str, target_branch: &str) -> String {
-        let message = format!(
-            "Apply session updates\n\n- Squash merge `{source_branch}` into `{target_branch}`."
-        );
-
-        Self::append_merge_commit_co_authored_by(message)
-    }
-
-    fn append_merge_commit_co_authored_by(message: String) -> String {
-        if message
-            .lines()
-            .any(|line| line.trim() == MERGE_COMMIT_CO_AUTHORED_BY)
-        {
-            return message;
-        }
-
-        let trimmed_message = message.trim_end();
-        if trimmed_message.is_empty() {
-            return MERGE_COMMIT_CO_AUTHORED_BY.to_string();
-        }
-
-        format!("{trimmed_message}\n\n{MERGE_COMMIT_CO_AUTHORED_BY}")
+        format!("Apply session updates\n\n- Squash merge `{source_branch}` into `{target_branch}`.")
     }
 
     /// Removes a merged session worktree and deletes its source branch.
@@ -2793,8 +2772,8 @@ WHERE id = 'beta0000'
         assert!(prompt.contains("Do not use Conventional Commit prefixes like `feat:` or `fix:`."));
         assert!(prompt.contains("use `-` bullets when listing multiple points."));
         assert!(prompt.contains(
-            "Include `Co-Authored-By: [Agentty](https://github.com/opencloudtool/agentty)` \
-             exactly once"
+            "Include `Co-Authored-By: [Agentty](https://github.com/opencloudtool/agentty)` at the \
+             end of the final message."
         ));
         assert!(
             prompt
@@ -2814,20 +2793,8 @@ WHERE id = 'beta0000'
         // Assert
         assert_eq!(
             message,
-            "Apply session updates\n\n- Squash merge `agentty/12345678` into `main`.\n\nCo-Authored-By: [Agentty](https://github.com/opencloudtool/agentty)"
+            "Apply session updates\n\n- Squash merge `agentty/12345678` into `main`."
         );
-    }
-
-    #[test]
-    fn test_append_merge_commit_co_authored_by_avoids_duplicate_trailer() {
-        // Arrange
-        let message = format!("Title\n\n{MERGE_COMMIT_CO_AUTHORED_BY}");
-
-        // Act
-        let updated_message = App::append_merge_commit_co_authored_by(message.clone());
-
-        // Assert
-        assert_eq!(updated_message, message);
     }
 
     // --- session_folder / session_branch ---
