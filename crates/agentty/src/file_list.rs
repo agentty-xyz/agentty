@@ -66,7 +66,8 @@ fn sort_and_limit_entries(entries: &mut Vec<FileEntry>) {
 ///
 /// Query characters must appear in order (case-insensitive) within the
 /// path. Results are ranked by: consecutive-character runs, matches at
-/// the start of path segments (`/`, `.`), and filename matches.
+/// the start of path segments (`/`, `.`), and filename matches. If the
+/// query ends with `/`, directory entries are prioritized before files.
 pub fn filter_entries<'a>(entries: &'a [FileEntry], query: &str) -> Vec<&'a FileEntry> {
     if query.is_empty() {
         return entries.iter().collect();
@@ -85,7 +86,18 @@ pub fn filter_entries<'a>(entries: &'a [FileEntry], query: &str) -> Vec<&'a File
             .then(first.0.path.cmp(&second.0.path))
     });
 
-    scored.into_iter().map(|(entry, _)| entry).collect()
+    let mut filtered: Vec<&FileEntry> = scored.into_iter().map(|(entry, _)| entry).collect();
+    prioritize_directories_for_trailing_slash(&mut filtered, query);
+
+    filtered
+}
+
+fn prioritize_directories_for_trailing_slash(entries: &mut Vec<&FileEntry>, query: &str) {
+    if !query.ends_with('/') {
+        return;
+    }
+
+    entries.sort_by_key(|entry| !entry.is_dir);
 }
 
 /// Scores a fuzzy match of `query_chars` against `path`.
@@ -504,6 +516,31 @@ mod tests {
         // Assert
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].path, "src/app/mod.rs");
+    }
+
+    #[test]
+    fn test_filter_entries_trailing_slash_prioritizes_directories() {
+        // Arrange
+        let entries = vec![
+            FileEntry {
+                is_dir: false,
+                path: "src/aaa.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: true,
+                path: "src/zzz".to_string(),
+            },
+        ];
+
+        // Act
+        let filtered = filter_entries(&entries, "src/");
+
+        // Assert
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].path, "src/zzz");
+        assert!(filtered[0].is_dir);
+        assert_eq!(filtered[1].path, "src/aaa.rs");
+        assert!(!filtered[1].is_dir);
     }
 
     #[test]
