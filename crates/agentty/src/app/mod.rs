@@ -88,7 +88,7 @@ impl App {
             .await
             .unwrap_or(0);
 
-        let _ = db.backfill_sessions_project(active_project_id).await;
+        let _ = db.backfill_session_project(active_project_id).await;
 
         Self::discover_sibling_projects(&working_dir, &db).await;
         Self::fail_unfinished_operations_from_previous_run(&db).await;

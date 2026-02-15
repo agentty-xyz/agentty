@@ -52,7 +52,7 @@ impl App {
         // Read base branch from DB
         let base_branch = self
             .db
-            .get_base_branch(&session.id)
+            .get_session_base_branch(&session.id)
             .await?
             .ok_or_else(|| "No git worktree for this session".to_string())?;
 

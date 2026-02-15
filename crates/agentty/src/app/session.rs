@@ -473,7 +473,7 @@ impl App {
         // Read base branch from DB
         let base_branch = self
             .db
-            .get_base_branch(&session.id)
+            .get_session_base_branch(&session.id)
             .await?
             .ok_or_else(|| "No git worktree for this session".to_string())?;
 
@@ -589,7 +589,7 @@ impl App {
         if let Ok(mut count) = commit_count.lock() {
             *count += 1;
         }
-        let _ = db.increment_commit_count(session_id).await;
+        let _ = db.increment_session_commit_count(session_id).await;
 
         Ok(commit_hash)
     }

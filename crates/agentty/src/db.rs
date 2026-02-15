@@ -29,6 +29,35 @@
 //!   `004_revert_status_column.sql`).
 //! - For development, you can delete the database file and let migrations
 //!   recreate it from scratch.
+//!
+//! ## Repository pattern
+//!
+//! All query methods live on a single [`Database`] struct rather than being
+//! split into per-entity repository types. This keeps the data layer flat and
+//! easy to navigate: callers depend on one type, and adding a new table means
+//! adding methods to the existing impl block instead of introducing a new
+//! file and wiring a new dependency. The trade-off is a growing impl, which
+//! is managed by grouping methods by entity (see ordering rules below) and
+//! keeping each method small — typically a single `sqlx::query` call with
+//! error mapping.
+//!
+//! ## Method conventions
+//!
+//! ### Naming
+//! Methods follow the pattern `{verb}_{entity}_{field}` where:
+//! - **verb**: the operation (`insert`, `load`, `get`, `update`, `delete`,
+//!   `append`, `increment`, `clear`, `mark`, `upsert`, `backfill`, `is`,
+//!   `fail`, `request`).
+//! - **entity**: singular table name (`session`, `project`,
+//!   `session_operation`).
+//! - **field** (optional): the column or concept being acted on (e.g.,
+//!   `status`, `title`, `base_branch`).
+//!
+//! ### Ordering
+//! Methods are grouped by entity. Within each entity group, place CRUD
+//! operations first, then field updates, then specialized queries.
+//! Infrastructure methods (`open`, `pool`) come before all entity groups.
+//! Tests follow the same order as the methods they cover.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,20 +67,26 @@ use sqlx::{Row, SqlitePool};
 
 use crate::model::SessionStats;
 
+/// Subdirectory under the agentty home where the database file is stored.
 pub const DB_DIR: &str = "db";
+
+/// Default database filename.
 pub const DB_FILE: &str = "agentty.db";
 
+/// Thin wrapper around a `SQLite` connection pool providing query methods.
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
 }
 
+/// Row returned when loading a project from the `project` table.
 pub struct ProjectRow {
     pub git_branch: Option<String>,
     pub id: i64,
     pub path: String,
 }
 
+/// Row returned when loading a session from the `session` table.
 pub struct SessionRow {
     pub agent: String,
     pub base_branch: String,
@@ -84,6 +119,38 @@ pub struct SessionOperationRow {
 }
 
 impl Database {
+    /// Opens the `SQLite` database and runs embedded migrations.
+    ///
+    /// # Errors
+    /// Returns an error if the directory cannot be created, the database cannot
+    /// be opened, or migrations fail.
+    pub async fn open(db_path: &Path) -> Result<Self, String> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("Failed to create database directory: {err}"))?;
+        }
+
+        let options = SqliteConnectOptions::new()
+            .filename(db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(|err| format!("Failed to connect to database: {err}"))?;
+
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|err| format!("Failed to run migrations: {err}"))?;
+
+        Ok(Self { pool })
+    }
+
+    /// Returns a reference to the underlying connection pool.
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -126,32 +193,6 @@ WHERE path = ?
         Ok(row.get("id"))
     }
 
-    /// Loads all configured projects ordered by path.
-    ///
-    /// # Errors
-    /// Returns an error if project rows cannot be read from the database.
-    pub async fn load_projects(&self) -> Result<Vec<ProjectRow>, String> {
-        let rows = sqlx::query(
-            r"
-SELECT id, path, git_branch
-FROM project
-ORDER BY path
-",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load projects: {err}"))?;
-
-        Ok(rows
-            .iter()
-            .map(|row| ProjectRow {
-                git_branch: row.get("git_branch"),
-                id: row.get("id"),
-                path: row.get("path"),
-            })
-            .collect())
-    }
-
     /// Looks up a project by identifier.
     ///
     /// # Errors
@@ -176,54 +217,30 @@ WHERE id = ?
         }))
     }
 
-    /// Sets `project_id` for sessions that do not yet reference a project.
+    /// Loads all configured projects ordered by path.
     ///
     /// # Errors
-    /// Returns an error if the backfill update fails.
-    pub async fn backfill_sessions_project(&self, project_id: i64) -> Result<(), String> {
-        sqlx::query(
+    /// Returns an error if project rows cannot be read from the database.
+    pub async fn load_projects(&self) -> Result<Vec<ProjectRow>, String> {
+        let rows = sqlx::query(
             r"
-UPDATE session
-SET project_id = ?
-WHERE project_id IS NULL
+SELECT id, path, git_branch
+FROM project
+ORDER BY path
 ",
         )
-        .bind(project_id)
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await
-        .map_err(|err| format!("Failed to backfill sessions: {err}"))?;
-        Ok(())
-    }
+        .map_err(|err| format!("Failed to load projects: {err}"))?;
 
-    /// Opens the `SQLite` database and runs embedded migrations.
-    ///
-    /// # Errors
-    /// Returns an error if the directory cannot be created, the database cannot
-    /// be opened, or migrations fail.
-    pub async fn open(db_path: &Path) -> Result<Self, String> {
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create database directory: {err}"))?;
-        }
-
-        let options = SqliteConnectOptions::new()
-            .filename(db_path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .foreign_keys(true);
-
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .map_err(|err| format!("Failed to connect to database: {err}"))?;
-
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|err| format!("Failed to run migrations: {err}"))?;
-
-        Ok(Self { pool })
+        Ok(rows
+            .iter()
+            .map(|row| ProjectRow {
+                git_branch: row.get("git_branch"),
+                id: row.get("id"),
+                path: row.get("path"),
+            })
+            .collect())
     }
 
     /// Inserts a newly created session row.
@@ -322,6 +339,24 @@ FROM session
         Ok((session_count, max_updated_at))
     }
 
+    /// Deletes a session row by identifier.
+    ///
+    /// # Errors
+    /// Returns an error if the session row cannot be deleted.
+    pub async fn delete_session(&self, id: &str) -> Result<(), String> {
+        sqlx::query(
+            r"
+DELETE FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to delete session: {err}"))?;
+        Ok(())
+    }
+
     /// Updates the status for a session row.
     ///
     /// # Errors
@@ -359,47 +394,6 @@ WHERE id = ?
         .execute(&self.pool)
         .await
         .map_err(|err| format!("Failed to update session prompt: {err}"))?;
-
-        Ok(())
-    }
-
-    /// Appends text to the saved output for a session row.
-    ///
-    /// # Errors
-    /// Returns an error if the output append update fails.
-    pub async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), String> {
-        sqlx::query(
-            r"
-UPDATE session
-SET output = output || ?
-WHERE id = ?
-",
-        )
-        .bind(chunk)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to append session output: {err}"))?;
-
-        Ok(())
-    }
-
-    /// Increments the commit count for a session by one.
-    ///
-    /// # Errors
-    /// Returns an error if the update fails.
-    pub async fn increment_commit_count(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
-            r"
-UPDATE session
-SET commit_count = commit_count + 1
-WHERE id = ?
-",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to increment commit count: {err}"))?;
 
         Ok(())
     }
@@ -474,21 +468,44 @@ WHERE id = ?
         Ok(())
     }
 
-    /// Deletes a session row by identifier.
+    /// Appends text to the saved output for a session row.
     ///
     /// # Errors
-    /// Returns an error if the session row cannot be deleted.
-    pub async fn delete_session(&self, id: &str) -> Result<(), String> {
+    /// Returns an error if the output append update fails.
+    pub async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), String> {
         sqlx::query(
             r"
-DELETE FROM session
+UPDATE session
+SET output = output || ?
+WHERE id = ?
+",
+        )
+        .bind(chunk)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to append session output: {err}"))?;
+
+        Ok(())
+    }
+
+    /// Increments the commit count for a session by one.
+    ///
+    /// # Errors
+    /// Returns an error if the update fails.
+    pub async fn increment_session_commit_count(&self, id: &str) -> Result<(), String> {
+        sqlx::query(
+            r"
+UPDATE session
+SET commit_count = commit_count + 1
 WHERE id = ?
 ",
         )
         .bind(id)
         .execute(&self.pool)
         .await
-        .map_err(|err| format!("Failed to delete session: {err}"))?;
+        .map_err(|err| format!("Failed to increment commit count: {err}"))?;
+
         Ok(())
     }
 
@@ -513,6 +530,45 @@ WHERE id = ?
         .map_err(|err| format!("Failed to clear session history: {err}"))?;
 
         Ok(())
+    }
+
+    /// Sets `project_id` for sessions that do not yet reference a project.
+    ///
+    /// # Errors
+    /// Returns an error if the backfill update fails.
+    pub async fn backfill_session_project(&self, project_id: i64) -> Result<(), String> {
+        sqlx::query(
+            r"
+UPDATE session
+SET project_id = ?
+WHERE project_id IS NULL
+",
+        )
+        .bind(project_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to backfill sessions: {err}"))?;
+        Ok(())
+    }
+
+    /// Returns the persisted base branch for a session, when present.
+    ///
+    /// # Errors
+    /// Returns an error if the base branch lookup query fails.
+    pub async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, String> {
+        let row = sqlx::query(
+            r"
+SELECT base_branch
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to get base branch: {err}"))?;
+
+        Ok(row.map(|row| row.get("base_branch")))
     }
 
     /// Inserts a queued operation row for a session.
@@ -806,26 +862,6 @@ WHERE status IN ('queued', 'running')
 
         Ok(())
     }
-
-    /// Returns the persisted base branch for a session, when present.
-    ///
-    /// # Errors
-    /// Returns an error if the base branch lookup query fails.
-    pub async fn get_base_branch(&self, id: &str) -> Result<Option<String>, String> {
-        let row = sqlx::query(
-            r"
-SELECT base_branch
-FROM session
-WHERE id = ?
-",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to get base branch: {err}"))?;
-
-        Ok(row.map(|row| row.get("base_branch")))
-    }
 }
 
 fn unix_timestamp_now() -> i64 {
@@ -936,40 +972,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_projects() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        db.upsert_project("/tmp/beta", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.upsert_project("/tmp/alpha", None)
-            .await
-            .expect("failed to upsert");
-
-        // Act
-        let projects = db.load_projects().await.expect("failed to load");
-
-        // Assert
-        assert_eq!(projects.len(), 2);
-        assert_eq!(projects[0].path, "/tmp/alpha");
-        assert_eq!(projects[0].git_branch, None);
-        assert_eq!(projects[1].path, "/tmp/beta");
-        assert_eq!(projects[1].git_branch, Some("main".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_load_projects_empty() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-
-        // Act
-        let projects = db.load_projects().await.expect("failed to load");
-
-        // Assert
-        assert!(projects.is_empty());
-    }
-
-    #[tokio::test]
     async fn test_get_project() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
@@ -1001,37 +1003,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_backfill_sessions_project() {
+    async fn test_load_projects() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+        db.upsert_project("/tmp/beta", Some("main"))
             .await
             .expect("failed to upsert");
-        // Insert session without project_id (simulates legacy data)
-        sqlx::query(
-            r"
-INSERT INTO session (id, agent, base_branch)
-VALUES (?, ?, ?)
-",
-        )
-        .bind("orphan")
-        .bind("claude")
-        .bind("main")
-        .execute(db.pool())
-        .await
-        .expect("failed to insert");
+        db.upsert_project("/tmp/alpha", None)
+            .await
+            .expect("failed to upsert");
 
         // Act
-        db.backfill_sessions_project(project_id)
-            .await
-            .expect("failed to backfill");
+        let projects = db.load_projects().await.expect("failed to load");
 
         // Assert
-        let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, "orphan");
-        assert_eq!(sessions[0].project_id, Some(project_id));
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].path, "/tmp/alpha");
+        assert_eq!(projects[0].git_branch, None);
+        assert_eq!(projects[1].path, "/tmp/beta");
+        assert_eq!(projects[1].git_branch, Some("main".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_load_projects_empty() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+
+        // Act
+        let projects = db.load_projects().await.expect("failed to load");
+
+        // Assert
+        assert!(projects.is_empty());
     }
 
     #[tokio::test]
@@ -1098,6 +1100,32 @@ VALUES (?, ?, ?)
 
         // Assert
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_insert_session_title_is_null_by_default() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "New",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let sessions = db.load_sessions().await.expect("failed to load");
+
+        // Assert
+        assert_eq!(sessions[0].title, None);
     }
 
     #[tokio::test]
@@ -1179,6 +1207,66 @@ WHERE id = 'beta'
     }
 
     #[tokio::test]
+    async fn test_load_sessions_include_project_ids() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_a = db
+            .upsert_project("/tmp/alpha", Some("main"))
+            .await
+            .expect("failed to upsert");
+        let project_b = db
+            .upsert_project("/tmp/beta", Some("develop"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Done",
+            project_a,
+        )
+        .await
+        .expect("failed to insert");
+        db.insert_session(
+            "sess2",
+            "gemini",
+            "gemini-3-flash-preview",
+            "develop",
+            "Done",
+            project_b,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let sessions = db.load_sessions().await.expect("failed to load");
+
+        // Assert
+        assert_eq!(sessions.len(), 2);
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.id == "sess1" && session.project_id == Some(project_a))
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.id == "sess1" && session.model == "claude-opus-4-6")
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.id == "sess2" && session.project_id == Some(project_b))
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.id == "sess2" && session.model == "gemini-3-flash-preview")
+        );
+    }
+
+    #[tokio::test]
     async fn test_load_sessions_metadata_empty() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
@@ -1253,227 +1341,6 @@ WHERE id = 'beta'
     }
 
     #[tokio::test]
-    async fn test_update_session_status() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "claude",
-            "claude-opus-4-6",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
-
-        let initial_sessions = db.load_sessions().await.expect("failed to load");
-        let initial_updated_at = initial_sessions[0].updated_at;
-
-        // Act
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let result = db.update_session_status("sess1", "Done").await;
-
-        // Assert
-        assert!(result.is_ok());
-        let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].status, "Done");
-        assert!(
-            sessions[0].updated_at > initial_updated_at,
-            "updated_at should be updated by trigger"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_increment_commit_count() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "claude",
-            "claude-opus-4-6",
-            "main",
-            "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
-
-        // Act
-        db.increment_commit_count("sess1")
-            .await
-            .expect("failed to increment");
-        db.increment_commit_count("sess1")
-            .await
-            .expect("failed to increment");
-
-        // Assert
-        let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].commit_count, 2);
-    }
-
-    #[tokio::test]
-    async fn test_update_session_title() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "claude",
-            "claude-opus-4-6",
-            "main",
-            "New",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
-
-        // Act
-        let result = db.update_session_title("sess1", "Fix the login bug").await;
-
-        // Assert
-        assert!(result.is_ok());
-        let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].title, Some("Fix the login bug".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_update_session_agent_and_model() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "claude",
-            "claude-opus-4-6",
-            "main",
-            "New",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
-
-        let initial_sessions = db.load_sessions().await.expect("failed to load");
-        let initial_updated_at = initial_sessions[0].updated_at;
-
-        // Act
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let result = db
-            .update_session_agent_and_model("sess1", "codex", "gpt-5.2-codex")
-            .await;
-
-        // Assert
-        assert!(result.is_ok());
-        let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].agent, "codex");
-        assert_eq!(sessions[0].model, "gpt-5.2-codex");
-        assert!(
-            sessions[0].updated_at > initial_updated_at,
-            "updated_at should be updated by trigger"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_insert_session_title_is_null_by_default() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "claude",
-            "claude-opus-4-6",
-            "main",
-            "New",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
-
-        // Act
-        let sessions = db.load_sessions().await.expect("failed to load");
-
-        // Assert
-        assert_eq!(sessions[0].title, None);
-    }
-
-    #[tokio::test]
-    async fn test_load_sessions_include_project_ids() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_a = db
-            .upsert_project("/tmp/alpha", Some("main"))
-            .await
-            .expect("failed to upsert");
-        let project_b = db
-            .upsert_project("/tmp/beta", Some("develop"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "claude",
-            "claude-opus-4-6",
-            "main",
-            "Done",
-            project_a,
-        )
-        .await
-        .expect("failed to insert");
-        db.insert_session(
-            "sess2",
-            "gemini",
-            "gemini-3-flash-preview",
-            "develop",
-            "Done",
-            project_b,
-        )
-        .await
-        .expect("failed to insert");
-
-        // Act
-        let sessions = db.load_sessions().await.expect("failed to load");
-
-        // Assert
-        assert_eq!(sessions.len(), 2);
-        assert!(
-            sessions
-                .iter()
-                .any(|session| session.id == "sess1" && session.project_id == Some(project_a))
-        );
-        assert!(
-            sessions
-                .iter()
-                .any(|session| session.id == "sess1" && session.model == "claude-opus-4-6")
-        );
-        assert!(
-            sessions
-                .iter()
-                .any(|session| session.id == "sess2" && session.project_id == Some(project_b))
-        );
-        assert!(
-            sessions
-                .iter()
-                .any(|session| session.id == "sess2" && session.model == "gemini-3-flash-preview")
-        );
-    }
-
-    #[tokio::test]
     async fn test_delete_session() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
@@ -1514,7 +1381,7 @@ WHERE id = 'beta'
     }
 
     #[tokio::test]
-    async fn test_get_base_branch_exists() {
+    async fn test_update_session_status() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
         let project_id = db
@@ -1526,32 +1393,55 @@ WHERE id = 'beta'
             "claude",
             "claude-opus-4-6",
             "main",
-            "Done",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        let initial_sessions = db.load_sessions().await.expect("failed to load");
+        let initial_updated_at = initial_sessions[0].updated_at;
+
+        // Act
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let result = db.update_session_status("sess1", "Done").await;
+
+        // Assert
+        assert!(result.is_ok());
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].status, "Done");
+        assert!(
+            sessions[0].updated_at > initial_updated_at,
+            "updated_at should be updated by trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_session_title() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "New",
             project_id,
         )
         .await
         .expect("failed to insert");
 
         // Act
-        let branch = db.get_base_branch("sess1").await.expect("failed to get");
+        let result = db.update_session_title("sess1", "Fix the login bug").await;
 
         // Assert
-        assert_eq!(branch, Some("main".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_get_base_branch_not_found() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-
-        // Act
-        let branch = db
-            .get_base_branch("nonexistent")
-            .await
-            .expect("failed to get");
-
-        // Assert
-        assert_eq!(branch, None);
+        assert!(result.is_ok());
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].title, Some("Fix the login bug".to_string()));
     }
 
     #[tokio::test]
@@ -1612,6 +1502,77 @@ WHERE id = 'beta'
         // Assert
         assert_eq!(sessions[0].input_tokens, None);
         assert_eq!(sessions[0].output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_session_agent_and_model() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "New",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        let initial_sessions = db.load_sessions().await.expect("failed to load");
+        let initial_updated_at = initial_sessions[0].updated_at;
+
+        // Act
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let result = db
+            .update_session_agent_and_model("sess1", "codex", "gpt-5.2-codex")
+            .await;
+
+        // Assert
+        assert!(result.is_ok());
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].agent, "codex");
+        assert_eq!(sessions[0].model, "gpt-5.2-codex");
+        assert!(
+            sessions[0].updated_at > initial_updated_at,
+            "updated_at should be updated by trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_increment_session_commit_count() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        db.increment_session_commit_count("sess1")
+            .await
+            .expect("failed to increment");
+        db.increment_session_commit_count("sess1")
+            .await
+            .expect("failed to increment");
+
+        // Assert
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions[0].commit_count, 2);
     }
 
     #[tokio::test]
@@ -1680,6 +1641,84 @@ WHERE id = 'beta'
     }
 
     #[tokio::test]
+    async fn test_backfill_session_project() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        // Insert session without project_id (simulates legacy data)
+        sqlx::query(
+            r"
+INSERT INTO session (id, agent, base_branch)
+VALUES (?, ?, ?)
+",
+        )
+        .bind("orphan")
+        .bind("claude")
+        .bind("main")
+        .execute(db.pool())
+        .await
+        .expect("failed to insert");
+
+        // Act
+        db.backfill_session_project(project_id)
+            .await
+            .expect("failed to backfill");
+
+        // Assert
+        let sessions = db.load_sessions().await.expect("failed to load");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "orphan");
+        assert_eq!(sessions[0].project_id, Some(project_id));
+    }
+
+    #[tokio::test]
+    async fn test_get_session_base_branch_exists() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "claude",
+            "claude-opus-4-6",
+            "main",
+            "Done",
+            project_id,
+        )
+        .await
+        .expect("failed to insert");
+
+        // Act
+        let branch = db
+            .get_session_base_branch("sess1")
+            .await
+            .expect("failed to get");
+
+        // Assert
+        assert_eq!(branch, Some("main".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_session_base_branch_not_found() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+
+        // Act
+        let branch = db
+            .get_session_base_branch("nonexistent")
+            .await
+            .expect("failed to get");
+
+        // Assert
+        assert_eq!(branch, None);
+    }
+
+    #[tokio::test]
     async fn test_insert_and_load_unfinished_session_operations() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
@@ -1714,6 +1753,46 @@ WHERE id = 'beta'
         assert_eq!(operations[0].kind, "start_prompt");
         assert_eq!(operations[0].status, "queued");
         assert!(!operations[0].cancel_requested);
+    }
+
+    #[tokio::test]
+    async fn test_is_session_operation_unfinished() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "gemini",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        db.insert_session_operation("op-4", "sess1", "reply")
+            .await
+            .expect("failed to insert operation");
+
+        // Act
+        let is_unfinished_before = db
+            .is_session_operation_unfinished("op-4")
+            .await
+            .expect("failed to read unfinished flag");
+        db.mark_session_operation_done("op-4")
+            .await
+            .expect("failed to mark operation done");
+        let is_unfinished_after = db
+            .is_session_operation_unfinished("op-4")
+            .await
+            .expect("failed to read unfinished flag after done");
+
+        // Assert
+        assert!(is_unfinished_before);
+        assert!(!is_unfinished_after);
     }
 
     #[tokio::test]
@@ -1801,45 +1880,5 @@ WHERE id = 'beta'
         // Assert
         assert!(is_requested);
         assert!(!pending_after_cancel);
-    }
-
-    #[tokio::test]
-    async fn test_is_session_operation_unfinished() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "gemini",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.insert_session_operation("op-4", "sess1", "reply")
-            .await
-            .expect("failed to insert operation");
-
-        // Act
-        let is_unfinished_before = db
-            .is_session_operation_unfinished("op-4")
-            .await
-            .expect("failed to read unfinished flag");
-        db.mark_session_operation_done("op-4")
-            .await
-            .expect("failed to mark operation done");
-        let is_unfinished_after = db
-            .is_session_operation_unfinished("op-4")
-            .await
-            .expect("failed to read unfinished flag after done");
-
-        // Assert
-        assert!(is_unfinished_before);
-        assert!(!is_unfinished_after);
     }
 }
