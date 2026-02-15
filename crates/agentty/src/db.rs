@@ -1413,12 +1413,12 @@ WHERE id = 'beta'
 
         // Act
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let result = db.update_session_status("sess1", "Done").await;
+        let result = db.update_session_status("sess1", "Merging").await;
 
         // Assert
         assert!(result.is_ok());
         let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].status, "Done");
+        assert_eq!(sessions[0].status, "Merging");
         assert!(
             sessions[0].updated_at > initial_updated_at,
             "updated_at should be updated by trigger"

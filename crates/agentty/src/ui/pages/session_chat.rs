@@ -233,7 +233,10 @@ impl<'a> SessionChatPage<'a> {
 
         if matches!(
             status,
-            Status::InProgress | Status::PullRequest | Status::CreatingPullRequest
+            Status::InProgress
+                | Status::Merging
+                | Status::PullRequest
+                | Status::CreatingPullRequest
         ) {
             while lines.last().is_some_and(|line| line.width() == 0) {
                 lines.pop();
@@ -255,6 +258,7 @@ impl<'a> SessionChatPage<'a> {
     fn status_message(status: Status) -> &'static str {
         match status {
             Status::InProgress => "Thinking...",
+            Status::Merging => "Merging...",
             Status::CreatingPullRequest => "Creating PR...",
             Status::PullRequest => "Waiting for PR merge...",
             Status::New | Status::Review | Status::Done | Status::Canceled => "",
@@ -546,5 +550,14 @@ mod tests {
 
         // Assert
         assert_eq!(description, "Clear chat history and start fresh.");
+    }
+
+    #[test]
+    fn test_status_message_for_merging() {
+        // Arrange & Act
+        let message = SessionChatPage::status_message(Status::Merging);
+
+        // Assert
+        assert_eq!(message, "Merging...");
     }
 }

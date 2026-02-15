@@ -473,71 +473,90 @@ impl App {
             .iter()
             .find(|session| session.id == session_id)
             .ok_or_else(|| "Session not found".to_string())?;
-        if !matches!(session.status(), Status::Review | Status::PullRequest) {
-            return Err("Session must be in review or pull request status".to_string());
+        if session.status() != Status::Review {
+            return Err("Session must be in review status".to_string());
         }
 
-        // Read base branch from DB
-        let base_branch = self
-            .db
-            .get_session_base_branch(&session.id)
-            .await?
-            .ok_or_else(|| "No git worktree for this session".to_string())?;
+        if !Self::update_status(&session.status, &self.db, &session.id, Status::Merging).await {
+            return Err("Invalid status transition to Merging".to_string());
+        }
 
-        // Find repo root
-        let repo_root = git::find_git_repo_root(&self.working_dir)
-            .ok_or_else(|| "Failed to find git repository root".to_string())?;
+        let merge_result: Result<String, String> = async {
+            // Read base branch from DB
+            let base_branch = self
+                .db
+                .get_session_base_branch(&session.id)
+                .await?
+                .ok_or_else(|| "No git worktree for this session".to_string())?;
 
-        // Build source branch name
-        let source_branch = session_branch(&session.id);
+            // Find repo root
+            let repo_root = git::find_git_repo_root(&self.working_dir)
+                .ok_or_else(|| "Failed to find git repository root".to_string())?;
 
-        let squash_diff = {
-            let repo_root = repo_root.clone();
-            let source_branch = source_branch.clone();
-            let base_branch = base_branch.clone();
+            // Build source branch name
+            let source_branch = session_branch(&session.id);
 
-            tokio::task::spawn_blocking(move || {
-                git::squash_merge_diff(&repo_root, &source_branch, &base_branch)
-            })
+            let squash_diff = {
+                let repo_root = repo_root.clone();
+                let source_branch = source_branch.clone();
+                let base_branch = base_branch.clone();
+
+                tokio::task::spawn_blocking(move || {
+                    git::squash_merge_diff(&repo_root, &source_branch, &base_branch)
+                })
+                .await
+                .map_err(|error| format!("Join error: {error}"))?
+                .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
+            };
+
+            let commit_message =
+                Self::generate_merge_commit_message_from_diff(session, &squash_diff)
+                    .unwrap_or_else(|| {
+                        Self::fallback_merge_commit_message(&source_branch, &base_branch)
+                    });
+
+            // Perform squash merge
+            {
+                let repo_root = repo_root.clone();
+                let source_branch = source_branch.clone();
+                let base_branch = base_branch.clone();
+                let commit_message = commit_message.clone();
+                tokio::task::spawn_blocking(move || {
+                    git::squash_merge(&repo_root, &source_branch, &base_branch, &commit_message)
+                })
+                .await
+                .map_err(|error| format!("Join error: {error}"))?
+                .map_err(|error| format!("Failed to merge: {error}"))?;
+            }
+
+            if !Self::update_status(&session.status, &self.db, &session.id, Status::Done).await {
+                return Err("Invalid status transition to Done".to_string());
+            }
+
+            self.cancel_pr_polling_for_session(&session.id);
+            self.clear_pr_creation_in_flight(&session.id);
+            Self::cleanup_merged_session_worktree(
+                session.folder.clone(),
+                source_branch.clone(),
+                Some(repo_root),
+            )
             .await
-            .map_err(|error| format!("Join error: {error}"))?
-            .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
-        };
+            .map_err(|error| {
+                format!("Merged successfully but failed to remove worktree: {error}")
+            })?;
 
-        let commit_message = Self::generate_merge_commit_message_from_diff(session, &squash_diff)
-            .unwrap_or_else(|| Self::fallback_merge_commit_message(&source_branch, &base_branch));
+            Ok(format!(
+                "Successfully merged {source_branch} into {base_branch}"
+            ))
+        }
+        .await;
 
-        // Perform squash merge
-        {
-            let repo_root = repo_root.clone();
-            let source_branch = source_branch.clone();
-            let base_branch = base_branch.clone();
-            let commit_message = commit_message.clone();
-            tokio::task::spawn_blocking(move || {
-                git::squash_merge(&repo_root, &source_branch, &base_branch, &commit_message)
-            })
-            .await
-            .map_err(|e| format!("Join error: {e}"))?
-            .map_err(|err| format!("Failed to merge: {err}"))?;
+        if merge_result.is_err() {
+            let _ =
+                Self::update_status(&session.status, &self.db, &session.id, Status::Review).await;
         }
 
-        if !Self::update_status(&session.status, &self.db, &session.id, Status::Done).await {
-            return Err("Invalid status transition to Done".to_string());
-        }
-
-        self.cancel_pr_polling_for_session(&session.id);
-        self.clear_pr_creation_in_flight(&session.id);
-        Self::cleanup_merged_session_worktree(
-            session.folder.clone(),
-            source_branch.clone(),
-            Some(repo_root),
-        )
-        .await
-        .map_err(|error| format!("Merged successfully but failed to remove worktree: {error}"))?;
-
-        Ok(format!(
-            "Successfully merged {source_branch} into {base_branch}"
-        ))
+        merge_result
     }
 
     /// Rebases a reviewed session branch onto its base branch.

@@ -96,6 +96,7 @@ fn status_column_width() -> Constraint {
             Status::New,
             Status::InProgress,
             Status::Review,
+            Status::Merging,
             Status::CreatingPullRequest,
             Status::PullRequest,
             Status::Done,

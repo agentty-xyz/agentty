@@ -26,6 +26,7 @@ pub enum Status {
     New,
     InProgress,
     Review,
+    Merging,
     CreatingPullRequest,
     PullRequest,
     Done,
@@ -38,6 +39,7 @@ impl std::fmt::Display for Status {
             Status::New => write!(f, "New"),
             Status::InProgress => write!(f, "InProgress"),
             Status::Review => write!(f, "Review"),
+            Status::Merging => write!(f, "Merging"),
             Status::CreatingPullRequest => write!(f, "CreatingPullRequest"),
             Status::PullRequest => write!(f, "PullRequest"),
             Status::Done => write!(f, "Done"),
@@ -54,6 +56,7 @@ impl std::str::FromStr for Status {
             "New" => Ok(Status::New),
             "InProgress" | "Committing" => Ok(Status::InProgress),
             "Review" => Ok(Status::Review),
+            "Merging" => Ok(Status::Merging),
             "CreatingPullRequest" => Ok(Status::CreatingPullRequest),
             "PullRequest" | "Processing" => Ok(Status::PullRequest),
             "Done" => Ok(Status::Done),
@@ -598,7 +601,7 @@ impl Status {
                     Status::Review,
                     Status::InProgress
                         | Status::PullRequest
-                        | Status::Done
+                        | Status::Merging
                         | Status::Canceled
                         | Status::CreatingPullRequest
                 )
@@ -607,6 +610,7 @@ impl Status {
                     Status::CreatingPullRequest,
                     Status::PullRequest | Status::Review
                 )
+                | (Status::Merging, Status::Done | Status::Review)
                 | (Status::PullRequest, Status::Done | Status::Canceled)
         )
     }
@@ -614,9 +618,10 @@ impl Status {
     pub fn icon(self) -> Icon {
         match self {
             Status::New | Status::Review => Icon::Pending,
-            Status::InProgress | Status::PullRequest | Status::CreatingPullRequest => {
-                Icon::current_spinner()
-            }
+            Status::InProgress
+            | Status::Merging
+            | Status::PullRequest
+            | Status::CreatingPullRequest => Icon::current_spinner(),
             Status::Done => Icon::Check,
             Status::Canceled => Icon::Cross,
         }
@@ -627,7 +632,7 @@ impl Status {
             Status::New => Color::DarkGray,
             Status::InProgress => Color::Yellow,
             Status::Review => Color::LightBlue,
-            Status::PullRequest | Status::CreatingPullRequest => Color::Cyan,
+            Status::Merging | Status::PullRequest | Status::CreatingPullRequest => Color::Cyan,
             Status::Done => Color::Green,
             Status::Canceled => Color::Red,
         }
@@ -755,6 +760,7 @@ mod tests {
         assert_eq!(Status::New.icon(), Icon::Pending);
         assert!(matches!(Status::InProgress.icon(), Icon::Spinner(_)));
         assert_eq!(Status::Review.icon(), Icon::Pending);
+        assert!(matches!(Status::Merging.icon(), Icon::Spinner(_)));
         assert!(matches!(
             Status::CreatingPullRequest.icon(),
             Icon::Spinner(_)
@@ -770,6 +776,7 @@ mod tests {
         assert_eq!(Status::New.color(), Color::DarkGray);
         assert_eq!(Status::InProgress.color(), Color::Yellow);
         assert_eq!(Status::Review.color(), Color::LightBlue);
+        assert_eq!(Status::Merging.color(), Color::Cyan);
         assert_eq!(Status::CreatingPullRequest.color(), Color::Cyan);
         assert_eq!(Status::PullRequest.color(), Color::Cyan);
         assert_eq!(Status::Done.color(), Color::Green);
@@ -801,13 +808,16 @@ mod tests {
         assert!(!Status::New.can_transition_to(Status::Review));
         assert!(!Status::New.can_transition_to(Status::Done));
         assert!(Status::Review.can_transition_to(Status::InProgress));
+        assert!(Status::Review.can_transition_to(Status::Merging));
         assert!(Status::Review.can_transition_to(Status::PullRequest));
         assert!(Status::Review.can_transition_to(Status::CreatingPullRequest));
-        assert!(Status::Review.can_transition_to(Status::Done));
         assert!(Status::Review.can_transition_to(Status::Canceled));
         assert!(Status::CreatingPullRequest.can_transition_to(Status::PullRequest));
         assert!(Status::CreatingPullRequest.can_transition_to(Status::Review));
         assert!(!Status::CreatingPullRequest.can_transition_to(Status::Canceled));
+        assert!(Status::Merging.can_transition_to(Status::Done));
+        assert!(Status::Merging.can_transition_to(Status::Review));
+        assert!(!Status::Merging.can_transition_to(Status::PullRequest));
         assert!(Status::InProgress.can_transition_to(Status::Review));
         assert!(!Status::InProgress.can_transition_to(Status::Canceled));
         assert!(Status::PullRequest.can_transition_to(Status::Done));
