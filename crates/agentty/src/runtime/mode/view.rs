@@ -77,6 +77,9 @@ pub(crate) async fn handle(
         KeyCode::Char('m') => {
             merge_view_session(app, &view_context.session_id).await;
         }
+        KeyCode::Char('r') => {
+            rebase_view_session(app, &view_context.session_id).await;
+        }
         KeyCode::Char('p') => {
             create_pr_for_view_session(app, &view_context.session_id).await;
         }
@@ -185,6 +188,16 @@ async fn merge_view_session(app: &mut App, session_id: &str) {
     let result_message = match app.merge_session(session_id).await {
         Ok(message) => format!("\n[Merge] {message}\n"),
         Err(error) => format!("\n[Merge Error] {error}\n"),
+    };
+
+    app.append_output_for_session(session_id, &result_message)
+        .await;
+}
+
+async fn rebase_view_session(app: &mut App, session_id: &str) {
+    let result_message = match app.rebase_session(session_id).await {
+        Ok(message) => format!("\n[Rebase] {message}\n"),
+        Err(error) => format!("\n[Rebase Error] {error}\n"),
     };
 
     app.append_output_for_session(session_id, &result_message)
@@ -420,6 +433,24 @@ mod tests {
             .expect("lock poisoned")
             .clone();
         assert!(output.contains("[Merge Error]"));
+    }
+
+    #[tokio::test]
+    async fn test_rebase_view_session_appends_error_output_without_review_status() {
+        // Arrange
+        let (app, _base_dir, session_id) = new_test_app_with_session().await;
+        let mut app = app;
+
+        // Act
+        rebase_view_session(&mut app, &session_id).await;
+
+        // Assert
+        let output = app.session_state.sessions[0]
+            .output
+            .lock()
+            .expect("lock poisoned")
+            .clone();
+        assert!(output.contains("[Rebase Error]"));
     }
 
     #[tokio::test]

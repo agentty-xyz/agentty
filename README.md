@@ -53,6 +53,7 @@ Agentty creates isolated worktrees for each session:
 - **Isolated Branches:** Each session gets its own branch named `agentty/<hash>` based on your current branch
 - **Separate Working Directory:** Sessions work in isolated directories under `~/.agentty/wt/`
 - **Diff View:** Press `d` in the chat view to see real-time changes made by the agent
+- **Rebase Action:** Press `r` in the chat view to rebase the session branch onto its base branch
 - **Automatic Cleanup:** Worktrees and branches are automatically removed when sessions are deleted
 
 This allows agents to work on code changes without affecting your main working directory.

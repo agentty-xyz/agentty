@@ -278,6 +278,63 @@ pub fn squash_merge(
     Ok(())
 }
 
+/// Rebases the current branch onto `target_branch`.
+///
+/// If the rebase fails, this function attempts to abort it immediately so the
+/// repository does not remain in an in-progress rebase state.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `target_branch` - Branch to rebase onto (e.g., `main`)
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) with detailed error message on failure
+///
+/// # Errors
+/// Returns an error if `git rebase` fails, or if aborting a failed rebase also
+/// fails.
+pub fn rebase(repo_path: &Path, target_branch: &str) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["rebase", target_branch])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        let detail = if detail.is_empty() {
+            "Unknown git rebase error"
+        } else {
+            detail
+        };
+
+        let abort_suffix = match Command::new("git")
+            .args(["rebase", "--abort"])
+            .current_dir(repo_path)
+            .output()
+        {
+            Ok(abort_output) if abort_output.status.success() => String::new(),
+            Ok(abort_output) => {
+                let abort_stderr = String::from_utf8_lossy(&abort_output.stderr);
+                format!(" Failed to abort rebase: {}.", abort_stderr.trim())
+            }
+            Err(error) => format!(" Failed to abort rebase: {error}."),
+        };
+
+        return Err(format!(
+            "Failed to rebase onto {target_branch}: {detail}.{abort_suffix}"
+        ));
+    }
+
+    Ok(())
+}
+
 /// Stages all changes and commits them with the given message.
 ///
 /// # Arguments
@@ -1092,6 +1149,139 @@ mod tests {
             result
                 .expect_err("should be error")
                 .contains("Failed to checkout")
+        );
+    }
+
+    #[test]
+    fn test_rebase_success() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "-b", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("feature.txt"), "feature content").expect("test setup failed");
+        Command::new("git")
+            .args(["add", "feature.txt"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: feature branch update"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "main branch update").expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: main branch update"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+
+        // Act
+        let result = rebase(dir.path(), "main");
+
+        // Assert
+        assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
+        let current_branch_output = Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test execution failed");
+        let current_branch = String::from_utf8_lossy(&current_branch_output.stdout)
+            .trim()
+            .to_string();
+        assert_eq!(current_branch, "feature-branch");
+
+        let status_output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test execution failed");
+        let status = String::from_utf8_lossy(&status_output.stdout);
+        assert!(status.trim().is_empty(), "working tree should be clean");
+    }
+
+    #[test]
+    fn test_rebase_conflict_aborts_in_progress_state() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "-b", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "feature branch update")
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: feature branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "main branch update").expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: main branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+
+        // Act
+        let result = rebase(dir.path(), "main");
+
+        // Assert
+        assert!(result.is_err());
+        let error = result.expect_err("should be error");
+        assert!(
+            error.contains("Failed to rebase onto main"),
+            "unexpected error: {error}"
+        );
+
+        let rebase_head_output = Command::new("git")
+            .args(["rev-parse", "--verify", "REBASE_HEAD"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test execution failed");
+        assert!(
+            !rebase_head_output.status.success(),
+            "rebase should be aborted and REBASE_HEAD should not exist"
         );
     }
 

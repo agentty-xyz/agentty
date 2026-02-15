@@ -540,6 +540,44 @@ impl App {
         ))
     }
 
+    /// Rebases a reviewed session branch onto its base branch.
+    ///
+    /// # Errors
+    /// Returns an error if the session is invalid for rebase, required git
+    /// metadata is missing, or the rebase command fails.
+    pub async fn rebase_session(&self, session_id: &str) -> Result<String, String> {
+        let session = self
+            .session_state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .ok_or_else(|| "Session not found".to_string())?;
+        if session.status() != Status::Review {
+            return Err("Session must be in review status".to_string());
+        }
+
+        let base_branch = self
+            .db
+            .get_session_base_branch(&session.id)
+            .await?
+            .ok_or_else(|| "No git worktree for this session".to_string())?;
+
+        let session_folder = session.folder.clone();
+        {
+            let base_branch = base_branch.clone();
+            tokio::task::spawn_blocking(move || git::rebase(&session_folder, &base_branch))
+                .await
+                .map_err(|error| format!("Join error: {error}"))?
+                .map_err(|error| format!("Failed to rebase: {error}"))?;
+        }
+
+        let source_branch = session_branch(&session.id);
+
+        Ok(format!(
+            "Successfully rebased {source_branch} onto {base_branch}"
+        ))
+    }
+
     fn generate_merge_commit_message_from_diff(session: &Session, diff: &str) -> Option<String> {
         let prompt = Self::merge_commit_message_prompt(diff);
         let (session_agent, session_model) = Self::resolve_session_agent_and_model(session);
@@ -2239,6 +2277,123 @@ WHERE id = 'beta0000'
         let commit_message = String::from_utf8_lossy(&commit_output.stdout);
         assert!(!commit_message.trim().is_empty());
         assert!(!commit_message.contains("Test merge commit"));
+    }
+
+    #[tokio::test]
+    async fn test_rebase_session_no_git() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
+        add_manual_session(&mut app, dir.path(), "manual01", "Test");
+
+        // Act
+        let result = app.rebase_session("manual01").await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("No git worktree")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rebase_session_requires_review_status() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+
+        // Act
+        let result = app.rebase_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("must be in review")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rebase_session_invalid_id() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app_with_git(dir.path()).await;
+
+        // Act
+        let result = app.rebase_session("missing").await;
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("should be error")
+                .contains("Session not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rebase_session_updates_session_worktree_to_base_head() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_folder = app.session_state.sessions[0].folder.clone();
+        if let Ok(mut status) = app.session_state.sessions[0].status.lock() {
+            *status = Status::Review;
+        }
+        std::fs::write(dir.path().join("main-only.txt"), "main change")
+            .expect("failed to write main change");
+        Command::new("git")
+            .args(["add", "main-only.txt"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to stage main change");
+        Command::new("git")
+            .args(["commit", "-m", "main update"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to commit main change");
+
+        // Act
+        let result = app.rebase_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
+        assert!(
+            result
+                .expect("rebase should succeed")
+                .contains("Successfully rebased")
+        );
+
+        let base_head_output = Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to resolve base head");
+        let base_head = String::from_utf8_lossy(&base_head_output.stdout)
+            .trim()
+            .to_string();
+
+        let session_head_output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(session_folder)
+            .output()
+            .expect("failed to resolve session head");
+        let session_head = String::from_utf8_lossy(&session_head_output.stdout)
+            .trim()
+            .to_string();
+
+        assert_eq!(session_head, base_head);
     }
 
     #[tokio::test]

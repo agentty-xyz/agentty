@@ -388,6 +388,7 @@ impl HelpContext {
                 ("d", "Show diff"),
                 ("p", "Create PR"),
                 ("m", "Merge"),
+                ("r", "Rebase"),
                 ("g", "Scroll to top"),
                 ("G", "Scroll to bottom"),
                 ("Ctrl+d", "Half page down"),
@@ -1326,6 +1327,7 @@ mod tests {
         // Assert
         assert!(bindings.iter().any(|(key, _)| *key == "d"));
         assert!(bindings.iter().any(|(key, _)| *key == "p"));
+        assert!(bindings.iter().any(|(key, _)| *key == "r"));
     }
 
     #[test]
