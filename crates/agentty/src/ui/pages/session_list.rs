@@ -3,7 +3,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
-use crate::model::{Session, Status};
+use crate::model::{Session, SessionSize, Status};
 use crate::ui::Page;
 
 /// Session list page renderer.
@@ -34,7 +34,7 @@ impl Page for SessionListPage<'_> {
 
         let selected_style = Style::default().bg(Color::DarkGray);
         let normal_style = Style::default().bg(Color::Gray).fg(Color::Black);
-        let header_cells = ["Session", "Project", "Model", "Status"]
+        let header_cells = ["Session", "Project", "Model", "Size", "Status"]
             .iter()
             .map(|h| Cell::from(*h));
         let header = Row::new(header_cells)
@@ -47,6 +47,7 @@ impl Page for SessionListPage<'_> {
                 Cell::from(session.display_title().to_string()),
                 Cell::from(session.project_name.clone()),
                 Cell::from(session.model.clone()),
+                Cell::from(session.size.to_string()),
                 Cell::from(format!("{status}")).style(Style::default().fg(status.color())),
             ];
             Row::new(cells).height(1)
@@ -57,6 +58,7 @@ impl Page for SessionListPage<'_> {
                 Constraint::Min(0),
                 project_column_width(self.sessions),
                 model_column_width(self.sessions),
+                size_column_width(),
                 status_column_width(),
             ],
         )
@@ -104,6 +106,15 @@ fn status_column_width() -> Constraint {
         ]
         .iter()
         .map(std::string::ToString::to_string),
+    )
+}
+
+fn size_column_width() -> Constraint {
+    text_column_width(
+        "Size",
+        SessionSize::ALL
+            .iter()
+            .map(std::string::ToString::to_string),
     )
 }
 
@@ -159,6 +170,18 @@ mod tests {
 
         // Act
         let width = text_column_width("Model", models.into_iter());
+
+        // Assert
+        assert_eq!(width, Constraint::Length(expected_width));
+    }
+
+    #[test]
+    fn test_size_column_width_uses_header_width() {
+        // Arrange
+        let expected_width = u16::try_from("Size".chars().count()).unwrap_or(u16::MAX);
+
+        // Act
+        let width = size_column_width();
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));

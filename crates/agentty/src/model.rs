@@ -77,6 +77,18 @@ pub enum Status {
     Canceled,
 }
 
+/// Size bucket derived from a session's git diff.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SessionSize {
+    #[default]
+    Xs,
+    S,
+    M,
+    L,
+    Xl,
+    Xxl,
+}
+
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -107,6 +119,57 @@ impl std::str::FromStr for Status {
             "Canceled" | "Cancelled" => Ok(Status::Canceled),
             _ => Err(format!("Unknown status: {s}")),
         }
+    }
+}
+
+impl SessionSize {
+    pub(crate) const ALL: [SessionSize; 6] = [
+        SessionSize::Xs,
+        SessionSize::S,
+        SessionSize::M,
+        SessionSize::L,
+        SessionSize::Xl,
+        SessionSize::Xxl,
+    ];
+
+    pub(crate) fn from_diff(diff: &str) -> Self {
+        let changed_line_count = diff
+            .lines()
+            .filter(|line| {
+                (line.starts_with('+') && !line.starts_with("+++"))
+                    || (line.starts_with('-') && !line.starts_with("---"))
+            })
+            .count();
+
+        Self::from_changed_line_count(changed_line_count)
+    }
+
+    fn from_changed_line_count(changed_line_count: usize) -> Self {
+        match changed_line_count {
+            0..=10 => SessionSize::Xs,
+            11..=30 => SessionSize::S,
+            31..=80 => SessionSize::M,
+            81..=200 => SessionSize::L,
+            201..=500 => SessionSize::Xl,
+            _ => SessionSize::Xxl,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SessionSize::Xs => "XS",
+            SessionSize::S => "S",
+            SessionSize::M => "M",
+            SessionSize::L => "L",
+            SessionSize::Xl => "XL",
+            SessionSize::Xxl => "XXL",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
     }
 }
 
@@ -569,6 +632,7 @@ pub struct SessionStats {
     pub output_tokens: Option<i64>,
 }
 
+/// In-memory session model used across UI and runtime orchestration.
 pub struct Session {
     pub agent: String,
     pub base_branch: String,
@@ -580,6 +644,7 @@ pub struct Session {
     pub permission_mode: PermissionMode,
     pub project_name: String,
     pub prompt: String,
+    pub size: SessionSize,
     pub stats: SessionStats,
     pub status: Arc<Mutex<Status>>,
     pub title: Option<String>,
@@ -705,6 +770,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: String::new(),
+            size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::New)),
             title: Some("Fix the login bug".to_string()),
@@ -728,6 +794,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: String::new(),
+            size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::New)),
             title: None,
@@ -751,6 +818,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: "prompt".to_string(),
+            size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::Review)),
             title: None,
@@ -791,6 +859,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: "prompt".to_string(),
+            size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::Done)),
             title: None,
@@ -831,6 +900,28 @@ mod tests {
         assert_eq!(Status::PullRequest.color(), Color::Cyan);
         assert_eq!(Status::Done.color(), Color::Green);
         assert_eq!(Status::Canceled.color(), Color::Red);
+    }
+
+    #[test]
+    fn test_session_size_from_diff_uses_expected_buckets() {
+        // Arrange
+        let tiny_diff = "+line\n".repeat(10);
+        let small_diff = "+line\n".repeat(11);
+        let medium_diff = "+line\n".repeat(31);
+        let large_diff = "+line\n".repeat(81);
+        let extra_large_diff = "+line\n".repeat(201);
+        let double_extra_large_diff = "+line\n".repeat(501);
+
+        // Act & Assert
+        assert_eq!(SessionSize::from_diff(&tiny_diff), SessionSize::Xs);
+        assert_eq!(SessionSize::from_diff(&small_diff), SessionSize::S);
+        assert_eq!(SessionSize::from_diff(&medium_diff), SessionSize::M);
+        assert_eq!(SessionSize::from_diff(&large_diff), SessionSize::L);
+        assert_eq!(SessionSize::from_diff(&extra_large_diff), SessionSize::Xl);
+        assert_eq!(
+            SessionSize::from_diff(&double_extra_large_diff),
+            SessionSize::Xxl
+        );
     }
 
     #[test]

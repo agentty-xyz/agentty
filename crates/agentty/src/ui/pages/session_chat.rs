@@ -340,7 +340,7 @@ mod tests {
 
     use super::*;
     use crate::file_list::FileEntry;
-    use crate::model::{PermissionMode, SessionStats};
+    use crate::model::{PermissionMode, SessionSize, SessionStats};
 
     fn session_fixture() -> Session {
         Session {
@@ -354,6 +354,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::New)),
             title: None,

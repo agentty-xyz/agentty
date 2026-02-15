@@ -15,7 +15,7 @@ use crate::app::worker::SessionCommand;
 use crate::db::Database;
 use crate::git;
 use crate::model::{
-    AppMode, PermissionMode, Project, SESSION_DATA_DIR, Session, SessionStats, Status,
+    AppMode, PermissionMode, Project, SESSION_DATA_DIR, Session, SessionSize, SessionStats, Status,
 };
 
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -1068,76 +1068,92 @@ impl App {
             .collect();
 
         let db_rows = db.load_sessions().await.unwrap_or_default();
-        let sessions: Vec<Session> = db_rows
-            .into_iter()
-            .filter_map(|row| {
-                let folder = session_folder(base, &row.id);
-                let status = row.status.parse::<Status>().unwrap_or(Status::Done);
-                let keep_without_folder = matches!(status, Status::Done | Status::Canceled);
-                if !folder.is_dir() && !keep_without_folder {
-                    return None;
-                }
+        let mut sessions: Vec<Session> = Vec::new();
+        for row in db_rows {
+            let folder = session_folder(base, &row.id);
+            let status = row.status.parse::<Status>().unwrap_or(Status::Done);
+            let keep_without_folder = matches!(status, Status::Done | Status::Canceled);
+            if !folder.is_dir() && !keep_without_folder {
+                continue;
+            }
 
-                let session_agent = row.agent.parse::<AgentKind>().unwrap_or(AgentKind::Gemini);
-                let session_model = session_agent
-                    .parse_model(&row.model)
-                    .unwrap_or_else(|| session_agent.default_model())
-                    .as_str()
-                    .to_string();
-                let project_name = row
-                    .project_id
-                    .and_then(|id| project_names.get(&id))
-                    .cloned()
-                    .unwrap_or_default();
-                let (output, status, commit_count) =
-                    if let Some((existing_output, existing_status, existing_commit_count)) =
-                        existing_sessions_by_name.get(&row.id)
-                    {
-                        if let Ok(mut output_buffer) = existing_output.lock() {
-                            output_buffer.clone_from(&row.output);
-                        }
-                        if let Ok(mut status_value) = existing_status.lock() {
-                            *status_value = status;
-                        }
-                        if let Ok(mut count) = existing_commit_count.lock() {
-                            *count = row.commit_count;
-                        }
+            let session_agent = row.agent.parse::<AgentKind>().unwrap_or(AgentKind::Gemini);
+            let session_model = session_agent
+                .parse_model(&row.model)
+                .unwrap_or_else(|| session_agent.default_model())
+                .as_str()
+                .to_string();
+            let project_name = row
+                .project_id
+                .and_then(|id| project_names.get(&id))
+                .cloned()
+                .unwrap_or_default();
+            let (output, status, commit_count) =
+                if let Some((existing_output, existing_status, existing_commit_count)) =
+                    existing_sessions_by_name.get(&row.id)
+                {
+                    if let Ok(mut output_buffer) = existing_output.lock() {
+                        output_buffer.clone_from(&row.output);
+                    }
+                    if let Ok(mut status_value) = existing_status.lock() {
+                        *status_value = status;
+                    }
+                    if let Ok(mut count) = existing_commit_count.lock() {
+                        *count = row.commit_count;
+                    }
 
-                        (
-                            Arc::clone(existing_output),
-                            Arc::clone(existing_status),
-                            Arc::clone(existing_commit_count),
-                        )
-                    } else {
-                        (
-                            Arc::new(Mutex::new(row.output.clone())),
-                            Arc::new(Mutex::new(status)),
-                            Arc::new(Mutex::new(row.commit_count)),
-                        )
-                    };
+                    (
+                        Arc::clone(existing_output),
+                        Arc::clone(existing_status),
+                        Arc::clone(existing_commit_count),
+                    )
+                } else {
+                    (
+                        Arc::new(Mutex::new(row.output.clone())),
+                        Arc::new(Mutex::new(status)),
+                        Arc::new(Mutex::new(row.commit_count)),
+                    )
+                };
+            let size = Self::session_size_for_folder(&folder, &row.base_branch).await;
 
-                Some(Session {
-                    agent: row.agent,
-                    base_branch: row.base_branch,
-                    commit_count,
-                    folder,
-                    id: row.id,
-                    model: session_model,
-                    output,
-                    permission_mode: row.permission_mode.parse().unwrap_or_default(),
-                    project_name,
-                    prompt: row.prompt,
-                    stats: SessionStats {
-                        input_tokens: row.input_tokens,
-                        output_tokens: row.output_tokens,
-                    },
-                    status,
-                    title: row.title,
-                })
-            })
-            .collect();
+            sessions.push(Session {
+                agent: row.agent,
+                base_branch: row.base_branch,
+                commit_count,
+                folder,
+                id: row.id,
+                model: session_model,
+                output,
+                permission_mode: row.permission_mode.parse().unwrap_or_default(),
+                project_name,
+                prompt: row.prompt,
+                size,
+                stats: SessionStats {
+                    input_tokens: row.input_tokens,
+                    output_tokens: row.output_tokens,
+                },
+                status,
+                title: row.title,
+            });
+        }
 
         sessions
+    }
+
+    async fn session_size_for_folder(folder: &Path, base_branch: &str) -> SessionSize {
+        if !folder.is_dir() {
+            return SessionSize::Xs;
+        }
+
+        let folder = folder.to_path_buf();
+        let base_branch = base_branch.to_string();
+        let diff = tokio::task::spawn_blocking(move || git::diff(&folder, &base_branch))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+
+        SessionSize::from_diff(&diff)
     }
 }
 
@@ -1239,6 +1255,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: prompt.to_string(),
+            size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Arc::new(Mutex::new(Status::Review)),
             title: Some(App::summarize_title(prompt)),
