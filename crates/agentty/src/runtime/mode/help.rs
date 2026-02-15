@@ -77,6 +77,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::View {
+                is_done: false,
                 session_id: "s1".to_string(),
                 scroll_offset: Some(5),
             },

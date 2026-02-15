@@ -4,7 +4,7 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 
 use crate::app::App;
 use crate::git;
-use crate::model::{AppMode, HelpContext, InputState, PromptSlashState};
+use crate::model::{AppMode, HelpContext, InputState, PromptSlashState, Status};
 use crate::runtime::{EventResult, TuiTerminal};
 
 #[derive(Clone)]
@@ -32,11 +32,16 @@ pub(crate) async fn handle(
     let view_metrics = view_metrics(app, terminal, view_context.session_index)?;
     let mut next_scroll_offset = view_context.scroll_offset;
 
+    let Some(session) = app.session_state.sessions.get(view_context.session_index) else {
+        return Ok(EventResult::Continue);
+    };
+    let is_done = session.status() == Status::Done;
+
     match key.code {
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
         }
-        KeyCode::Enter => {
+        KeyCode::Enter if !is_done => {
             app.mode = AppMode::Prompt {
                 at_mention_state: None,
                 slash_state: PromptSlashState::new(),
@@ -71,21 +76,22 @@ pub(crate) async fn handle(
                 view_metrics.view_height / 2,
             ));
         }
-        KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+        KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) && !is_done => {
             show_diff_for_view_session(app, &view_context).await;
         }
-        KeyCode::Char('m') => {
+        KeyCode::Char('m') if !is_done => {
             merge_view_session(app, &view_context.session_id).await;
         }
-        KeyCode::Char('r') => {
+        KeyCode::Char('r') if !is_done => {
             rebase_view_session(app, &view_context.session_id).await;
         }
-        KeyCode::Char('p') => {
+        KeyCode::Char('p') if !is_done => {
             create_pr_for_view_session(app, &view_context.session_id).await;
         }
         KeyCode::Char('?') => {
             app.mode = AppMode::Help {
                 context: HelpContext::View {
+                    is_done,
                     session_id: view_context.session_id.clone(),
                     scroll_offset: view_context.scroll_offset,
                 },
@@ -484,6 +490,7 @@ mod tests {
         // Act — simulate what the `?` arm does
         app.mode = AppMode::Help {
             context: HelpContext::View {
+                is_done: false,
                 session_id,
                 scroll_offset: scroll,
             },
@@ -495,6 +502,7 @@ mod tests {
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
+                    is_done: false,
                     ref session_id,
                     scroll_offset: Some(3),
                 },

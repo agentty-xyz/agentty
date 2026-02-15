@@ -309,11 +309,13 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_message = Paragraph::new(
+        let help_text = if session.status() == Status::Done {
+            "q: back | j/k: scroll | ?: help"
+        } else {
             "q: back | enter: reply | d: diff | p: pr | m: merge | r: rebase | j/k: scroll | ?: \
-             help",
-        )
-        .style(Style::default().fg(Color::Gray));
+             help"
+        };
+        let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, bottom_area);
     }
 }

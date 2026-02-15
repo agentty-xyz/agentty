@@ -54,7 +54,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
 
             if let Some(session_index) = app.session_state.table_state.selected()
                 && let Some(session) = app.session_state.sessions.get(session_index)
-                && !matches!(session.status(), Status::Done | Status::Canceled)
+                && !matches!(session.status(), Status::Canceled)
                 && let Some(session_id) = app.session_id_for_index(session_index)
             {
                 app.mode = AppMode::View {
@@ -248,10 +248,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_key_does_not_open_done_session() {
+    async fn test_handle_enter_key_opens_done_session() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_with_git().await;
-        let _session_id = app
+        let expected_session_id = app
             .create_session()
             .await
             .expect("failed to create session");
@@ -270,7 +270,13 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(app.mode, AppMode::List));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: None
+            } if session_id == &expected_session_id
+        ));
     }
 
     #[tokio::test]

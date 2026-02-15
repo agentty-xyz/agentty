@@ -200,6 +200,7 @@ fn render_help_background(
         HelpContext::View {
             session_id,
             scroll_offset: view_scroll,
+            ..
         } => {
             if let Some(session_index) = sessions
                 .iter()

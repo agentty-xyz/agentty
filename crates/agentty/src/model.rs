@@ -357,6 +357,7 @@ pub enum AppMode {
 pub enum HelpContext {
     List,
     View {
+        is_done: bool,
         session_id: String,
         scroll_offset: Option<u16>,
     },
@@ -382,6 +383,9 @@ impl HelpContext {
                 ("/", "Command palette"),
                 ("?", "Help"),
             ],
+            HelpContext::View { is_done: true, .. } => {
+                &[("q", "Quit"), ("j", "Scroll down"), ("k", "Scroll up")]
+            }
             HelpContext::View { .. } => &[
                 ("q", "Back to list"),
                 ("Enter", "Reply"),
@@ -412,6 +416,7 @@ impl HelpContext {
             HelpContext::View {
                 session_id,
                 scroll_offset,
+                ..
             } => AppMode::View {
                 session_id,
                 scroll_offset,
@@ -1317,6 +1322,7 @@ mod tests {
     fn test_help_context_view_keybindings() {
         // Arrange
         let context = HelpContext::View {
+            is_done: false,
             session_id: "s1".to_string(),
             scroll_offset: None,
         };
@@ -1328,6 +1334,30 @@ mod tests {
         assert!(bindings.iter().any(|(key, _)| *key == "d"));
         assert!(bindings.iter().any(|(key, _)| *key == "p"));
         assert!(bindings.iter().any(|(key, _)| *key == "r"));
+    }
+
+    #[test]
+    fn test_help_context_done_view_keybindings_only_quit_and_scroll() {
+        // Arrange
+        let context = HelpContext::View {
+            is_done: true,
+            session_id: "s1".to_string(),
+            scroll_offset: None,
+        };
+
+        // Act
+        let bindings = context.keybindings();
+
+        // Assert
+        assert!(bindings.iter().any(|(key, _)| *key == "q"));
+        assert!(bindings.iter().any(|(key, _)| *key == "j"));
+        assert!(bindings.iter().any(|(key, _)| *key == "k"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "Enter"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "d"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "p"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "m"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "r"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "?"));
     }
 
     #[test]
@@ -1374,6 +1404,7 @@ mod tests {
     fn test_help_context_restore_mode_view() {
         // Arrange
         let context = HelpContext::View {
+            is_done: false,
             session_id: "s1".to_string(),
             scroll_offset: Some(10),
         };
