@@ -47,7 +47,8 @@ impl Page for SessionListPage<'_> {
                 Cell::from(session.display_title().to_string()),
                 Cell::from(session.project_name.clone()),
                 Cell::from(session.model.clone()),
-                Cell::from(session.size.to_string()),
+                Cell::from(session.size.to_string())
+                    .style(Style::default().fg(size_color(session.size))),
                 Cell::from(format!("{status}")).style(Style::default().fg(status.color())),
             ];
             Row::new(cells).height(1)
@@ -118,6 +119,17 @@ fn size_column_width() -> Constraint {
     )
 }
 
+fn size_color(size: SessionSize) -> Color {
+    match size {
+        SessionSize::Xs => Color::DarkGray,
+        SessionSize::S => Color::Cyan,
+        SessionSize::M => Color::LightBlue,
+        SessionSize::L => Color::Yellow,
+        SessionSize::Xl => Color::LightRed,
+        SessionSize::Xxl => Color::Red,
+    }
+}
+
 fn text_column_width<T>(header: &str, values: impl Iterator<Item = T>) -> Constraint
 where
     T: AsRef<str>,
@@ -185,5 +197,23 @@ mod tests {
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));
+    }
+
+    #[test]
+    fn test_size_color_uses_expected_palette() {
+        // Arrange
+        let test_cases = [
+            (SessionSize::Xs, Color::DarkGray),
+            (SessionSize::S, Color::Cyan),
+            (SessionSize::M, Color::LightBlue),
+            (SessionSize::L, Color::Yellow),
+            (SessionSize::Xl, Color::LightRed),
+            (SessionSize::Xxl, Color::Red),
+        ];
+
+        // Act & Assert
+        for (size, expected_color) in test_cases {
+            assert_eq!(size_color(size), expected_color);
+        }
     }
 }
