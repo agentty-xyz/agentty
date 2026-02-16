@@ -115,7 +115,6 @@ impl<'a> CommandOptionList<'a> {
 
     fn options(&self) -> Vec<String> {
         match self.command {
-            PaletteCommand::Health => Vec::new(),
             PaletteCommand::Projects => self
                 .projects
                 .iter()

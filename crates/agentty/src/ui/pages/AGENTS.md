@@ -4,7 +4,6 @@ Full-screen page implementations implementing the `Page` trait.
 
 ## Directory Index
 - [diff.rs](diff.rs) - Diff view page.
-- [health.rs](health.rs) - Health check splash screen page.
 - [mod.rs](mod.rs) - Page module exports.
 - [onboarding.rs](onboarding.rs) - Onboarding page shown when there are no sessions.
 - [stats.rs](stats.rs) - Stats view page.

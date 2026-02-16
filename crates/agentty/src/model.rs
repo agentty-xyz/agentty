@@ -476,7 +476,6 @@ pub enum AppMode {
         context: HelpContext,
         scroll_offset: u16,
     },
-    Health,
 }
 
 /// Captures which page opened the help overlay so it can be restored on close.
@@ -492,7 +491,6 @@ pub enum HelpContext {
         diff: String,
         scroll_offset: u16,
     },
-    Health,
 }
 
 impl HelpContext {
@@ -527,12 +525,6 @@ impl HelpContext {
                 ("?", "Help"),
             ],
             HelpContext::Diff { .. } => &[("q / Esc", "Back to session"), ("?", "Help")],
-            HelpContext::Health => &[
-                ("q / Esc", "Back to list"),
-                ("Ctrl+c", "Back to list"),
-                ("r", "Rerun checks"),
-                ("?", "Help"),
-            ],
         }
     }
 
@@ -557,7 +549,6 @@ impl HelpContext {
                 diff,
                 scroll_offset,
             },
-            HelpContext::Health => AppMode::Health,
         }
     }
 
@@ -615,16 +606,14 @@ pub enum PaletteFocus {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PaletteCommand {
-    Health,
     Projects,
 }
 
 impl PaletteCommand {
-    pub const ALL: &[PaletteCommand] = &[PaletteCommand::Health, PaletteCommand::Projects];
+    pub const ALL: &[PaletteCommand] = &[PaletteCommand::Projects];
 
     pub fn label(self) -> &'static str {
         match self {
-            PaletteCommand::Health => "health",
             PaletteCommand::Projects => "projects",
         }
     }
@@ -966,36 +955,34 @@ mod tests {
     #[test]
     fn test_palette_command_label() {
         // Arrange & Act & Assert
-        assert_eq!(PaletteCommand::Health.label(), "health");
         assert_eq!(PaletteCommand::Projects.label(), "projects");
     }
 
     #[test]
     fn test_palette_command_all() {
         // Arrange & Act & Assert
-        assert_eq!(PaletteCommand::ALL.len(), 2);
-        assert_eq!(PaletteCommand::ALL[0], PaletteCommand::Health);
-        assert_eq!(PaletteCommand::ALL[1], PaletteCommand::Projects);
+        assert_eq!(PaletteCommand::ALL.len(), 1);
+        assert_eq!(PaletteCommand::ALL[0], PaletteCommand::Projects);
     }
 
     #[test]
     fn test_palette_command_filter() {
         // Arrange & Act
-        let results = PaletteCommand::filter("heal");
+        let results = PaletteCommand::filter("proj");
 
         // Assert
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0], PaletteCommand::Health);
+        assert_eq!(results[0], PaletteCommand::Projects);
     }
 
     #[test]
     fn test_palette_command_filter_case_insensitive() {
         // Arrange & Act
-        let results = PaletteCommand::filter("HEAL");
+        let results = PaletteCommand::filter("PROJ");
 
         // Assert
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0], PaletteCommand::Health);
+        assert_eq!(results[0], PaletteCommand::Projects);
     }
 
     #[test]
@@ -1005,16 +992,6 @@ mod tests {
 
         // Assert
         assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_palette_command_filter_projects() {
-        // Arrange & Act
-        let results = PaletteCommand::filter("proj");
-
-        // Assert
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0], PaletteCommand::Projects);
     }
 
     #[test]
@@ -1521,18 +1498,6 @@ mod tests {
     }
 
     #[test]
-    fn test_help_context_health_keybindings() {
-        // Arrange
-        let context = HelpContext::Health;
-
-        // Act
-        let bindings = context.keybindings();
-
-        // Assert
-        assert!(bindings.iter().any(|(key, _)| *key == "r"));
-    }
-
-    #[test]
     fn test_help_context_restore_mode_list() {
         // Arrange
         let context = HelpContext::List;
@@ -1590,22 +1555,18 @@ mod tests {
     }
 
     #[test]
-    fn test_help_context_restore_mode_health() {
-        // Arrange
-        let context = HelpContext::Health;
-
-        // Act
-        let mode = context.restore_mode();
-
-        // Assert
-        assert!(matches!(mode, AppMode::Health));
-    }
-
-    #[test]
     fn test_help_context_title_returns_keybindings() {
         // Arrange & Act & Assert
         assert_eq!(HelpContext::List.title(), "Keybindings");
-        assert_eq!(HelpContext::Health.title(), "Keybindings");
+        assert_eq!(
+            HelpContext::Diff {
+                session_id: "s1".to_string(),
+                diff: "diff".to_string(),
+                scroll_offset: 0,
+            }
+            .title(),
+            "Keybindings"
+        );
     }
 
     #[test]

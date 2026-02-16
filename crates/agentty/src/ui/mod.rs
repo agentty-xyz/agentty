@@ -3,14 +3,12 @@ pub mod pages;
 pub mod util;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
-use crate::health::HealthEntry;
 use crate::model::{AppMode, HelpContext, Project, Session, Tab};
 
 /// A trait for UI pages that enforces a standard rendering interface.
@@ -29,7 +27,6 @@ pub struct RenderContext<'a> {
     pub current_tab: Tab,
     pub git_branch: Option<&'a str>,
     pub git_status: Option<(u32, u32)>,
-    pub health_checks: &'a Arc<Mutex<Vec<HealthEntry>>>,
     pub mode: &'a AppMode,
     pub projects: &'a [Project],
     pub show_onboarding: bool,
@@ -91,7 +88,6 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
         current_tab,
-        health_checks,
         mode,
         projects,
         sessions,
@@ -166,19 +162,8 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
             context,
             scroll_offset,
         } => {
-            render_help_background(
-                f,
-                area,
-                context,
-                sessions,
-                table_state,
-                current_tab,
-                health_checks,
-            );
+            render_help_background(f, area, context, sessions, table_state, current_tab);
             components::help_overlay::HelpOverlay::new(context, *scroll_offset).render(f, area);
-        }
-        AppMode::Health => {
-            pages::health::HealthPage::new(health_checks).render(f, area);
         }
     }
 }
@@ -191,7 +176,6 @@ fn render_help_background(
     sessions: &[Session],
     table_state: &mut TableState,
     current_tab: Tab,
-    health_checks: &Arc<Mutex<Vec<HealthEntry>>>,
 ) {
     match context {
         HelpContext::List => {
@@ -227,9 +211,6 @@ fn render_help_background(
             if let Some(session) = sessions.iter().find(|session| session.id == *session_id) {
                 pages::diff::DiffPage::new(session, diff.clone(), *diff_scroll).render(f, area);
             }
-        }
-        HelpContext::Health => {
-            pages::health::HealthPage::new(health_checks).render(f, area);
         }
     }
 }
@@ -322,7 +303,10 @@ mod tests {
     #[test]
     fn test_should_render_onboarding_returns_false_for_non_list_mode() {
         // Arrange
-        let mode = AppMode::Health;
+        let mode = AppMode::Help {
+            context: HelpContext::List,
+            scroll_offset: 0,
+        };
         let show_onboarding = true;
 
         // Act

@@ -62,10 +62,6 @@ pub(crate) fn handle_palette(app: &mut App, key: KeyEvent) -> EventResult {
                 selected_index: 0,
             };
         }
-        PaletteAction::Open(PaletteCommand::Health) => {
-            app.start_health_checks();
-            app.mode = AppMode::Health;
-        }
     }
 
     EventResult::Continue
@@ -144,19 +140,15 @@ pub(crate) async fn handle_option(app: &mut App, key: KeyEvent) -> io::Result<Ev
 
 fn command_option_count(app: &App, command: PaletteCommand) -> usize {
     match command {
-        PaletteCommand::Health => 0,
         PaletteCommand::Projects => app.projects.len(),
     }
 }
 
 async fn handle_command_option_enter(
     app: &mut App,
-    command: PaletteCommand,
+    _command: PaletteCommand,
     selected_index: usize,
 ) {
-    if command != PaletteCommand::Projects {
-        return;
-    }
     let Some(project) = app.projects.get(selected_index) else {
         return;
     };
@@ -209,31 +201,6 @@ mod tests {
                 focus: PaletteFocus::Dropdown
             } if input == "p"
         ));
-    }
-
-    #[tokio::test]
-    async fn test_handle_palette_enter_opens_health_mode() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
-        app.mode = AppMode::CommandPalette {
-            input: String::new(),
-            selected_index: 0,
-            focus: PaletteFocus::Dropdown,
-        };
-
-        // Act
-        let event_result =
-            handle_palette(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(app.mode, AppMode::Health));
-        assert!(
-            !app.health_checks()
-                .lock()
-                .expect("lock poisoned")
-                .is_empty()
-        );
     }
 
     #[tokio::test]
@@ -307,8 +274,8 @@ mod tests {
         move_palette_selection_down("", &mut selected_index, &mut focus);
 
         // Assert
-        assert_eq!(selected_index, 1);
-        assert_eq!(focus, PaletteFocus::Dropdown);
+        assert_eq!(selected_index, 0);
+        assert_eq!(focus, PaletteFocus::Input);
     }
 
     #[tokio::test]

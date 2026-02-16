@@ -8,7 +8,6 @@ use tokio::sync::mpsc;
 
 use crate::agent::{AgentKind, AgentModel};
 use crate::db::Database;
-use crate::health::{self, HealthEntry};
 use crate::model::{AppMode, PermissionMode, Project, Session, SessionHandles, Tab};
 
 mod pr;
@@ -125,7 +124,6 @@ pub struct App {
     git_branch: Option<String>,
     git_status: Arc<Mutex<Option<(u32, u32)>>>,
     git_status_cancel: Arc<AtomicBool>,
-    health_checks: Arc<Mutex<Vec<HealthEntry>>>,
     pr_creation_in_flight: Arc<Mutex<HashSet<String>>>,
     pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     session_workers: HashMap<String, mpsc::UnboundedSender<worker::SessionCommand>>,
@@ -211,7 +209,6 @@ impl App {
             git_branch,
             git_status,
             git_status_cancel,
-            health_checks: Arc::new(Mutex::new(Vec::new())),
             pr_creation_in_flight,
             pr_poll_cancel,
             projects,
@@ -240,17 +237,9 @@ impl App {
         self.git_status.lock().ok().and_then(|status| *status)
     }
 
-    pub fn health_checks(&self) -> &Arc<Mutex<Vec<HealthEntry>>> {
-        &self.health_checks
-    }
-
     /// Returns whether the onboarding screen should be shown.
     pub fn should_show_onboarding(&self) -> bool {
         self.session_state.sessions.is_empty()
-    }
-
-    pub fn start_health_checks(&mut self) {
-        self.health_checks = health::run_health_checks(self.git_branch.clone());
     }
 
     /// Applies one or more queued app events.

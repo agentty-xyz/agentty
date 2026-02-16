@@ -68,7 +68,6 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let current_working_dir = app.working_dir().clone();
     let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
     let current_git_status = app.git_status_info();
-    let health_checks = app.health_checks().clone();
     let current_active_project_id = app.active_project_id();
 
     terminal.draw(|frame| {
@@ -79,7 +78,6 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
                 current_tab,
                 git_branch: current_git_branch.as_deref(),
                 git_status: current_git_status,
-                health_checks: &health_checks,
                 mode: &app.mode,
                 projects: &app.projects,
                 show_onboarding: app.should_show_onboarding(),

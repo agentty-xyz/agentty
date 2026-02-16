@@ -102,23 +102,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_restores_health_mode() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
-        app.mode = AppMode::Help {
-            context: HelpContext::Health,
-            scroll_offset: 0,
-        };
-
-        // Act
-        let result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-        // Assert
-        assert!(matches!(result, EventResult::Continue));
-        assert!(matches!(app.mode, AppMode::Health));
-    }
-
-    #[tokio::test]
     async fn test_handle_down_key_increments_scroll_offset() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;

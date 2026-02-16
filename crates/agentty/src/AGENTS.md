@@ -23,7 +23,6 @@
 - [file_list.rs](file_list.rs) - Gitignore-aware file listing for `@` mention dropdown.
 - [gh.rs](gh.rs) - GitHub CLI integration and PR response parsing.
 - [git.rs](git.rs) - Git integration and worktree management.
-- [health.rs](health.rs) - Health check domain logic.
 - [icon.rs](icon.rs) - Centralized `Icon` enum for consistent Unicode symbols.
 - [lib.rs](lib.rs) - Library entry point, exports modules.
 - [lock.rs](lock.rs) - Single-instance session lock using POSIX `flock`.
