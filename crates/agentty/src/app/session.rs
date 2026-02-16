@@ -1574,7 +1574,7 @@ mod tests {
         let working_dir = app.working_dir();
 
         // Assert
-        assert_eq!(working_dir, &PathBuf::from("/tmp/test"));
+        assert_eq!(working_dir, Path::new("/tmp/test"));
     }
 
     #[tokio::test]
@@ -3126,7 +3126,7 @@ WHERE id = 'beta0000'
 
         // Assert
         assert_eq!(app.active_project_id(), other_id);
-        assert_eq!(app.working_dir(), &PathBuf::from("/tmp/other"));
+        assert_eq!(app.working_dir(), Path::new("/tmp/other"));
         assert_eq!(app.git_branch(), Some("develop"));
         assert!(app.session_state.sessions.is_empty());
     }

@@ -483,7 +483,7 @@ async fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
         .sessions
         .get(prompt_context.session_index)
         .map_or_else(
-            || app.working_dir().clone(),
+            || app.working_dir().to_path_buf(),
             |session| session.folder.clone(),
         );
 

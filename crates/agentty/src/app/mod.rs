@@ -4,7 +4,7 @@
 //! used by runtime mode handlers.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
@@ -110,7 +110,7 @@ impl SessionState {
     /// Copies current values from one runtime handle into its `Session`
     /// snapshot.
     pub fn sync_session_from_handle(&mut self, session_id: &str) {
-        let Some(handles) = self.handles.get(session_id) else {
+        let Some(session_handles) = self.handles.get(session_id) else {
             return;
         };
         let Some(session) = self
@@ -120,29 +120,36 @@ impl SessionState {
         else {
             return;
         };
-        if let Ok(output) = handles.output.lock()
-            && session.output.len() != output.len()
-        {
-            session.output.clone_from(&*output);
-        }
-        if let Ok(status) = handles.status.lock() {
-            session.status = *status;
-        }
-        if let Ok(count) = handles.commit_count.lock() {
-            session.commit_count = *count;
-        }
+
+        Self::sync_session_with_handles(session, session_handles);
     }
 
     /// Copies current values from runtime handles into plain `Session` fields.
     pub fn sync_from_handles(&mut self) {
-        let session_ids: Vec<String> = self
-            .sessions
-            .iter()
-            .map(|session| session.id.clone())
-            .collect();
+        let handles = &self.handles;
 
-        for session_id in session_ids {
-            self.sync_session_from_handle(&session_id);
+        for session in &mut self.sessions {
+            let Some(session_handles) = handles.get(&session.id) else {
+                continue;
+            };
+
+            Self::sync_session_with_handles(session, session_handles);
+        }
+    }
+
+    fn sync_session_with_handles(session: &mut Session, session_handles: &SessionHandles) {
+        if let Ok(output) = session_handles.output.lock()
+            && session.output.len() != output.len()
+        {
+            session.output.clone_from(&*output);
+        }
+
+        if let Ok(status) = session_handles.status.lock() {
+            session.status = *status;
+        }
+
+        if let Ok(count) = session_handles.commit_count.lock() {
+            session.commit_count = *count;
         }
     }
 }
@@ -269,8 +276,8 @@ impl App {
     }
 
     /// Returns the working directory for the active project.
-    pub fn working_dir(&self) -> &PathBuf {
-        &self.working_dir
+    pub fn working_dir(&self) -> &Path {
+        self.working_dir.as_path()
     }
 
     /// Returns the git branch of the active project, when available.
@@ -294,13 +301,61 @@ impl App {
     /// git-status updates, then applies session-handle sync for touched
     /// sessions.
     pub(crate) async fn apply_app_events(&mut self, first_event: AppEvent) {
-        let mut event_batch = AppEventBatch::default();
-        event_batch.collect_event(first_event);
+        let drained_events = self.drain_app_events(first_event);
+        let event_batch = Self::reduce_app_events(drained_events);
 
+        self.apply_app_event_batch(event_batch).await;
+    }
+
+    /// Enqueues an app event onto the internal app event bus.
+    pub(crate) fn emit_app_event(&self, event: AppEvent) {
+        let _ = self.event_tx.send(event);
+    }
+
+    /// Processes currently queued app events without waiting.
+    pub(crate) async fn process_pending_app_events(&mut self) {
+        let Ok(first_event) = self.event_rx.try_recv() else {
+            return;
+        };
+
+        self.apply_app_events(first_event).await;
+    }
+
+    /// Emits one app event and immediately processes the pending app queue.
+    pub(crate) async fn dispatch_app_event(&mut self, event: AppEvent) {
+        self.emit_app_event(event);
+        self.process_pending_app_events().await;
+    }
+
+    /// Returns a clone of the internal app event sender.
+    pub(crate) fn app_event_sender(&self) -> mpsc::UnboundedSender<AppEvent> {
+        self.event_tx.clone()
+    }
+
+    /// Waits for the next internal app event.
+    pub(crate) async fn next_app_event(&mut self) -> Option<AppEvent> {
+        self.event_rx.recv().await
+    }
+
+    fn drain_app_events(&mut self, first_event: AppEvent) -> Vec<AppEvent> {
+        let mut events = vec![first_event];
         while let Ok(event) = self.event_rx.try_recv() {
+            events.push(event);
+        }
+
+        events
+    }
+
+    fn reduce_app_events(events: Vec<AppEvent>) -> AppEventBatch {
+        let mut event_batch = AppEventBatch::default();
+        for event in events {
             event_batch.collect_event(event);
         }
 
+        event_batch
+    }
+
+    async fn apply_app_event_batch(&mut self, event_batch: AppEventBatch) {
         if event_batch.should_force_reload {
             self.refresh_sessions_now().await;
         }
@@ -337,36 +392,6 @@ impl App {
         for session_id in &event_batch.session_ids {
             self.session_state.sync_session_from_handle(session_id);
         }
-    }
-
-    /// Enqueues an app event onto the internal app event bus.
-    pub(crate) fn emit_app_event(&self, event: AppEvent) {
-        let _ = self.event_tx.send(event);
-    }
-
-    /// Processes currently queued app events without waiting.
-    pub(crate) async fn process_pending_app_events(&mut self) {
-        let Ok(first_event) = self.event_rx.try_recv() else {
-            return;
-        };
-
-        self.apply_app_events(first_event).await;
-    }
-
-    /// Emits one app event and immediately processes the pending app queue.
-    pub(crate) async fn dispatch_app_event(&mut self, event: AppEvent) {
-        self.emit_app_event(event);
-        self.process_pending_app_events().await;
-    }
-
-    /// Returns a clone of the internal app event sender.
-    pub(crate) fn app_event_sender(&self) -> mpsc::UnboundedSender<AppEvent> {
-        self.event_tx.clone()
-    }
-
-    /// Waits for the next internal app event.
-    pub(crate) async fn next_app_event(&mut self) -> Option<AppEvent> {
-        self.event_rx.recv().await
     }
 
     fn apply_session_history_cleared(&mut self, session_id: &str) {

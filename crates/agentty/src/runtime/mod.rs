@@ -65,7 +65,7 @@ async fn run_main_loop(
 
 fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let current_tab = app.current_tab;
-    let current_working_dir = app.working_dir().clone();
+    let current_working_dir = app.working_dir().to_path_buf();
     let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
     let current_git_status = app.git_status_info();
     let current_active_project_id = app.active_project_id();
