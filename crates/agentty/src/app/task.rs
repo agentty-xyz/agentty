@@ -231,7 +231,38 @@ impl App {
     fn status_requires_full_refresh(status: Status) -> bool {
         matches!(
             status,
-            Status::Review | Status::Done | Status::Canceled | Status::PullRequest
+            Status::InProgress
+                | Status::Review
+                | Status::Merging
+                | Status::CreatingPullRequest
+                | Status::PullRequest
+                | Status::Done
+                | Status::Canceled
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_status_requires_full_refresh_for_lifecycle_statuses() {
+        // Arrange
+        let refresh_statuses = [
+            Status::InProgress,
+            Status::Review,
+            Status::Merging,
+            Status::CreatingPullRequest,
+            Status::PullRequest,
+            Status::Done,
+            Status::Canceled,
+        ];
+
+        // Act & Assert
+        for status in refresh_statuses {
+            assert!(App::status_requires_full_refresh(status));
+        }
+        assert!(!App::status_requires_full_refresh(Status::New));
     }
 }
