@@ -1,3 +1,8 @@
+//! App-layer composition root and shared state container.
+//!
+//! This module wires app submodules and exposes [`App`] and [`SessionState`]
+//! used by runtime mode handlers.
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -17,6 +22,7 @@ mod task;
 mod title;
 mod worker;
 
+/// Relative directory name used for session git worktrees under `~/.agentty`.
 pub const AGENTTY_WT_DIR: &str = "wt";
 
 /// Returns the agentty home directory (`~/.agentty`).
@@ -139,6 +145,8 @@ pub struct App {
 }
 
 impl App {
+    /// Builds the app state from persisted data and starts background
+    /// housekeeping tasks.
     pub async fn new(
         base_path: PathBuf,
         working_dir: PathBuf,
@@ -229,14 +237,17 @@ impl App {
         app
     }
 
+    /// Returns the active project identifier.
     pub fn active_project_id(&self) -> i64 {
         self.active_project_id
     }
 
+    /// Returns the working directory for the active project.
     pub fn working_dir(&self) -> &PathBuf {
         &self.working_dir
     }
 
+    /// Returns the git branch of the active project, when available.
     pub fn git_branch(&self) -> Option<&str> {
         self.git_branch.as_deref()
     }

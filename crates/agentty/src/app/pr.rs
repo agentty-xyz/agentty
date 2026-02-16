@@ -1,3 +1,5 @@
+//! Pull-request lifecycle orchestration for session branches.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -204,6 +206,8 @@ impl App {
         });
     }
 
+    /// Ensures merge polling tasks are running for sessions in
+    /// `PullRequest` status.
     pub(super) fn start_pr_polling_for_pull_request_sessions(&self) {
         for session in &self.session_state.sessions {
             if session.status != Status::PullRequest {
@@ -256,12 +260,14 @@ impl App {
             .is_ok_and(|polling| polling.contains_key(id))
     }
 
+    /// Removes a session identifier from the in-flight PR creation set.
     pub(super) fn clear_pr_creation_in_flight(&self, id: &str) {
         if let Ok(mut in_flight) = self.pr_creation_in_flight.lock() {
             in_flight.remove(id);
         }
     }
 
+    /// Requests cancellation of PR polling for a single session.
     pub(super) fn cancel_pr_polling_for_session(&self, id: &str) {
         if let Ok(mut polling) = self.pr_poll_cancel.lock()
             && let Some(cancel) = polling.remove(id)

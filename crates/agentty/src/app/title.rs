@@ -1,3 +1,5 @@
+//! Session title and agent/model normalization helpers.
+
 use crate::agent::{AgentKind, AgentModel};
 use crate::app::App;
 use crate::model::Session;

@@ -1,3 +1,5 @@
+//! Project discovery and active-project switching workflows.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +49,8 @@ impl App {
         Ok(())
     }
 
+    /// Scans sibling directories for git repositories and stores them as
+    /// known projects.
     pub(super) async fn discover_sibling_projects(working_dir: &Path, db: &Database) {
         let Some(parent) = working_dir.parent() else {
             return;
@@ -68,6 +72,7 @@ impl App {
         }
     }
 
+    /// Loads all persisted projects from the database.
     pub(super) async fn load_projects_from_db(db: &Database) -> Vec<Project> {
         db.load_projects()
             .await
