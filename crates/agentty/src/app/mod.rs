@@ -29,6 +29,16 @@ pub fn agentty_home() -> PathBuf {
     PathBuf::from(".agentty")
 }
 
+/// Internal app events emitted by background workers and workflows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AppEvent {
+    /// Indicates that a session handle snapshot changed in-memory.
+    SessionUpdated { session_id: String },
+    /// Indicates that a session lifecycle milestone completed and list reload
+    /// should run to keep ordering and persisted metadata in sync.
+    TaskComplete { session_id: String },
+}
+
 /// Holds all in-memory state related to session listing and refresh tracking.
 pub struct SessionState {
     pub handles: HashMap<String, SessionHandles>,
@@ -58,23 +68,42 @@ impl SessionState {
         }
     }
 
+    /// Copies current values from one runtime handle into its `Session`
+    /// snapshot.
+    pub fn sync_session_from_handle(&mut self, session_id: &str) {
+        let Some(handles) = self.handles.get(session_id) else {
+            return;
+        };
+        let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+        if let Ok(output) = handles.output.lock()
+            && session.output.len() != output.len()
+        {
+            session.output.clone_from(&*output);
+        }
+        if let Ok(status) = handles.status.lock() {
+            session.status = *status;
+        }
+        if let Ok(count) = handles.commit_count.lock() {
+            session.commit_count = *count;
+        }
+    }
+
     /// Copies current values from runtime handles into plain `Session` fields.
     pub fn sync_from_handles(&mut self) {
-        for session in &mut self.sessions {
-            let Some(handles) = self.handles.get(&session.id) else {
-                continue;
-            };
-            if let Ok(output) = handles.output.lock()
-                && session.output.len() != output.len()
-            {
-                session.output.clone_from(&*output);
-            }
-            if let Ok(status) = handles.status.lock() {
-                session.status = *status;
-            }
-            if let Ok(count) = handles.commit_count.lock() {
-                session.commit_count = *count;
-            }
+        let session_ids: Vec<String> = self
+            .sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+
+        for session_id in session_ids {
+            self.sync_session_from_handle(&session_id);
         }
     }
 }
@@ -86,6 +115,8 @@ pub struct App {
     pub projects: Vec<Project>,
     pub session_state: SessionState,
     active_project_id: i64,
+    event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    event_tx: mpsc::UnboundedSender<AppEvent>,
     base_path: PathBuf,
     db: Database,
     default_session_agent: AgentKind,
@@ -149,6 +180,7 @@ impl App {
         let git_status_cancel = Arc::new(AtomicBool::new(false));
         let pr_creation_in_flight = Arc::new(Mutex::new(HashSet::new()));
         let pr_poll_cancel = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         if git_branch.is_some() {
             Self::spawn_git_status_task(
@@ -169,6 +201,8 @@ impl App {
                 sessions_updated_at_max,
             ),
             active_project_id,
+            event_rx,
+            event_tx,
             base_path,
             db,
             default_session_agent,
@@ -217,6 +251,53 @@ impl App {
 
     pub fn start_health_checks(&mut self) {
         self.health_checks = health::run_health_checks(self.git_branch.clone());
+    }
+
+    /// Applies one or more queued app events.
+    pub(crate) async fn apply_app_events(&mut self, first_event: AppEvent) {
+        let mut should_force_reload = false;
+        let mut session_ids: HashSet<String> = HashSet::new();
+        Self::collect_app_event(&mut should_force_reload, &mut session_ids, first_event);
+
+        while let Ok(event) = self.event_rx.try_recv() {
+            Self::collect_app_event(&mut should_force_reload, &mut session_ids, event);
+        }
+
+        if should_force_reload {
+            self.refresh_sessions_now().await;
+
+            return;
+        }
+
+        for session_id in &session_ids {
+            self.session_state.sync_session_from_handle(session_id);
+        }
+    }
+
+    /// Returns a clone of the internal app event sender.
+    pub(crate) fn app_event_sender(&self) -> mpsc::UnboundedSender<AppEvent> {
+        self.event_tx.clone()
+    }
+
+    /// Waits for the next internal app event.
+    pub(crate) async fn next_app_event(&mut self) -> Option<AppEvent> {
+        self.event_rx.recv().await
+    }
+
+    fn collect_app_event(
+        should_force_reload: &mut bool,
+        session_ids: &mut HashSet<String>,
+        event: AppEvent,
+    ) {
+        match event {
+            AppEvent::SessionUpdated { session_id } => {
+                session_ids.insert(session_id);
+            }
+            AppEvent::TaskComplete { session_id } => {
+                *should_force_reload = true;
+                session_ids.insert(session_id);
+            }
+        }
     }
 }
 

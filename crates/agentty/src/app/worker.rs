@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::agent::AgentKind;
-use crate::app::App;
 use crate::app::task::RunSessionTaskInput;
+use crate::app::{App, AppEvent};
 use crate::db::Database;
 use crate::model::Status;
 
@@ -50,6 +50,7 @@ impl SessionCommand {
 }
 
 struct SessionWorkerContext {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
     commit_count: Arc<Mutex<i64>>,
     db: Database,
     folder: PathBuf,
@@ -137,6 +138,7 @@ impl App {
             .get(session_id)
             .ok_or_else(|| "Session handles not found".to_string())?;
         let context = SessionWorkerContext {
+            app_event_tx: self.app_event_sender(),
             commit_count: Arc::clone(&handles.commit_count),
             db: self.db.clone(),
             folder: session.folder.clone(),
@@ -175,6 +177,7 @@ impl App {
                     SessionCommand::StartPrompt { agent, command, .. } => {
                         App::run_session_task(RunSessionTaskInput {
                             agent,
+                            app_event_tx: context.app_event_tx.clone(),
                             cmd: command,
                             commit_count: Arc::clone(&context.commit_count),
                             db: context.db.clone(),
@@ -189,6 +192,7 @@ impl App {
                         let _ = App::update_status(
                             &context.status,
                             &context.db,
+                            &context.app_event_tx,
                             &context.session_id,
                             Status::InProgress,
                         )
@@ -196,6 +200,7 @@ impl App {
 
                         App::run_session_task(RunSessionTaskInput {
                             agent,
+                            app_event_tx: context.app_event_tx.clone(),
                             cmd: command,
                             commit_count: Arc::clone(&context.commit_count),
                             db: context.db.clone(),
@@ -346,6 +351,7 @@ mod tests {
             .await
             .expect("failed to request cancel");
         let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
             commit_count: Arc::new(Mutex::new(0)),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),

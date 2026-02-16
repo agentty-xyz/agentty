@@ -33,7 +33,9 @@ Application-layer workflows and orchestration.
   - `Session` is a pure data snapshot (`output: String`, `status: Status`, `commit_count: i64`) with no `Arc`/`Mutex`.
   - `SessionHandles` owns runtime channels (`Arc<Mutex<...>>`) for output/status/commit-count updates shared with background tasks.
   - `SessionState` stores both `sessions: Vec<Session>` (render data) and `handles: HashMap<String, SessionHandles>` (live runtime state).
-  - `SessionState::sync_from_handles()` copies handle values into `Session` snapshots once per tick before rendering.
+  - `AppEvent` (`SessionUpdated`, `TaskComplete`) forms an internal event bus from background tasks to the runtime loop.
+  - Event handling applies targeted sync (`SessionState::sync_session_from_handle`) and triggers forced list reload on task-complete milestones.
+  - A low-frequency fallback metadata poll (5s) remains for safety/external changes.
   - Background tasks must clone arcs from `SessionState.handles`, not from `Session`.
   - Handle identity is preserved across session reloads so existing workers keep valid references.
 

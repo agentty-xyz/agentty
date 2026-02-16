@@ -4,8 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::app::App;
+use tokio::sync::mpsc;
+
 use crate::app::session::session_branch;
+use crate::app::{App, AppEvent};
 use crate::db::Database;
 use crate::git;
 use crate::model::Status;
@@ -13,6 +15,7 @@ use crate::model::Status;
 const PR_MERGE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 struct PrPollTaskInput {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
     db: Database,
     folder: PathBuf,
     id: String,
@@ -21,6 +24,20 @@ struct PrPollTaskInput {
     source_branch: String,
     repo_root: Option<PathBuf>,
     pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+}
+
+struct CreatePrTaskInput {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    base_branch: String,
+    db: Database,
+    folder: PathBuf,
+    id: String,
+    output: Arc<Mutex<String>>,
+    pr_creation_in_flight: Arc<Mutex<std::collections::HashSet<String>>>,
+    pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    source_branch: String,
+    status: Arc<Mutex<Status>>,
+    title: String,
 }
 
 impl App {
@@ -80,7 +97,16 @@ impl App {
         let folder = session.folder.clone();
         let db = self.db.clone();
         let id = session.id.clone();
-        if !Self::update_status(&status, &db, &id, Status::CreatingPullRequest).await {
+        let app_event_tx = self.app_event_sender();
+        if !Self::update_status(
+            &status,
+            &db,
+            &app_event_tx,
+            &id,
+            Status::CreatingPullRequest,
+        )
+        .await
+        {
             self.clear_pr_creation_in_flight(&id);
 
             return Err("Invalid status transition to CreatingPullRequest".to_string());
@@ -89,7 +115,38 @@ impl App {
         let pr_creation_in_flight = Arc::clone(&self.pr_creation_in_flight);
         let pr_poll_cancel = Arc::clone(&self.pr_poll_cancel);
 
-        // Perform PR creation in background
+        Self::spawn_create_pr_task(CreatePrTaskInput {
+            app_event_tx,
+            base_branch,
+            db,
+            folder,
+            id,
+            output,
+            pr_creation_in_flight,
+            pr_poll_cancel,
+            source_branch,
+            status,
+            title,
+        });
+
+        Ok(())
+    }
+
+    fn spawn_create_pr_task(input: CreatePrTaskInput) {
+        let CreatePrTaskInput {
+            app_event_tx,
+            base_branch,
+            db,
+            folder,
+            id,
+            output,
+            pr_creation_in_flight,
+            pr_poll_cancel,
+            source_branch,
+            status,
+            title,
+        } = input;
+
         tokio::spawn(async move {
             let result = {
                 let folder = folder.clone();
@@ -103,10 +160,13 @@ impl App {
             match result {
                 Ok(Ok(message)) => {
                     let message = format!("\n[PR] {message}\n");
-                    Self::append_session_output(&output, &db, &id, &message).await;
-                    if Self::update_status(&status, &db, &id, Status::PullRequest).await {
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+                    if Self::update_status(&status, &db, &app_event_tx, &id, Status::PullRequest)
+                        .await
+                    {
                         let repo_root = Self::resolve_repo_root_from_worktree(&folder);
                         Self::spawn_pr_poll_task(PrPollTaskInput {
+                            app_event_tx,
                             db,
                             folder,
                             id: id.clone(),
@@ -120,22 +180,27 @@ impl App {
                         Self::append_session_output(
                             &output,
                             &db,
+                            &app_event_tx,
                             &id,
                             "\n[PR Error] Invalid status transition to PullRequest\n",
                         )
                         .await;
-                        let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+                        let _ =
+                            Self::update_status(&status, &db, &app_event_tx, &id, Status::Review)
+                                .await;
                     }
                 }
                 Ok(Err(error)) => {
                     let message = format!("\n[PR Error] {error}\n");
-                    Self::append_session_output(&output, &db, &id, &message).await;
-                    let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+                    let _ =
+                        Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
                 }
                 Err(error) => {
                     let message = format!("\n[PR Error] Join error: {error}\n");
-                    Self::append_session_output(&output, &db, &id, &message).await;
-                    let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+                    let _ =
+                        Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
                 }
             }
 
@@ -143,8 +208,6 @@ impl App {
                 in_flight.remove(&id);
             }
         });
-
-        Ok(())
     }
 
     pub(super) fn start_pr_polling_for_pull_request_sessions(&self) {
@@ -159,6 +222,7 @@ impl App {
 
             let source_branch = session_branch(&session.id);
             Self::spawn_pr_poll_task(PrPollTaskInput {
+                app_event_tx: self.app_event_sender(),
                 db: self.db.clone(),
                 folder: session.folder.clone(),
                 id: session.id.clone(),
@@ -214,6 +278,7 @@ impl App {
 
     fn spawn_pr_poll_task(input: PrPollTaskInput) {
         let PrPollTaskInput {
+            app_event_tx,
             db,
             folder,
             id,
@@ -252,11 +317,13 @@ impl App {
                 if merged == Some(true) {
                     let merged_message =
                         format!("\n[PR] Pull request from `{source_branch}` was merged\n");
-                    Self::append_session_output(&output, &db, &id, &merged_message).await;
-                    if !Self::update_status(&status, &db, &id, Status::Done).await {
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, &merged_message)
+                        .await;
+                    if !Self::update_status(&status, &db, &app_event_tx, &id, Status::Done).await {
                         Self::append_session_output(
                             &output,
                             &db,
+                            &app_event_tx,
                             &id,
                             "\n[PR Error] Invalid status transition to Done\n",
                         )
@@ -271,7 +338,8 @@ impl App {
                     {
                         let message =
                             format!("\n[PR Error] Failed to remove merged worktree: {error}\n");
-                        Self::append_session_output(&output, &db, &id, &message).await;
+                        Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
+                            .await;
                     }
 
                     break;
@@ -289,11 +357,15 @@ impl App {
                 if closed == Some(true) {
                     let closed_message =
                         format!("\n[PR] Pull request from `{source_branch}` was closed\n");
-                    Self::append_session_output(&output, &db, &id, &closed_message).await;
-                    if !Self::update_status(&status, &db, &id, Status::Canceled).await {
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, &closed_message)
+                        .await;
+                    if !Self::update_status(&status, &db, &app_event_tx, &id, Status::Canceled)
+                        .await
+                    {
                         Self::append_session_output(
                             &output,
                             &db,
+                            &app_event_tx,
                             &id,
                             "\n[PR Error] Invalid status transition to Canceled\n",
                         )

@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncBufReadExt as _, AsyncRead};
+use tokio::sync::mpsc;
 
 use crate::agent::AgentKind;
-use crate::app::App;
+use crate::app::{App, AppEvent};
 use crate::db::Database;
 use crate::git;
 use crate::model::Status;
@@ -17,6 +18,7 @@ use crate::model::Status;
 /// Inputs needed to execute one session command.
 pub(super) struct RunSessionTaskInput {
     pub(super) agent: AgentKind,
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     pub(super) cmd: Command,
     pub(super) commit_count: Arc<Mutex<i64>>,
     pub(super) db: Database,
@@ -72,6 +74,7 @@ impl App {
     pub(super) async fn run_session_task(input: RunSessionTaskInput) -> Result<(), String> {
         let RunSessionTaskInput {
             agent,
+            app_event_tx,
             cmd,
             commit_count,
             db,
@@ -120,30 +123,33 @@ impl App {
                 let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
                 let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
                 let parsed = agent.parse_response(&stdout_text, &stderr_text);
-                Self::append_session_output(&output, &db, &id, &parsed.content).await;
+                Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content)
+                    .await;
 
                 let _ = db.update_session_stats(&id, &parsed.stats).await;
 
                 match Self::commit_changes(&folder, &db, &id, &commit_count).await {
                     Ok(hash) => {
                         let message = format!("\n[Commit] committed with hash `{hash}`\n");
-                        Self::append_session_output(&output, &db, &id, &message).await;
+                        Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
+                            .await;
                     }
                     Err(commit_error) if commit_error.contains("Nothing to commit") => {}
                     Err(commit_error) => {
                         let message = format!("\n[Commit Error] {commit_error}\n");
-                        Self::append_session_output(&output, &db, &id, &message).await;
+                        Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
+                            .await;
                     }
                 }
             }
             Err(spawn_error) => {
                 let message = format!("Failed to spawn process: {spawn_error}\n");
-                Self::append_session_output(&output, &db, &id, &message).await;
+                Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
                 error = Some(message.trim().to_string());
             }
         }
 
-        let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+        let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
         if let Some(error) = error {
             return Err(error);
@@ -156,6 +162,7 @@ impl App {
     pub(super) async fn update_status(
         status: &Mutex<Status>,
         db: &Database,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         id: &str,
         new: Status,
     ) -> bool {
@@ -173,6 +180,13 @@ impl App {
             return false;
         }
         let _ = db.update_session_status(id, &new.to_string()).await;
+        let session_id = id.to_string();
+        let _ = app_event_tx.send(AppEvent::SessionUpdated {
+            session_id: session_id.clone(),
+        });
+        if Self::status_requires_full_refresh(new) {
+            let _ = app_event_tx.send(AppEvent::TaskComplete { session_id });
+        }
 
         true
     }
@@ -195,6 +209,7 @@ impl App {
     pub(super) async fn append_session_output(
         output: &Arc<Mutex<String>>,
         db: &Database,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         id: &str,
         message: &str,
     ) {
@@ -202,5 +217,15 @@ impl App {
             buf.push_str(message);
         }
         let _ = db.append_session_output(id, message).await;
+        let _ = app_event_tx.send(AppEvent::SessionUpdated {
+            session_id: id.to_string(),
+        });
+    }
+
+    fn status_requires_full_refresh(status: Status) -> bool {
+        matches!(
+            status,
+            Status::Review | Status::Done | Status::Canceled | Status::PullRequest
+        )
     }
 }

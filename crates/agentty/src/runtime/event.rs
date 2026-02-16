@@ -7,7 +7,7 @@ use crossterm::event::Event;
 use mockall::{Sequence, automock, predicate::eq};
 use tokio::sync::mpsc;
 
-use crate::app::App;
+use crate::app::{App, AppEvent};
 use crate::runtime::{EventResult, TuiTerminal, key_handler};
 
 /// Reads terminal events from an underlying event backend.
@@ -66,6 +66,7 @@ pub(crate) async fn process_events(
     tick: &mut tokio::time::Interval,
 ) -> io::Result<EventResult> {
     enum LoopSignal {
+        AppEvent(Option<AppEvent>),
         Event(Option<Event>),
         Tick,
     }
@@ -76,9 +77,15 @@ pub(crate) async fn process_events(
     let signal = tokio::select! {
         biased;
         event = event_rx.recv() => LoopSignal::Event(event),
+        app_event = app.next_app_event() => LoopSignal::AppEvent(app_event),
         _ = tick.tick() => LoopSignal::Tick,
     };
     let maybe_event = match signal {
+        LoopSignal::AppEvent(Some(event)) => {
+            app.apply_app_events(event).await;
+            None
+        }
+        LoopSignal::AppEvent(None) => None,
         LoopSignal::Event(event) => event,
         LoopSignal::Tick => {
             app.refresh_sessions_if_needed().await;

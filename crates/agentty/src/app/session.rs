@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::agent::{AgentBackend, AgentKind, AgentModel};
-use crate::app::App;
 use crate::app::worker::SessionCommand;
+use crate::app::{App, AppEvent};
 use crate::db::Database;
 use crate::git;
 use crate::model::{
@@ -21,7 +22,7 @@ use crate::model::{
     SessionStats, Status,
 };
 
-pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
 const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -32,6 +33,7 @@ struct ModelMergeCommitMessageResponse {
 }
 
 struct MergeTaskInput {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
     db: Database,
     folder: PathBuf,
@@ -67,17 +69,27 @@ impl App {
 
         self.session_state.refresh_deadline = Instant::now() + SESSION_REFRESH_INTERVAL;
 
-        let Ok((sessions_row_count, sessions_updated_at_max)) =
-            self.db.load_sessions_metadata().await
-        else {
+        let Ok(sessions_metadata) = self.db.load_sessions_metadata().await else {
             return;
         };
+        let (sessions_row_count, sessions_updated_at_max) = sessions_metadata;
         if sessions_row_count == self.session_state.row_count
             && sessions_updated_at_max == self.session_state.updated_at_max
         {
             return;
         }
 
+        self.reload_sessions(Some(sessions_metadata)).await;
+    }
+
+    /// Reloads sessions immediately, bypassing refresh deadline checks.
+    pub(crate) async fn refresh_sessions_now(&mut self) {
+        let sessions_metadata = self.db.load_sessions_metadata().await.ok();
+        self.reload_sessions(sessions_metadata).await;
+        self.session_state.refresh_deadline = Instant::now() + SESSION_REFRESH_INTERVAL;
+    }
+
+    async fn reload_sessions(&mut self, sessions_metadata: Option<(i64, i64)>) {
         let selected_index = self.session_state.table_state.selected();
         let selected_session_id = selected_index
             .and_then(|index| self.session_state.sessions.get(index))
@@ -102,8 +114,12 @@ impl App {
         self.session_workers
             .retain(|session_id, _| active_session_ids.contains(session_id));
 
-        self.session_state.row_count = sessions_row_count;
-        self.session_state.updated_at_max = sessions_updated_at_max;
+        if let Some((sessions_row_count, sessions_updated_at_max)) = sessions_metadata {
+            self.session_state.row_count = sessions_row_count;
+            self.session_state.updated_at_max = sessions_updated_at_max;
+        } else {
+            self.update_sessions_metadata_cache().await;
+        }
     }
 
     /// Selects the next top-level tab.
@@ -305,6 +321,7 @@ impl App {
             .ok_or_else(|| "Session handles not found".to_string())?;
         let output = Arc::clone(&handles.output);
         let status = Arc::clone(&handles.status);
+        let app_event_tx = self.app_event_sender();
 
         let _ = self
             .db
@@ -316,11 +333,23 @@ impl App {
             .await;
 
         let initial_output = format!(" › {prompt}\n\n");
-        Self::append_session_output(&output, &self.db, &persisted_session_id, &initial_output)
-            .await;
+        Self::append_session_output(
+            &output,
+            &self.db,
+            &app_event_tx,
+            &persisted_session_id,
+            &initial_output,
+        )
+        .await;
 
-        let _ =
-            Self::update_status(&status, &self.db, &persisted_session_id, Status::InProgress).await;
+        let _ = Self::update_status(
+            &status,
+            &self.db,
+            &app_event_tx,
+            &persisted_session_id,
+            Status::InProgress,
+        )
+        .await;
 
         let cmd = session_agent.create_backend().build_start_command(
             &folder,
@@ -554,6 +583,7 @@ impl App {
         let folder = session.folder.clone();
         let id = session.id.clone();
         let (session_agent, session_model) = Self::resolve_session_agent_and_model(session);
+        let app_event_tx = self.app_event_sender();
 
         let handles = self
             .session_state
@@ -563,31 +593,32 @@ impl App {
         let output = Arc::clone(&handles.output);
         let status = Arc::clone(&handles.status);
 
-        if !Self::update_status(&status, &db, &id, Status::Merging).await {
+        if !Self::update_status(&status, &db, &app_event_tx, &id, Status::Merging).await {
             return Err("Invalid status transition to Merging".to_string());
         }
 
         let base_branch = match db.get_session_base_branch(&id).await {
             Ok(Some(base_branch)) => base_branch,
             Ok(None) => {
-                let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+                let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
                 return Err("No git worktree for this session".to_string());
             }
             Err(error) => {
-                let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+                let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
                 return Err(error);
             }
         };
 
         let Some(repo_root) = git::find_git_repo_root(&self.working_dir) else {
-            let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+            let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
             return Err("Failed to find git repository root".to_string());
         };
 
         let merge_task_input = MergeTaskInput {
+            app_event_tx,
             base_branch,
             db,
             folder,
@@ -610,6 +641,7 @@ impl App {
 
     async fn run_merge_task(input: MergeTaskInput) {
         let MergeTaskInput {
+            app_event_tx,
             base_branch,
             db,
             folder,
@@ -674,7 +706,7 @@ impl App {
                 .map_err(|error| format!("Failed to merge: {error}"))?;
             }
 
-            if !Self::update_status(&status, &db, &id, Status::Done).await {
+            if !Self::update_status(&status, &db, &app_event_tx, &id, Status::Done).await {
                 return Err("Invalid status transition to Done".to_string());
             }
 
@@ -699,12 +731,12 @@ impl App {
         match merge_result {
             Ok(message) => {
                 let merge_message = format!("\n[Merge] {message}\n");
-                Self::append_session_output(&output, &db, &id, &merge_message).await;
+                Self::append_session_output(&output, &db, &app_event_tx, &id, &merge_message).await;
             }
             Err(error) => {
                 let merge_error = format!("\n[Merge Error] {error}\n");
-                Self::append_session_output(&output, &db, &id, &merge_error).await;
-                let _ = Self::update_status(&status, &db, &id, Status::Review).await;
+                Self::append_session_output(&output, &db, &app_event_tx, &id, &merge_error).await;
+                let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
             }
         }
     }
@@ -985,7 +1017,7 @@ impl App {
             }
         };
         if let Some(session_id) = blocked_session_id {
-            self.append_reply_status_error(&session_id);
+            self.append_reply_status_error(&session_id).await;
 
             return;
         }
@@ -994,6 +1026,7 @@ impl App {
         else {
             return;
         };
+        let app_event_tx = self.app_event_sender();
 
         let Some(handles) = self.session_state.handles.get(&persisted_session_id) else {
             return;
@@ -1010,13 +1043,25 @@ impl App {
                 .db
                 .update_session_prompt(&persisted_session_id, prompt)
                 .await;
-            let _ =
-                Self::update_status(&status, &self.db, &persisted_session_id, Status::InProgress)
-                    .await;
+            let _ = Self::update_status(
+                &status,
+                &self.db,
+                &app_event_tx,
+                &persisted_session_id,
+                Status::InProgress,
+            )
+            .await;
         }
 
         let reply_line = format!("\n › {prompt}\n\n");
-        Self::append_session_output(&output, &self.db, &persisted_session_id, &reply_line).await;
+        Self::append_session_output(
+            &output,
+            &self.db,
+            &app_event_tx,
+            &persisted_session_id,
+            &reply_line,
+        )
+        .await;
 
         let operation_id = Uuid::new_v4().to_string();
         let command = if is_first_message {
@@ -1032,26 +1077,31 @@ impl App {
                 operation_id,
             }
         };
-        self.enqueue_reply_command(&output, &persisted_session_id, command)
+        self.enqueue_reply_command(&output, &app_event_tx, &persisted_session_id, command)
             .await;
     }
 
-    fn append_reply_status_error(&self, session_id: &str) {
+    async fn append_reply_status_error(&self, session_id: &str) {
         let status_error = "\n[Reply Error] Session must be in review status\n".to_string();
-        if let Some(handles) = self.session_state.handles.get(session_id) {
-            handles.append_output(&status_error);
-        }
+        let Some(handles) = self.session_state.handles.get(session_id) else {
+            return;
+        };
+        let app_event_tx = self.app_event_sender();
 
-        let db = self.db.clone();
-        let session_id = session_id.to_string();
-        tokio::spawn(async move {
-            let _ = db.append_session_output(&session_id, &status_error).await;
-        });
+        Self::append_session_output(
+            &handles.output,
+            &self.db,
+            &app_event_tx,
+            session_id,
+            &status_error,
+        )
+        .await;
     }
 
     async fn enqueue_reply_command(
         &mut self,
         output: &Arc<Mutex<String>>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         persisted_session_id: &str,
         command: SessionCommand,
     ) {
@@ -1060,7 +1110,14 @@ impl App {
             .await
         {
             let error_line = format!("\n[Reply Error] {error}\n");
-            Self::append_session_output(output, &self.db, persisted_session_id, &error_line).await;
+            Self::append_session_output(
+                output,
+                &self.db,
+                app_event_tx,
+                persisted_session_id,
+                &error_line,
+            )
+            .await;
         }
     }
 
@@ -1162,8 +1219,16 @@ impl App {
         let Some(handles) = self.session_state.handles.get(session_id) else {
             return;
         };
+        let app_event_tx = self.app_event_sender();
 
-        Self::append_session_output(&handles.output, &self.db, &session.id, output).await;
+        Self::append_session_output(
+            &handles.output,
+            &self.db,
+            &app_event_tx,
+            &session.id,
+            output,
+        )
+        .await;
     }
 
     /// Loads session models from the database and reuses live handles when
@@ -2096,13 +2161,11 @@ WHERE id = 'beta0000'
         app.session_state.table_state.select(Some(1));
 
         // Act
-        tokio::time::sleep(Duration::from_secs(1)).await;
         app.db
             .update_session_status("alpha000", "Done")
             .await
             .expect("failed to update session status");
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        app.refresh_sessions_if_needed().await;
+        app.refresh_sessions_now().await;
 
         // Assert
         assert_eq!(app.session_state.sessions[0].id, "alpha000");
@@ -2184,13 +2247,11 @@ WHERE id = 'beta0000'
         };
 
         // Act
-        tokio::time::sleep(Duration::from_secs(1)).await;
         app.db
             .update_session_status("alpha000", "Done")
             .await
             .expect("failed to update session status");
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        app.refresh_sessions_if_needed().await;
+        app.refresh_sessions_now().await;
 
         // Assert
         assert_eq!(app.session_state.sessions[0].id, "alpha000");
