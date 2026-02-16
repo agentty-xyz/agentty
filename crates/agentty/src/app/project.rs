@@ -29,19 +29,13 @@ impl App {
         self.active_project_id = project_id;
 
         // Reset git status
-        if let Ok(mut status) = self.git_status.lock() {
-            *status = None;
-        }
+        self.git_status = None;
 
         // Start new git status task
         let new_cancel = Arc::new(AtomicBool::new(false));
         self.git_status_cancel = new_cancel.clone();
         if self.git_branch.is_some() {
-            Self::spawn_git_status_task(
-                &self.working_dir,
-                Arc::clone(&self.git_status),
-                new_cancel,
-            );
+            Self::spawn_git_status_task(&self.working_dir, new_cancel, self.app_event_sender());
         }
 
         // Refresh project list and reload all sessions

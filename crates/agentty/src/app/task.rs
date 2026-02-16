@@ -30,10 +30,13 @@ pub(super) struct RunSessionTaskInput {
 
 impl App {
     /// Spawns a background loop that periodically refreshes ahead/behind info.
+    ///
+    /// The task emits [`AppEvent::GitStatusUpdated`] snapshots instead of
+    /// mutating app state directly.
     pub(super) fn spawn_git_status_task(
         working_dir: &Path,
-        git_status: Arc<Mutex<Option<(u32, u32)>>>,
         cancel: Arc<AtomicBool>,
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
     ) {
         let dir = working_dir.to_path_buf();
         tokio::spawn(async move {
@@ -53,9 +56,10 @@ impl App {
                         .ok()
                         .and_then(std::result::Result::ok)
                 };
-                if let Ok(mut lock) = git_status.lock() {
-                    *lock = status;
+                if cancel.load(Ordering::Relaxed) {
+                    break;
                 }
+                let _ = app_event_tx.send(AppEvent::GitStatusUpdated { status });
                 for _ in 0..30 {
                     if cancel.load(Ordering::Relaxed) {
                         return;
@@ -159,6 +163,10 @@ impl App {
     }
 
     /// Applies a status transition to memory and database when valid.
+    ///
+    /// This emits [`AppEvent::SessionUpdated`] for targeted snapshot sync and
+    /// emits [`AppEvent::RefreshSessions`] for transitions that require full
+    /// list reload.
     pub(super) async fn update_status(
         status: &Mutex<Status>,
         db: &Database,
@@ -181,11 +189,9 @@ impl App {
         }
         let _ = db.update_session_status(id, &new.to_string()).await;
         let session_id = id.to_string();
-        let _ = app_event_tx.send(AppEvent::SessionUpdated {
-            session_id: session_id.clone(),
-        });
+        let _ = app_event_tx.send(AppEvent::SessionUpdated { session_id });
         if Self::status_requires_full_refresh(new) {
-            let _ = app_event_tx.send(AppEvent::TaskComplete { session_id });
+            let _ = app_event_tx.send(AppEvent::RefreshSessions);
         }
 
         true

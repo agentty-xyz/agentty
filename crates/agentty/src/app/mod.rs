@@ -29,13 +29,17 @@ pub fn agentty_home() -> PathBuf {
 }
 
 /// Internal app events emitted by background workers and workflows.
+///
+/// Producers should emit events only; state mutation is centralized in
+/// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
+    /// Indicates latest ahead/behind information from the git status worker.
+    GitStatusUpdated { status: Option<(u32, u32)> },
+    /// Requests a full session list refresh.
+    RefreshSessions,
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
-    /// Indicates that a session lifecycle milestone completed and list reload
-    /// should run to keep ordering and persisted metadata in sync.
-    TaskComplete { session_id: String },
 }
 
 /// Holds all in-memory state related to session listing and refresh tracking.
@@ -122,7 +126,7 @@ pub struct App {
     default_session_model: AgentModel,
     default_session_permission_mode: PermissionMode,
     git_branch: Option<String>,
-    git_status: Arc<Mutex<Option<(u32, u32)>>>,
+    git_status: Option<(u32, u32)>,
     git_status_cancel: Arc<AtomicBool>,
     pr_creation_in_flight: Arc<Mutex<HashSet<String>>>,
     pr_poll_cancel: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -174,7 +178,7 @@ impl App {
             table_state.select(Some(0));
         }
 
-        let git_status = Arc::new(Mutex::new(None));
+        let git_status = None;
         let git_status_cancel = Arc::new(AtomicBool::new(false));
         let pr_creation_in_flight = Arc::new(Mutex::new(HashSet::new()));
         let pr_poll_cancel = Arc::new(Mutex::new(HashMap::new()));
@@ -183,8 +187,8 @@ impl App {
         if git_branch.is_some() {
             Self::spawn_git_status_task(
                 &working_dir,
-                Arc::clone(&git_status),
                 Arc::clone(&git_status_cancel),
+                event_tx.clone(),
             );
         }
 
@@ -233,8 +237,9 @@ impl App {
         self.git_branch.as_deref()
     }
 
+    /// Returns the latest ahead/behind snapshot from reducer-applied events.
     pub fn git_status_info(&self) -> Option<(u32, u32)> {
-        self.git_status.lock().ok().and_then(|status| *status)
+        self.git_status
     }
 
     /// Returns whether the onboarding screen should be shown.
@@ -242,20 +247,40 @@ impl App {
         self.session_state.sessions.is_empty()
     }
 
-    /// Applies one or more queued app events.
+    /// Applies one or more queued app events through a single reducer path.
+    ///
+    /// This method drains currently queued app events, coalesces refresh and
+    /// git-status updates, then applies session-handle sync for touched
+    /// sessions.
     pub(crate) async fn apply_app_events(&mut self, first_event: AppEvent) {
+        let mut has_git_status_update = false;
         let mut should_force_reload = false;
+        let mut git_status_update = None;
         let mut session_ids: HashSet<String> = HashSet::new();
-        Self::collect_app_event(&mut should_force_reload, &mut session_ids, first_event);
+        Self::collect_app_event(
+            &mut has_git_status_update,
+            &mut should_force_reload,
+            &mut git_status_update,
+            &mut session_ids,
+            first_event,
+        );
 
         while let Ok(event) = self.event_rx.try_recv() {
-            Self::collect_app_event(&mut should_force_reload, &mut session_ids, event);
+            Self::collect_app_event(
+                &mut has_git_status_update,
+                &mut should_force_reload,
+                &mut git_status_update,
+                &mut session_ids,
+                event,
+            );
         }
 
         if should_force_reload {
             self.refresh_sessions_now().await;
+        }
 
-            return;
+        if has_git_status_update {
+            self.git_status = git_status_update;
         }
 
         for session_id in &session_ids {
@@ -273,17 +298,23 @@ impl App {
         self.event_rx.recv().await
     }
 
+    /// Collects one event into aggregate reducer state for this loop pass.
     fn collect_app_event(
+        has_git_status_update: &mut bool,
         should_force_reload: &mut bool,
+        git_status_update: &mut Option<(u32, u32)>,
         session_ids: &mut HashSet<String>,
         event: AppEvent,
     ) {
         match event {
-            AppEvent::SessionUpdated { session_id } => {
-                session_ids.insert(session_id);
+            AppEvent::GitStatusUpdated { status } => {
+                *has_git_status_update = true;
+                *git_status_update = status;
             }
-            AppEvent::TaskComplete { session_id } => {
+            AppEvent::RefreshSessions => {
                 *should_force_reload = true;
+            }
+            AppEvent::SessionUpdated { session_id } => {
                 session_ids.insert(session_id);
             }
         }
@@ -292,6 +323,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use tempfile::tempdir;
 
     use super::*;
@@ -343,5 +376,69 @@ mod tests {
 
         // Assert
         assert!(!app.should_show_onboarding());
+    }
+
+    #[test]
+    fn test_collect_app_event_tracks_git_status_and_refresh() {
+        // Arrange
+        let mut has_git_status_update = false;
+        let mut should_force_reload = false;
+        let mut git_status_update = None;
+        let mut session_ids = HashSet::new();
+
+        // Act
+        App::collect_app_event(
+            &mut has_git_status_update,
+            &mut should_force_reload,
+            &mut git_status_update,
+            &mut session_ids,
+            AppEvent::SessionUpdated {
+                session_id: "session-1".to_string(),
+            },
+        );
+        App::collect_app_event(
+            &mut has_git_status_update,
+            &mut should_force_reload,
+            &mut git_status_update,
+            &mut session_ids,
+            AppEvent::GitStatusUpdated {
+                status: Some((2, 1)),
+            },
+        );
+        App::collect_app_event(
+            &mut has_git_status_update,
+            &mut should_force_reload,
+            &mut git_status_update,
+            &mut session_ids,
+            AppEvent::RefreshSessions,
+        );
+
+        // Assert
+        assert!(has_git_status_update);
+        assert!(should_force_reload);
+        assert_eq!(git_status_update, Some((2, 1)));
+        assert_eq!(session_ids.len(), 1);
+        assert!(session_ids.contains("session-1"));
+    }
+
+    #[tokio::test]
+    async fn test_apply_app_events_updates_git_status() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base_path = temp_dir.path().join("wt");
+        let working_dir = temp_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let mut app = App::new(base_path, working_dir, None, database).await;
+
+        // Act
+        app.apply_app_events(AppEvent::GitStatusUpdated {
+            status: Some((5, 3)),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(app.git_status_info(), Some((5, 3)));
     }
 }
