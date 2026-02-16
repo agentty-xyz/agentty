@@ -89,7 +89,9 @@ pub(crate) async fn handle(
             create_pr_for_view_session(app, &view_context.session_id).await;
         }
         KeyCode::BackTab => {
-            let _ = app.toggle_session_permission_mode(&view_context.session_id);
+            let _ = app
+                .toggle_session_permission_mode(&view_context.session_id)
+                .await;
         }
         KeyCode::Char('?') => {
             app.mode = AppMode::Help {

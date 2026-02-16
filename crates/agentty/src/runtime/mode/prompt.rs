@@ -97,7 +97,9 @@ pub(crate) async fn handle(
             handle_prompt_delete(app);
         }
         KeyCode::BackTab => {
-            let _ = app.toggle_session_permission_mode(&prompt_context.session_id);
+            let _ = app
+                .toggle_session_permission_mode(&prompt_context.session_id)
+                .await;
         }
         KeyCode::Char(character) => {
             handle_prompt_char(app, character, &prompt_context).await;
@@ -340,11 +342,13 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 slash_state.reset();
             }
 
-            let _ = app.set_session_agent_and_model(
-                &prompt_context.session_id,
-                selected_agent,
-                selected_model,
-            );
+            let _ = app
+                .set_session_agent_and_model(
+                    &prompt_context.session_id,
+                    selected_agent,
+                    selected_model,
+                )
+                .await;
         }
     }
 }

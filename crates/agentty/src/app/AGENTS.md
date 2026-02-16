@@ -14,6 +14,7 @@ Application-layer workflows and orchestration.
 - Event model:
   - `AppEvent` is the internal bus between background workflows and the runtime loop.
   - `apply_app_events()` is the reducer for app-side async mutations.
+  - Session configuration/history mutations (`agent/model`, `permission_mode`, history reset) are persisted first, then reduced via events.
   - Foreground workflows should emit via `dispatch_app_event()` instead of mutating reducer state directly.
 - Execution model:
   - Work is serialized per session through worker queues.

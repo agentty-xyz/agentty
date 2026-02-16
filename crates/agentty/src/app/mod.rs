@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{AgentKind, AgentModel};
 use crate::db::Database;
-use crate::model::{AppMode, PermissionMode, Project, Session, SessionHandles, Tab};
+use crate::model::{AppMode, PermissionMode, Project, Session, SessionHandles, Status, Tab};
 
 mod pr;
 mod project;
@@ -42,6 +42,19 @@ pub fn agentty_home() -> PathBuf {
 pub(crate) enum AppEvent {
     /// Indicates latest ahead/behind information from the git status worker.
     GitStatusUpdated { status: Option<(u32, u32)> },
+    /// Indicates a session history reset has been persisted.
+    SessionHistoryCleared { session_id: String },
+    /// Indicates a session agent/model selection has been persisted.
+    SessionAgentModelUpdated {
+        session_agent: AgentKind,
+        session_id: String,
+        session_model: AgentModel,
+    },
+    /// Indicates a session permission mode selection has been persisted.
+    SessionPermissionModeUpdated {
+        permission_mode: PermissionMode,
+        session_id: String,
+    },
     /// Indicates a PR creation task has finished for a session.
     PrCreationCleared { session_id: String },
     /// Indicates a PR polling task has stopped for a session.
@@ -50,6 +63,19 @@ pub(crate) enum AppEvent {
     RefreshSessions,
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
+}
+
+#[derive(Default)]
+struct AppEventBatch {
+    cleared_pr_creation_ids: HashSet<String>,
+    cleared_session_history_ids: HashSet<String>,
+    git_status_update: Option<(u32, u32)>,
+    has_git_status_update: bool,
+    session_agent_model_updates: HashMap<String, (AgentKind, AgentModel)>,
+    session_ids: HashSet<String>,
+    session_permission_mode_updates: HashMap<String, PermissionMode>,
+    should_force_reload: bool,
+    stopped_pr_poll_ids: HashSet<String>,
 }
 
 /// Holds all in-memory state related to session listing and refresh tracking.
@@ -268,55 +294,47 @@ impl App {
     /// git-status updates, then applies session-handle sync for touched
     /// sessions.
     pub(crate) async fn apply_app_events(&mut self, first_event: AppEvent) {
-        let mut cleared_pr_creation_ids: HashSet<String> = HashSet::new();
-        let mut has_git_status_update = false;
-        let mut stopped_pr_poll_ids: HashSet<String> = HashSet::new();
-        let mut should_force_reload = false;
-        let mut git_status_update = None;
-        let mut session_ids: HashSet<String> = HashSet::new();
-        Self::collect_app_event(
-            &mut cleared_pr_creation_ids,
-            &mut has_git_status_update,
-            &mut stopped_pr_poll_ids,
-            &mut should_force_reload,
-            &mut git_status_update,
-            &mut session_ids,
-            first_event,
-        );
+        let mut event_batch = AppEventBatch::default();
+        event_batch.collect_event(first_event);
 
         while let Ok(event) = self.event_rx.try_recv() {
-            Self::collect_app_event(
-                &mut cleared_pr_creation_ids,
-                &mut has_git_status_update,
-                &mut stopped_pr_poll_ids,
-                &mut should_force_reload,
-                &mut git_status_update,
-                &mut session_ids,
-                event,
-            );
+            event_batch.collect_event(event);
         }
 
-        if should_force_reload {
+        if event_batch.should_force_reload {
             self.refresh_sessions_now().await;
         }
 
-        if has_git_status_update {
-            self.git_status = git_status_update;
+        if event_batch.has_git_status_update {
+            self.git_status = event_batch.git_status_update;
         }
 
         if let Ok(mut in_flight) = self.pr_creation_in_flight.lock() {
-            for session_id in &cleared_pr_creation_ids {
+            for session_id in &event_batch.cleared_pr_creation_ids {
                 in_flight.remove(session_id);
             }
         }
 
         if let Ok(mut polling) = self.pr_poll_cancel.lock() {
-            for session_id in &stopped_pr_poll_ids {
+            for session_id in &event_batch.stopped_pr_poll_ids {
                 polling.remove(session_id);
             }
         }
 
-        for session_id in &session_ids {
+        for session_id in &event_batch.cleared_session_history_ids {
+            self.apply_session_history_cleared(session_id);
+        }
+
+        for (session_id, (session_agent, session_model)) in event_batch.session_agent_model_updates
+        {
+            self.apply_session_agent_model_updated(&session_id, session_agent, session_model);
+        }
+
+        for (session_id, permission_mode) in event_batch.session_permission_mode_updates {
+            self.apply_session_permission_mode_updated(&session_id, permission_mode);
+        }
+
+        for session_id in &event_batch.session_ids {
             self.session_state.sync_session_from_handle(session_id);
         }
     }
@@ -351,32 +369,101 @@ impl App {
         self.event_rx.recv().await
     }
 
-    /// Collects one event into aggregate reducer state for this loop pass.
-    fn collect_app_event(
-        cleared_pr_creation_ids: &mut HashSet<String>,
-        has_git_status_update: &mut bool,
-        stopped_pr_poll_ids: &mut HashSet<String>,
-        should_force_reload: &mut bool,
-        git_status_update: &mut Option<(u32, u32)>,
-        session_ids: &mut HashSet<String>,
-        event: AppEvent,
+    fn apply_session_history_cleared(&mut self, session_id: &str) {
+        if let Some(handles) = self.session_state.handles.get(session_id) {
+            if let Ok(mut output_buffer) = handles.output.lock() {
+                output_buffer.clear();
+            }
+            if let Ok(mut status_value) = handles.status.lock() {
+                *status_value = Status::New;
+            }
+        }
+
+        if let Some(session) = self
+            .session_state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.output.clear();
+            session.prompt = String::new();
+            session.title = None;
+            session.status = Status::New;
+        }
+    }
+
+    fn apply_session_agent_model_updated(
+        &mut self,
+        session_id: &str,
+        session_agent: AgentKind,
+        session_model: AgentModel,
     ) {
+        if let Some(session) = self
+            .session_state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.agent = session_agent.to_string();
+            session.model = session_model.as_str().to_string();
+        }
+        self.default_session_agent = session_agent;
+        self.default_session_model = session_model;
+    }
+
+    fn apply_session_permission_mode_updated(
+        &mut self,
+        session_id: &str,
+        permission_mode: PermissionMode,
+    ) {
+        if let Some(session) = self
+            .session_state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.permission_mode = permission_mode;
+        }
+        self.default_session_permission_mode = permission_mode;
+    }
+}
+
+impl AppEventBatch {
+    fn collect_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::GitStatusUpdated { status } => {
-                *has_git_status_update = true;
-                *git_status_update = status;
+                self.has_git_status_update = true;
+                self.git_status_update = status;
+            }
+            AppEvent::SessionHistoryCleared { session_id } => {
+                self.cleared_session_history_ids.insert(session_id);
+            }
+            AppEvent::SessionAgentModelUpdated {
+                session_agent,
+                session_id,
+                session_model,
+            } => {
+                self.session_agent_model_updates
+                    .insert(session_id, (session_agent, session_model));
+            }
+            AppEvent::SessionPermissionModeUpdated {
+                permission_mode,
+                session_id,
+            } => {
+                self.session_permission_mode_updates
+                    .insert(session_id, permission_mode);
             }
             AppEvent::PrCreationCleared { session_id } => {
-                cleared_pr_creation_ids.insert(session_id);
+                self.cleared_pr_creation_ids.insert(session_id);
             }
             AppEvent::PrPollingStopped { session_id } => {
-                stopped_pr_poll_ids.insert(session_id);
+                self.stopped_pr_poll_ids.insert(session_id);
             }
             AppEvent::RefreshSessions => {
-                *should_force_reload = true;
+                self.should_force_reload = true;
             }
             AppEvent::SessionUpdated { session_id } => {
-                session_ids.insert(session_id);
+                self.session_ids.insert(session_id);
             }
         }
     }
@@ -384,8 +471,6 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use tempfile::tempdir;
 
     use super::*;
@@ -440,80 +525,80 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_app_event_tracks_git_status_and_refresh() {
+    fn test_app_event_batch_collects_git_status_and_refresh() {
         // Arrange
-        let mut cleared_pr_creation_ids = HashSet::new();
-        let mut has_git_status_update = false;
-        let mut stopped_pr_poll_ids = HashSet::new();
-        let mut should_force_reload = false;
-        let mut git_status_update = None;
-        let mut session_ids = HashSet::new();
+        let mut event_batch = AppEventBatch::default();
 
         // Act
-        App::collect_app_event(
-            &mut cleared_pr_creation_ids,
-            &mut has_git_status_update,
-            &mut stopped_pr_poll_ids,
-            &mut should_force_reload,
-            &mut git_status_update,
-            &mut session_ids,
-            AppEvent::SessionUpdated {
-                session_id: "session-1".to_string(),
-            },
-        );
-        App::collect_app_event(
-            &mut cleared_pr_creation_ids,
-            &mut has_git_status_update,
-            &mut stopped_pr_poll_ids,
-            &mut should_force_reload,
-            &mut git_status_update,
-            &mut session_ids,
-            AppEvent::GitStatusUpdated {
-                status: Some((2, 1)),
-            },
-        );
-        App::collect_app_event(
-            &mut cleared_pr_creation_ids,
-            &mut has_git_status_update,
-            &mut stopped_pr_poll_ids,
-            &mut should_force_reload,
-            &mut git_status_update,
-            &mut session_ids,
-            AppEvent::RefreshSessions,
-        );
-        App::collect_app_event(
-            &mut cleared_pr_creation_ids,
-            &mut has_git_status_update,
-            &mut stopped_pr_poll_ids,
-            &mut should_force_reload,
-            &mut git_status_update,
-            &mut session_ids,
-            AppEvent::PrCreationCleared {
-                session_id: "session-2".to_string(),
-            },
-        );
-        App::collect_app_event(
-            &mut cleared_pr_creation_ids,
-            &mut has_git_status_update,
-            &mut stopped_pr_poll_ids,
-            &mut should_force_reload,
-            &mut git_status_update,
-            &mut session_ids,
-            AppEvent::PrPollingStopped {
-                session_id: "session-3".to_string(),
-            },
-        );
+        event_batch.collect_event(AppEvent::GitStatusUpdated {
+            status: Some((2, 1)),
+        });
+        event_batch.collect_event(AppEvent::RefreshSessions);
 
         // Assert
-        assert_eq!(cleared_pr_creation_ids.len(), 1);
-        assert!(cleared_pr_creation_ids.contains("session-2"));
-        assert!(has_git_status_update);
-        assert_eq!(stopped_pr_poll_ids.len(), 1);
-        assert!(stopped_pr_poll_ids.contains("session-3"));
-        assert!(should_force_reload);
-        assert_eq!(git_status_update, Some((2, 1)));
-        assert_eq!(session_ids.len(), 1);
-        assert!(session_ids.contains("session-1"));
+        assert!(event_batch.has_git_status_update);
+        assert_eq!(event_batch.git_status_update, Some((2, 1)));
+        assert!(event_batch.should_force_reload);
+    }
+
+    #[test]
+    fn test_app_event_batch_collects_session_updates() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::SessionUpdated {
+            session_id: "session-1".to_string(),
+        });
+        event_batch.collect_event(AppEvent::SessionHistoryCleared {
+            session_id: "session-2".to_string(),
+        });
+        event_batch.collect_event(AppEvent::SessionAgentModelUpdated {
+            session_agent: AgentKind::Claude,
+            session_id: "session-3".to_string(),
+            session_model: AgentModel::Claude(crate::agent::ClaudeModel::ClaudeOpus46),
+        });
+        event_batch.collect_event(AppEvent::SessionPermissionModeUpdated {
+            permission_mode: PermissionMode::Autonomous,
+            session_id: "session-4".to_string(),
+        });
+
+        // Assert
+        assert!(event_batch.session_ids.contains("session-1"));
+        assert!(
+            event_batch
+                .cleared_session_history_ids
+                .contains("session-2")
+        );
+        assert_eq!(
+            event_batch.session_agent_model_updates.get("session-3"),
+            Some(&(
+                AgentKind::Claude,
+                AgentModel::Claude(crate::agent::ClaudeModel::ClaudeOpus46)
+            ))
+        );
+        assert_eq!(
+            event_batch.session_permission_mode_updates.get("session-4"),
+            Some(&PermissionMode::Autonomous)
+        );
+    }
+
+    #[test]
+    fn test_app_event_batch_collects_pr_updates() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::PrCreationCleared {
+            session_id: "session-1".to_string(),
+        });
+        event_batch.collect_event(AppEvent::PrPollingStopped {
+            session_id: "session-2".to_string(),
+        });
+
+        // Assert
+        assert!(event_batch.cleared_pr_creation_ids.contains("session-1"));
+        assert!(event_batch.stopped_pr_poll_ids.contains("session-2"));
     }
 
     #[tokio::test]

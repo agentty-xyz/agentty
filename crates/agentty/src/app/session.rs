@@ -385,8 +385,8 @@ impl App {
     ///
     /// # Errors
     /// Returns an error if the session is missing or the model does not belong
-    /// to the selected agent.
-    pub fn set_session_agent_and_model(
+    /// to the selected agent, or persistence fails.
+    pub async fn set_session_agent_and_model(
         &mut self,
         session_id: &str,
         session_agent: AgentKind,
@@ -396,26 +396,22 @@ impl App {
             return Err("Model does not belong to selected agent".to_string());
         }
 
-        let Some(session_index) = self.session_index_for_id(session_id) else {
-            return Err("Session not found".to_string());
-        };
-        let Some(session) = self.session_state.sessions.get_mut(session_index) else {
+        let Some(_) = self.session_index_for_id(session_id) else {
             return Err("Session not found".to_string());
         };
 
         let agent = session_agent.to_string();
         let model = session_model.as_str().to_string();
 
-        session.agent.clone_from(&agent);
-        session.model.clone_from(&model);
-        self.default_session_agent = session_agent;
-        self.default_session_model = session_model;
-
-        let db = self.db.clone();
-        let id = session_id.to_string();
-        tokio::spawn(async move {
-            let _ = db.update_session_agent_and_model(&id, &agent, &model).await;
-        });
+        self.db
+            .update_session_agent_and_model(session_id, &agent, &model)
+            .await?;
+        self.dispatch_app_event(AppEvent::SessionAgentModelUpdated {
+            session_agent,
+            session_id: session_id.to_string(),
+            session_model,
+        })
+        .await;
 
         Ok(())
     }
@@ -423,24 +419,24 @@ impl App {
     /// Toggles the permission mode for a session and persists the change.
     ///
     /// # Errors
-    /// Returns an error if the session is not found.
-    pub fn toggle_session_permission_mode(&mut self, session_id: &str) -> Result<(), String> {
+    /// Returns an error if the session is not found or persistence fails.
+    pub async fn toggle_session_permission_mode(&mut self, session_id: &str) -> Result<(), String> {
         let Some(session_index) = self.session_index_for_id(session_id) else {
             return Err("Session not found".to_string());
         };
-        let Some(session) = self.session_state.sessions.get_mut(session_index) else {
+        let Some(session) = self.session_state.sessions.get(session_index) else {
             return Err("Session not found".to_string());
         };
 
-        session.permission_mode = session.permission_mode.toggle();
-        let mode_label = session.permission_mode.label().to_string();
-        self.default_session_permission_mode = session.permission_mode;
-
-        let db = self.db.clone();
-        let id = session_id.to_string();
-        tokio::spawn(async move {
-            let _ = db.update_session_permission_mode(&id, &mode_label).await;
-        });
+        let permission_mode = session.permission_mode.toggle();
+        self.db
+            .update_session_permission_mode(session_id, permission_mode.label())
+            .await?;
+        self.dispatch_app_event(AppEvent::SessionPermissionModeUpdated {
+            permission_mode,
+            session_id: session_id.to_string(),
+        })
+        .await;
 
         Ok(())
     }
@@ -455,29 +451,15 @@ impl App {
     /// Returns an error if the session is not found or the database update
     /// fails.
     pub async fn clear_session_history(&mut self, session_id: &str) -> Result<(), String> {
-        let session_index = self
-            .session_index_for_id(session_id)
-            .ok_or_else(|| "Session not found".to_string())?;
-        let session = self
-            .session_state
-            .sessions
-            .get_mut(session_index)
-            .ok_or_else(|| "Session not found".to_string())?;
-
-        if let Some(handles) = self.session_state.handles.get(&session.id) {
-            if let Ok(mut output_buffer) = handles.output.lock() {
-                output_buffer.clear();
-            }
-            if let Ok(mut status_value) = handles.status.lock() {
-                *status_value = Status::New;
-            }
-        }
-        session.output.clear();
-        session.prompt = String::new();
-        session.title = None;
-        session.status = Status::New;
+        let Some(_) = self.session_index_for_id(session_id) else {
+            return Err("Session not found".to_string());
+        };
 
         self.db.clear_session_history(session_id).await?;
+        self.dispatch_app_event(AppEvent::SessionHistoryCleared {
+            session_id: session_id.to_string(),
+        })
+        .await;
         self.update_sessions_metadata_cache().await;
 
         Ok(())
@@ -1682,8 +1664,10 @@ mod tests {
             AgentKind::Codex,
             AgentModel::Codex(crate::agent::CodexModel::Gpt52Codex),
         )
+        .await
         .expect("failed to set session agent/model");
         app.toggle_session_permission_mode(&first_session_id)
+            .await
             .expect("failed to toggle permission mode");
 
         // Act
@@ -3405,11 +3389,13 @@ WHERE id = 'beta0000'
         let session_id = app.session_state.sessions[0].id.clone();
         wait_for_status(&mut app, &session_id, Status::Review).await;
         let session_id = app.session_state.sessions[0].id.clone();
-        let _ = app.set_session_agent_and_model(
-            &session_id,
-            AgentKind::Claude,
-            AgentKind::Claude.default_model(),
-        );
+        let _ = app
+            .set_session_agent_and_model(
+                &session_id,
+                AgentKind::Claude,
+                AgentKind::Claude.default_model(),
+            )
+            .await;
 
         // Act
         app.clear_session_history(&session_id)
