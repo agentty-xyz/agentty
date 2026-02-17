@@ -70,9 +70,6 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('d') => {
             app.delete_selected_session().await;
         }
-        KeyCode::Char('o') => {
-            app.open_session_worktree_in_tmux().await;
-        }
         KeyCode::Char('?') => {
             app.mode = AppMode::Help {
                 context: HelpContext::List,

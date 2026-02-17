@@ -43,6 +43,9 @@ pub(crate) async fn handle(
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
         }
+        KeyCode::Char('o') => {
+            app.open_session_worktree_in_tmux().await;
+        }
         KeyCode::Enter if !is_done => {
             app.mode = AppMode::Prompt {
                 at_mention_state: None,

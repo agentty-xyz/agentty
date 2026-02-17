@@ -336,10 +336,10 @@ impl<'a> SessionChatPage<'a> {
         }
 
         let help_text = if session.status == Status::Done {
-            "q: back | j/k: scroll | ?: help"
+            "q: back | o: open | j/k: scroll | ?: help"
         } else {
-            "q: back | enter: reply | d: diff | p: pr | m: merge | r: rebase | S-Tab: mode | j/k: \
-             scroll | ?: help"
+            "q: back | enter: reply | o: open | d: diff | p: pr | m: merge | r: rebase | S-Tab: \
+             mode | j/k: scroll | ?: help"
         };
         let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, bottom_area);
