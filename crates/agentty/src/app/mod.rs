@@ -419,6 +419,18 @@ impl App {
         self.process_pending_app_events().await;
     }
 
+    /// Opens the selected session's worktree in a new tmux window.
+    pub async fn open_session_worktree_in_tmux(&self) {
+        if let Some(session) = self.selected_session() {
+            let _ = tokio::process::Command::new("tmux")
+                .arg("new-window")
+                .arg("-c")
+                .arg(&session.folder)
+                .output()
+                .await;
+        }
+    }
+
     /// Appends output text to a session stream and persists it.
     pub(crate) async fn append_output_for_session(&self, session_id: &str, output: &str) {
         self.sessions
