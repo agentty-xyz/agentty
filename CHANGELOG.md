@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.11] - 2026-02-16
+
+### Added
+- **Permissions:** Add per-session permission mode toggle and `Plan` permission mode with denial-gated response parsing.
+- **Session Control:** Add `Ctrl+c` to stop running agent sessions.
+- **Prompt History:** Implement prompt history navigation with up/down arrows.
+- **Stats Page:** Add project and model columns to the stats page.
+- **Session Size:** Compute session size from diff and display it in the session list.
+- **File Listing:** Include directories in `@` mention dropdown with trailing slash.
+- **Session Status:** Add `Rebasing` status to session lifecycle.
+- **Terminal Summaries:** Persist terminal summaries for session outcomes.
+
+### Changed
+- **Architecture:** Refactor app into manager composition with event-driven session state updates and reducer-based routing for git status, PR control, and session mutations.
+- **Architecture:** Split session module and centralize lookups; separate session snapshots from runtime handles.
+- **Session Defaults:** New sessions inherit the latest session's agent, model, and permission mode.
+- **File Listing:** Include non-ignored dotfiles in file listing.
+- **Merge Flow:** Run session merges asynchronously, harden merge messaging, and increase merge commit message timeout.
+- **Rebase Flow:** Improve assisted rebase continuation flow and auto-commit pending changes before rebasing.
+- **Auto-Commit:** Improve auto-commit recovery with agent assistance.
+- **Session Summary:** Backfill and use session summary for finished sessions.
+- **UI:** Move open worktree keybinding to chat view and update session size color palette.
+- **Docs:** Document app module architecture and public API docs; add cargo install instructions to README.
+
+### Removed
+- **Health Module:** Remove health check module and wiring.
+
+### Contributors
+- @andagaev
+- @minev-dev
+
 ## [v0.1.10] - 2026-02-15
 
 ### Added
