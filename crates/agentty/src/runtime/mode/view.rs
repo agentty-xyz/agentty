@@ -62,6 +62,11 @@ pub(crate) async fn handle(
         KeyCode::Char('G') => {
             next_scroll_offset = None;
         }
+        KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            if session.status == Status::InProgress {
+                stop_view_session(app, &view_context.session_id).await;
+            }
+        }
         KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
             next_scroll_offset = scroll_offset_down(
                 next_scroll_offset,
@@ -209,6 +214,13 @@ async fn rebase_view_session(app: &mut App, session_id: &str) {
 
     app.append_output_for_session(session_id, &result_message)
         .await;
+}
+
+async fn stop_view_session(app: &mut App, session_id: &str) {
+    if let Err(error) = app.stop_session(session_id).await {
+        app.append_output_for_session(session_id, &format!("\n[Stop Error] {error}\n"))
+            .await;
+    }
 }
 
 async fn create_pr_for_view_session(app: &mut App, session_id: &str) {
@@ -464,6 +476,20 @@ mod tests {
         app.session_state.sync_from_handles();
         let output = app.session_state.sessions[0].output.clone();
         assert!(output.contains("[PR Error]"));
+    }
+
+    #[tokio::test]
+    async fn test_stop_view_session_appends_error_when_not_in_progress() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+
+        // Act
+        stop_view_session(&mut app, &session_id).await;
+
+        // Assert
+        app.session_state.sync_from_handles();
+        let output = app.session_state.sessions[0].output.clone();
+        assert!(output.contains("[Stop Error]"));
     }
 
     #[tokio::test]

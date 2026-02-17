@@ -368,6 +368,51 @@ impl App {
         Ok(())
     }
 
+    /// Sends SIGINT to the running agent process and cancels queued operations.
+    ///
+    /// # Errors
+    /// Returns an error if the session is not found, not in `InProgress`
+    /// status, or the agent process is not running.
+    pub async fn stop_session(&self, session_id: &str) -> Result<(), String> {
+        let session = self
+            .session_state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .ok_or_else(|| "Session not found".to_string())?;
+        if session.status != Status::InProgress {
+            return Err("Session is not in progress".to_string());
+        }
+
+        let handles = self
+            .session_state
+            .handles
+            .get(session_id)
+            .ok_or_else(|| "Session handles not found".to_string())?;
+
+        let pid = handles
+            .child_pid
+            .lock()
+            .ok()
+            .and_then(|guard| *guard)
+            .ok_or_else(|| "No running agent process".to_string())?;
+
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(
+                i32::try_from(pid).map_err(|err| format!("Invalid PID: {err}"))?,
+            ),
+            nix::sys::signal::Signal::SIGINT,
+        )
+        .map_err(|err| format!("Failed to send SIGINT: {err}"))?;
+
+        let _ = self
+            .db
+            .request_cancel_for_session_operations(session_id)
+            .await;
+
+        Ok(())
+    }
+
     /// Submits a follow-up prompt to an existing session.
     pub async fn reply(&mut self, session_id: &str, prompt: &str) {
         let Some(session_index) = self.session_index_for_id(session_id) else {
@@ -3493,5 +3538,66 @@ WHERE id = 'beta0000'
         let session = &app.session_state.sessions[0];
         assert!(session.prompt.is_empty());
         assert_eq!(session.status, Status::New);
+    }
+
+    #[tokio::test]
+    async fn test_stop_session_errors_when_not_in_progress() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(base_dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        assert_eq!(app.session_state.sessions[0].status, Status::New);
+
+        // Act
+        let result = app.stop_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(
+            result.expect_err("expected error"),
+            "Session is not in progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_session_errors_when_no_pid() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(base_dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        if let Ok(mut status) = app.session_state.handles[&session_id].status.lock() {
+            *status = Status::InProgress;
+        }
+        app.session_state.sessions[0].status = Status::InProgress;
+
+        // Act
+        let result = app.stop_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(
+            result.expect_err("expected error"),
+            "No running agent process"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_session_errors_when_session_not_found() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app_with_git(base_dir.path()).await;
+
+        // Act
+        let result = app.stop_session("nonexistent").await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(result.expect_err("expected error"), "Session not found");
     }
 }

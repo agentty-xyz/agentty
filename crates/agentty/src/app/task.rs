@@ -1,6 +1,7 @@
 //! Session task execution helpers for process running, output capture, and
 //! status persistence.
 
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +20,7 @@ use crate::model::{PermissionMode, Status};
 pub(super) struct RunSessionTaskInput {
     pub(super) agent: AgentKind,
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     pub(super) cmd: Command,
     pub(super) commit_count: Arc<Mutex<i64>>,
     pub(super) db: Database,
@@ -80,6 +82,7 @@ impl App {
         let RunSessionTaskInput {
             agent,
             app_event_tx,
+            child_pid,
             cmd,
             commit_count,
             db,
@@ -100,6 +103,12 @@ impl App {
 
         match tokio_cmd.spawn() {
             Ok(mut child) => {
+                if let Some(pid) = child.id()
+                    && let Ok(mut guard) = child_pid.lock()
+                {
+                    *guard = Some(pid);
+                }
+
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
 
@@ -124,27 +133,40 @@ impl App {
                 for handle in handles {
                     let _ = handle.await;
                 }
-                let _ = child.wait().await;
+                let exit_status = child.wait().await.ok();
 
-                let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
-                let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
-                let parsed = agent.parse_response(&stdout_text, &stderr_text, permission_mode);
-                Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content)
-                    .await;
+                if let Ok(mut guard) = child_pid.lock() {
+                    *guard = None;
+                }
 
-                let _ = db.update_session_stats(&id, &parsed.stats).await;
+                let killed_by_signal = exit_status
+                    .as_ref()
+                    .is_some_and(|status| status.signal().is_some());
 
-                match Self::commit_changes(&folder, &db, &id, &commit_count).await {
-                    Ok(hash) => {
-                        let message = format!("\n[Commit] committed with hash `{hash}`\n");
-                        Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
-                            .await;
-                    }
-                    Err(commit_error) if commit_error.contains("Nothing to commit") => {}
-                    Err(commit_error) => {
-                        let message = format!("\n[Commit Error] {commit_error}\n");
-                        Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
-                            .await;
+                if killed_by_signal {
+                    let message = "\n[Stopped] Agent interrupted by user.\n";
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, message).await;
+                } else {
+                    let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
+                    let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
+                    let parsed = agent.parse_response(&stdout_text, &stderr_text, permission_mode);
+                    Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content)
+                        .await;
+
+                    let _ = db.update_session_stats(&id, &parsed.stats).await;
+
+                    match Self::commit_changes(&folder, &db, &id, &commit_count).await {
+                        Ok(hash) => {
+                            let message = format!("\n[Commit] committed with hash `{hash}`\n");
+                            Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
+                                .await;
+                        }
+                        Err(commit_error) if commit_error.contains("Nothing to commit") => {}
+                        Err(commit_error) => {
+                            let message = format!("\n[Commit Error] {commit_error}\n");
+                            Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
+                                .await;
+                        }
                     }
                 }
             }

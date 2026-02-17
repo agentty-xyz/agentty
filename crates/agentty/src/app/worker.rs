@@ -53,6 +53,7 @@ impl SessionCommand {
 
 struct SessionWorkerContext {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    child_pid: Arc<Mutex<Option<u32>>>,
     commit_count: Arc<Mutex<i64>>,
     db: Database,
     folder: PathBuf,
@@ -141,6 +142,7 @@ impl App {
             .ok_or_else(|| "Session handles not found".to_string())?;
         let context = SessionWorkerContext {
             app_event_tx: self.app_event_sender(),
+            child_pid: Arc::clone(&handles.child_pid),
             commit_count: Arc::clone(&handles.commit_count),
             db: self.db.clone(),
             folder: session.folder.clone(),
@@ -185,6 +187,7 @@ impl App {
                         App::run_session_task(RunSessionTaskInput {
                             agent,
                             app_event_tx: context.app_event_tx.clone(),
+                            child_pid: Arc::clone(&context.child_pid),
                             cmd: command,
                             commit_count: Arc::clone(&context.commit_count),
                             db: context.db.clone(),
@@ -214,6 +217,7 @@ impl App {
                         App::run_session_task(RunSessionTaskInput {
                             agent,
                             app_event_tx: context.app_event_tx.clone(),
+                            child_pid: Arc::clone(&context.child_pid),
                             cmd: command,
                             commit_count: Arc::clone(&context.commit_count),
                             db: context.db.clone(),
@@ -368,6 +372,7 @@ mod tests {
             .expect("failed to request cancel");
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
+            child_pid: Arc::new(Mutex::new(None)),
             commit_count: Arc::new(Mutex::new(0)),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),

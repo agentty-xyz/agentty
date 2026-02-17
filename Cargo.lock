@@ -21,6 +21,7 @@ dependencies = [
  "dirs",
  "ignore",
  "mockall",
+ "nix",
  "ratatui",
  "serde",
  "serde_json",

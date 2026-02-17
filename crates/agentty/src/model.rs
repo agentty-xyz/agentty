@@ -535,6 +535,7 @@ impl HelpContext {
             HelpContext::View { .. } => &[
                 ("q", "Back to list"),
                 ("Enter", "Reply"),
+                ("Ctrl+c", "Stop agent"),
                 ("d", "Show diff"),
                 ("p", "Create PR"),
                 ("m", "Merge"),
@@ -692,6 +693,7 @@ impl Session {
 /// These `Arc<Mutex<...>>` wrappers allow concurrent writes from workers
 /// while the UI reads snapshots via `SessionState::sync_from_handles()`.
 pub struct SessionHandles {
+    pub child_pid: Arc<Mutex<Option<u32>>>,
     pub commit_count: Arc<Mutex<i64>>,
     pub output: Arc<Mutex<String>>,
     pub status: Arc<Mutex<Status>>,
@@ -701,6 +703,7 @@ impl SessionHandles {
     /// Creates handles initialized with the given values.
     pub fn new(output: String, status: Status, commit_count: i64) -> Self {
         Self {
+            child_pid: Arc::new(Mutex::new(None)),
             commit_count: Arc::new(Mutex::new(commit_count)),
             output: Arc::new(Mutex::new(output)),
             status: Arc::new(Mutex::new(status)),
@@ -1822,6 +1825,42 @@ mod tests {
         assert!(result.starts_with("[PLAN MODE]"));
         assert!(result.ends_with("Prompt: Fix the bug"));
         assert!(matches!(result, Cow::Owned(_)));
+    }
+
+    #[test]
+    fn test_help_context_view_keybindings_include_ctrl_c() {
+        // Arrange
+        let context = HelpContext::View {
+            is_done: false,
+            session_id: "s1".to_string(),
+            scroll_offset: None,
+        };
+
+        // Act
+        let bindings = context.keybindings();
+
+        // Assert
+        assert!(
+            bindings
+                .iter()
+                .any(|(key, desc)| *key == "Ctrl+c" && *desc == "Stop agent")
+        );
+    }
+
+    #[test]
+    fn test_help_context_done_view_keybindings_exclude_ctrl_c() {
+        // Arrange
+        let context = HelpContext::View {
+            is_done: true,
+            session_id: "s1".to_string(),
+            scroll_offset: None,
+        };
+
+        // Act
+        let bindings = context.keybindings();
+
+        // Assert
+        assert!(!bindings.iter().any(|(key, _)| *key == "Ctrl+c"));
     }
 
     #[test]
