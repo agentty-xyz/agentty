@@ -269,6 +269,8 @@ impl<'a> SessionChatPage<'a> {
                 ),
                 Style::default().fg(status.color()),
             )]));
+        } else {
+            lines.push(Line::from(""));
         }
 
         if let Some(selected_action) = plan_followup_action {
@@ -738,6 +740,40 @@ mod tests {
 
         // Assert
         assert_eq!(message, "Merging...");
+    }
+
+    #[test]
+    fn test_output_lines_appends_empty_line_when_done() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "some output".to_string();
+        session.status = Status::Done;
+
+        // Act
+        let lines =
+            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
+
+        // Assert
+        assert!(lines.last().expect("lines").to_string().is_empty());
+        assert!(lines.len() >= 2);
+    }
+
+    #[test]
+    fn test_output_lines_appends_empty_line_before_spinner() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "some output".to_string();
+        session.status = Status::InProgress;
+
+        // Act
+        let lines =
+            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
+
+        // Assert
+        assert!(lines.len() >= 3);
+        let len = lines.len();
+        assert!(lines[len - 2].to_string().is_empty());
+        assert!(lines[len - 1].to_string().contains("Thinking..."));
     }
 
     #[test]
