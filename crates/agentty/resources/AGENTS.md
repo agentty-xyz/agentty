@@ -4,6 +4,7 @@ Static resources embedded into the binary at compile time.
 
 ## Directory Index
 - [plan_mode.md](plan_mode.md) - Plan mode instructions written to session worktrees.
+- [auto_commit_assist_prompt.md](auto_commit_assist_prompt.md) - Prompt template for agent-assisted auto-commit error recovery.
 - [rebase_assist_prompt.md](rebase_assist_prompt.md) - Prompt template for agent-assisted rebase conflict resolution.
 - [merge_commit_message_prompt.md](merge_commit_message_prompt.md) - Prompt template for model-generated squash commit messages.
 - [session_terminal_summary_prompt.md](session_terminal_summary_prompt.md) - Prompt template for terminal session summaries (`Done`/`Canceled`).

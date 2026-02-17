@@ -16,6 +16,10 @@ use crate::db::Database;
 use crate::git;
 use crate::model::{PermissionMode, Status};
 
+const AUTO_COMMIT_ASSIST_MAX_ATTEMPTS: usize = 3;
+const AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE: &str =
+    include_str!("../../resources/auto_commit_assist_prompt.md");
+
 /// Stateless helpers for background tasks and session process output handling.
 pub(super) struct TaskService;
 
@@ -31,6 +35,7 @@ pub(super) struct RunSessionTaskInput {
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
     pub(super) permission_mode: PermissionMode,
+    pub(super) session_model: String,
     pub(super) status: Arc<Mutex<Status>>,
 }
 
@@ -43,6 +48,18 @@ pub(super) struct RunAgentAssistTaskInput {
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
     pub(super) permission_mode: PermissionMode,
+}
+
+struct AutoCommitAssistContext {
+    agent: AgentKind,
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    commit_count: Arc<Mutex<i64>>,
+    db: Database,
+    folder: PathBuf,
+    id: String,
+    output: Arc<Mutex<String>>,
+    permission_mode: PermissionMode,
+    session_model: String,
 }
 
 impl TaskService {
@@ -104,6 +121,7 @@ impl TaskService {
             id,
             output,
             permission_mode,
+            session_model,
             status,
         } = input;
 
@@ -168,20 +186,18 @@ impl TaskService {
                         .await;
 
                     let _ = db.update_session_stats(&id, &parsed.stats).await;
-
-                    match SessionManager::commit_changes(&folder, &db, &id, &commit_count).await {
-                        Ok(hash) => {
-                            let message = format!("\n[Commit] committed with hash `{hash}`\n");
-                            Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
-                                .await;
-                        }
-                        Err(commit_error) if commit_error.contains("Nothing to commit") => {}
-                        Err(commit_error) => {
-                            let message = format!("\n[Commit Error] {commit_error}\n");
-                            Self::append_session_output(&output, &db, &app_event_tx, &id, &message)
-                                .await;
-                        }
-                    }
+                    Self::handle_auto_commit(AutoCommitAssistContext {
+                        agent,
+                        app_event_tx: app_event_tx.clone(),
+                        commit_count,
+                        db: db.clone(),
+                        folder,
+                        id: id.clone(),
+                        output: Arc::clone(&output),
+                        permission_mode,
+                        session_model,
+                    })
+                    .await;
                 }
             }
             Err(spawn_error) => {
@@ -198,6 +214,133 @@ impl TaskService {
         }
 
         Ok(())
+    }
+
+    async fn handle_auto_commit(context: AutoCommitAssistContext) {
+        match Self::commit_changes_with_assist(&context).await {
+            Ok(Some(hash)) => {
+                let message = format!("\n[Commit] committed with hash `{hash}`\n");
+                Self::append_session_output(
+                    &context.output,
+                    &context.db,
+                    &context.app_event_tx,
+                    &context.id,
+                    &message,
+                )
+                .await;
+            }
+            Ok(None) => {}
+            Err(commit_error) => {
+                let message = format!("\n[Commit Error] {commit_error}\n");
+                Self::append_session_output(
+                    &context.output,
+                    &context.db,
+                    &context.app_event_tx,
+                    &context.id,
+                    &message,
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn commit_changes_with_assist(
+        context: &AutoCommitAssistContext,
+    ) -> Result<Option<String>, String> {
+        for assist_attempt in 1..=AUTO_COMMIT_ASSIST_MAX_ATTEMPTS + 1 {
+            match SessionManager::commit_changes(
+                &context.folder,
+                &context.db,
+                &context.id,
+                &context.commit_count,
+            )
+            .await
+            {
+                Ok(commit_hash) => {
+                    return Ok(Some(commit_hash));
+                }
+                Err(commit_error) if commit_error.contains("Nothing to commit") => {
+                    return Ok(None);
+                }
+                Err(commit_error) => {
+                    if assist_attempt > AUTO_COMMIT_ASSIST_MAX_ATTEMPTS {
+                        return Err(commit_error);
+                    }
+
+                    Self::append_commit_assist_header(context, assist_attempt, &commit_error).await;
+                    Self::run_commit_assist_for_error(context, &commit_error).await?;
+                }
+            }
+        }
+
+        Err("Failed to auto-commit after assistance attempts".to_string())
+    }
+
+    async fn append_commit_assist_header(
+        context: &AutoCommitAssistContext,
+        assist_attempt: usize,
+        commit_error: &str,
+    ) {
+        let formatted_error = Self::format_commit_error_for_display(commit_error);
+        let assist_header = format!(
+            "\n[Commit Assist] Attempt {assist_attempt}/{AUTO_COMMIT_ASSIST_MAX_ATTEMPTS}. \
+             Resolving auto-commit failure:\n{formatted_error}\n"
+        );
+        Self::append_session_output(
+            &context.output,
+            &context.db,
+            &context.app_event_tx,
+            &context.id,
+            &assist_header,
+        )
+        .await;
+    }
+
+    async fn run_commit_assist_for_error(
+        context: &AutoCommitAssistContext,
+        commit_error: &str,
+    ) -> Result<(), String> {
+        let prompt = Self::auto_commit_assist_prompt(commit_error);
+        let effective_permission_mode =
+            Self::auto_commit_assist_permission_mode(context.permission_mode);
+        let backend = context.agent.create_backend();
+        let command = backend.build_resume_command(
+            &context.folder,
+            &prompt,
+            &context.session_model,
+            effective_permission_mode,
+        );
+        Self::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: context.agent,
+            app_event_tx: context.app_event_tx.clone(),
+            cmd: command,
+            db: context.db.clone(),
+            id: context.id.clone(),
+            output: Arc::clone(&context.output),
+            permission_mode: effective_permission_mode,
+        })
+        .await
+        .map_err(|error| format!("Commit assistance failed: {error}"))
+    }
+
+    fn auto_commit_assist_prompt(commit_error: &str) -> String {
+        AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE.replace("{commit_error}", commit_error.trim())
+    }
+
+    fn auto_commit_assist_permission_mode(permission_mode: PermissionMode) -> PermissionMode {
+        if permission_mode == PermissionMode::Plan {
+            return PermissionMode::AutoEdit;
+        }
+
+        permission_mode
+    }
+
+    fn format_commit_error_for_display(commit_error: &str) -> String {
+        commit_error
+            .lines()
+            .map(|line| format!("- {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Executes one agent command for assisted edits without auto-commit.
@@ -378,6 +521,42 @@ mod tests {
             assert!(TaskService::status_requires_full_refresh(status));
         }
         assert!(!TaskService::status_requires_full_refresh(Status::New));
+    }
+
+    #[test]
+    fn test_auto_commit_assist_permission_mode_plan_uses_auto_edit() {
+        // Arrange
+        let permission_mode = PermissionMode::Plan;
+
+        // Act
+        let effective_mode = TaskService::auto_commit_assist_permission_mode(permission_mode);
+
+        // Assert
+        assert_eq!(effective_mode, PermissionMode::AutoEdit);
+    }
+
+    #[test]
+    fn test_auto_commit_assist_prompt_includes_commit_error() {
+        // Arrange
+        let commit_error = "Failed to commit: merge conflict remains";
+
+        // Act
+        let prompt = TaskService::auto_commit_assist_prompt(commit_error);
+
+        // Assert
+        assert!(prompt.contains("Failed to commit: merge conflict remains"));
+    }
+
+    #[test]
+    fn test_format_commit_error_for_display_returns_bulleted_lines() {
+        // Arrange
+        let commit_error = "line one\nline two";
+
+        // Act
+        let formatted = TaskService::format_commit_error_for_display(commit_error);
+
+        // Assert
+        assert_eq!(formatted, "- line one\n- line two");
     }
 
     #[tokio::test]

@@ -251,6 +251,7 @@ impl SessionManager {
                 command,
                 operation_id,
                 permission_mode,
+                session_model: session_model.as_str().to_string(),
             },
         )
         .await?;
@@ -604,6 +605,7 @@ impl SessionManager {
                 command: backend.build_start_command(folder, prompt, model, permission_mode),
                 operation_id,
                 permission_mode,
+                session_model: model.to_string(),
             }
         } else {
             SessionCommand::Reply {
@@ -611,6 +613,7 @@ impl SessionManager {
                 command: backend.build_resume_command(folder, prompt, model, permission_mode),
                 operation_id,
                 permission_mode,
+                session_model: model.to_string(),
             }
         }
     }

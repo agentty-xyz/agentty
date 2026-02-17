@@ -23,12 +23,14 @@ pub(super) enum SessionCommand {
         command: Command,
         operation_id: String,
         permission_mode: PermissionMode,
+        session_model: String,
     },
     StartPrompt {
         agent: AgentKind,
         command: Command,
         operation_id: String,
         permission_mode: PermissionMode,
+        session_model: String,
     },
 }
 
@@ -174,6 +176,7 @@ impl SessionManager {
                         agent,
                         command,
                         permission_mode,
+                        session_model,
                         ..
                     } => {
                         TaskService::run_session_task(RunSessionTaskInput {
@@ -187,6 +190,7 @@ impl SessionManager {
                             id: context.session_id.clone(),
                             output: Arc::clone(&context.output),
                             permission_mode,
+                            session_model,
                             status: Arc::clone(&context.status),
                         })
                         .await
@@ -195,6 +199,7 @@ impl SessionManager {
                         agent,
                         command,
                         permission_mode,
+                        session_model,
                         ..
                     } => {
                         let _ = TaskService::update_status(
@@ -217,6 +222,7 @@ impl SessionManager {
                             id: context.session_id.clone(),
                             output: Arc::clone(&context.output),
                             permission_mode,
+                            session_model,
                             status: Arc::clone(&context.status),
                         })
                         .await
@@ -284,12 +290,14 @@ mod tests {
             command: Command::new("echo"),
             operation_id: "a".to_string(),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: "gemini-3-flash-preview".to_string(),
         };
         let start_prompt_command = SessionCommand::StartPrompt {
             agent: AgentKind::Gemini,
             command: Command::new("echo"),
             operation_id: "b".to_string(),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: "gemini-3-flash-preview".to_string(),
         };
 
         // Act
