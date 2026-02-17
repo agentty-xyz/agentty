@@ -372,6 +372,29 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Sets the permission mode for a session and persists the change.
+    ///
+    /// # Errors
+    /// Returns an error if the session is not found or persistence fails.
+    pub async fn set_session_permission_mode(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        permission_mode: PermissionMode,
+    ) -> Result<(), String> {
+        let _ = self.session_or_err(session_id)?;
+        services
+            .db()
+            .update_session_permission_mode(session_id, permission_mode.label())
+            .await?;
+        services.emit_app_event(AppEvent::SessionPermissionModeUpdated {
+            permission_mode,
+            session_id: session_id.to_string(),
+        });
+
+        Ok(())
+    }
+
     /// Clears a session's chat history and resets it to a fresh state.
     ///
     /// Preserves the session identity, worktree, commit count, agent, model,

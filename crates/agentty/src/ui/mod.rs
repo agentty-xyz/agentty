@@ -2,6 +2,7 @@ pub mod components;
 pub mod pages;
 pub mod util;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -9,7 +10,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
-use crate::model::{AppMode, HelpContext, Project, Session, Tab};
+use crate::model::{AppMode, HelpContext, PlanFollowupAction, Project, Session, Tab};
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -28,6 +29,7 @@ pub struct RenderContext<'a> {
     pub git_branch: Option<&'a str>,
     pub git_status: Option<(u32, u32)>,
     pub mode: &'a AppMode,
+    pub plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
     pub projects: &'a [Project],
     pub show_onboarding: bool,
     pub sessions: &'a [Session],
@@ -89,6 +91,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
         active_project_id,
         current_tab,
         mode,
+        plan_followup_actions,
         projects,
         sessions,
         table_state,
@@ -102,8 +105,23 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
         AppMode::View {
             session_id,
             scroll_offset,
+        } => {
+            if let Some(session_index) = sessions
+                .iter()
+                .position(|session| session.id == *session_id)
+            {
+                let plan_followup_action = plan_followup_actions.get(session_id).copied();
+                pages::session_chat::SessionChatPage::new(
+                    sessions,
+                    session_index,
+                    *scroll_offset,
+                    mode,
+                    plan_followup_action,
+                )
+                .render(f, area);
+            }
         }
-        | AppMode::Prompt {
+        AppMode::Prompt {
             session_id,
             scroll_offset,
             ..
@@ -117,6 +135,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
                     session_index,
                     *scroll_offset,
                     mode,
+                    None,
                 )
                 .render(f, area);
             }
@@ -162,7 +181,15 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
             context,
             scroll_offset,
         } => {
-            render_help_background(f, area, context, sessions, table_state, current_tab);
+            render_help_background(
+                f,
+                area,
+                context,
+                plan_followup_actions,
+                sessions,
+                table_state,
+                current_tab,
+            );
             components::help_overlay::HelpOverlay::new(context, *scroll_offset).render(f, area);
         }
     }
@@ -173,6 +200,7 @@ fn render_help_background(
     f: &mut Frame,
     area: Rect,
     context: &HelpContext,
+    plan_followup_actions: &HashMap<String, PlanFollowupAction>,
     sessions: &[Session],
     table_state: &mut TableState,
     current_tab: Tab,
@@ -194,11 +222,13 @@ fn render_help_background(
                     session_id: session_id.clone(),
                     scroll_offset: *view_scroll,
                 };
+                let plan_followup_action = plan_followup_actions.get(session_id).copied();
                 pages::session_chat::SessionChatPage::new(
                     sessions,
                     session_index,
                     *view_scroll,
                     &bg_mode,
+                    plan_followup_action,
                 )
                 .render(f, area);
             }

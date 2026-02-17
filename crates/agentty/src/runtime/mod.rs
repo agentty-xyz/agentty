@@ -70,6 +70,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
     let current_git_status = app.git_status_info();
     let current_active_project_id = app.active_project_id();
+    let plan_followup_actions = app.plan_followup_actions_snapshot();
     let show_onboarding = app.should_show_onboarding();
     let mode = &app.mode;
     let projects = &app.projects;
@@ -84,6 +85,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
                 git_branch: current_git_branch.as_deref(),
                 git_status: current_git_status,
                 mode,
+                plan_followup_actions: &plan_followup_actions,
                 projects,
                 show_onboarding,
                 sessions,

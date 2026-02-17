@@ -87,6 +87,42 @@ impl std::str::FromStr for PermissionMode {
     }
 }
 
+/// Post-plan actions shown after a plan response finishes in chat view.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PlanFollowupAction {
+    #[default]
+    ImplementPlan,
+    TypeFeedback,
+}
+
+impl PlanFollowupAction {
+    /// Returns the display label used by the inline action bar.
+    pub fn label(self) -> &'static str {
+        match self {
+            PlanFollowupAction::ImplementPlan => "Implement the plan",
+            PlanFollowupAction::TypeFeedback => "Type feedback",
+        }
+    }
+
+    /// Cycles selection to the previous action.
+    #[must_use]
+    pub fn previous(self) -> Self {
+        match self {
+            PlanFollowupAction::ImplementPlan => PlanFollowupAction::TypeFeedback,
+            PlanFollowupAction::TypeFeedback => PlanFollowupAction::ImplementPlan,
+        }
+    }
+
+    /// Cycles selection to the next action.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            PlanFollowupAction::ImplementPlan => PlanFollowupAction::TypeFeedback,
+            PlanFollowupAction::TypeFeedback => PlanFollowupAction::ImplementPlan,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     New,
@@ -778,6 +814,7 @@ impl Status {
         matches!(
             (self, next),
             (Status::New, Status::InProgress)
+                | (Status::New | Status::InProgress, Status::Rebasing)
                 | (
                     Status::Review,
                     Status::InProgress
@@ -1003,8 +1040,10 @@ mod tests {
     fn test_status_transition_rules() {
         // Arrange & Act & Assert
         assert!(Status::New.can_transition_to(Status::InProgress));
+        assert!(Status::New.can_transition_to(Status::Rebasing));
         assert!(!Status::New.can_transition_to(Status::Review));
         assert!(!Status::New.can_transition_to(Status::Done));
+        assert!(Status::InProgress.can_transition_to(Status::Rebasing));
         assert!(Status::Review.can_transition_to(Status::InProgress));
         assert!(Status::Review.can_transition_to(Status::Merging));
         assert!(Status::Review.can_transition_to(Status::PullRequest));
@@ -1907,6 +1946,42 @@ mod tests {
         assert!(result.starts_with("[PLAN MODE]"));
         assert!(result.ends_with("Prompt: Fix the bug"));
         assert!(matches!(result, Cow::Owned(_)));
+    }
+
+    #[test]
+    fn test_plan_followup_action_label() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            PlanFollowupAction::ImplementPlan.label(),
+            "Implement the plan"
+        );
+        assert_eq!(PlanFollowupAction::TypeFeedback.label(), "Type feedback");
+    }
+
+    #[test]
+    fn test_plan_followup_action_next() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            PlanFollowupAction::ImplementPlan.next(),
+            PlanFollowupAction::TypeFeedback
+        );
+        assert_eq!(
+            PlanFollowupAction::TypeFeedback.next(),
+            PlanFollowupAction::ImplementPlan
+        );
+    }
+
+    #[test]
+    fn test_plan_followup_action_previous() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            PlanFollowupAction::ImplementPlan.previous(),
+            PlanFollowupAction::TypeFeedback
+        );
+        assert_eq!(
+            PlanFollowupAction::TypeFeedback.previous(),
+            PlanFollowupAction::ImplementPlan
+        );
     }
 
     #[test]

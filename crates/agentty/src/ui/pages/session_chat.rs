@@ -8,7 +8,8 @@ use crate::agent::{AgentKind, AgentSelectionMetadata};
 use crate::file_list;
 use crate::icon::Icon;
 use crate::model::{
-    AppMode, PromptAtMentionState, PromptSlashStage, Session, Status, extract_at_mention_query,
+    AppMode, PlanFollowupAction, PromptAtMentionState, PromptSlashStage, Session, Status,
+    extract_at_mention_query,
 };
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::util::{calculate_input_height, wrap_lines};
@@ -17,6 +18,7 @@ use crate::ui::{Component, Page};
 /// Chat page renderer for a single session.
 pub struct SessionChatPage<'a> {
     pub mode: &'a AppMode,
+    pub plan_followup_action: Option<PlanFollowupAction>,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
     pub sessions: &'a [Session],
@@ -29,9 +31,11 @@ impl<'a> SessionChatPage<'a> {
         session_index: usize,
         scroll_offset: Option<u16>,
         mode: &'a AppMode,
+        plan_followup_action: Option<PlanFollowupAction>,
     ) -> Self {
         Self {
             mode,
+            plan_followup_action,
             scroll_offset,
             session_index,
             sessions,
@@ -217,7 +221,7 @@ impl<'a> SessionChatPage<'a> {
             session.model,
             session.permission_mode.label()
         );
-        let lines = Self::output_lines(session, output_area, status);
+        let lines = Self::output_lines(session, output_area, status, self.plan_followup_action);
         let final_scroll = self.final_scroll_offset(output_area, lines.len());
 
         let paragraph = Paragraph::new(lines)
@@ -232,7 +236,12 @@ impl<'a> SessionChatPage<'a> {
         f.render_widget(paragraph, output_area);
     }
 
-    fn output_lines(session: &Session, output_area: Rect, status: Status) -> Vec<Line<'static>> {
+    fn output_lines(
+        session: &Session,
+        output_area: Rect,
+        status: Status,
+        plan_followup_action: Option<PlanFollowupAction>,
+    ) -> Vec<Line<'static>> {
         let output_text = Self::output_text(session, status);
         let inner_width = output_area.width.saturating_sub(2) as usize;
         let mut lines = wrap_lines(output_text, inner_width)
@@ -262,6 +271,15 @@ impl<'a> SessionChatPage<'a> {
             )]));
         }
 
+        if let Some(selected_action) = plan_followup_action {
+            lines.push(Line::from(""));
+            lines.push(Self::plan_followup_action_line(selected_action));
+            lines.push(Line::from(vec![Span::styled(
+                "Use \u{2190}/\u{2192} to select and Enter to confirm.",
+                Style::default().fg(Color::DarkGray),
+            )]));
+        }
+
         lines
     }
 
@@ -276,6 +294,35 @@ impl<'a> SessionChatPage<'a> {
         }
 
         &session.output
+    }
+
+    fn plan_followup_action_line(selected_action: PlanFollowupAction) -> Line<'static> {
+        let implement_style = if selected_action == PlanFollowupAction::ImplementPlan {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let feedback_style = if selected_action == PlanFollowupAction::TypeFeedback {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        Line::from(vec![
+            Span::styled(
+                format!("[ {} ]", PlanFollowupAction::ImplementPlan.label()),
+                implement_style,
+            ),
+            Span::styled("  ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("[ {} ]", PlanFollowupAction::TypeFeedback.label()),
+                feedback_style,
+            ),
+        ])
     }
 
     fn status_message(status: Status) -> &'static str {
@@ -339,6 +386,9 @@ impl<'a> SessionChatPage<'a> {
 
         let help_text = if session.status == Status::Done {
             "q: back | o: open | j/k: scroll | ?: help"
+        } else if self.plan_followup_action.is_some() {
+            "q: back | \u{2190}/\u{2192}: choose action | enter: confirm | d: diff | p: pr | m: \
+             merge | r: rebase | S-Tab: mode | j/k: scroll | ?: help"
         } else {
             "q: back | enter: reply | o: open | d: diff | p: pr | m: merge | r: rebase | S-Tab: \
              mode | j/k: scroll | ?: help"
@@ -646,7 +696,8 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let lines = SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status);
+        let lines =
+            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -667,7 +718,8 @@ mod tests {
         session.status = Status::Canceled;
 
         // Act
-        let lines = SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status);
+        let lines =
+            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -686,5 +738,46 @@ mod tests {
 
         // Assert
         assert_eq!(message, "Merging...");
+    }
+
+    #[test]
+    fn test_output_lines_include_plan_followup_actions_when_present() {
+        // Arrange
+        let session = session_fixture();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 20,
+        };
+
+        // Act
+        let lines = SessionChatPage::output_lines(
+            &session,
+            area,
+            Status::Review,
+            Some(PlanFollowupAction::ImplementPlan),
+        );
+        let rendered = lines
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(rendered.contains("Implement the plan"));
+        assert!(rendered.contains("Type feedback"));
+        assert!(rendered.contains("Use"));
+    }
+
+    #[test]
+    fn test_plan_followup_action_line_contains_both_actions() {
+        // Arrange & Act
+        let line = SessionChatPage::plan_followup_action_line(PlanFollowupAction::TypeFeedback);
+        let rendered = line.to_string();
+
+        // Assert
+        assert!(rendered.contains("Implement the plan"));
+        assert!(rendered.contains("Type feedback"));
     }
 }

@@ -5,9 +5,14 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 use crate::app::App;
 use crate::git;
 use crate::model::{
-    AppMode, HelpContext, InputState, PromptHistoryState, PromptSlashState, Status,
+    AppMode, HelpContext, InputState, PermissionMode, PlanFollowupAction, PromptHistoryState,
+    PromptSlashState, Status,
 };
 use crate::runtime::{EventResult, TuiTerminal};
+
+const IMPLEMENT_PLAN_PROMPT: &str = "Implement the approved plan from your previous response \
+                                     end-to-end. Make the required code changes, run all relevant \
+                                     checks/tests, and report what changed plus results.";
 
 #[derive(Clone)]
 struct ViewContext {
@@ -38,6 +43,12 @@ pub(crate) async fn handle(
         return Ok(EventResult::Continue);
     };
     let is_done = session.status == Status::Done;
+    let is_in_progress = session.status == Status::InProgress;
+    let session_output = session.output.clone();
+
+    if handle_plan_followup_action_key(app, key, &view_context).await {
+        return Ok(EventResult::Continue);
+    }
 
     match key.code {
         KeyCode::Char('q') => {
@@ -47,14 +58,12 @@ pub(crate) async fn handle(
             app.open_session_worktree_in_tmux().await;
         }
         KeyCode::Enter if !is_done => {
-            app.mode = AppMode::Prompt {
-                at_mention_state: None,
-                history_state: PromptHistoryState::new(prompt_history_entries(&session.output)),
-                slash_state: PromptSlashState::new(),
-                session_id: view_context.session_id.clone(),
-                input: InputState::new(),
-                scroll_offset: next_scroll_offset,
-            };
+            switch_view_to_prompt(
+                app,
+                &view_context,
+                PromptHistoryState::new(prompt_history_entries(&session_output)),
+                next_scroll_offset,
+            );
         }
         KeyCode::Char('j') | KeyCode::Down => {
             next_scroll_offset = scroll_offset_down(next_scroll_offset, view_metrics, 1);
@@ -69,7 +78,7 @@ pub(crate) async fn handle(
             next_scroll_offset = None;
         }
         KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            if session.status == Status::InProgress {
+            if is_in_progress {
                 stop_view_session(app, &view_context.session_id).await;
             }
         }
@@ -124,6 +133,109 @@ pub(crate) async fn handle(
     }
 
     Ok(EventResult::Continue)
+}
+
+fn switch_view_to_prompt(
+    app: &mut App,
+    view_context: &ViewContext,
+    history_state: PromptHistoryState,
+    scroll_offset: Option<u16>,
+) {
+    app.mode = AppMode::Prompt {
+        at_mention_state: None,
+        history_state,
+        slash_state: PromptSlashState::new(),
+        session_id: view_context.session_id.clone(),
+        input: InputState::new(),
+        scroll_offset,
+    };
+}
+
+async fn handle_plan_followup_action_key(
+    app: &mut App,
+    key: KeyEvent,
+    view_context: &ViewContext,
+) -> bool {
+    if !app.has_plan_followup_action(&view_context.session_id) {
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Left => {
+            app.select_previous_plan_followup_action(&view_context.session_id);
+
+            true
+        }
+        KeyCode::Right => {
+            app.select_next_plan_followup_action(&view_context.session_id);
+
+            true
+        }
+        KeyCode::Enter => {
+            let selected_action = app
+                .consume_plan_followup_action(&view_context.session_id)
+                .unwrap_or_default();
+            match selected_action {
+                PlanFollowupAction::ImplementPlan => {
+                    implement_plan_followup_action(app, &view_context.session_id).await;
+                }
+                PlanFollowupAction::TypeFeedback => {
+                    let history_state = app
+                        .sessions
+                        .sessions
+                        .get(view_context.session_index)
+                        .map_or_else(
+                            || PromptHistoryState::new(Vec::new()),
+                            |session| {
+                                PromptHistoryState::new(prompt_history_entries(&session.output))
+                            },
+                        );
+                    switch_view_to_prompt(
+                        app,
+                        view_context,
+                        history_state,
+                        view_context.scroll_offset,
+                    );
+                }
+            }
+
+            true
+        }
+        _ => false,
+    }
+}
+
+async fn implement_plan_followup_action(app: &mut App, session_id: &str) {
+    if let Err(error) = app
+        .set_session_permission_mode(session_id, PermissionMode::AutoEdit)
+        .await
+    {
+        app.append_output_for_session(session_id, &format!("\n[Error] {error}\n"))
+            .await;
+
+        return;
+    }
+
+    let is_new_session = app
+        .sessions
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .is_some_and(|session| session.prompt.is_empty());
+
+    if is_new_session {
+        if let Err(error) = app
+            .start_session(session_id, IMPLEMENT_PLAN_PROMPT.to_string())
+            .await
+        {
+            app.append_output_for_session(session_id, &format!("\n[Error] {error}\n"))
+                .await;
+        }
+
+        return;
+    }
+
+    app.reply(session_id, IMPLEMENT_PLAN_PROMPT).await;
 }
 
 fn view_context(app: &mut App) -> Option<ViewContext> {
@@ -268,10 +380,13 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
+    use crossterm::event::KeyModifiers;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::app::AppEvent;
     use crate::db::Database;
+    use crate::model::PermissionMode;
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -559,6 +674,88 @@ mod tests {
         app.sessions.sync_from_handles();
         let output = app.sessions.sessions[0].output.clone();
         assert!(output.contains("[Stop Error]"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_plan_followup_action_key_right_selects_type_feedback() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone(),
+            scroll_offset: Some(0),
+        };
+        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
+        app.sessions.sessions[0].status = Status::InProgress;
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut status) = handles.status.lock()
+        {
+            *status = Status::Review;
+        }
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: session_id.clone(),
+        })
+        .await;
+        let context = ViewContext {
+            scroll_offset: Some(0),
+            session_id: session_id.clone(),
+            session_index: 0,
+        };
+        let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+
+        // Act
+        let handled = handle_plan_followup_action_key(&mut app, key, &context).await;
+
+        // Assert
+        assert!(handled);
+        assert_eq!(
+            app.plan_followup_action(&session_id),
+            Some(PlanFollowupAction::TypeFeedback)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_plan_followup_action_key_enter_for_feedback_opens_prompt_mode() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            session_id: session_id.clone(),
+            scroll_offset: Some(4),
+        };
+        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
+        app.sessions.sessions[0].status = Status::InProgress;
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut status) = handles.status.lock()
+        {
+            *status = Status::Review;
+        }
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: session_id.clone(),
+        })
+        .await;
+        app.select_next_plan_followup_action(&session_id);
+        let context = ViewContext {
+            scroll_offset: Some(4),
+            session_id: session_id.clone(),
+            session_index: 0,
+        };
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+        // Act
+        let handled = handle_plan_followup_action_key(&mut app, key, &context).await;
+
+        // Assert
+        assert!(handled);
+        assert!(!app.has_plan_followup_action(&session_id));
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        if let AppMode::Prompt {
+            session_id,
+            scroll_offset,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(session_id, &context.session_id);
+            assert_eq!(*scroll_offset, context.scroll_offset);
+        }
     }
 
     #[tokio::test]

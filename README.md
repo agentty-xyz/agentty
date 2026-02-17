@@ -57,6 +57,11 @@ selection becomes the default for newly created sessions.
 - Permission modes:
   - `auto_edit` (default): runs with standard edit permissions.
   - `autonomous`: runs with elevated autonomy (backend-specific flags such as `--yolo` or skipping permission prompts).
+  - `plan`: asks the agent for a detailed plan instead of implementation.
+- After a plan response in chat view, an inline action bar appears:
+  - `Implement the plan`: switches that session to `auto_edit` and sends an implementation prompt.
+  - `Type feedback`: opens prompt input so you can send feedback while keeping `plan` mode.
+  - Use `Left` / `Right` arrows to choose and `Enter` to confirm.
 - The active mode is shown in the session chat title.
 - Changes are persisted for that session and used as defaults for future sessions.
 

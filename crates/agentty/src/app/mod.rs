@@ -13,7 +13,9 @@ use tokio::sync::mpsc;
 
 use crate::agent::{AgentKind, AgentModel};
 use crate::db::Database;
-use crate::model::{AppMode, PermissionMode, Session, SessionHandles, Tab};
+use crate::model::{
+    AppMode, PermissionMode, PlanFollowupAction, Session, SessionHandles, Status, Tab,
+};
 
 mod pr;
 mod project;
@@ -168,6 +170,7 @@ pub struct App {
     pub(crate) services: AppServices,
     pub(crate) sessions: SessionManager,
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    plan_followup_actions: HashMap<String, PlanFollowupAction>,
 }
 
 impl App {
@@ -257,6 +260,7 @@ impl App {
             services,
             sessions,
             event_rx,
+            plan_followup_actions: HashMap::new(),
         };
 
         app.start_pr_polling_for_pull_request_sessions();
@@ -383,6 +387,23 @@ impl App {
         Ok(())
     }
 
+    /// Sets and persists a session permission mode.
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails.
+    pub async fn set_session_permission_mode(
+        &mut self,
+        session_id: &str,
+        permission_mode: PermissionMode,
+    ) -> Result<(), String> {
+        self.sessions
+            .set_session_permission_mode(&self.services, session_id, permission_mode)
+            .await?;
+        self.process_pending_app_events().await;
+
+        Ok(())
+    }
+
     /// Clears persisted and in-memory history for a session.
     ///
     /// # Errors
@@ -409,6 +430,40 @@ impl App {
     /// Resolves a session id to current list index.
     pub fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
         self.sessions.session_index_for_id(session_id)
+    }
+
+    /// Returns the currently selected post-plan action for a session.
+    pub fn plan_followup_action(&self, session_id: &str) -> Option<PlanFollowupAction> {
+        self.plan_followup_actions.get(session_id).copied()
+    }
+
+    /// Returns a snapshot of pending post-plan actions by session id.
+    pub fn plan_followup_actions_snapshot(&self) -> HashMap<String, PlanFollowupAction> {
+        self.plan_followup_actions.clone()
+    }
+
+    /// Returns whether a session has pending post-plan actions.
+    pub fn has_plan_followup_action(&self, session_id: &str) -> bool {
+        self.plan_followup_actions.contains_key(session_id)
+    }
+
+    /// Selects the previous post-plan action for a session.
+    pub fn select_previous_plan_followup_action(&mut self, session_id: &str) {
+        if let Some(action) = self.plan_followup_actions.get_mut(session_id) {
+            *action = action.previous();
+        }
+    }
+
+    /// Selects the next post-plan action for a session.
+    pub fn select_next_plan_followup_action(&mut self, session_id: &str) {
+        if let Some(action) = self.plan_followup_actions.get_mut(session_id) {
+            *action = action.next();
+        }
+    }
+
+    /// Clears and returns the pending post-plan action for a session.
+    pub fn consume_plan_followup_action(&mut self, session_id: &str) -> Option<PlanFollowupAction> {
+        self.plan_followup_actions.remove(session_id)
     }
 
     /// Deletes the selected session and schedules list refresh.
@@ -547,6 +602,23 @@ impl App {
     }
 
     async fn apply_app_event_batch(&mut self, event_batch: AppEventBatch) {
+        let previous_session_states = event_batch
+            .session_ids
+            .iter()
+            .filter_map(|session_id| {
+                self.sessions
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == *session_id)
+                    .map(|session| {
+                        (
+                            session_id.clone(),
+                            (session.permission_mode, session.status),
+                        )
+                    })
+            })
+            .collect::<HashMap<_, _>>();
+
         if event_batch.should_force_reload {
             self.refresh_sessions_now().await;
         }
@@ -588,6 +660,56 @@ impl App {
         for session_id in &event_batch.session_ids {
             self.sessions.sync_session_from_handle(session_id);
         }
+
+        self.mark_plan_followup_actions(&event_batch.session_ids, &previous_session_states);
+        self.retain_valid_plan_followup_actions();
+    }
+
+    fn mark_plan_followup_actions(
+        &mut self,
+        session_ids: &HashSet<String>,
+        previous_session_states: &HashMap<String, (PermissionMode, Status)>,
+    ) {
+        for session_id in session_ids {
+            let Some(session) = self
+                .sessions
+                .sessions
+                .iter()
+                .find(|session| session.id == *session_id)
+            else {
+                self.plan_followup_actions.remove(session_id);
+
+                continue;
+            };
+
+            if session.permission_mode != PermissionMode::Plan || session.status != Status::Review {
+                self.plan_followup_actions.remove(session_id);
+
+                continue;
+            }
+
+            let Some((_, previous_status)) = previous_session_states.get(session_id) else {
+                continue;
+            };
+
+            if *previous_status == Status::InProgress {
+                self.plan_followup_actions
+                    .insert(session_id.clone(), PlanFollowupAction::ImplementPlan);
+            }
+        }
+    }
+
+    fn retain_valid_plan_followup_actions(&mut self) {
+        self.plan_followup_actions.retain(|session_id, _| {
+            self.sessions
+                .sessions
+                .iter()
+                .find(|session| session.id == *session_id)
+                .is_some_and(|session| {
+                    session.permission_mode == PermissionMode::Plan
+                        && session.status == Status::Review
+                })
+        });
     }
 }
 
@@ -783,5 +905,194 @@ mod tests {
 
         // Assert
         assert_eq!(app.git_status_info(), Some((5, 3)));
+    }
+
+    #[tokio::test]
+    async fn test_apply_app_events_marks_plan_followup_after_plan_response() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base_path = temp_dir.path().join("wt");
+        let working_dir = temp_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project(&working_dir.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "seed0000",
+                "gemini",
+                "gemini-2.5-flash",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        std::fs::create_dir_all(base_path.join("seed0000"))
+            .expect("failed to create session folder");
+        let mut app = App::new(base_path, working_dir, None, database).await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut status) = handles.status.lock()
+        {
+            *status = Status::Review;
+        }
+
+        // Act
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert!(app.has_plan_followup_action(&session_id));
+        assert_eq!(
+            app.plan_followup_action(&session_id),
+            Some(PlanFollowupAction::ImplementPlan)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_app_events_does_not_mark_plan_followup_for_non_plan_mode() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base_path = temp_dir.path().join("wt");
+        let working_dir = temp_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project(&working_dir.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "seed0000",
+                "gemini",
+                "gemini-2.5-flash",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        std::fs::create_dir_all(base_path.join("seed0000"))
+            .expect("failed to create session folder");
+        let mut app = App::new(base_path, working_dir, None, database).await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.sessions[0].permission_mode = PermissionMode::AutoEdit;
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut status) = handles.status.lock()
+        {
+            *status = Status::Review;
+        }
+
+        // Act
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert!(!app.has_plan_followup_action(&session_id));
+    }
+
+    #[tokio::test]
+    async fn test_apply_app_events_clears_plan_followup_when_permission_mode_changes() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base_path = temp_dir.path().join("wt");
+        let working_dir = temp_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project(&working_dir.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "seed0000",
+                "gemini",
+                "gemini-2.5-flash",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        std::fs::create_dir_all(base_path.join("seed0000"))
+            .expect("failed to create session folder");
+        let mut app = App::new(base_path, working_dir, None, database).await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
+        app.plan_followup_actions
+            .insert(session_id.clone(), PlanFollowupAction::TypeFeedback);
+
+        // Act
+        app.apply_app_events(AppEvent::SessionPermissionModeUpdated {
+            permission_mode: PermissionMode::AutoEdit,
+            session_id: session_id.clone(),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.sessions.sessions[0].permission_mode,
+            PermissionMode::AutoEdit
+        );
+        assert!(!app.has_plan_followup_action(&session_id));
+    }
+
+    #[tokio::test]
+    async fn test_set_session_permission_mode_updates_session_and_database() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base_path = temp_dir.path().join("wt");
+        let working_dir = temp_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project(&working_dir.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "seed0000",
+                "gemini",
+                "gemini-2.5-flash",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        std::fs::create_dir_all(base_path.join("seed0000"))
+            .expect("failed to create session folder");
+        let mut app = App::new(base_path, working_dir, None, database).await;
+        let session_id = app.sessions.sessions[0].id.clone();
+
+        // Act
+        app.set_session_permission_mode(&session_id, PermissionMode::Plan)
+            .await
+            .expect("failed to set session permission mode");
+
+        // Assert
+        assert_eq!(
+            app.sessions.sessions[0].permission_mode,
+            PermissionMode::Plan
+        );
+        let db_session = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert_eq!(db_session[0].permission_mode, PermissionMode::Plan.label());
     }
 }
