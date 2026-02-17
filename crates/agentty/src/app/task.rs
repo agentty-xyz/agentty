@@ -34,6 +34,17 @@ pub(super) struct RunSessionTaskInput {
     pub(super) status: Arc<Mutex<Status>>,
 }
 
+/// Inputs needed to execute an agent-assisted edit task.
+pub(super) struct RunAgentAssistTaskInput {
+    pub(super) agent: AgentKind,
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub(super) cmd: Command,
+    pub(super) db: Database,
+    pub(super) id: String,
+    pub(super) output: Arc<Mutex<String>>,
+    pub(super) permission_mode: PermissionMode,
+}
+
 impl TaskService {
     /// Spawns a background loop that periodically refreshes ahead/behind info.
     ///
@@ -189,6 +200,79 @@ impl TaskService {
         Ok(())
     }
 
+    /// Executes one agent command for assisted edits without auto-commit.
+    ///
+    /// # Errors
+    /// Returns an error when spawning fails or the process is interrupted.
+    pub(super) async fn run_agent_assist_task(
+        input: RunAgentAssistTaskInput,
+    ) -> Result<(), String> {
+        let RunAgentAssistTaskInput {
+            agent,
+            app_event_tx,
+            cmd,
+            db,
+            id,
+            output,
+            permission_mode,
+        } = input;
+
+        let mut tokio_cmd = tokio::process::Command::from(cmd);
+        tokio_cmd.stdin(std::process::Stdio::null());
+
+        let mut child = match tokio_cmd.spawn() {
+            Ok(child) => child,
+            Err(spawn_error) => {
+                let message = format!("Failed to spawn process: {spawn_error}\n");
+                Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+
+                return Err(message.trim().to_string());
+            }
+        };
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let raw_stdout = Arc::new(Mutex::new(String::new()));
+        let raw_stderr = Arc::new(Mutex::new(String::new()));
+        let mut handles = Vec::new();
+
+        if let Some(stdout) = stdout {
+            let buffer = Arc::clone(&raw_stdout);
+            handles.push(tokio::spawn(async move {
+                Self::capture_raw_output(stdout, &buffer).await;
+            }));
+        }
+
+        if let Some(stderr) = stderr {
+            let buffer = Arc::clone(&raw_stderr);
+            handles.push(tokio::spawn(async move {
+                Self::capture_raw_output(stderr, &buffer).await;
+            }));
+        }
+
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        let exit_status = child.wait().await.ok();
+        if exit_status.is_some_and(|status| status.signal().is_some()) {
+            let message = "\n[Stopped] Agent assistance interrupted.\n";
+            Self::append_session_output(&output, &db, &app_event_tx, &id, message).await;
+
+            return Err("Agent assistance interrupted".to_string());
+        }
+
+        let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
+        let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
+        let parsed = agent.parse_response(&stdout_text, &stderr_text, permission_mode);
+
+        Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content).await;
+        let _ = db.update_session_stats(&id, &parsed.stats).await;
+
+        Ok(())
+    }
+
     /// Applies a status transition to memory and database when valid.
     ///
     /// This emits [`AppEvent::SessionUpdated`] for targeted snapshot sync and
@@ -271,7 +355,10 @@ impl TaskService {
 
 #[cfg(test)]
 mod tests {
+    use std::process::{Command, Stdio};
+
     use super::*;
+    use crate::db::Database;
 
     #[test]
     fn test_status_requires_full_refresh_for_lifecycle_statuses() {
@@ -291,5 +378,63 @@ mod tests {
             assert!(TaskService::status_requires_full_refresh(status));
         }
         assert!(!TaskService::status_requires_full_refresh(Status::New));
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_appends_output_without_committing() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                "claude",
+                "claude-sonnet-4-20250514",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args(["-lc", "printf 'assistant output'"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Claude,
+            app_event_tx,
+            cmd: command,
+            db: database.clone(),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            permission_mode: PermissionMode::AutoEdit,
+        })
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "assist task should succeed: {:?}",
+            result.err()
+        );
+        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+        assert!(output_text.contains("assistant output"));
+        let sessions = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert_eq!(sessions[0].commit_count, 0);
     }
 }

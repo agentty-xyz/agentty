@@ -4,6 +4,15 @@ use std::process::Command;
 
 use crate::gh;
 
+/// Result of attempting a rebase step.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RebaseStepResult {
+    /// Rebase step completed successfully.
+    Completed,
+    /// Rebase step stopped because of merge conflicts.
+    Conflict { detail: String },
+}
+
 /// Detects git repository information for the given directory.
 /// Returns the current branch name if in a git repository, None otherwise.
 pub fn detect_git_info(dir: &Path) -> Option<String> {
@@ -280,56 +289,194 @@ pub fn squash_merge(
 
 /// Rebases the current branch onto `target_branch`.
 ///
-/// If the rebase fails, this function attempts to abort it immediately so the
-/// repository does not remain in an in-progress rebase state.
+/// Returns a conflict outcome when the rebase stops for manual resolution.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 /// * `target_branch` - Branch to rebase onto (e.g., `main`)
 ///
 /// # Returns
-/// Ok(()) on success, Err(msg) with detailed error message on failure
+/// A [`RebaseStepResult`] describing whether the rebase completed or
+/// encountered conflicts.
 ///
 /// # Errors
-/// Returns an error if `git rebase` fails, or if aborting a failed rebase also
-/// fails.
-pub fn rebase(repo_path: &Path, target_branch: &str) -> Result<(), String> {
+/// Returns an error for non-conflict git failures.
+pub fn rebase_start(repo_path: &Path, target_branch: &str) -> Result<RebaseStepResult, String> {
     let output = Command::new("git")
         .args(["rebase", target_branch])
         .current_dir(repo_path)
         .output()
         .map_err(|error| format!("Failed to execute git: {error}"))?;
 
+    if output.status.success() {
+        return Ok(RebaseStepResult::Completed);
+    }
+
+    let detail = command_output_detail(&output.stdout, &output.stderr);
+    if is_rebase_conflict(&detail) {
+        return Ok(RebaseStepResult::Conflict { detail });
+    }
+
+    Err(format!("Failed to rebase onto {target_branch}: {detail}."))
+}
+
+/// Continues an in-progress rebase.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// A [`RebaseStepResult`] describing whether the rebase completed or
+/// encountered conflicts.
+///
+/// # Errors
+/// Returns an error for non-conflict git failures.
+pub fn rebase_continue(repo_path: &Path) -> Result<RebaseStepResult, String> {
+    let output = Command::new("git")
+        .args(["rebase", "--continue"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if output.status.success() {
+        return Ok(RebaseStepResult::Completed);
+    }
+
+    let detail = command_output_detail(&output.stdout, &output.stderr);
+    if is_rebase_conflict(&detail) {
+        return Ok(RebaseStepResult::Conflict { detail });
+    }
+
+    Err(format!("Failed to continue rebase: {detail}."))
+}
+
+/// Aborts an in-progress rebase.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) on failure.
+///
+/// # Errors
+/// Returns an error when `git rebase --abort` cannot be executed.
+pub fn abort_rebase(repo_path: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["rebase", "--abort"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if stderr.trim().is_empty() {
-            stdout.trim()
-        } else {
-            stderr.trim()
-        };
-        let detail = if detail.is_empty() {
-            "Unknown git rebase error"
-        } else {
-            detail
-        };
+        let detail = command_output_detail(&output.stdout, &output.stderr);
 
-        let abort_suffix = match Command::new("git")
-            .args(["rebase", "--abort"])
-            .current_dir(repo_path)
-            .output()
-        {
-            Ok(abort_output) if abort_output.status.success() => String::new(),
-            Ok(abort_output) => {
-                let abort_stderr = String::from_utf8_lossy(&abort_output.stderr);
-                format!(" Failed to abort rebase: {}.", abort_stderr.trim())
-            }
-            Err(error) => format!(" Failed to abort rebase: {error}."),
-        };
+        return Err(format!("Failed to abort rebase: {detail}."));
+    }
 
-        return Err(format!(
-            "Failed to rebase onto {target_branch}: {detail}.{abort_suffix}"
-        ));
+    Ok(())
+}
+
+/// Returns conflicted file paths for the current index.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// A list of relative file paths with unresolved conflicts.
+///
+/// # Errors
+/// Returns an error if invoking `git diff --name-only --diff-filter=U` fails.
+pub fn list_conflicted_files(repo_path: &Path) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(format!("Failed to read conflicted files: {detail}."));
+    }
+
+    let files = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    Ok(files)
+}
+
+/// Returns whether unresolved paths still exist in the index.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// `true` when unresolved paths exist, `false` otherwise.
+///
+/// # Errors
+/// Returns an error when conflicted files cannot be queried.
+pub fn has_unmerged_paths(repo_path: &Path) -> Result<bool, String> {
+    let conflicted_files = list_conflicted_files(repo_path)?;
+
+    Ok(!conflicted_files.is_empty())
+}
+
+/// Rebases the current branch onto `target_branch`.
+///
+/// If the rebase fails due to conflict, this function aborts it immediately so
+/// the repository does not remain in an in-progress rebase state.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `target_branch` - Branch to rebase onto (e.g., `main`)
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) with detailed error message on failure.
+///
+/// # Errors
+/// Returns an error if rebase fails, or aborting a conflicted rebase also
+/// fails.
+pub fn rebase(repo_path: &Path, target_branch: &str) -> Result<(), String> {
+    match rebase_start(repo_path, target_branch)? {
+        RebaseStepResult::Completed => Ok(()),
+        RebaseStepResult::Conflict { detail } => {
+            let abort_suffix = match abort_rebase(repo_path) {
+                Ok(()) => String::new(),
+                Err(error) => format!(" {error}"),
+            };
+
+            Err(format!(
+                "Failed to rebase onto {target_branch}: {detail}.{abort_suffix}"
+            ))
+        }
+    }
+}
+
+/// Stages all changes in the repository or worktree.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) on failure.
+///
+/// # Errors
+/// Returns an error if `git add -A` fails.
+pub fn stage_all(repo_path: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(format!("Failed to stage changes: {detail}"));
     }
 
     Ok(())
@@ -348,16 +495,7 @@ pub fn rebase(repo_path: &Path, target_branch: &str) -> Result<(), String> {
 /// Returns an error if staging or committing changes fails.
 pub fn commit_all(repo_path: &Path, commit_message: &str) -> Result<(), String> {
     // Stage all changes
-    let output = Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to execute git: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to stage changes: {}", stderr.trim()));
-    }
+    stage_all(repo_path)?;
 
     // Commit (skip pre-commit hooks)
     let output = Command::new("git")
@@ -584,6 +722,29 @@ fn normalize_repo_url(remote: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+/// Extracts the best human-readable error detail from command output.
+fn command_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
+    if !stderr_text.is_empty() {
+        return stderr_text;
+    }
+
+    let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
+    if !stdout_text.is_empty() {
+        return stdout_text;
+    }
+
+    "Unknown git error".to_string()
+}
+
+/// Returns whether git output detail indicates a rebase conflict state.
+fn is_rebase_conflict(detail: &str) -> bool {
+    detail.contains("CONFLICT")
+        || detail.contains("Resolve all conflicts manually")
+        || detail.contains("could not apply")
+        || detail.contains("mark them as resolved")
 }
 
 /// Pushes the source branch to origin and creates a Pull Request via GitHub
@@ -1283,6 +1444,213 @@ mod tests {
             !rebase_head_output.status.success(),
             "rebase should be aborted and REBASE_HEAD should not exist"
         );
+    }
+
+    #[test]
+    fn test_rebase_start_conflict_keeps_rebase_in_progress() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "-b", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "feature branch update")
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: feature branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "main branch update").expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: main branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+
+        // Act
+        let result = rebase_start(dir.path(), "main");
+
+        // Assert
+        assert!(matches!(result, Ok(RebaseStepResult::Conflict { .. })));
+        let rebase_head_output = Command::new("git")
+            .args(["rev-parse", "--verify", "REBASE_HEAD"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test execution failed");
+        assert!(
+            rebase_head_output.status.success(),
+            "rebase should remain in progress"
+        );
+
+        let abort_result = abort_rebase(dir.path());
+        assert!(abort_result.is_ok(), "failed to abort test rebase");
+    }
+
+    #[test]
+    fn test_list_conflicted_files_and_unmerged_paths_on_rebase_conflict() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "-b", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "feature branch update")
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: feature branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "main branch update").expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: main branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        let rebase_result = rebase_start(dir.path(), "main");
+        assert!(matches!(
+            rebase_result,
+            Ok(RebaseStepResult::Conflict { .. })
+        ));
+
+        // Act
+        let conflicted_files = list_conflicted_files(dir.path()).expect("should list conflicts");
+        let has_unmerged = has_unmerged_paths(dir.path()).expect("should query unmerged paths");
+
+        // Assert
+        assert_eq!(conflicted_files, vec!["README.md".to_string()]);
+        assert!(has_unmerged);
+
+        let abort_result = abort_rebase(dir.path());
+        assert!(abort_result.is_ok(), "failed to abort test rebase");
+    }
+
+    #[test]
+    fn test_rebase_continue_conflict_when_unmerged_paths_remain() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "-b", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "feature branch update")
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: feature branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        fs::write(dir.path().join("README.md"), "main branch update").expect("test setup failed");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "feat: main branch readme"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "feature-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        let rebase_result = rebase_start(dir.path(), "main");
+        assert!(matches!(
+            rebase_result,
+            Ok(RebaseStepResult::Conflict { .. })
+        ));
+
+        // Act
+        let continue_result = rebase_continue(dir.path());
+
+        // Assert
+        assert!(matches!(
+            continue_result,
+            Ok(RebaseStepResult::Conflict { .. })
+        ));
+
+        let abort_result = abort_rebase(dir.path());
+        assert!(abort_result.is_ok(), "failed to abort test rebase");
+    }
+
+    #[test]
+    fn test_stage_all_stages_changed_files() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+        fs::write(dir.path().join("new_file.txt"), "new content").expect("test setup failed");
+
+        // Act
+        let stage_result = stage_all(dir.path());
+
+        // Assert
+        assert!(stage_result.is_ok());
+        let output = Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test execution failed");
+        let status = String::from_utf8_lossy(&output.stdout);
+        assert!(status.contains("A  new_file.txt"));
     }
 
     #[test]
