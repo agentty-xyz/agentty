@@ -20,7 +20,7 @@ use crate::db::Database;
 use crate::git;
 use crate::model::{PermissionMode, Status};
 
-const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(8);
+const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
 const REBASE_ASSIST_MAX_ATTEMPTS: usize = 3;
 const REBASE_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/rebase_assist_prompt.md");
