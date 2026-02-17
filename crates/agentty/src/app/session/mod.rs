@@ -1821,6 +1821,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rebase_session_auto_commits_uncommitted_changes() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_folder = app.sessions.sessions[0].folder.clone();
+        app.sessions.sessions[0].status = Status::Review;
+
+        // Create an uncommitted change in the session worktree
+        std::fs::write(session_folder.join("dirty.txt"), "uncommitted content")
+            .expect("failed to write dirty file");
+
+        // Act
+        let result = app.rebase_session(&session_id).await;
+
+        // Assert
+        assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
+        assert!(
+            result
+                .expect("rebase should succeed")
+                .contains("Successfully rebased")
+        );
+
+        // Verify worktree is clean
+        let status_output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&session_folder)
+            .output()
+            .expect("failed to check status");
+        assert!(
+            status_output.stdout.is_empty(),
+            "worktree should be clean after auto-commit"
+        );
+
+        // Verify commit count incremented
+        app.sessions.sync_from_handles();
+        assert_eq!(app.sessions.sessions[0].commit_count, 1);
+    }
+
+    #[tokio::test]
     async fn test_create_pr_session_no_git() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");

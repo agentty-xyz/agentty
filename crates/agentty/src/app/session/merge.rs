@@ -307,6 +307,20 @@ impl SessionManager {
             .session_handles_or_err(session_id)
             .map_err(|_| SESSION_HANDLES_NOT_FOUND_ERROR.to_string())?;
         let output = Arc::clone(&handles.output);
+        let commit_count = Arc::clone(&handles.commit_count);
+
+        // Auto-commit any pending changes before rebasing to avoid "cannot rebase: You
+        // have unstaged changes"
+        match Self::commit_changes(&session.folder, services.db(), &session.id, &commit_count).await
+        {
+            Ok(_) => {}
+            Err(e) if e.contains("Nothing to commit") => {}
+            Err(e) => {
+                return Err(format!(
+                    "Failed to commit pending changes before rebase: {e}"
+                ));
+            }
+        }
 
         let session_folder = session.folder.clone();
         let session_id = session.id.clone();
