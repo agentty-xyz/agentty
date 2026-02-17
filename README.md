@@ -14,6 +14,12 @@ A terminal UI tool for managing agents, built with Rust and [Ratatui](https://ra
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh
 ```
 
+### Cargo
+
+```sh
+cargo install agentty
+```
+
 ### npm
 
 ```sh
