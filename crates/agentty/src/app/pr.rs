@@ -48,12 +48,7 @@ impl App {
     /// Returns an error if the session is not eligible for PR creation or git
     /// metadata for the worktree is unavailable.
     pub async fn create_pr_session(&self, session_id: &str) -> Result<(), String> {
-        let session = self
-            .session_state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .ok_or_else(|| "Session not found".to_string())?;
+        let (session, handles) = self.session_and_handles_or_err(session_id)?;
 
         if session.status != Status::Review {
             return Err("Session must be in review to create a pull request".to_string());
@@ -84,12 +79,6 @@ impl App {
             .next()
             .unwrap_or("New Session")
             .to_string();
-
-        let handles = self
-            .session_state
-            .handles
-            .get(&session.id)
-            .ok_or_else(|| "Session handles not found".to_string())?;
 
         self.mark_pr_creation_in_flight(&session.id)?;
 

@@ -129,17 +129,7 @@ impl App {
             return Ok(sender.clone());
         }
 
-        let session = self
-            .session_state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .ok_or_else(|| "Session not found".to_string())?;
-        let handles = self
-            .session_state
-            .handles
-            .get(session_id)
-            .ok_or_else(|| "Session handles not found".to_string())?;
+        let (session, handles) = self.session_and_handles_or_err(session_id)?;
         let context = SessionWorkerContext {
             app_event_tx: self.app_event_sender(),
             child_pid: Arc::clone(&handles.child_pid),
