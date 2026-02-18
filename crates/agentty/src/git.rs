@@ -520,7 +520,7 @@ pub fn commit_all(repo_path: &Path, commit_message: &str) -> Result<(), String> 
     // Stage all changes
     stage_all(repo_path)?;
 
-    // Commit (skip pre-commit hooks)
+    // Commit
     let output = Command::new("git")
         .args(["commit", "-m", commit_message])
         .current_dir(repo_path)

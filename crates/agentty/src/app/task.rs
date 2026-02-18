@@ -16,7 +16,7 @@ use crate::db::Database;
 use crate::git;
 use crate::model::{PermissionMode, Status};
 
-const AUTO_COMMIT_ASSIST_MAX_ATTEMPTS: usize = 3;
+const AUTO_COMMIT_ASSIST_MAX_ATTEMPTS: usize = 10;
 const AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../resources/auto_commit_assist_prompt.md");
 
@@ -298,11 +298,7 @@ impl TaskService {
             return false;
         }
 
-        let retryable_patterns = ["conflict", "unmerged", "merge"];
-
-        retryable_patterns
-            .iter()
-            .any(|pattern| normalized_error.contains(pattern))
+        true
     }
 
     async fn append_commit_assist_header(
@@ -641,6 +637,18 @@ mod tests {
         // Arrange
         let commit_error =
             "Failed to commit: Committing is not possible because you have unmerged files";
+
+        // Act
+        let is_retryable = TaskService::is_commit_error_retryable(commit_error);
+
+        // Assert
+        assert!(is_retryable);
+    }
+
+    #[test]
+    fn test_is_commit_error_retryable_returns_true_for_generic_failure() {
+        // Arrange
+        let commit_error = "Failed to commit: rustfmt failed";
 
         // Act
         let is_retryable = TaskService::is_commit_error_retryable(commit_error);

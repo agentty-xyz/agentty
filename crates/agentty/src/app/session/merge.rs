@@ -227,8 +227,7 @@ impl SessionManager {
                     git::squash_merge(&repo_root, &source_branch, &base_branch, &commit_message)
                 })
                 .await
-                .map_err(|error| format!("Join error: {error}"))?
-                .map_err(|error| format!("Failed to merge: {error}"))?;
+                .map_err(|error| format!("Join error: {error}"))??;
             }
 
             // Reuse the pre-merge diff since the worktree is now merged and clean.
@@ -879,8 +878,7 @@ impl SessionManager {
             git::head_short_hash(&folder)
         })
         .await
-        .map_err(|error| format!("Join error: {error}"))?
-        .map_err(|error| format!("Failed to commit: {error}"))?;
+        .map_err(|error| format!("Join error: {error}"))??;
 
         if let Ok(mut count) = commit_count.lock() {
             *count += 1;
