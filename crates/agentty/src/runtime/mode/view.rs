@@ -9,6 +9,7 @@ use crate::model::{
     PromptSlashState, Status,
 };
 use crate::runtime::{EventResult, TuiTerminal};
+use crate::ui::pages::session_chat::SessionChatPage;
 
 const IMPLEMENT_PLAN_PROMPT: &str = "Implement the approved plan from your previous response \
                                      end-to-end. Make the required code changes, run all relevant \
@@ -36,7 +37,7 @@ pub(crate) async fn handle(
         return Ok(EventResult::Continue);
     };
 
-    let view_metrics = view_metrics(app, terminal, view_context.session_index)?;
+    let view_metrics = view_metrics(app, terminal, &view_context)?;
     let mut next_scroll_offset = view_context.scroll_offset;
 
     let Some(session) = app.sessions.sessions.get(view_context.session_index) else {
@@ -263,22 +264,33 @@ fn view_context(app: &mut App) -> Option<ViewContext> {
 fn view_metrics(
     app: &App,
     terminal: &TuiTerminal,
-    session_index: usize,
+    view_context: &ViewContext,
 ) -> io::Result<ViewMetrics> {
-    let terminal_height = terminal.size()?.height;
-    let view_height = terminal_height.saturating_sub(5);
-    let total_lines = u16::try_from(
-        app.sessions
-            .sessions
-            .get(session_index)
-            .map_or(0, |session| session.output.lines().count()),
-    )
-    .unwrap_or(0);
+    let terminal_size = terminal.size()?;
+    let view_height = terminal_size.height.saturating_sub(5);
+    let output_width = terminal_size.width.saturating_sub(2);
+    let total_lines = view_total_lines(
+        app,
+        &view_context.session_id,
+        view_context.session_index,
+        output_width,
+    );
 
     Ok(ViewMetrics {
         total_lines,
         view_height,
     })
+}
+
+fn view_total_lines(app: &App, session_id: &str, session_index: usize, output_width: u16) -> u16 {
+    let plan_followup_action = app.plan_followup_action(session_id);
+
+    app.sessions
+        .sessions
+        .get(session_index)
+        .map_or(0, |session| {
+            SessionChatPage::rendered_output_line_count(session, output_width, plan_followup_action)
+        })
 }
 
 fn prompt_history_entries(output: &str) -> Vec<String> {
@@ -512,6 +524,21 @@ mod tests {
         assert_eq!(context.session_index, 0);
     }
 
+    #[tokio::test]
+    async fn test_view_total_lines_counts_wrapped_output_lines() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].output = "word ".repeat(40);
+        let raw_line_count =
+            u16::try_from(app.sessions.sessions[0].output.lines().count()).unwrap_or(u16::MAX);
+
+        // Act
+        let total_lines = view_total_lines(&app, &session_id, 0, 20);
+
+        // Assert
+        assert!(total_lines > raw_line_count);
+    }
+
     #[test]
     fn test_prompt_history_entries_extracts_user_prompts() {
         // Arrange
@@ -546,6 +573,23 @@ mod tests {
 
         // Assert
         assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_scroll_offset_down_does_not_jump_to_bottom_for_wrapped_output() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].output = "word ".repeat(60);
+        let metrics = ViewMetrics {
+            total_lines: view_total_lines(&app, &session_id, 0, 20),
+            view_height: 5,
+        };
+
+        // Act
+        let next_offset = scroll_offset_down(Some(0), metrics, 1);
+
+        // Assert
+        assert_eq!(next_offset, Some(1));
     }
 
     #[test]
