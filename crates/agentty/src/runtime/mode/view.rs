@@ -364,13 +364,10 @@ async fn merge_view_session(app: &mut App, session_id: &str) {
 }
 
 async fn rebase_view_session(app: &mut App, session_id: &str) {
-    let result_message = match app.rebase_session(session_id).await {
-        Ok(message) => format!("\n[Rebase] {message}\n"),
-        Err(error) => format!("\n[Rebase Error] {error}\n"),
-    };
-
-    app.append_output_for_session(session_id, &result_message)
-        .await;
+    if let Err(error) = app.rebase_session(session_id).await {
+        app.append_output_for_session(session_id, &format!("\n[Rebase Error] {error}\n"))
+            .await;
+    }
 }
 
 async fn stop_view_session(app: &mut App, session_id: &str) {

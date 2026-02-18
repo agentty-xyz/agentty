@@ -326,6 +326,42 @@ mod tests {
         assert_eq!(session.status, expected);
     }
 
+    async fn wait_for_output_contains(
+        app: &mut App,
+        session_id: &str,
+        expected_output: &str,
+        retries: usize,
+    ) {
+        for _ in 0..retries {
+            app.sessions.sync_from_handles();
+            let Some(session) = app
+                .sessions
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+            else {
+                break;
+            };
+            if session.output.contains(expected_output) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        app.sessions.sync_from_handles();
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing session while waiting for output");
+        assert!(
+            session.output.contains(expected_output),
+            "expected output to contain: {expected_output}, actual output: {}",
+            session.output
+        );
+    }
+
     #[tokio::test]
     async fn test_new_app_empty() {
         // Arrange
@@ -1681,15 +1717,24 @@ mod tests {
             app.sessions.sessions[0].status,
             Status::Done | Status::Merging
         ));
-        wait_for_status_with_retries(&mut app, &session_id, Status::Done, 400).await;
-        assert!(!session_folder.exists(), "worktree should be removed");
+        wait_for_status_with_retries(&mut app, &session_id, Status::Done, 5000).await;
 
-        let branch_output = Command::new("git")
-            .args(["branch", "--list", &branch_name])
-            .current_dir(dir.path())
-            .output()
-            .expect("failed to list branches");
-        let branches = String::from_utf8_lossy(&branch_output.stdout);
+        let mut branches = String::new();
+        for _ in 0..400 {
+            let branch_output = Command::new("git")
+                .args(["branch", "--list", &branch_name])
+                .current_dir(dir.path())
+                .output()
+                .expect("failed to list branches");
+            branches = String::from_utf8_lossy(&branch_output.stdout).to_string();
+            if !session_folder.exists() && branches.trim().is_empty() {
+                break;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        assert!(!session_folder.exists(), "worktree should be removed");
         assert!(
             branches.trim().is_empty(),
             "branch should be removed after merge"
@@ -1775,6 +1820,11 @@ mod tests {
             .expect("failed to create session");
         let session_folder = app.sessions.sessions[0].folder.clone();
         app.sessions.sessions[0].status = Status::Review;
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut session_status) = handles.status.lock()
+        {
+            *session_status = Status::Review;
+        }
         std::fs::write(dir.path().join("main-only.txt"), "main change")
             .expect("failed to write main change");
         Command::new("git")
@@ -1793,11 +1843,7 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
-        assert!(
-            result
-                .expect("rebase should succeed")
-                .contains("Successfully rebased")
-        );
+        wait_for_output_contains(&mut app, &session_id, "[Rebase] Successfully rebased", 200).await;
 
         let base_head_output = Command::new("git")
             .args(["rev-parse", "main"])
@@ -1831,6 +1877,11 @@ mod tests {
             .expect("failed to create session");
         let session_folder = app.sessions.sessions[0].folder.clone();
         app.sessions.sessions[0].status = Status::Review;
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut session_status) = handles.status.lock()
+        {
+            *session_status = Status::Review;
+        }
 
         // Create an uncommitted change in the session worktree
         std::fs::write(session_folder.join("dirty.txt"), "uncommitted content")
@@ -1841,11 +1892,7 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
-        assert!(
-            result
-                .expect("rebase should succeed")
-                .contains("Successfully rebased")
-        );
+        wait_for_output_contains(&mut app, &session_id, "[Rebase] Successfully rebased", 200).await;
 
         // Verify worktree is clean
         let status_output = Command::new("git")

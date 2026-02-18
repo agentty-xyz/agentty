@@ -771,6 +771,7 @@ mod tests {
 
         // Assert
         assert!(lines.last().expect("lines").to_string().is_empty());
+        // wrap_lines might produce 1 line for "some output". +1 empty line = 2.
         assert!(lines.len() >= 2);
     }
 
@@ -786,6 +787,7 @@ mod tests {
             SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
 
         // Assert
+        // Expected: "some output", "", "Spinner..."
         assert!(lines.len() >= 3);
         let len = lines.len();
         assert!(lines[len - 2].to_string().is_empty());

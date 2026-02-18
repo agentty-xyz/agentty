@@ -520,8 +520,8 @@ impl App {
     /// Rebases a reviewed session branch onto its base branch.
     ///
     /// # Errors
-    /// Returns an error if session cannot be rebased.
-    pub async fn rebase_session(&self, session_id: &str) -> Result<String, String> {
+    /// Returns an error if session cannot start rebasing.
+    pub async fn rebase_session(&self, session_id: &str) -> Result<(), String> {
         self.sessions
             .rebase_session(&self.services, session_id)
             .await

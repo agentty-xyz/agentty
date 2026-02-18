@@ -67,6 +67,20 @@ struct RebaseAssistInput {
     session_model: String,
 }
 
+struct RebaseTaskInput {
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    base_branch: String,
+    commit_count: Arc<Mutex<i64>>,
+    db: Database,
+    folder: PathBuf,
+    id: String,
+    output: Arc<Mutex<String>>,
+    permission_mode: PermissionMode,
+    session_agent: AgentKind,
+    session_model: String,
+    status: Arc<Mutex<Status>>,
+}
+
 impl SessionManager {
     /// Starts a squash merge for a reviewed session branch in the background.
     ///
@@ -285,12 +299,12 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if the session is invalid for rebase, required git
-    /// metadata is missing, or the rebase command fails.
+    /// metadata is missing, or starting the rebase task fails.
     pub async fn rebase_session(
         &self,
         services: &AppServices,
         session_id: &str,
-    ) -> Result<String, String> {
+    ) -> Result<(), String> {
         let session = self
             .session_or_err(session_id)
             .map_err(|_| SESSION_NOT_FOUND_ERROR.to_string())?;
@@ -311,61 +325,113 @@ impl SessionManager {
         let commit_count = Arc::clone(&handles.commit_count);
 
         let status = Arc::clone(&handles.status);
-        let db = services.db();
+        let db = services.db().clone();
         let app_event_tx = services.event_sender();
 
-        if !TaskService::update_status(&status, db, &app_event_tx, &session.id, Status::Rebasing)
+        if !TaskService::update_status(&status, &db, &app_event_tx, &session.id, Status::Rebasing)
             .await
         {
             return Err("Invalid status transition to Rebasing".to_string());
         }
 
-        // Auto-commit any pending changes before rebasing to avoid "cannot rebase: You
-        // have unstaged changes"
-        if let Err(e) =
-            Self::commit_changes(&session.folder, services.db(), &session.id, &commit_count).await
-            && !e.contains("Nothing to commit")
-        {
-            let _ =
-                TaskService::update_status(&status, db, &app_event_tx, &session.id, Status::Review)
-                    .await;
-            return Err(format!(
-                "Failed to commit pending changes before rebase: {e}"
-            ));
-        }
-
-        let session_folder = session.folder.clone();
-        let session_id = session.id.clone();
+        let id = session.id.clone();
         let permission_mode = session.permission_mode;
         let (session_agent, session_model) = TitleService::resolve_session_agent_and_model(session);
 
-        let rebase_input = RebaseAssistInput {
-            app_event_tx: services.event_sender(),
-            base_branch: base_branch.clone(),
-            db: services.db().clone(),
-            folder: session_folder,
-            id: session_id,
+        let rebase_task_input = RebaseTaskInput {
+            app_event_tx,
+            base_branch,
+            commit_count,
+            db,
+            folder: session.folder.clone(),
+            id,
             output,
             permission_mode,
             session_agent,
             session_model: session_model.as_str().to_string(),
+            status,
         };
-        let rebase_result = Self::run_rebase_assist_loop(rebase_input).await;
-        if let Err(error) = rebase_result {
-            let _ =
-                TaskService::update_status(&status, db, &app_event_tx, &session.id, Status::Review)
+        tokio::spawn(async move {
+            Self::run_rebase_task(rebase_task_input).await;
+        });
+
+        Ok(())
+    }
+
+    async fn run_rebase_task(input: RebaseTaskInput) {
+        let RebaseTaskInput {
+            app_event_tx,
+            base_branch,
+            commit_count,
+            db,
+            folder,
+            id,
+            output,
+            permission_mode,
+            session_agent,
+            session_model,
+            status,
+        } = input;
+
+        let rebase_result: Result<String, String> = async {
+            // Auto-commit any pending changes before rebasing to avoid
+            // "cannot rebase: You have unstaged changes".
+            if let Err(error) = Self::commit_changes(&folder, &db, &id, &commit_count).await
+                && !error.contains("Nothing to commit")
+            {
+                return Err(format!(
+                    "Failed to commit pending changes before rebase: {error}"
+                ));
+            }
+
+            let rebase_input = RebaseAssistInput {
+                app_event_tx: app_event_tx.clone(),
+                base_branch: base_branch.clone(),
+                db: db.clone(),
+                folder: folder.clone(),
+                id: id.clone(),
+                output: Arc::clone(&output),
+                permission_mode,
+                session_agent,
+                session_model: session_model.clone(),
+            };
+            if let Err(error) = Self::run_rebase_assist_loop(rebase_input).await {
+                return Err(format!("Failed to rebase: {error}"));
+            }
+
+            let source_branch = session_branch(&id);
+
+            Ok(format!(
+                "Successfully rebased {source_branch} onto {base_branch}"
+            ))
+        }
+        .await;
+
+        Self::finalize_rebase_task(rebase_result, &output, &db, &app_event_tx, &id, &status).await;
+    }
+
+    async fn finalize_rebase_task(
+        rebase_result: Result<String, String>,
+        output: &Arc<Mutex<String>>,
+        db: &Database,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        id: &str,
+        status: &Arc<Mutex<Status>>,
+    ) {
+        match rebase_result {
+            Ok(message) => {
+                let rebase_message = format!("\n[Rebase] {message}\n");
+                TaskService::append_session_output(output, db, app_event_tx, id, &rebase_message)
                     .await;
-            return Err(format!("Failed to rebase: {error}"));
+            }
+            Err(error) => {
+                let rebase_error = format!("\n[Rebase Error] {error}\n");
+                TaskService::append_session_output(output, db, app_event_tx, id, &rebase_error)
+                    .await;
+            }
         }
 
-        let source_branch = session_branch(&session.id);
-
-        let _ = TaskService::update_status(&status, db, &app_event_tx, &session.id, Status::Review)
-            .await;
-
-        Ok(format!(
-            "Successfully rebased {source_branch} onto {base_branch}"
-        ))
+        let _ = TaskService::update_status(status, db, app_event_tx, id, Status::Review).await;
     }
 
     /// Updates the persisted terminal summary for a session.
