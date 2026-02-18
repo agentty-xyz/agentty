@@ -124,13 +124,14 @@ To ensure code quality, you must pass both automated and manual gates.
 
 ### Automated Checks
 Run these commands after making changes:
-1. **Autofix + Validate:** `pre-commit run --all-files`
-2. **Test:** `cargo test -q`
+1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
+2. **Validate:** `pre-commit run --all-files`
+3. **Test:** `cargo test -q`
 
-The `pre-commit` command auto-fixes formatting and clippy issues, then validates
-unused dependencies, compilation, and directory indexes — all with minimal output
-(errors only). If a hook reports "Failed" after auto-fixing files, the fixes are
-already applied — just re-run to confirm everything passes.
+The manual-stage autofix hooks apply formatting and fixable clippy lints. The
+validation command then runs non-mutating checks (including formatting and clippy
+lint gates), dependency checks, compilation, and directory index checks with
+minimal output (errors only).
 
 ### Manual Verification
 - **Test Style:** Verify *every* test function uses explicit `// Arrange`, `// Act`, and `// Assert` comments.
