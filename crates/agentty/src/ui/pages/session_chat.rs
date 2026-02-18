@@ -42,6 +42,22 @@ impl<'a> SessionChatPage<'a> {
         }
     }
 
+    /// Returns the rendered output line count for chat content at a given
+    /// width.
+    ///
+    /// This mirrors the exact wrapping and footer line rules used during
+    /// rendering so scroll math can stay in sync with what users see.
+    pub(crate) fn rendered_output_line_count(
+        session: &Session,
+        output_width: u16,
+        plan_followup_action: Option<PlanFollowupAction>,
+    ) -> u16 {
+        let output_area = Rect::new(0, 0, output_width, 0);
+        let lines = Self::output_lines(session, output_area, session.status, plan_followup_action);
+
+        u16::try_from(lines.len()).unwrap_or(u16::MAX)
+    }
+
     fn build_slash_menu(
         input: &str,
         stage: PromptSlashStage,
@@ -774,6 +790,20 @@ mod tests {
         let len = lines.len();
         assert!(lines[len - 2].to_string().is_empty());
         assert!(lines[len - 1].to_string().contains("Thinking..."));
+    }
+
+    #[test]
+    fn test_rendered_output_line_count_counts_wrapped_content() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "word ".repeat(40);
+        let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
+
+        // Act
+        let rendered_line_count = SessionChatPage::rendered_output_line_count(&session, 20, None);
+
+        // Assert
+        assert!(rendered_line_count > raw_line_count);
     }
 
     #[test]
