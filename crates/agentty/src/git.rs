@@ -215,12 +215,16 @@ pub fn squash_merge_diff(
 /// Performs a squash merge from a source branch to a target branch.
 ///
 /// This function:
-/// 1. Checks out the target branch
+/// 1. Verifies the repository is already on the target branch
 /// 2. Performs `git merge --squash` from the source branch
-/// 3. Commits the squashed changes
+/// 3. Commits the squashed changes (skipping pre-commit hooks)
+///
+/// The caller is responsible for ensuring `repo_path` is already checked out
+/// on `target_branch`. Switching branches here would disrupt the user's
+/// working directory.
 ///
 /// # Arguments
-/// * `repo_path` - Path to the git repository root
+/// * `repo_path` - Path to the git repository root, already on `target_branch`
 /// * `source_branch` - Name of the branch to merge from (e.g.,
 ///   `agentty/abc123`)
 /// * `target_branch` - Name of the branch to merge into (e.g., `main`)
@@ -230,25 +234,22 @@ pub fn squash_merge_diff(
 /// Ok(()) on success, Err(msg) with detailed error message on failure
 ///
 /// # Errors
-/// Returns an error if checkout, merge, or commit commands fail.
+/// Returns an error if the repository is on the wrong branch, the merge
+/// fails, or the commit fails.
 pub fn squash_merge(
     repo_path: &Path,
     source_branch: &str,
     target_branch: &str,
     commit_message: &str,
 ) -> Result<(), String> {
-    // Checkout target branch
-    let output = Command::new("git")
-        .args(["checkout", target_branch])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("Failed to execute git: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    // Verify that repo_path is already on the target branch. Switching
+    // branches here would disrupt the user's working directory.
+    let current_branch = detect_git_info(repo_path)
+        .ok_or_else(|| format!("Failed to detect current branch in {}", repo_path.display()))?;
+    if current_branch != target_branch {
         return Err(format!(
-            "Failed to checkout {target_branch}: {}",
-            stderr.trim()
+            "Cannot merge: repository is on '{current_branch}' but expected '{target_branch}'. \
+             Switch to '{target_branch}' first."
         ));
     }
 
@@ -267,20 +268,34 @@ pub fn squash_merge(
         ));
     }
 
-    // Commit the squashed changes
+    // Check whether the squash merge staged any changes before committing.
+    // `git diff --cached --quiet` exits 0 when the index matches HEAD (nothing
+    // staged) and 1 when there are staged changes.
+    let cached_diff = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+    if cached_diff.status.success() {
+        return Err(
+            "Nothing to merge: the session changes are already present in the base branch"
+                .to_string(),
+        );
+    }
+
+    // Commit the squashed changes. Skip pre-commit hooks (`--no-verify`)
+    // because the session code was already validated by those same hooks
+    // during auto-commit in the session worktree. Re-running them here is
+    // redundant and causes failures when hooks modify files in the main repo.
     let output = Command::new("git")
-        .args(["commit", "-m", commit_message])
+        .args(["commit", "--no-verify", "-m", commit_message])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("Failed to execute git: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Check if there's nothing to commit (no changes) - message appears on stdout
-        if stdout.contains("nothing to commit") || stderr.contains("nothing to commit") {
-            return Err("Nothing to merge: no changes detected".to_string());
-        }
         return Err(format!("Failed to commit squash merge: {}", stderr.trim()));
     }
 
@@ -1236,7 +1251,7 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         setup_test_git_repo(dir.path()).expect("test setup failed");
 
-        // Create a feature branch and add a commit
+        // Create a feature branch and add a commit, then return to main.
         Command::new("git")
             .args(["checkout", "-b", "feature-branch"])
             .current_dir(dir.path())
@@ -1253,23 +1268,19 @@ mod tests {
             .current_dir(dir.path())
             .output()
             .expect("test setup failed");
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
 
-        // Act
+        // Act — squash_merge requires the repo to already be on the target branch.
         let result = squash_merge(dir.path(), "feature-branch", "main", "Squash merge feature");
 
         // Assert
         assert!(result.is_ok());
 
-        // Verify we're on main branch
-        let output = Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(dir.path())
-            .output()
-            .expect("test execution failed");
-        let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(current_branch, "main");
-
-        // Verify the file exists on main
+        // Verify the file was squash-merged onto main.
         assert!(dir.path().join("feature.txt").exists());
     }
 
@@ -1289,9 +1300,65 @@ mod tests {
         // Act
         let result = squash_merge(dir.path(), "empty-branch", "main", "Empty merge");
 
-        // Assert - git merge --squash succeeds with "nothing to squash", then commit
-        // fails with "nothing to commit", which we report as "Nothing to merge:
-        // no changes detected"
+        // Assert - git merge --squash stages nothing (branch is already at same
+        // commit as main), so we detect it via `git diff --cached --quiet` and
+        // return "Nothing to merge" before even attempting git commit.
+        assert!(result.is_err());
+        let error = result.expect_err("should be error");
+        assert!(
+            error.contains("Nothing to merge"),
+            "Expected 'Nothing to merge', got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_squash_merge_changes_already_in_base() {
+        // Arrange — session branch has a commit, but main already has the same
+        // changes (e.g., user manually applied the same patch to main).
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path()).expect("test setup failed");
+
+        // Create the session branch from main and add a commit.
+        Command::new("git")
+            .args(["checkout", "-b", "session-branch"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        std::fs::write(dir.path().join("session.txt"), "session change").expect("write failed");
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "session change"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+
+        // Switch back to main and apply the same change independently.
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        std::fs::write(dir.path().join("session.txt"), "session change").expect("write failed");
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+        Command::new("git")
+            .args(["commit", "-m", "same change applied to main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("test setup failed");
+
+        // Act — trying to merge session-branch into main should detect that
+        // there is nothing new to stage after the squash merge.
+        let result = squash_merge(dir.path(), "session-branch", "main", "Merge session");
+
+        // Assert
         assert!(result.is_err());
         let error = result.expect_err("should be error");
         assert!(
@@ -1319,20 +1386,22 @@ mod tests {
     }
 
     #[test]
-    fn test_squash_merge_invalid_target_branch() {
-        // Arrange
+    fn test_squash_merge_wrong_branch() {
+        // Arrange — repo is on main but target_branch says something else.
         let dir = tempdir().expect("failed to create temp dir");
         setup_test_git_repo(dir.path()).expect("test setup failed");
 
         // Act
         let result = squash_merge(dir.path(), "main", "nonexistent-branch", "Test merge");
 
-        // Assert
+        // Assert — should fail immediately because the current branch does not
+        // match target_branch; no git merge is attempted.
         assert!(result.is_err());
         assert!(
             result
                 .expect_err("should be error")
-                .contains("Failed to checkout")
+                .contains("Cannot merge"),
+            "Expected 'Cannot merge' error for wrong branch"
         );
     }
 
