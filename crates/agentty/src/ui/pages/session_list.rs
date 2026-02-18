@@ -175,7 +175,7 @@ where
         .fold(header.chars().count(), usize::max);
     let column_width = u16::try_from(column_width).unwrap_or(u16::MAX);
 
-    Constraint::Length(column_width)
+    Constraint::Min(column_width)
 }
 
 #[cfg(test)]
@@ -193,7 +193,7 @@ mod tests {
         let width = text_column_width("Project", project_names.into_iter());
 
         // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
+        assert_eq!(width, Constraint::Min(expected_width));
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
         let width = text_column_width("Model", models.into_iter());
 
         // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
+        assert_eq!(width, Constraint::Min(expected_width));
     }
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
         let width = mode_column_width();
 
         // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
+        assert_eq!(width, Constraint::Min(expected_width));
     }
 
     #[test]
@@ -231,7 +231,7 @@ mod tests {
         let width = size_column_width();
 
         // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
+        assert_eq!(width, Constraint::Min(expected_width));
     }
 
     #[test]
@@ -244,7 +244,7 @@ mod tests {
         let width = status_column_width();
 
         // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
+        assert_eq!(width, Constraint::Min(expected_width));
     }
 
     #[test]
