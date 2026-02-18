@@ -9,6 +9,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: clippy-fix
+        name: clippy fix
+        description: Auto-fix clippy lints where possible.
+        entry: cargo clippy --fix --allow-dirty -q --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
       - id: rustfmt
         name: rustfmt
         description: Format the code with rustfmt.
@@ -20,13 +27,6 @@ repos:
         name: cargo check
         description: Check the package for errors.
         entry: cargo check -q --all-targets --all-features
-        language: system
-        types: [rust]
-        pass_filenames: false
-      - id: clippy-fix
-        name: clippy fix
-        description: Auto-fix clippy lints where possible.
-        entry: cargo clippy --fix --allow-dirty -q --all-targets --all-features -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
