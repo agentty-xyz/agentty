@@ -263,6 +263,10 @@ impl TaskService {
                     return Ok(None);
                 }
                 Err(commit_error) => {
+                    if !Self::is_commit_error_retryable(&commit_error) {
+                        return Err(commit_error);
+                    }
+
                     if assist_attempt > AUTO_COMMIT_ASSIST_MAX_ATTEMPTS {
                         return Err(commit_error);
                     }
@@ -274,6 +278,31 @@ impl TaskService {
         }
 
         Err("Failed to auto-commit after assistance attempts".to_string())
+    }
+
+    fn is_commit_error_retryable(commit_error: &str) -> bool {
+        let normalized_error = commit_error.to_ascii_lowercase();
+        let non_retryable_patterns = [
+            "author identity unknown",
+            "unable to auto-detect email address",
+            "please tell me who you are",
+            "gpg failed to sign the data",
+            "gpg: signing failed",
+            "failed to execute git",
+            "not a git repository",
+        ];
+        if non_retryable_patterns
+            .iter()
+            .any(|pattern| normalized_error.contains(pattern))
+        {
+            return false;
+        }
+
+        let retryable_patterns = ["conflict", "unmerged", "merge"];
+
+        retryable_patterns
+            .iter()
+            .any(|pattern| normalized_error.contains(pattern))
     }
 
     async fn append_commit_assist_header(
@@ -346,7 +375,8 @@ impl TaskService {
     /// Executes one agent command for assisted edits without auto-commit.
     ///
     /// # Errors
-    /// Returns an error when spawning fails or the process is interrupted.
+    /// Returns an error when spawning fails, waiting fails, the process is
+    /// interrupted, or the command exits with a non-zero status code.
     pub(super) async fn run_agent_assist_task(
         input: RunAgentAssistTaskInput,
     ) -> Result<(), String> {
@@ -398,22 +428,57 @@ impl TaskService {
             let _ = handle.await;
         }
 
-        let exit_status = child.wait().await.ok();
-        if exit_status.is_some_and(|status| status.signal().is_some()) {
+        let exit_status = child
+            .wait()
+            .await
+            .map_err(|error| format!("Failed to wait for agent assistance process: {error}"))?;
+        let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
+        let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
+
+        if exit_status.signal().is_some() {
             let message = "\n[Stopped] Agent assistance interrupted.\n";
             Self::append_session_output(&output, &db, &app_event_tx, &id, message).await;
 
             return Err("Agent assistance interrupted".to_string());
         }
 
-        let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
-        let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
+        if !exit_status.success() {
+            return Err(Self::format_assist_exit_error(
+                exit_status.code(),
+                &stdout_text,
+                &stderr_text,
+            ));
+        }
+
         let parsed = agent.parse_response(&stdout_text, &stderr_text, permission_mode);
 
         Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content).await;
         let _ = db.update_session_stats(&id, &parsed.stats).await;
 
         Ok(())
+    }
+
+    fn format_assist_exit_error(exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
+        let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
+        let output_detail = Self::format_assist_output_detail(stdout, stderr);
+
+        format!("Agent assistance failed with exit code {exit_code}: {output_detail}")
+    }
+
+    fn format_assist_output_detail(stdout: &str, stderr: &str) -> String {
+        let trimmed_stdout = stdout.trim();
+        let trimmed_stderr = stderr.trim();
+        if !trimmed_stderr.is_empty() && !trimmed_stdout.is_empty() {
+            return format!("stderr: {trimmed_stderr}; stdout: {trimmed_stdout}");
+        }
+        if !trimmed_stderr.is_empty() {
+            return format!("stderr: {trimmed_stderr}");
+        }
+        if !trimmed_stdout.is_empty() {
+            return format!("stdout: {trimmed_stdout}");
+        }
+
+        "no stdout or stderr output".to_string()
     }
 
     /// Applies a status transition to memory and database when valid.
@@ -559,6 +624,31 @@ mod tests {
         assert_eq!(formatted, "- line one\n- line two");
     }
 
+    #[test]
+    fn test_is_commit_error_retryable_returns_false_for_identity_error() {
+        // Arrange
+        let commit_error = "Failed to commit: Author identity unknown";
+
+        // Act
+        let is_retryable = TaskService::is_commit_error_retryable(commit_error);
+
+        // Assert
+        assert!(!is_retryable);
+    }
+
+    #[test]
+    fn test_is_commit_error_retryable_returns_true_for_conflict_error() {
+        // Arrange
+        let commit_error =
+            "Failed to commit: Committing is not possible because you have unmerged files";
+
+        // Act
+        let is_retryable = TaskService::is_commit_error_retryable(commit_error);
+
+        // Assert
+        assert!(is_retryable);
+    }
+
     #[tokio::test]
     async fn test_run_agent_assist_task_appends_output_without_committing() {
         // Arrange
@@ -615,5 +705,55 @@ mod tests {
             .await
             .expect("failed to load sessions");
         assert_eq!(sessions[0].commit_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                "claude",
+                "claude-sonnet-4-20250514",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args(["-lc", "printf 'assist failed' >&2; exit 7"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Claude,
+            app_event_tx,
+            cmd: command,
+            db: database,
+            id: "session-id".to_string(),
+            output,
+            permission_mode: PermissionMode::AutoEdit,
+        })
+        .await;
+
+        // Assert
+        assert!(result.is_err());
+        let error_text = result.expect_err("expected non-zero exit to fail");
+        assert!(error_text.contains("exit code 7"));
+        assert!(error_text.contains("assist failed"));
     }
 }
