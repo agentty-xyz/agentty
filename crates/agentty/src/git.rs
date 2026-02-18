@@ -525,19 +525,25 @@ pub fn stage_all(repo_path: &Path) -> Result<(), String> {
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 /// * `commit_message` - Message for the commit
+/// * `no_verify` - When `true`, skips pre-commit and commit-msg hooks
+///   (`--no-verify`)
 ///
 /// # Returns
 /// Ok(()) on success, Err(msg) with detailed error message on failure
 ///
 /// # Errors
 /// Returns an error if staging or committing changes fails.
-pub fn commit_all(repo_path: &Path, commit_message: &str) -> Result<(), String> {
+pub fn commit_all(repo_path: &Path, commit_message: &str, no_verify: bool) -> Result<(), String> {
     // Stage all changes
     stage_all(repo_path)?;
 
     // Commit
+    let mut args = vec!["commit", "-m", commit_message];
+    if no_verify {
+        args.push("--no-verify");
+    }
     let output = Command::new("git")
-        .args(["commit", "-m", commit_message])
+        .args(&args)
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("Failed to execute git: {e}"))?;
@@ -1895,7 +1901,7 @@ mod tests {
         fs::write(dir.path().join("new_file.txt"), "new content").expect("test setup failed");
 
         // Act
-        let result = commit_all(dir.path(), "Test commit message");
+        let result = commit_all(dir.path(), "Test commit message", false);
 
         // Assert
         assert!(result.is_ok());
@@ -1917,7 +1923,7 @@ mod tests {
         setup_test_git_repo(dir.path()).expect("test setup failed");
 
         // Act - no changes to commit
-        let result = commit_all(dir.path(), "Empty commit");
+        let result = commit_all(dir.path(), "Empty commit", false);
 
         // Assert
         assert!(result.is_err());

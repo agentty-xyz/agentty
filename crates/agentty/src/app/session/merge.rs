@@ -375,7 +375,7 @@ impl SessionManager {
         let rebase_result: Result<String, String> = async {
             // Auto-commit any pending changes before rebasing to avoid
             // "cannot rebase: You have unstaged changes".
-            if let Err(error) = Self::commit_changes(&folder, &db, &id, &commit_count).await
+            if let Err(error) = Self::commit_changes(&folder, &db, &id, &commit_count, true).await
                 && !error.contains("Nothing to commit")
             {
                 return Err(format!(
@@ -865,15 +865,21 @@ impl SessionManager {
     }
 
     /// Commits all changes in a session worktree using a fixed message.
+    ///
+    /// When `no_verify` is `true`, pre-commit and commit-msg hooks are skipped.
+    /// Use this for defensive commits (e.g., before rebase) where the session
+    /// code was already validated by hooks during the normal auto-commit
+    /// flow.
     pub(crate) async fn commit_changes(
         folder: &Path,
         db: &Database,
         session_id: &str,
         commit_count: &Arc<Mutex<i64>>,
+        no_verify: bool,
     ) -> Result<String, String> {
         let folder = folder.to_path_buf();
         let commit_hash = tokio::task::spawn_blocking(move || {
-            git::commit_all(&folder, COMMIT_MESSAGE)?;
+            git::commit_all(&folder, COMMIT_MESSAGE, no_verify)?;
 
             git::head_short_hash(&folder)
         })

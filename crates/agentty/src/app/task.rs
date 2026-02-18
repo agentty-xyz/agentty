@@ -253,6 +253,7 @@ impl TaskService {
                 &context.db,
                 &context.id,
                 &context.commit_count,
+                false,
             )
             .await
             {

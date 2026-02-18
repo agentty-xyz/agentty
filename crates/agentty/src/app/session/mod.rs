@@ -1703,7 +1703,7 @@ mod tests {
         let session_folder = app.sessions.sessions[0].folder.clone();
         std::fs::write(session_folder.join("session-change.txt"), "change")
             .expect("failed to write worktree change");
-        git::commit_all(&session_folder, "Test merge commit")
+        git::commit_all(&session_folder, "Test merge commit", false)
             .expect("failed to commit session changes");
         let branch_name = session_branch(&session_id);
 
