@@ -60,6 +60,23 @@ struct AutoCommitAssistContext {
     session_model: String,
 }
 
+/// Shared context for streaming incremental agent output as it arrives.
+#[derive(Clone)]
+pub(super) struct StreamOutputContext {
+    agent: AgentKind,
+    app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    db: Database,
+    id: String,
+    output: Arc<Mutex<String>>,
+    streamed_response_seen: Arc<AtomicBool>,
+}
+
+struct CapturedOutput {
+    stderr_text: String,
+    streamed_response_seen: bool,
+    stdout_text: String,
+}
+
 impl TaskService {
     /// Spawns a background loop that periodically refreshes ahead/behind info.
     ///
@@ -138,30 +155,9 @@ impl TaskService {
                     *guard = Some(pid);
                 }
 
-                let stdout = child.stdout.take();
-                let stderr = child.stderr.take();
-
-                let raw_stdout = Arc::new(Mutex::new(String::new()));
-                let raw_stderr = Arc::new(Mutex::new(String::new()));
-                let mut handles = Vec::new();
-
-                if let Some(stdout) = stdout {
-                    let buffer = Arc::clone(&raw_stdout);
-                    handles.push(tokio::spawn(async move {
-                        Self::capture_raw_output(stdout, &buffer).await;
-                    }));
-                }
-
-                if let Some(stderr) = stderr {
-                    let buffer = Arc::clone(&raw_stderr);
-                    handles.push(tokio::spawn(async move {
-                        Self::capture_raw_output(stderr, &buffer).await;
-                    }));
-                }
-
-                for handle in handles {
-                    let _ = handle.await;
-                }
+                let captured =
+                    Self::capture_child_output(&mut child, agent, &app_event_tx, &db, &id, &output)
+                        .await;
                 let exit_status = child.wait().await.ok();
 
                 if let Ok(mut guard) = child_pid.lock() {
@@ -176,11 +172,21 @@ impl TaskService {
                     let message = "\n[Stopped] Agent interrupted by user.\n";
                     Self::append_session_output(&output, &db, &app_event_tx, &id, message).await;
                 } else {
-                    let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
-                    let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
-                    let parsed = agent.parse_response(&stdout_text, &stderr_text, permission_mode);
-                    Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content)
+                    let parsed = agent.parse_response(
+                        &captured.stdout_text,
+                        &captured.stderr_text,
+                        permission_mode,
+                    );
+                    if !captured.streamed_response_seen {
+                        Self::append_session_output(
+                            &output,
+                            &db,
+                            &app_event_tx,
+                            &id,
+                            &parsed.content,
+                        )
                         .await;
+                    }
 
                     let _ = db.update_session_stats(&id, &parsed.stats).await;
                     Self::handle_auto_commit(AutoCommitAssistContext {
@@ -388,37 +394,13 @@ impl TaskService {
             }
         };
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let raw_stdout = Arc::new(Mutex::new(String::new()));
-        let raw_stderr = Arc::new(Mutex::new(String::new()));
-        let mut handles = Vec::new();
-
-        if let Some(stdout) = stdout {
-            let buffer = Arc::clone(&raw_stdout);
-            handles.push(tokio::spawn(async move {
-                Self::capture_raw_output(stdout, &buffer).await;
-            }));
-        }
-
-        if let Some(stderr) = stderr {
-            let buffer = Arc::clone(&raw_stderr);
-            handles.push(tokio::spawn(async move {
-                Self::capture_raw_output(stderr, &buffer).await;
-            }));
-        }
-
-        for handle in handles {
-            let _ = handle.await;
-        }
+        let captured =
+            Self::capture_child_output(&mut child, agent, &app_event_tx, &db, &id, &output).await;
 
         let exit_status = child
             .wait()
             .await
             .map_err(|error| format!("Failed to wait for agent assistance process: {error}"))?;
-        let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
-        let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
 
         if exit_status.signal().is_some() {
             let message = "\n[Stopped] Agent assistance interrupted.\n";
@@ -430,17 +412,75 @@ impl TaskService {
         if !exit_status.success() {
             return Err(Self::format_assist_exit_error(
                 exit_status.code(),
-                &stdout_text,
-                &stderr_text,
+                &captured.stdout_text,
+                &captured.stderr_text,
             ));
         }
 
-        let parsed = agent.parse_response(&stdout_text, &stderr_text, permission_mode);
+        let parsed = agent.parse_response(
+            &captured.stdout_text,
+            &captured.stderr_text,
+            permission_mode,
+        );
 
-        Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content).await;
+        if !captured.streamed_response_seen {
+            Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content).await;
+        }
         let _ = db.update_session_stats(&id, &parsed.stats).await;
 
         Ok(())
+    }
+
+    async fn capture_child_output(
+        child: &mut tokio::process::Child,
+        agent: AgentKind,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        db: &Database,
+        id: &str,
+        output: &Arc<Mutex<String>>,
+    ) -> CapturedOutput {
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let raw_stdout = Arc::new(Mutex::new(String::new()));
+        let raw_stderr = Arc::new(Mutex::new(String::new()));
+        let mut handles = Vec::new();
+        let streamed_response_seen = Arc::new(AtomicBool::new(false));
+
+        if let Some(stdout) = stdout {
+            let buffer = Arc::clone(&raw_stdout);
+            let stream_context = StreamOutputContext {
+                agent,
+                app_event_tx: app_event_tx.clone(),
+                db: db.clone(),
+                id: id.to_string(),
+                output: Arc::clone(output),
+                streamed_response_seen: Arc::clone(&streamed_response_seen),
+            };
+            handles.push(tokio::spawn(async move {
+                Self::capture_raw_output(stdout, &buffer, Some(stream_context)).await;
+            }));
+        }
+
+        if let Some(stderr) = stderr {
+            let buffer = Arc::clone(&raw_stderr);
+            handles.push(tokio::spawn(async move {
+                Self::capture_raw_output(stderr, &buffer, None).await;
+            }));
+        }
+
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
+        let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
+
+        CapturedOutput {
+            stderr_text,
+            streamed_response_seen: streamed_response_seen.load(Ordering::Relaxed),
+            stdout_text,
+        }
     }
 
     fn format_assist_exit_error(exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
@@ -505,12 +545,40 @@ impl TaskService {
     pub(super) async fn capture_raw_output<R: AsyncRead + Unpin>(
         source: R,
         buffer: &Arc<Mutex<String>>,
+        stream_context: Option<StreamOutputContext>,
     ) {
         let mut reader = tokio::io::BufReader::new(source).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             if let Ok(mut buf) = buffer.lock() {
                 buf.push_str(&line);
                 buf.push('\n');
+            }
+
+            let Some(stream_context) = &stream_context else {
+                continue;
+            };
+            let Some((stream_text, is_response_content)) =
+                stream_context.agent.parse_stream_output_line(&line)
+            else {
+                continue;
+            };
+            if stream_text.trim().is_empty() {
+                continue;
+            }
+
+            let formatted_stream_text = format!("{stream_text}\n");
+            Self::append_session_output(
+                &stream_context.output,
+                &stream_context.db,
+                &stream_context.app_event_tx,
+                &stream_context.id,
+                &formatted_stream_text,
+            )
+            .await;
+            if is_response_content {
+                stream_context
+                    .streamed_response_seen
+                    .store(true, Ordering::Relaxed);
             }
         }
     }
@@ -702,6 +770,74 @@ mod tests {
             .await
             .expect("failed to load sessions");
         assert_eq!(sessions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_streams_codex_output_without_duplication() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                "codex",
+                "gpt-5.3-codex",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-lc",
+                "printf '%s\\n' \
+                 '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}' \
+                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
+                 Final answer\"}}' \
+                 '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
+                 7}}'",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Codex,
+            app_event_tx,
+            cmd: command,
+            db: database.clone(),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            permission_mode: PermissionMode::AutoEdit,
+        })
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "assist task should succeed: {:?}",
+            result.err()
+        );
+        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+        assert!(output_text.contains("[command_execution] in progress..."));
+        assert_eq!(output_text.matches("Final answer").count(), 1);
+        let sessions = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert_eq!(sessions[0].input_tokens, Some(11));
+        assert_eq!(sessions[0].output_tokens, Some(7));
     }
 
     #[tokio::test]

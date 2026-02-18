@@ -1544,7 +1544,7 @@ mod tests {
         let source = "Line 1\nLine 2".as_bytes();
 
         // Act
-        crate::app::task::TaskService::capture_raw_output(source, &buffer).await;
+        crate::app::task::TaskService::capture_raw_output(source, &buffer, None).await;
 
         // Assert
         let out = buffer.lock().expect("failed to lock buffer").clone();

@@ -471,6 +471,18 @@ impl AgentKind {
         })
     }
 
+    /// Extracts a displayable incremental stream update from one stdout line.
+    ///
+    /// The returned tuple is `(text, is_response_content)`, where
+    /// `is_response_content` is `true` when `text` is model-authored content
+    /// that should prevent duplicate final output append.
+    pub(crate) fn parse_stream_output_line(self, stdout_line: &str) -> Option<(String, bool)> {
+        match self {
+            Self::Codex => Self::parse_codex_stream_output_line(stdout_line),
+            Self::Claude | Self::Gemini => None,
+        }
+    }
+
     fn parse_claude_response(
         stdout: &str,
         permission_mode: PermissionMode,
@@ -584,6 +596,35 @@ impl AgentKind {
         };
 
         last_message.map(|content| ParsedResponse { content, stats })
+    }
+
+    fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
+        let trimmed = stdout_line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let event = serde_json::from_str::<CodexEvent>(trimmed).ok()?;
+        let event_type = event.event_type.as_deref()?;
+
+        if event_type == "item.started" {
+            let item_type = event.item?.item_type?;
+
+            return Some((format!("[{item_type}] in progress..."), false));
+        }
+
+        if event_type != "item.completed" {
+            return None;
+        }
+
+        let item = event.item?;
+        let item_type = item.item_type.as_deref()?;
+        if item_type == "agent_message" {
+            let text = item.text?;
+
+            return Some((text, true));
+        }
+
+        Some((format!("[{item_type}] completed"), false))
     }
 
     fn fallback_response(stdout: &str, stderr: &str) -> String {
@@ -1232,6 +1273,46 @@ mod tests {
 
         // Assert — falls back to raw stdout
         assert!(result.content.contains("thread.started"));
+    }
+
+    #[test]
+    fn test_codex_parse_stream_output_line_for_item_started() {
+        // Arrange
+        let line = r#"{"type":"item.started","item":{"type":"command_execution"}}"#;
+
+        // Act
+        let streamed = AgentKind::Codex.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(
+            streamed,
+            Some(("[command_execution] in progress...".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn test_codex_parse_stream_output_line_for_agent_message() {
+        // Arrange
+        let line =
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Partial answer"}}"#;
+
+        // Act
+        let streamed = AgentKind::Codex.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(streamed, Some(("Partial answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_claude_parse_stream_output_line_returns_none() {
+        // Arrange
+        let line = r#"{"type":"item.started","item":{"type":"command_execution"}}"#;
+
+        // Act
+        let streamed = AgentKind::Claude.parse_stream_output_line(line);
+
+        // Assert
+        assert!(streamed.is_none());
     }
 
     #[test]
