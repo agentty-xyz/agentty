@@ -247,7 +247,7 @@ mod tests {
         std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
         app.sessions.handles.insert(
             id.to_string(),
-            SessionHandles::new(String::new(), Status::Review, 0),
+            SessionHandles::new(String::new(), Status::Review),
         );
         app.sessions.sessions.push(Session {
             agent: "gemini".to_string(),
@@ -1468,6 +1468,7 @@ mod tests {
 
         // Act — wait for agent to finish and auto-commit
         wait_for_status(&mut app, &session_id, Status::Review).await;
+        app.refresh_sessions_now().await;
 
         // Assert — output should contain commit confirmation
         let session = &app.sessions.sessions[0];
@@ -1906,7 +1907,7 @@ mod tests {
         );
 
         // Verify commit count incremented
-        app.sessions.sync_from_handles();
+        app.refresh_sessions_now().await;
         assert_eq!(app.sessions.sessions[0].commit_count, 1);
     }
 

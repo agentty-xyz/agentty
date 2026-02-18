@@ -19,3 +19,4 @@ SQLite migrations for the `agentty` crate.
 - [014_add_size_to_session.sql](014_add_size_to_session.sql) - Adds persisted `size` bucket to `session`.
 - [015_add_summary_to_session.sql](015_add_summary_to_session.sql) - Adds persisted terminal `summary` text to `session`.
 - [016_backfill_summary_with_output.sql](016_backfill_summary_with_output.sql) - Backfills missing terminal `summary` values from persisted `output`.
+- [017_drop_commit_count_from_session.sql](017_drop_commit_count_from_session.sql) - Drops persisted `commit_count` from `session`.

@@ -56,7 +56,6 @@ impl SessionCommand {
 struct SessionWorkerContext {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     child_pid: Arc<Mutex<Option<u32>>>,
-    commit_count: Arc<Mutex<i64>>,
     db: Database,
     folder: PathBuf,
     output: Arc<Mutex<String>>,
@@ -138,7 +137,6 @@ impl SessionManager {
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
             child_pid: Arc::clone(&handles.child_pid),
-            commit_count: Arc::clone(&handles.commit_count),
             db: services.db().clone(),
             folder: session.folder.clone(),
             output: Arc::clone(&handles.output),
@@ -184,7 +182,6 @@ impl SessionManager {
                             app_event_tx: context.app_event_tx.clone(),
                             child_pid: Arc::clone(&context.child_pid),
                             cmd: command,
-                            commit_count: Arc::clone(&context.commit_count),
                             db: context.db.clone(),
                             folder: context.folder.clone(),
                             id: context.session_id.clone(),
@@ -216,7 +213,6 @@ impl SessionManager {
                             app_event_tx: context.app_event_tx.clone(),
                             child_pid: Arc::clone(&context.child_pid),
                             cmd: command,
-                            commit_count: Arc::clone(&context.commit_count),
                             db: context.db.clone(),
                             folder: context.folder.clone(),
                             id: context.session_id.clone(),
@@ -373,7 +369,6 @@ mod tests {
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             child_pid: Arc::new(Mutex::new(None)),
-            commit_count: Arc::new(Mutex::new(0)),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             output: Arc::new(Mutex::new(String::new())),

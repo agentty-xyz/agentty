@@ -154,10 +154,6 @@ impl SessionState {
         if let Ok(status) = session_handles.status.lock() {
             session.status = *status;
         }
-
-        if let Ok(count) = session_handles.commit_count.lock() {
-            session.commit_count = *count;
-        }
     }
 }
 

@@ -745,8 +745,8 @@ pub struct SessionStats {
 
 /// Pure data model for a session, used across UI rendering and persistence.
 ///
-/// Live runtime state (output streaming, status transitions, commit counting)
-/// is managed separately via [`SessionHandles`] in `SessionState`.
+/// Live runtime state (output streaming and status transitions) is managed
+/// separately via [`SessionHandles`] in `SessionState`.
 pub struct Session {
     pub agent: String,
     pub base_branch: String,
@@ -778,17 +778,15 @@ impl Session {
 /// while the UI reads snapshots via `SessionState::sync_from_handles()`.
 pub struct SessionHandles {
     pub child_pid: Arc<Mutex<Option<u32>>>,
-    pub commit_count: Arc<Mutex<i64>>,
     pub output: Arc<Mutex<String>>,
     pub status: Arc<Mutex<Status>>,
 }
 
 impl SessionHandles {
     /// Creates handles initialized with the given values.
-    pub fn new(output: String, status: Status, commit_count: i64) -> Self {
+    pub fn new(output: String, status: Status) -> Self {
         Self {
             child_pid: Arc::new(Mutex::new(None)),
-            commit_count: Arc::new(Mutex::new(commit_count)),
             output: Arc::new(Mutex::new(output)),
             status: Arc::new(Mutex::new(status)),
         }
@@ -933,7 +931,7 @@ mod tests {
     #[test]
     fn test_session_handles_append_output() {
         // Arrange
-        let handles = SessionHandles::new(String::new(), Status::Done, 0);
+        let handles = SessionHandles::new(String::new(), Status::Done);
 
         // Act
         handles.append_output("[Test] Hello\n");

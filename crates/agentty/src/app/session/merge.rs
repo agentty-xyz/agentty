@@ -70,7 +70,6 @@ struct RebaseAssistInput {
 struct RebaseTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
-    commit_count: Arc<Mutex<i64>>,
     db: Database,
     folder: PathBuf,
     id: String,
@@ -321,7 +320,6 @@ impl SessionManager {
             .session_handles_or_err(session_id)
             .map_err(|_| SESSION_HANDLES_NOT_FOUND_ERROR.to_string())?;
         let output = Arc::clone(&handles.output);
-        let commit_count = Arc::clone(&handles.commit_count);
 
         let status = Arc::clone(&handles.status);
         let db = services.db().clone();
@@ -340,7 +338,6 @@ impl SessionManager {
         let rebase_task_input = RebaseTaskInput {
             app_event_tx,
             base_branch,
-            commit_count,
             db,
             folder: session.folder.clone(),
             id,
@@ -361,7 +358,6 @@ impl SessionManager {
         let RebaseTaskInput {
             app_event_tx,
             base_branch,
-            commit_count,
             db,
             folder,
             id,
@@ -375,7 +371,7 @@ impl SessionManager {
         let rebase_result: Result<String, String> = async {
             // Auto-commit any pending changes before rebasing to avoid
             // "cannot rebase: You have unstaged changes".
-            if let Err(error) = Self::commit_changes(&folder, &db, &id, &commit_count, true).await
+            if let Err(error) = Self::commit_changes(&folder, true).await
                 && !error.contains("Nothing to commit")
             {
                 return Err(format!(
@@ -870,13 +866,7 @@ impl SessionManager {
     /// Use this for defensive commits (e.g., before rebase) where the session
     /// code was already validated by hooks during the normal auto-commit
     /// flow.
-    pub(crate) async fn commit_changes(
-        folder: &Path,
-        db: &Database,
-        session_id: &str,
-        commit_count: &Arc<Mutex<i64>>,
-        no_verify: bool,
-    ) -> Result<String, String> {
+    pub(crate) async fn commit_changes(folder: &Path, no_verify: bool) -> Result<String, String> {
         let folder = folder.to_path_buf();
         let commit_hash = tokio::task::spawn_blocking(move || {
             git::commit_all(&folder, COMMIT_MESSAGE, no_verify)?;
@@ -885,11 +875,6 @@ impl SessionManager {
         })
         .await
         .map_err(|error| format!("Join error: {error}"))??;
-
-        if let Ok(mut count) = commit_count.lock() {
-            *count += 1;
-        }
-        let _ = db.increment_session_commit_count(session_id).await;
 
         Ok(commit_hash)
     }

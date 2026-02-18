@@ -29,7 +29,6 @@ pub(super) struct RunSessionTaskInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     pub(super) cmd: Command,
-    pub(super) commit_count: Arc<Mutex<i64>>,
     pub(super) db: Database,
     pub(super) folder: PathBuf,
     pub(super) id: String,
@@ -53,7 +52,6 @@ pub(super) struct RunAgentAssistTaskInput {
 struct AutoCommitAssistContext {
     agent: AgentKind,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    commit_count: Arc<Mutex<i64>>,
     db: Database,
     folder: PathBuf,
     id: String,
@@ -115,7 +113,6 @@ impl TaskService {
             app_event_tx,
             child_pid,
             cmd,
-            commit_count,
             db,
             folder,
             id,
@@ -189,7 +186,6 @@ impl TaskService {
                     Self::handle_auto_commit(AutoCommitAssistContext {
                         agent,
                         app_event_tx: app_event_tx.clone(),
-                        commit_count,
                         db: db.clone(),
                         folder,
                         id: id.clone(),
@@ -248,15 +244,7 @@ impl TaskService {
         context: &AutoCommitAssistContext,
     ) -> Result<Option<String>, String> {
         for assist_attempt in 1..=AUTO_COMMIT_ASSIST_MAX_ATTEMPTS + 1 {
-            match SessionManager::commit_changes(
-                &context.folder,
-                &context.db,
-                &context.id,
-                &context.commit_count,
-                false,
-            )
-            .await
-            {
+            match SessionManager::commit_changes(&context.folder, false).await {
                 Ok(commit_hash) => {
                     return Ok(Some(commit_hash));
                 }
@@ -713,7 +701,7 @@ mod tests {
             .load_sessions()
             .await
             .expect("failed to load sessions");
-        assert_eq!(sessions[0].commit_count, 0);
+        assert_eq!(sessions.len(), 1);
     }
 
     #[tokio::test]

@@ -61,13 +61,10 @@ impl SessionManager {
                 if let Ok(mut status_value) = existing.status.lock() {
                     *status_value = status;
                 }
-                if let Ok(mut count) = existing.commit_count.lock() {
-                    *count = row.commit_count;
-                }
             } else {
                 handles.insert(
                     row.id.clone(),
-                    SessionHandles::new(row.output.clone(), status, row.commit_count),
+                    SessionHandles::new(row.output.clone(), status),
                 );
             }
 
@@ -81,11 +78,13 @@ impl SessionManager {
 
                 computed_size
             };
+            let commit_count =
+                Self::session_commit_count_for_folder(&folder, &row.base_branch).await;
 
             sessions.push(Session {
                 agent: row.agent,
                 base_branch: row.base_branch,
-                commit_count: row.commit_count,
+                commit_count,
                 folder,
                 id: row.id,
                 model: session_model,
@@ -121,5 +120,19 @@ impl SessionManager {
             .unwrap_or_default();
 
         SessionSize::from_diff(&diff)
+    }
+
+    async fn session_commit_count_for_folder(folder: &Path, base_branch: &str) -> i64 {
+        if !folder.is_dir() {
+            return 0;
+        }
+
+        let folder = folder.to_path_buf();
+        let base_branch = base_branch.to_string();
+        tokio::task::spawn_blocking(move || git::count_commits_since_base(&folder, &base_branch))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or(0)
     }
 }
