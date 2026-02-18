@@ -259,8 +259,9 @@ impl<'a> SessionChatPage<'a> {
         plan_followup_action: Option<PlanFollowupAction>,
     ) -> Vec<Line<'static>> {
         let output_text = Self::output_text(session, status);
+        let output_text = Self::output_text_with_spaced_user_input(output_text);
         let inner_width = output_area.width.saturating_sub(2) as usize;
-        let mut lines = wrap_lines(output_text, inner_width)
+        let mut lines = wrap_lines(&output_text, inner_width)
             .into_iter()
             .map(|line| Line::from(line.to_string()))
             .collect::<Vec<_>>();
@@ -312,6 +313,34 @@ impl<'a> SessionChatPage<'a> {
         }
 
         &session.output
+    }
+
+    fn output_text_with_spaced_user_input(output_text: &str) -> String {
+        let raw_lines = output_text.split('\n').collect::<Vec<_>>();
+        let mut formatted_lines = Vec::with_capacity(raw_lines.len());
+
+        for (index, line) in raw_lines.iter().enumerate() {
+            let is_user_input = line.starts_with(" › ");
+            if is_user_input
+                && formatted_lines
+                    .last()
+                    .is_some_and(|item: &String| !item.is_empty())
+            {
+                formatted_lines.push(String::new());
+            }
+
+            formatted_lines.push((*line).to_string());
+
+            if is_user_input {
+                let next_line_is_empty =
+                    raw_lines.get(index + 1).is_some_and(|next| next.is_empty());
+                if !next_line_is_empty {
+                    formatted_lines.push(String::new());
+                }
+            }
+        }
+
+        formatted_lines.join("\n")
     }
 
     fn plan_followup_action_line(selected_action: PlanFollowupAction) -> Line<'static> {
@@ -810,6 +839,33 @@ mod tests {
         let len = lines.len();
         assert!(lines[len - 2].to_string().is_empty());
         assert!(lines[len - 1].to_string().contains("Thinking..."));
+    }
+
+    #[test]
+    fn test_output_text_with_spaced_user_input_adds_empty_line_before_and_after() {
+        // Arrange
+        let output = "assistant output\n › user prompt\nagent response";
+
+        // Act
+        let spaced = SessionChatPage::output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(
+            spaced,
+            "assistant output\n\n › user prompt\n\nagent response"
+        );
+    }
+
+    #[test]
+    fn test_output_text_with_spaced_user_input_keeps_existing_empty_lines() {
+        // Arrange
+        let output = "assistant output\n\n › user prompt\n\nagent response";
+
+        // Act
+        let spaced = SessionChatPage::output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(spaced, output);
     }
 
     #[test]
