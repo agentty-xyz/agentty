@@ -353,10 +353,11 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
 
     let session_folder = session.folder.clone();
     let base_branch = session.base_branch.clone();
-    let diff = tokio::task::spawn_blocking(move || git::diff(&session_folder, &base_branch))
+
+    let diff = git::diff(session_folder, base_branch)
         .await
-        .unwrap_or_else(|join_error| Err(join_error.to_string()))
         .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
+
     app.mode = AppMode::Diff {
         session_id: view_context.session_id.clone(),
         diff,

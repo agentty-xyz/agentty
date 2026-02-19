@@ -110,10 +110,9 @@ impl SessionManager {
 
         let folder = folder.to_path_buf();
         let base_branch = base_branch.to_string();
-        let diff = tokio::task::spawn_blocking(move || git::diff(&folder, &base_branch))
+        let diff = git::diff(folder, base_branch)
             .await
             .ok()
-            .and_then(Result::ok)
             .unwrap_or_default();
 
         SessionSize::from_diff(&diff)
@@ -126,10 +125,8 @@ impl SessionManager {
 
         let folder = folder.to_path_buf();
         let base_branch = base_branch.to_string();
-        tokio::task::spawn_blocking(move || git::count_commits_since_base(&folder, &base_branch))
+        git::count_commits_since_base(folder, base_branch)
             .await
-            .ok()
-            .and_then(Result::ok)
             .unwrap_or(0)
     }
 }

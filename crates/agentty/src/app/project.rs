@@ -109,17 +109,17 @@ impl ProjectManager {
         let Some(parent) = working_dir.parent() else {
             return;
         };
-        let Ok(entries) = std::fs::read_dir(parent) else {
+        let Ok(mut entries) = tokio::fs::read_dir(parent).await else {
             return;
         };
 
-        for entry in entries.flatten() {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if !path.is_dir() || path == working_dir {
                 continue;
             }
             if path.join(".git").exists() {
-                let branch = git::detect_git_info(&path);
+                let branch = git::detect_git_info(path.clone()).await;
                 let _ = db
                     .upsert_project(&path.to_string_lossy(), branch.as_deref())
                     .await;

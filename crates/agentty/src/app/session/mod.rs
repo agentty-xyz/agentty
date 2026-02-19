@@ -1648,8 +1648,13 @@ mod tests {
         let session_folder = app.sessions.sessions[0].folder.clone();
         std::fs::write(session_folder.join("session-change.txt"), "change")
             .expect("failed to write worktree change");
-        git::commit_all(&session_folder, "Test merge commit", false)
-            .expect("failed to commit session changes");
+        git::commit_all(
+            session_folder.clone(),
+            "Test merge commit".to_string(),
+            false,
+        )
+        .await
+        .expect("failed to commit session changes");
         let branch_name = session_branch(&session_id);
 
         // Act
@@ -1943,8 +1948,14 @@ mod tests {
         setup_test_git_repo(dir.path());
         let worktree_folder = dir.path().join("merged-worktree");
         let branch_name = "agentty/cleanup123";
-        git::create_worktree(dir.path(), &worktree_folder, branch_name, "main")
-            .expect("failed to create worktree");
+        git::create_worktree(
+            dir.path().to_path_buf(),
+            worktree_folder.clone(),
+            branch_name.to_string(),
+            "main".to_string(),
+        )
+        .await
+        .expect("failed to create worktree");
         assert!(
             worktree_folder.exists(),
             "worktree should exist before cleanup"

@@ -132,7 +132,8 @@ impl SessionManager {
             }
         };
 
-        let Some(repo_root) = git::find_git_repo_root(projects.working_dir()) else {
+        let working_dir = projects.working_dir().to_path_buf();
+        let Some(repo_root) = git::find_git_repo_root(working_dir).await else {
             let _ =
                 TaskService::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
@@ -188,12 +189,9 @@ impl SessionManager {
                 let source_branch = source_branch.clone();
                 let base_branch = base_branch.clone();
 
-                tokio::task::spawn_blocking(move || {
-                    git::squash_merge_diff(&repo_root, &source_branch, &base_branch)
-                })
-                .await
-                .map_err(|error| format!("Join error: {error}"))?
-                .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
+                git::squash_merge_diff(repo_root, source_branch, base_branch)
+                    .await
+                    .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
             };
 
             let fallback_commit_message =
@@ -222,11 +220,7 @@ impl SessionManager {
                 let source_branch = source_branch.clone();
                 let base_branch = base_branch.clone();
                 let commit_message = commit_message.clone();
-                tokio::task::spawn_blocking(move || {
-                    git::squash_merge(&repo_root, &source_branch, &base_branch, &commit_message)
-                })
-                .await
-                .map_err(|error| format!("Join error: {error}"))??;
+                git::squash_merge(repo_root, source_branch, base_branch, commit_message).await?;
             }
 
             // Reuse the pre-merge diff since the worktree is now merged and clean.
@@ -555,10 +549,7 @@ impl SessionManager {
     /// Returns an error if git state cannot be queried.
     async fn is_rebase_in_progress(input: &RebaseAssistInput) -> Result<bool, String> {
         let folder = input.folder.clone();
-        let is_rebase_in_progress =
-            tokio::task::spawn_blocking(move || git::is_rebase_in_progress(&folder))
-                .await
-                .map_err(|error| format!("Join error: {error}"))??;
+        let is_rebase_in_progress = git::is_rebase_in_progress(folder).await?;
 
         Ok(is_rebase_in_progress)
     }
@@ -571,9 +562,7 @@ impl SessionManager {
     async fn run_rebase_start(input: &RebaseAssistInput) -> Result<git::RebaseStepResult, String> {
         let folder = input.folder.clone();
         let base_branch = input.base_branch.clone();
-        let result = tokio::task::spawn_blocking(move || git::rebase_start(&folder, &base_branch))
-            .await
-            .map_err(|error| format!("Join error: {error}"))??;
+        let result = git::rebase_start(folder, base_branch).await?;
 
         Ok(result)
     }
@@ -584,10 +573,7 @@ impl SessionManager {
     /// Returns an error if conflicted files cannot be queried via git.
     async fn load_conflicted_files(input: &RebaseAssistInput) -> Result<Vec<String>, String> {
         let folder = input.folder.clone();
-        let conflicted_files =
-            tokio::task::spawn_blocking(move || git::list_conflicted_files(&folder))
-                .await
-                .map_err(|error| format!("Join error: {error}"))??;
+        let conflicted_files = git::list_conflicted_files(folder).await?;
 
         Ok(conflicted_files)
     }
@@ -634,15 +620,10 @@ impl SessionManager {
     /// Returns an error when staging or unresolved-path checks fail.
     async fn stage_and_check_unmerged_paths(input: &RebaseAssistInput) -> Result<bool, String> {
         let folder = input.folder.clone();
-        tokio::task::spawn_blocking(move || git::stage_all(&folder))
-            .await
-            .map_err(|error| format!("Join error: {error}"))??;
+        git::stage_all(folder).await?;
 
         let folder = input.folder.clone();
-        let has_unmerged_paths =
-            tokio::task::spawn_blocking(move || git::has_unmerged_paths(&folder))
-                .await
-                .map_err(|error| format!("Join error: {error}"))??;
+        let has_unmerged_paths = git::has_unmerged_paths(folder).await?;
 
         Ok(has_unmerged_paths)
     }
@@ -655,9 +636,7 @@ impl SessionManager {
         input: &RebaseAssistInput,
     ) -> Result<git::RebaseStepResult, String> {
         let folder = input.folder.clone();
-        let result = tokio::task::spawn_blocking(move || git::rebase_continue(&folder))
-            .await
-            .map_err(|error| format!("Join error: {error}"))??;
+        let result = git::rebase_continue(folder).await?;
 
         Ok(result)
     }
@@ -703,7 +682,7 @@ impl SessionManager {
     /// Aborts rebase after assistance fails to keep worktree state clean.
     async fn abort_rebase_after_assist_failure(session_folder: &Path) {
         let folder = session_folder.to_path_buf();
-        let _ = tokio::task::spawn_blocking(move || git::abort_rebase(&folder)).await;
+        let _ = git::abort_rebase(folder).await;
     }
 
     fn generate_merge_commit_message_from_diff(
@@ -797,21 +776,17 @@ impl SessionManager {
         source_branch: String,
         repo_root: Option<PathBuf>,
     ) -> Result<(), String> {
-        tokio::task::spawn_blocking(move || {
-            let repo_root = repo_root.or_else(|| Self::resolve_repo_root_from_worktree(&folder));
+        let repo_root = repo_root.or_else(|| Self::resolve_repo_root_from_worktree(&folder));
 
-            git::remove_worktree(&folder)?;
+        git::remove_worktree(folder.clone()).await?;
 
-            if let Some(repo_root) = repo_root {
-                git::delete_branch(&repo_root, &source_branch)?;
-            }
+        if let Some(repo_root) = repo_root {
+            git::delete_branch(repo_root, source_branch).await?;
+        }
 
-            let _ = std::fs::remove_dir_all(&folder);
+        let _ = tokio::fs::remove_dir_all(&folder).await;
 
-            Ok(())
-        })
-        .await
-        .map_err(|error| format!("Join error: {error}"))?
+        Ok(())
     }
 
     /// Resolves a repository root path from a git worktree path.
@@ -845,15 +820,9 @@ impl SessionManager {
     /// flow.
     pub(crate) async fn commit_changes(folder: &Path, no_verify: bool) -> Result<String, String> {
         let folder = folder.to_path_buf();
-        let commit_hash = tokio::task::spawn_blocking(move || {
-            git::commit_all(&folder, COMMIT_MESSAGE, no_verify)?;
+        git::commit_all(folder.clone(), COMMIT_MESSAGE.to_string(), no_verify).await?;
 
-            git::head_short_hash(&folder)
-        })
-        .await
-        .map_err(|error| format!("Join error: {error}"))??;
-
-        Ok(commit_hash)
+        git::head_short_hash(folder).await
     }
 
     async fn build_terminal_session_summary_from_diff(

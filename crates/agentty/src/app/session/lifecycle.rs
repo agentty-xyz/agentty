@@ -85,7 +85,9 @@ impl SessionManager {
         }
 
         let worktree_branch = session_branch(&session_id);
-        let repo_root = git::find_git_repo_root(projects.working_dir())
+        let working_dir = projects.working_dir().to_path_buf();
+        let repo_root = git::find_git_repo_root(working_dir)
+            .await
             .ok_or_else(|| "Failed to find git repository root".to_string())?;
 
         {
@@ -93,16 +95,13 @@ impl SessionManager {
             let repo_root = repo_root.clone();
             let worktree_branch = worktree_branch.clone();
             let base_branch = base_branch.to_string();
-            tokio::task::spawn_blocking(move || {
-                git::create_worktree(&repo_root, &folder, &worktree_branch, &base_branch)
-            })
-            .await
-            .map_err(|error| format!("Join error: {error}"))?
-            .map_err(|error| format!("Failed to create git worktree: {error}"))?;
+            git::create_worktree(repo_root, folder, worktree_branch, base_branch)
+                .await
+                .map_err(|error| format!("Failed to create git worktree: {error}"))?;
         }
 
         let data_dir = folder.join(SESSION_DATA_DIR);
-        if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        if let Err(error) = tokio::fs::create_dir_all(&data_dir).await {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -454,24 +453,19 @@ impl SessionManager {
 
         if projects.has_git_branch() {
             let branch_name = session_branch(&session.id);
+            let working_dir = projects.working_dir().to_path_buf();
 
-            if let Some(repo_root) = git::find_git_repo_root(projects.working_dir()) {
+            if let Some(repo_root) = git::find_git_repo_root(working_dir).await {
                 let folder = session.folder.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = git::remove_worktree(&folder);
-                    let _ = git::delete_branch(&repo_root, &branch_name);
-                })
-                .await;
+                let _ = git::remove_worktree(folder).await;
+                let _ = git::delete_branch(repo_root, branch_name).await;
             } else {
                 let folder = session.folder.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = git::remove_worktree(&folder);
-                })
-                .await;
+                let _ = git::remove_worktree(folder).await;
             }
         }
 
-        let _ = std::fs::remove_dir_all(&session.folder);
+        let _ = tokio::fs::remove_dir_all(&session.folder).await;
         services.emit_app_event(AppEvent::RefreshSessions);
     }
 
@@ -683,14 +677,11 @@ impl SessionManager {
             let folder = folder.to_path_buf();
             let repo_root = repo_root.to_path_buf();
             let worktree_branch = worktree_branch.to_string();
-            let _ = tokio::task::spawn_blocking(move || {
-                let _ = git::remove_worktree(&folder);
-                let _ = git::delete_branch(&repo_root, &worktree_branch);
-            })
-            .await;
+            let _ = git::remove_worktree(folder).await;
+            let _ = git::delete_branch(repo_root, worktree_branch).await;
         }
 
-        let _ = std::fs::remove_dir_all(folder);
+        let _ = tokio::fs::remove_dir_all(folder).await;
     }
 
     /// Appends text to a specific session output stream.

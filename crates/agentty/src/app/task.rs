@@ -93,21 +93,18 @@ impl TaskService {
     ) {
         let dir = working_dir.to_path_buf();
         tokio::spawn(async move {
-            let repo_root = git::find_git_repo_root(&dir).unwrap_or(dir);
+            let repo_root = git::find_git_repo_root(dir.clone()).await.unwrap_or(dir);
             loop {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 {
                     let root = repo_root.clone();
-                    let _ = tokio::task::spawn_blocking(move || git::fetch_remote(&root)).await;
+                    let _ = git::fetch_remote(root).await;
                 }
                 let status = {
                     let root = repo_root.clone();
-                    tokio::task::spawn_blocking(move || git::get_ahead_behind(&root))
-                        .await
-                        .ok()
-                        .and_then(std::result::Result::ok)
+                    git::get_ahead_behind(root).await.ok()
                 };
                 if cancel.load(Ordering::Relaxed) {
                     break;
