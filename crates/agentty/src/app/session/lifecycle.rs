@@ -11,7 +11,6 @@ use super::{session_branch, session_folder};
 use crate::agent::{AgentBackend, AgentModel};
 use crate::app::session::worker::SessionCommand;
 use crate::app::task::TaskService;
-use crate::app::title::TitleService;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::git;
 use crate::model::{PermissionMode, SESSION_DATA_DIR, Session, Status};
@@ -185,7 +184,7 @@ impl SessionManager {
 
             session.prompt.clone_from(&prompt);
 
-            let title = TitleService::summarize_title(&prompt);
+            let title = prompt.clone();
             session.title = Some(title.clone());
             let session_model = session.model;
 
@@ -500,7 +499,7 @@ impl SessionManager {
                 let mut title_to_save = None;
                 if is_first_message {
                     session.prompt = prompt.to_string();
-                    let title = TitleService::summarize_title(prompt);
+                    let title = prompt.to_string();
                     session.title = Some(title.clone());
                     title_to_save = Some(title);
                 }

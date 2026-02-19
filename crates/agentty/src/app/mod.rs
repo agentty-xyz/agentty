@@ -22,7 +22,6 @@ mod project;
 mod service;
 pub(crate) mod session;
 mod task;
-mod title;
 
 pub use project::ProjectManager;
 pub use service::AppServices;

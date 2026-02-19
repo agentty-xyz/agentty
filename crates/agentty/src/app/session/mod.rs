@@ -256,7 +256,7 @@ mod tests {
             stats: SessionStats::default(),
             status: Status::Review,
             summary: None,
-            title: Some(crate::app::title::TitleService::summarize_title(prompt)),
+            title: Some(prompt.to_string()),
         });
         if app.sessions.table_state.selected().is_none() {
             app.sessions.table_state.select(Some(0));
@@ -603,6 +603,67 @@ mod tests {
             .expect("failed to load");
         assert_eq!(db_sessions[0].prompt, "Hello");
         assert_eq!(db_sessions[0].output, " › Hello\n\n");
+    }
+
+    #[tokio::test]
+    async fn test_start_session_uses_full_prompt_text_as_title() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let prompt = "First line\nSecond line is intentionally long to avoid truncation.";
+
+        // Act
+        app.start_session(&session_id, prompt.to_string())
+            .await
+            .expect("failed to start session");
+
+        // Assert
+        assert_eq!(app.sessions.sessions[0].title, Some(prompt.to_string()));
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+        assert_eq!(db_sessions[0].title, Some(prompt.to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_reply_first_message_uses_full_prompt_text_as_title() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let prompt = "Line one\nLine two with more words for title text";
+        let backend = create_mock_backend();
+
+        // Act
+        app.sessions
+            .reply_with_backend(
+                &app.services,
+                &session_id,
+                prompt,
+                &backend,
+                AgentModel::Gemini3FlashPreview,
+            )
+            .await;
+
+        // Assert
+        assert_eq!(app.sessions.sessions[0].title, Some(prompt.to_string()));
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+        assert_eq!(db_sessions[0].title, Some(prompt.to_string()));
     }
 
     #[tokio::test]
@@ -2129,71 +2190,6 @@ mod tests {
         let paths: Vec<&Path> = app.projects.iter().map(|p| p.path.as_path()).collect();
         assert!(paths.contains(&repo_a.as_path()));
         assert!(paths.contains(&repo_b.as_path()));
-    }
-
-    #[test]
-    fn test_summarize_title_short() {
-        // Arrange & Act & Assert
-        assert_eq!(
-            crate::app::title::TitleService::summarize_title("Fix bug"),
-            "Fix bug"
-        );
-    }
-
-    #[test]
-    fn test_summarize_title_exact_30() {
-        // Arrange
-        let prompt = "a23456789012345678901234567890"; // exactly 30 chars
-
-        // Act & Assert
-        assert_eq!(prompt.len(), 30);
-        assert_eq!(
-            crate::app::title::TitleService::summarize_title(prompt),
-            prompt
-        );
-    }
-
-    #[test]
-    fn test_summarize_title_long_with_space() {
-        // Arrange
-        let prompt = "Fix the authentication bug in the login flow";
-
-        // Act
-        let title = crate::app::title::TitleService::summarize_title(prompt);
-
-        // Assert
-        assert_eq!(title, "Fix the authentication bug in…");
-        assert!(title.len() <= 34); // 30 chars + ellipsis (3 bytes)
-    }
-
-    #[test]
-    fn test_summarize_title_long_without_spaces() {
-        // Arrange
-        let prompt = "abcdefghijklmnopqrstuvwxyz1234567890";
-
-        // Act
-        let title = crate::app::title::TitleService::summarize_title(prompt);
-
-        // Assert
-        assert_eq!(title, "abcdefghijklmnopqrstuvwxyz1234…");
-    }
-
-    #[test]
-    fn test_summarize_title_multiline() {
-        // Arrange
-        let prompt = "First line\nSecond line\nThird line";
-
-        // Act
-        let title = crate::app::title::TitleService::summarize_title(prompt);
-
-        // Assert
-        assert_eq!(title, "First line");
-    }
-
-    #[test]
-    fn test_summarize_title_empty() {
-        // Arrange & Act & Assert
-        assert_eq!(crate::app::title::TitleService::summarize_title(""), "");
     }
 
     #[test]
