@@ -173,6 +173,16 @@ impl SessionManager {
         } = input;
 
         let merge_result: Result<String, String> = async {
+            // Auto-commit any pending changes before merging to ensure all work
+            // is captured in the session branch.
+            if let Err(error) = Self::commit_changes(&folder, true).await
+                && !error.contains("Nothing to commit")
+            {
+                return Err(format!(
+                    "Failed to commit pending changes before merge: {error}"
+                ));
+            }
+
             let squash_diff = {
                 let repo_root = repo_root.clone();
                 let source_branch = source_branch.clone();
