@@ -176,7 +176,7 @@ impl std::str::FromStr for Status {
         match s {
             "New" => Ok(Status::New),
             "InProgress" | "Committing" => Ok(Status::InProgress),
-            "Review" | "PullRequest" | "CreatingPullRequest" | "Processing" => Ok(Status::Review),
+            "Review" => Ok(Status::Review),
             "Rebasing" => Ok(Status::Rebasing),
             "Merging" => Ok(Status::Merging),
             "Done" => Ok(Status::Done),
