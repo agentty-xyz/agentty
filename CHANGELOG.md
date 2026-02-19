@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.12] - 2026-02-19
+
+### Added
+- **Session UX:** Added a delete confirmation mode with selectable actions for session deletion.
+- **Output Streaming:** Added a live single-line progress indicator in chat and spacing before the first streamed response chunk.
+- **Agent Runtime:** Added Codex output streaming during non-interactive runs and follow-up actions for plan mode replies.
+
+### Changed
+- **Git Runtime:** Completed async `git` module transition to `spawn_blocking` and updated call sites.
+- **Session Model:** Refactored sessions to derive `AgentKind` from `AgentModel`, removed the session `agent` column, and migrated legacy PR statuses to `Review`.
+- **Merge/Rebase:** Improved merge and rebase robustness by auto-committing pending changes before merge/rebase and broadening auto-commit assistance handling.
+- **UI:** Improved session list layout with minimum-width columns and title truncation, and added spacing around user input in session chat output.
+- **Automation:** Split pre-commit workflow into separate autofix and validation phases.
+- **Config:** Removed `npm-scope` from `dist-workspace.toml`.
+
+### Removed
+- **Pull Requests:** Removed pull request functionality.
+- **UI Cleanup:** Removed delete confirmation bottom hints.
+
+### Contributors
+- @andagaev
+- @minev-dev
+
 ## [v0.1.11] - 2026-02-16
 
 ### Added
