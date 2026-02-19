@@ -478,8 +478,9 @@ impl AgentKind {
     /// that should prevent duplicate final output append.
     pub(crate) fn parse_stream_output_line(self, stdout_line: &str) -> Option<(String, bool)> {
         match self {
+            Self::Claude => Self::parse_claude_stream_output_line(stdout_line),
+            Self::Gemini => Self::parse_gemini_stream_output_line(stdout_line),
             Self::Codex => Self::parse_codex_stream_output_line(stdout_line),
-            Self::Claude | Self::Gemini => None,
         }
     }
 
@@ -487,7 +488,95 @@ impl AgentKind {
         stdout: &str,
         permission_mode: PermissionMode,
     ) -> Option<ParsedResponse> {
-        let response = serde_json::from_str::<ClaudeResponse>(stdout.trim()).ok()?;
+        let trimmed_stdout = stdout.trim();
+        if let Some(parsed_response) =
+            Self::parse_claude_response_payload(trimmed_stdout, permission_mode)
+        {
+            return Some(parsed_response);
+        }
+
+        for line in stdout.lines().rev() {
+            let trimmed_line = line.trim();
+            if trimmed_line.is_empty() {
+                continue;
+            }
+            if let Some(parsed_response) =
+                Self::parse_claude_response_payload(trimmed_line, permission_mode)
+            {
+                return Some(parsed_response);
+            }
+        }
+
+        None
+    }
+
+    fn parse_claude_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
+        let trimmed_line = stdout_line.trim();
+        if trimmed_line.is_empty() {
+            return None;
+        }
+
+        if let Some(content) = Self::extract_claude_stream_result(trimmed_line) {
+            return Some((content, true));
+        }
+
+        let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
+        let progress_message = Self::compact_progress_message_from_json(&stream_event)?;
+
+        Some((progress_message, false))
+    }
+
+    /// Extracts the plan content from a denied `ExitPlanMode` tool call.
+    fn extract_plan_from_denials(denials: Option<&[ClaudePermissionDenial]>) -> Option<String> {
+        denials?.iter().find_map(|denial| {
+            if denial.tool_name.as_deref() != Some("ExitPlanMode") {
+                return None;
+            }
+
+            denial.tool_input.as_ref()?.plan.clone()
+        })
+    }
+
+    fn parse_gemini_response(stdout: &str) -> Option<ParsedResponse> {
+        let trimmed_stdout = stdout.trim();
+        if let Some(parsed_response) = Self::parse_gemini_response_payload(trimmed_stdout) {
+            return Some(parsed_response);
+        }
+
+        for line in stdout.lines().rev() {
+            let trimmed_line = line.trim();
+            if trimmed_line.is_empty() {
+                continue;
+            }
+            if let Some(parsed_response) = Self::parse_gemini_response_payload(trimmed_line) {
+                return Some(parsed_response);
+            }
+        }
+
+        None
+    }
+
+    fn parse_gemini_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
+        let trimmed_line = stdout_line.trim();
+        if trimmed_line.is_empty() {
+            return None;
+        }
+
+        if let Some(content) = Self::extract_gemini_stream_response(trimmed_line) {
+            return Some((content, true));
+        }
+
+        let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
+        let progress_message = Self::compact_progress_message_from_json(&stream_event)?;
+
+        Some((progress_message, false))
+    }
+
+    fn parse_claude_response_payload(
+        stdout: &str,
+        permission_mode: PermissionMode,
+    ) -> Option<ParsedResponse> {
+        let response = serde_json::from_str::<ClaudeResponse>(stdout).ok()?;
         let content = if permission_mode == PermissionMode::Plan {
             Self::extract_plan_from_denials(response.permission_denials.as_deref())
                 .or(response.result)?
@@ -505,23 +594,119 @@ impl AgentKind {
         Some(ParsedResponse { content, stats })
     }
 
-    /// Extracts the plan content from a denied `ExitPlanMode` tool call.
-    fn extract_plan_from_denials(denials: Option<&[ClaudePermissionDenial]>) -> Option<String> {
-        denials?.iter().find_map(|denial| {
-            if denial.tool_name.as_deref() != Some("ExitPlanMode") {
-                return None;
-            }
-
-            denial.tool_input.as_ref()?.plan.clone()
-        })
-    }
-
-    fn parse_gemini_response(stdout: &str) -> Option<ParsedResponse> {
-        let response = serde_json::from_str::<GeminiResponse>(stdout.trim()).ok()?;
+    fn parse_gemini_response_payload(stdout: &str) -> Option<ParsedResponse> {
+        let response = serde_json::from_str::<GeminiResponse>(stdout).ok()?;
         let content = response.response?;
         let stats = Self::extract_gemini_stats(response.stats);
 
         Some(ParsedResponse { content, stats })
+    }
+
+    fn extract_claude_stream_result(stdout_line: &str) -> Option<String> {
+        let response = serde_json::from_str::<ClaudeResponse>(stdout_line).ok()?;
+        let extracted_plan =
+            Self::extract_plan_from_denials(response.permission_denials.as_deref());
+
+        extracted_plan.or(response.result)
+    }
+
+    fn extract_gemini_stream_response(stdout_line: &str) -> Option<String> {
+        let response = serde_json::from_str::<GeminiResponse>(stdout_line).ok()?;
+
+        response.response
+    }
+
+    fn compact_progress_message_from_json(stream_event: &serde_json::Value) -> Option<String> {
+        let item_type = stream_event
+            .get("item")
+            .and_then(|item| item.get("type"))
+            .and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            item_type.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        let tool_name = stream_event
+            .get("tool_name")
+            .and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            tool_name.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        let name = stream_event.get("name").and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            name.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        let tool_name = stream_event
+            .get("tool")
+            .and_then(|tool| tool.get("name"))
+            .and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            tool_name.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        let event = stream_event
+            .get("event")
+            .and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            event.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        let subtype = stream_event
+            .get("subtype")
+            .and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            subtype.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        let event_type = stream_event.get("type").and_then(serde_json::Value::as_str);
+        if let Some(progress_message) =
+            event_type.and_then(Self::compact_progress_message_from_stream_label)
+        {
+            return Some(progress_message);
+        }
+
+        None
+    }
+
+    fn compact_progress_message_from_stream_label(label: &str) -> Option<String> {
+        let normalized_label = label.to_ascii_lowercase().replace('-', "_");
+        if normalized_label.contains("search") {
+            return Some("Searching the web".to_string());
+        }
+
+        if normalized_label.contains("reasoning")
+            || normalized_label.contains("thinking")
+            || normalized_label.contains("thought")
+        {
+            return Some("Thinking".to_string());
+        }
+
+        if normalized_label.contains("command")
+            || normalized_label.contains("bash")
+            || normalized_label.contains("terminal")
+            || normalized_label.contains("shell")
+            || normalized_label.contains("tool_use")
+            || normalized_label.contains("tool_call")
+            || normalized_label.contains("toolcall")
+            || normalized_label.contains("execute")
+        {
+            return Some("Running a command".to_string());
+        }
+
+        None
     }
 
     fn extract_gemini_stats(stats: Option<GeminiStats>) -> SessionStats {
@@ -603,28 +788,38 @@ impl AgentKind {
         if trimmed.is_empty() {
             return None;
         }
+
         let event = serde_json::from_str::<CodexEvent>(trimmed).ok()?;
-        let event_type = event.event_type.as_deref()?;
+        if event.event_type.as_deref() == Some("item.started") {
+            let item = event.item?;
+            let item_type = item.item_type.as_deref()?;
+            let progress_message = Self::compact_codex_progress_message(item_type)?;
 
-        if event_type == "item.started" {
-            let item_type = event.item?.item_type?;
-
-            return Some((format!("[{item_type}] in progress..."), false));
+            return Some((progress_message, false));
         }
 
-        if event_type != "item.completed" {
+        if event.event_type.as_deref() != Some("item.completed") {
             return None;
         }
 
         let item = event.item?;
-        let item_type = item.item_type.as_deref()?;
-        if item_type == "agent_message" {
-            let text = item.text?;
-
-            return Some((text, true));
+        if item.item_type.as_deref() != Some("agent_message") {
+            return None;
         }
 
-        Some((format!("[{item_type}] completed"), false))
+        let text = item.text?;
+
+        Some((text, true))
+    }
+
+    fn compact_codex_progress_message(item_type: &str) -> Option<String> {
+        match item_type {
+            "agent_message" => None,
+            "command_execution" => Some("Running a command".to_string()),
+            "reasoning" => Some("Thinking".to_string()),
+            "web_search" => Some("Searching the web".to_string()),
+            other => Some(format!("Working: {}", other.replace('_', " "))),
+        }
     }
 
     fn fallback_response(stdout: &str, stderr: &str) -> String {
@@ -1157,6 +1352,21 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_parse_response_valid_ndjson() {
+        // Arrange
+        let stdout = r#"{"type":"tool_use","tool_name":"Bash"}
+{"type":"result","subtype":"success","result":"Hello world","usage":{"input_tokens":100,"output_tokens":25}}"#;
+
+        // Act
+        let result = AgentKind::Claude.parse_response(stdout, "", PermissionMode::AutoEdit);
+
+        // Assert
+        assert_eq!(result.content, "Hello world");
+        assert_eq!(result.stats.input_tokens, Some(100));
+        assert_eq!(result.stats.output_tokens, Some(25));
+    }
+
+    #[test]
     fn test_claude_parse_response_extracts_plan_from_permission_denials() {
         // Arrange — Claude tried ExitPlanMode which was denied; result is terse
         let stdout = r##"{
@@ -1245,6 +1455,21 @@ mod tests {
     }
 
     #[test]
+    fn test_gemini_parse_response_valid_ndjson() {
+        // Arrange
+        let stdout = r#"{"type":"tool_call","name":"google_search"}
+{"response":"Hello from Gemini","stats":{"models":{"gemini-3-flash-preview":{"tokens":{"input":11,"candidates":7}}}}}"#;
+
+        // Act
+        let result = AgentKind::Gemini.parse_response(stdout, "", PermissionMode::AutoEdit);
+
+        // Assert
+        assert_eq!(result.content, "Hello from Gemini");
+        assert_eq!(result.stats.input_tokens, Some(11));
+        assert_eq!(result.stats.output_tokens, Some(7));
+    }
+
+    #[test]
     fn test_codex_parse_response_valid_ndjson() {
         // Arrange
         let stdout = r#"{"type":"thread.started","thread_id":"abc123"}
@@ -1284,10 +1509,32 @@ mod tests {
         let streamed = AgentKind::Codex.parse_stream_output_line(line);
 
         // Assert
-        assert_eq!(
-            streamed,
-            Some(("[command_execution] in progress...".to_string(), false))
-        );
+        assert_eq!(streamed, Some(("Running a command".to_string(), false)));
+    }
+
+    #[test]
+    fn test_codex_parse_stream_output_line_for_reasoning_item_started() {
+        // Arrange
+        let line = r#"{"type":"item.started","item":{"type":"reasoning"}}"#;
+
+        // Act
+        let streamed = AgentKind::Codex.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(streamed, Some(("Thinking".to_string(), false)));
+    }
+
+    #[test]
+    fn test_codex_parse_stream_output_line_for_non_message_item_completed() {
+        // Arrange
+        let line =
+            r#"{"type":"item.completed","item":{"type":"reasoning","text":"internal details"}}"#;
+
+        // Act
+        let streamed = AgentKind::Codex.parse_stream_output_line(line);
+
+        // Assert
+        assert!(streamed.is_none());
     }
 
     #[test]
@@ -1304,15 +1551,51 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_parse_stream_output_line_returns_none() {
+    fn test_claude_parse_stream_output_line_for_tool_use() {
         // Arrange
-        let line = r#"{"type":"item.started","item":{"type":"command_execution"}}"#;
+        let line = r#"{"type":"tool_use","tool_name":"Bash"}"#;
 
         // Act
         let streamed = AgentKind::Claude.parse_stream_output_line(line);
 
         // Assert
-        assert!(streamed.is_none());
+        assert_eq!(streamed, Some(("Running a command".to_string(), false)));
+    }
+
+    #[test]
+    fn test_claude_parse_stream_output_line_for_result() {
+        // Arrange
+        let line = r#"{"type":"result","result":"Final answer"}"#;
+
+        // Act
+        let streamed = AgentKind::Claude.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(streamed, Some(("Final answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_gemini_parse_stream_output_line_for_search_tool() {
+        // Arrange
+        let line = r#"{"type":"tool_call","name":"google_search"}"#;
+
+        // Act
+        let streamed = AgentKind::Gemini.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(streamed, Some(("Searching the web".to_string(), false)));
+    }
+
+    #[test]
+    fn test_gemini_parse_stream_output_line_for_response() {
+        // Arrange
+        let line = r#"{"response":"Final answer","stats":{}}"#;
+
+        // Act
+        let streamed = AgentKind::Gemini.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(streamed, Some(("Final answer".to_string(), true)));
     }
 
     #[test]

@@ -10,7 +10,9 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
-use crate::model::{AppMode, HelpContext, PlanFollowupAction, Project, Session, Tab};
+use crate::model::{
+    AppMode, HelpContext, PaletteCommand, PaletteFocus, PlanFollowupAction, Project, Session, Tab,
+};
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -31,10 +33,65 @@ pub struct RenderContext<'a> {
     pub mode: &'a AppMode,
     pub plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
     pub projects: &'a [Project],
+    pub session_progress_messages: &'a HashMap<String, String>,
     pub show_onboarding: bool,
     pub sessions: &'a [Session],
     pub table_state: &'a mut TableState,
     pub working_dir: &'a Path,
+}
+
+struct SessionChatRenderContext<'a> {
+    mode: &'a AppMode,
+    plan_followup_actions: Option<&'a HashMap<String, PlanFollowupAction>>,
+    scroll_offset: Option<u16>,
+    session_id: &'a str,
+    session_progress_messages: &'a HashMap<String, String>,
+}
+
+struct HelpBackgroundRenderContext<'a> {
+    context: &'a HelpContext,
+    current_tab: Tab,
+    plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
+    session_progress_messages: &'a HashMap<String, String>,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+}
+
+struct CommandPaletteRenderContext<'a> {
+    current_tab: Tab,
+    focus: PaletteFocus,
+    input: &'a str,
+    selected_index: usize,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+}
+
+struct CommandOptionRenderContext<'a> {
+    active_project_id: i64,
+    command: PaletteCommand,
+    current_tab: Tab,
+    projects: &'a [Project],
+    selected_index: usize,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+}
+
+struct ListModeRenderContext<'a> {
+    active_project_id: i64,
+    current_tab: Tab,
+    mode: &'a AppMode,
+    projects: &'a [Project],
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+}
+
+struct SessionModeRenderContext<'a> {
+    current_tab: Tab,
+    mode: &'a AppMode,
+    plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
+    session_progress_messages: &'a HashMap<String, String>,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
 }
 
 pub fn render(f: &mut Frame, context: RenderContext<'_>) {
@@ -93,9 +150,54 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
         mode,
         plan_followup_actions,
         projects,
+        session_progress_messages,
         sessions,
         table_state,
         ..
+    } = context;
+
+    match mode {
+        AppMode::List
+        | AppMode::ConfirmDeleteSession { .. }
+        | AppMode::CommandPalette { .. }
+        | AppMode::CommandOption { .. } => render_list_mode_content(
+            f,
+            area,
+            ListModeRenderContext {
+                active_project_id,
+                current_tab,
+                mode,
+                projects,
+                sessions,
+                table_state,
+            },
+        ),
+        AppMode::View { .. }
+        | AppMode::Prompt { .. }
+        | AppMode::Diff { .. }
+        | AppMode::Help { .. } => render_session_mode_content(
+            f,
+            area,
+            SessionModeRenderContext {
+                current_tab,
+                mode,
+                plan_followup_actions,
+                session_progress_messages,
+                sessions,
+                table_state,
+            },
+        ),
+    }
+}
+
+fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderContext<'_>) {
+    let ListModeRenderContext {
+        active_project_id,
+        current_tab,
+        mode,
+        projects,
+        sessions,
+        table_state,
     } = context;
 
     match mode {
@@ -113,6 +215,53 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
             *selected_confirmation_index,
             session_title,
         ),
+        AppMode::CommandPalette {
+            input,
+            selected_index,
+            focus,
+        } => render_command_palette(
+            f,
+            area,
+            command_palette_context(
+                current_tab,
+                *focus,
+                input,
+                *selected_index,
+                sessions,
+                table_state,
+            ),
+        ),
+        AppMode::CommandOption {
+            command,
+            selected_index,
+        } => render_command_options(
+            f,
+            area,
+            command_option_context(
+                active_project_id,
+                *command,
+                current_tab,
+                projects,
+                *selected_index,
+                sessions,
+                table_state,
+            ),
+        ),
+        _ => {}
+    }
+}
+
+fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRenderContext<'_>) {
+    let SessionModeRenderContext {
+        current_tab,
+        mode,
+        plan_followup_actions,
+        session_progress_messages,
+        sessions,
+        table_state,
+    } = context;
+
+    match mode {
         AppMode::View {
             session_id,
             scroll_offset,
@@ -120,64 +269,152 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
             f,
             area,
             sessions,
-            mode,
-            Some(plan_followup_actions),
-            session_id,
-            *scroll_offset,
+            &view_session_chat_context(
+                mode,
+                plan_followup_actions,
+                *scroll_offset,
+                session_id,
+                session_progress_messages,
+            ),
         ),
         AppMode::Prompt {
             session_id,
             scroll_offset,
             ..
-        } => render_session_chat_mode(f, area, sessions, mode, None, session_id, *scroll_offset),
+        } => render_session_chat_mode(
+            f,
+            area,
+            sessions,
+            &prompt_session_chat_context(
+                mode,
+                *scroll_offset,
+                session_id,
+                session_progress_messages,
+            ),
+        ),
         AppMode::Diff {
             session_id,
             diff,
             scroll_offset,
-        } => {
-            if let Some(session) = sessions.iter().find(|session| session.id == *session_id) {
-                pages::diff::DiffPage::new(session, diff.clone(), *scroll_offset).render(f, area);
-            }
-        }
-        AppMode::CommandPalette {
-            input,
-            selected_index,
-            focus,
-        } => {
-            render_list_background(f, area, sessions, table_state, current_tab);
-
-            components::command_palette::CommandPaletteInput::new(input, *selected_index, *focus)
-                .render(f, area);
-        }
-        AppMode::CommandOption {
-            command,
-            selected_index,
-        } => {
-            render_list_background(f, area, sessions, table_state, current_tab);
-
-            components::command_palette::CommandOptionList::new(
-                *command,
-                *selected_index,
-                projects,
-                active_project_id,
-            )
-            .render(f, area);
-        }
+        } => render_diff_mode(f, area, sessions, session_id, diff, *scroll_offset),
         AppMode::Help {
             context,
             scroll_offset,
-        } => {
-            render_help_background(
-                f,
-                area,
+        } => render_help(
+            f,
+            area,
+            context,
+            *scroll_offset,
+            help_background_context(
                 context,
+                current_tab,
                 plan_followup_actions,
+                session_progress_messages,
                 sessions,
                 table_state,
-                current_tab,
-            );
-            components::help_overlay::HelpOverlay::new(context, *scroll_offset).render(f, area);
-        }
+            ),
+        ),
+        _ => {}
+    }
+}
+
+fn view_session_chat_context<'a>(
+    mode: &'a AppMode,
+    plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
+    scroll_offset: Option<u16>,
+    session_id: &'a str,
+    session_progress_messages: &'a HashMap<String, String>,
+) -> SessionChatRenderContext<'a> {
+    SessionChatRenderContext {
+        mode,
+        plan_followup_actions: Some(plan_followup_actions),
+        scroll_offset,
+        session_id,
+        session_progress_messages,
+    }
+}
+
+fn prompt_session_chat_context<'a>(
+    mode: &'a AppMode,
+    scroll_offset: Option<u16>,
+    session_id: &'a str,
+    session_progress_messages: &'a HashMap<String, String>,
+) -> SessionChatRenderContext<'a> {
+    SessionChatRenderContext {
+        mode,
+        plan_followup_actions: None,
+        scroll_offset,
+        session_id,
+        session_progress_messages,
+    }
+}
+
+fn render_diff_mode(
+    f: &mut Frame,
+    area: Rect,
+    sessions: &[Session],
+    session_id: &str,
+    diff: &str,
+    scroll_offset: u16,
+) {
+    if let Some(session) = sessions.iter().find(|session| session.id == session_id) {
+        pages::diff::DiffPage::new(session, diff.to_string(), scroll_offset).render(f, area);
+    }
+}
+
+fn command_palette_context<'a>(
+    current_tab: Tab,
+    focus: PaletteFocus,
+    input: &'a str,
+    selected_index: usize,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+) -> CommandPaletteRenderContext<'a> {
+    CommandPaletteRenderContext {
+        current_tab,
+        focus,
+        input,
+        selected_index,
+        sessions,
+        table_state,
+    }
+}
+
+fn command_option_context<'a>(
+    active_project_id: i64,
+    command: PaletteCommand,
+    current_tab: Tab,
+    projects: &'a [Project],
+    selected_index: usize,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+) -> CommandOptionRenderContext<'a> {
+    CommandOptionRenderContext {
+        active_project_id,
+        command,
+        current_tab,
+        projects,
+        selected_index,
+        sessions,
+        table_state,
+    }
+}
+
+fn help_background_context<'a>(
+    context: &'a HelpContext,
+    current_tab: Tab,
+    plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
+    session_progress_messages: &'a HashMap<String, String>,
+    sessions: &'a [Session],
+    table_state: &'a mut TableState,
+) -> HelpBackgroundRenderContext<'a> {
+    HelpBackgroundRenderContext {
+        context,
+        current_tab,
+        plan_followup_actions,
+        session_progress_messages,
+        sessions,
+        table_state,
     }
 }
 
@@ -185,20 +422,27 @@ fn render_session_chat_mode(
     f: &mut Frame,
     area: Rect,
     sessions: &[Session],
-    mode: &AppMode,
-    plan_followup_actions: Option<&HashMap<String, PlanFollowupAction>>,
-    session_id: &str,
-    scroll_offset: Option<u16>,
+    context: &SessionChatRenderContext<'_>,
 ) {
+    let mode = context.mode;
+    let plan_followup_actions = context.plan_followup_actions;
+    let scroll_offset = context.scroll_offset;
+    let session_id = context.session_id;
+    let session_progress_messages = context.session_progress_messages;
+
     if let Some(session_index) = sessions.iter().position(|session| session.id == session_id) {
         let plan_followup_action =
             plan_followup_actions.and_then(|actions| actions.get(session_id).copied());
+        let active_progress = session_progress_messages
+            .get(session_id)
+            .map(std::string::String::as_str);
         pages::session_chat::SessionChatPage::new(
             sessions,
             session_index,
             scroll_offset,
             mode,
             plan_followup_action,
+            active_progress,
         )
         .render(f, area);
     }
@@ -225,15 +469,15 @@ fn render_delete_confirmation(
 }
 
 /// Renders the background page behind the help overlay based on `HelpContext`.
-fn render_help_background(
-    f: &mut Frame,
-    area: Rect,
-    context: &HelpContext,
-    plan_followup_actions: &HashMap<String, PlanFollowupAction>,
-    sessions: &[Session],
-    table_state: &mut TableState,
-    current_tab: Tab,
-) {
+fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRenderContext<'_>) {
+    let HelpBackgroundRenderContext {
+        context,
+        current_tab,
+        plan_followup_actions,
+        session_progress_messages,
+        sessions,
+        table_state,
+    } = context;
     match context {
         HelpContext::List => {
             render_list_background(f, area, sessions, table_state, current_tab);
@@ -252,12 +496,16 @@ fn render_help_background(
                     scroll_offset: *view_scroll,
                 };
                 let plan_followup_action = plan_followup_actions.get(session_id).copied();
+                let active_progress = session_progress_messages
+                    .get(session_id)
+                    .map(std::string::String::as_str);
                 pages::session_chat::SessionChatPage::new(
                     sessions,
                     session_index,
                     *view_scroll,
                     &bg_mode,
                     plan_followup_action,
+                    active_progress,
                 )
                 .render(f, area);
             }
@@ -272,6 +520,51 @@ fn render_help_background(
             }
         }
     }
+}
+
+fn render_command_palette(f: &mut Frame, area: Rect, context: CommandPaletteRenderContext<'_>) {
+    let CommandPaletteRenderContext {
+        current_tab,
+        focus,
+        input,
+        selected_index,
+        sessions,
+        table_state,
+    } = context;
+    render_list_background(f, area, sessions, table_state, current_tab);
+    components::command_palette::CommandPaletteInput::new(input, selected_index, focus)
+        .render(f, area);
+}
+
+fn render_command_options(f: &mut Frame, area: Rect, context: CommandOptionRenderContext<'_>) {
+    let CommandOptionRenderContext {
+        active_project_id,
+        command,
+        current_tab,
+        projects,
+        selected_index,
+        sessions,
+        table_state,
+    } = context;
+    render_list_background(f, area, sessions, table_state, current_tab);
+    components::command_palette::CommandOptionList::new(
+        command,
+        selected_index,
+        projects,
+        active_project_id,
+    )
+    .render(f, area);
+}
+
+fn render_help(
+    f: &mut Frame,
+    area: Rect,
+    context: &HelpContext,
+    scroll_offset: u16,
+    background_context: HelpBackgroundRenderContext<'_>,
+) {
+    render_help_background(f, area, background_context);
+    components::help_overlay::HelpOverlay::new(context, scroll_offset).render(f, area);
 }
 
 /// Returns `true` when the onboarding page should replace the normal UI.

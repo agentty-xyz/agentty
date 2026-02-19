@@ -71,6 +71,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let current_git_status = app.git_status_info();
     let current_active_project_id = app.active_project_id();
     let plan_followup_actions = app.plan_followup_actions_snapshot();
+    let session_progress_messages = app.session_progress_snapshot();
     let show_onboarding = app.should_show_onboarding();
     let mode = &app.mode;
     let projects = &app.projects;
@@ -87,6 +88,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
                 mode,
                 plan_followup_actions: &plan_followup_actions,
                 projects,
+                session_progress_messages: &session_progress_messages,
                 show_onboarding,
                 sessions,
                 table_state,

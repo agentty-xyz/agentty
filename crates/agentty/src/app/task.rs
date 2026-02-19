@@ -58,6 +58,7 @@ pub(super) struct RunAgentAssistTaskInput {
 /// Shared context for streaming incremental agent output as it arrives.
 #[derive(Clone)]
 pub(super) struct StreamOutputContext {
+    active_progress_message: Arc<Mutex<Option<String>>>,
     agent: AgentKind,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     db: Database,
@@ -72,6 +73,14 @@ struct CapturedOutput {
     streamed_response_seen: bool,
     stdout_text: String,
 }
+
+enum ActiveProgressMessageUpdate {
+    NoChange,
+    Updated {
+        previous_progress_message: Option<String>,
+    },
+}
+
 impl TaskService {
     /// Spawns a background loop that periodically refreshes ahead/behind info.
     ///
@@ -154,6 +163,7 @@ impl TaskService {
                     Self::capture_child_output(&mut child, agent, &app_event_tx, &db, &id, &output)
                         .await;
                 let exit_status = child.wait().await.ok();
+                Self::clear_session_progress(&app_event_tx, &id);
 
                 if let Ok(mut guard) = child_pid.lock() {
                     *guard = None;
@@ -199,6 +209,7 @@ impl TaskService {
             Err(spawn_error) => {
                 let message = format!("Failed to spawn process: {spawn_error}\n");
                 Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+                Self::clear_session_progress(&app_event_tx, &id);
                 error = Some(message.trim().to_string());
             }
         }
@@ -350,6 +361,7 @@ impl TaskService {
             Err(spawn_error) => {
                 let message = format!("Failed to spawn process: {spawn_error}\n");
                 Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+                Self::clear_session_progress(&app_event_tx, &id);
 
                 return Err(message.trim().to_string());
             }
@@ -362,6 +374,7 @@ impl TaskService {
             .wait()
             .await
             .map_err(|error| format!("Failed to wait for agent assistance process: {error}"))?;
+        Self::clear_session_progress(&app_event_tx, &id);
 
         if exit_status.signal().is_some() {
             let message = "\n[Stopped] Agent assistance interrupted.\n";
@@ -406,12 +419,14 @@ impl TaskService {
         let raw_stdout = Arc::new(Mutex::new(String::new()));
         let raw_stderr = Arc::new(Mutex::new(String::new()));
         let mut handles = Vec::new();
+        let active_progress_message = Arc::new(Mutex::new(None));
         let non_response_stream_output_seen = Arc::new(AtomicBool::new(false));
         let streamed_response_seen = Arc::new(AtomicBool::new(false));
 
         if let Some(stdout) = stdout {
             let buffer = Arc::clone(&raw_stdout);
             let stream_context = StreamOutputContext {
+                active_progress_message: Arc::clone(&active_progress_message),
                 agent,
                 app_event_tx: app_event_tx.clone(),
                 db: db.clone(),
@@ -529,35 +544,68 @@ impl TaskService {
                 continue;
             }
 
-            let should_prefix_blank_line = is_response_content
-                && !stream_context
+            if is_response_content {
+                let should_prefix_blank_line = !stream_context
                     .streamed_response_seen
                     .load(Ordering::Relaxed)
-                && stream_context
-                    .non_response_stream_output_seen
-                    .load(Ordering::Relaxed);
-            let formatted_stream_text = if should_prefix_blank_line {
-                format!("\n{stream_text}\n")
-            } else {
-                format!("{stream_text}\n")
-            };
-            Self::append_session_output(
-                &stream_context.output,
-                &stream_context.db,
-                &stream_context.app_event_tx,
-                &stream_context.id,
-                &formatted_stream_text,
-            )
-            .await;
-            if is_response_content {
+                    && stream_context
+                        .non_response_stream_output_seen
+                        .load(Ordering::Relaxed);
+                let formatted_stream_text = if should_prefix_blank_line {
+                    format!("\n{stream_text}\n")
+                } else {
+                    format!("{stream_text}\n")
+                };
+                Self::append_session_output(
+                    &stream_context.output,
+                    &stream_context.db,
+                    &stream_context.app_event_tx,
+                    &stream_context.id,
+                    &formatted_stream_text,
+                )
+                .await;
                 stream_context
                     .streamed_response_seen
                     .store(true, Ordering::Relaxed);
-            } else {
-                stream_context
-                    .non_response_stream_output_seen
-                    .store(true, Ordering::Relaxed);
+
+                let previous_progress_message =
+                    Self::take_active_progress_message(&stream_context.active_progress_message);
+                if previous_progress_message.is_some() {
+                    Self::append_progress_completion_if_needed(
+                        stream_context,
+                        previous_progress_message,
+                    )
+                    .await;
+                    Self::set_session_progress(
+                        &stream_context.app_event_tx,
+                        &stream_context.id,
+                        None,
+                    );
+                }
+
+                continue;
             }
+
+            stream_context
+                .non_response_stream_output_seen
+                .store(true, Ordering::Relaxed);
+            let previous_progress_message = match Self::replace_active_progress_message_if_changed(
+                &stream_context.active_progress_message,
+                &stream_text,
+            ) {
+                ActiveProgressMessageUpdate::NoChange => continue,
+                ActiveProgressMessageUpdate::Updated {
+                    previous_progress_message,
+                } => previous_progress_message,
+            };
+
+            Self::append_progress_completion_if_needed(stream_context, previous_progress_message)
+                .await;
+            Self::set_session_progress(
+                &stream_context.app_event_tx,
+                &stream_context.id,
+                Some(stream_text),
+            );
         }
     }
 
@@ -576,6 +624,88 @@ impl TaskService {
         let _ = app_event_tx.send(AppEvent::SessionUpdated {
             session_id: id.to_string(),
         });
+    }
+
+    async fn append_progress_completion_if_needed(
+        stream_context: &StreamOutputContext,
+        previous_progress_message: Option<String>,
+    ) {
+        let Some(previous_progress_message) = previous_progress_message else {
+            return;
+        };
+        let Some(completion_message) =
+            Self::progress_completion_message(previous_progress_message.as_str())
+        else {
+            return;
+        };
+        let completion_message = format!("{completion_message}\n");
+
+        Self::append_session_output(
+            &stream_context.output,
+            &stream_context.db,
+            &stream_context.app_event_tx,
+            &stream_context.id,
+            &completion_message,
+        )
+        .await;
+    }
+
+    fn take_active_progress_message(
+        active_progress_message: &Arc<Mutex<Option<String>>>,
+    ) -> Option<String> {
+        let Ok(mut active_progress_message) = active_progress_message.lock() else {
+            return None;
+        };
+
+        active_progress_message.take()
+    }
+
+    fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
+        Self::set_session_progress(app_event_tx, id, None);
+    }
+
+    fn replace_active_progress_message_if_changed(
+        active_progress_message: &Arc<Mutex<Option<String>>>,
+        stream_text: &str,
+    ) -> ActiveProgressMessageUpdate {
+        let Ok(mut active_progress_message) = active_progress_message.lock() else {
+            return ActiveProgressMessageUpdate::NoChange;
+        };
+        if active_progress_message.as_deref() == Some(stream_text) {
+            return ActiveProgressMessageUpdate::NoChange;
+        }
+        let previous_progress_message = active_progress_message.replace(stream_text.to_string());
+
+        ActiveProgressMessageUpdate::Updated {
+            previous_progress_message,
+        }
+    }
+
+    fn set_session_progress(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        id: &str,
+        progress_message: Option<String>,
+    ) {
+        let _ = app_event_tx.send(AppEvent::SessionProgressUpdated {
+            progress_message,
+            session_id: id.to_string(),
+        });
+    }
+
+    fn progress_completion_message(progress_message: &str) -> Option<String> {
+        let normalized_progress_message = progress_message.trim().trim_end_matches('.').trim();
+        if normalized_progress_message.is_empty() {
+            return None;
+        }
+
+        let completion_message = match normalized_progress_message {
+            "Searching the web" => "Web search completed".to_string(),
+            "Thinking" => "Thinking completed".to_string(),
+            "Running a command" => "Command completed".to_string(),
+            other => format!("{other} completed"),
+        };
+
+        Some(completion_message)
     }
 
     fn status_requires_full_refresh(status: Status) -> bool {
@@ -645,6 +775,45 @@ mod tests {
 
         // Assert
         assert_eq!(formatted, "- line one\n- line two");
+    }
+
+    #[test]
+    fn test_progress_completion_message_returns_web_search_completion() {
+        // Arrange
+        let progress_message = "Searching the web";
+
+        // Act
+        let completion_message = TaskService::progress_completion_message(progress_message);
+
+        // Assert
+        assert_eq!(completion_message, Some("Web search completed".to_string()));
+    }
+
+    #[test]
+    fn test_progress_completion_message_returns_command_completion() {
+        // Arrange
+        let progress_message = "Running a command";
+
+        // Act
+        let completion_message = TaskService::progress_completion_message(progress_message);
+
+        // Assert
+        assert_eq!(completion_message, Some("Command completed".to_string()));
+    }
+
+    #[test]
+    fn test_progress_completion_message_returns_generic_completion() {
+        // Arrange
+        let progress_message = "Working: tool use";
+
+        // Act
+        let completion_message = TaskService::progress_completion_message(progress_message);
+
+        // Assert
+        assert_eq!(
+            completion_message,
+            Some("Working: tool use completed".to_string())
+        );
     }
 
     #[tokio::test]
@@ -755,8 +924,8 @@ mod tests {
             result.err()
         );
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(output_text.contains("[command_execution] in progress..."));
-        assert!(output_text.contains("[command_execution] in progress...\n\nFinal answer\n"));
+        assert!(!output_text.contains("Running a command"));
+        assert!(!output_text.contains("command_execution"));
         assert_eq!(output_text.matches("Final answer").count(), 1);
         let sessions = database
             .load_sessions()
@@ -764,6 +933,232 @@ mod tests {
             .expect("failed to load sessions");
         assert_eq!(sessions[0].input_tokens, Some(11));
         assert_eq!(sessions[0].output_tokens, Some(7));
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_streams_claude_output_with_compact_progress() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                "claude-sonnet-4-20250514",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-lc",
+                "printf '%s\\n' '{\"type\":\"tool_use\",\"tool_name\":\"Bash\"}' \
+                 '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"Final \
+                 answer\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}'",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Claude,
+            app_event_tx,
+            cmd: command,
+            db: database.clone(),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            permission_mode: PermissionMode::AutoEdit,
+        })
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "assist task should succeed: {:?}",
+            result.err()
+        );
+        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+        assert!(!output_text.contains("Running a command"));
+        assert!(!output_text.contains("tool_use"));
+        assert_eq!(output_text.matches("Final answer").count(), 1);
+        let sessions = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert_eq!(sessions[0].input_tokens, Some(11));
+        assert_eq!(sessions[0].output_tokens, Some(7));
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_streams_gemini_output_with_compact_progress() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                "gemini-3-flash-preview",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-lc",
+                "printf '%s\\n' '{\"type\":\"tool_call\",\"name\":\"google_search\"}' \
+                 '{\"response\":\"Final \
+                 answer\",\"stats\":{\"models\":{\"gemini-3-flash-preview\":{\"tokens\":{\"input\"\
+                 :11,\"candidates\":7}}}}}'",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Gemini,
+            app_event_tx,
+            cmd: command,
+            db: database.clone(),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            permission_mode: PermissionMode::AutoEdit,
+        })
+        .await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "assist task should succeed: {:?}",
+            result.err()
+        );
+        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+        assert!(!output_text.contains("Searching the web"));
+        assert!(!output_text.contains("google_search"));
+        assert_eq!(output_text.matches("Final answer").count(), 1);
+        let sessions = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert_eq!(sessions[0].input_tokens, Some(11));
+        assert_eq!(sessions[0].output_tokens, Some(7));
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_deduplicates_repeated_progress_updates() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-id", "gpt-5.3-codex", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-lc",
+                "printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"type\":\"web_search\"}}' \
+                 '{\"type\":\"item.started\",\"item\":{\"type\":\"web_search\"}}' \
+                 '{\"type\":\"item.started\",\"item\":{\"type\":\"web_search\"}}' \
+                 '{\"type\":\"item.started\",\"item\":{\"type\":\"reasoning\"}}' \
+                 '{\"type\":\"item.started\",\"item\":{\"type\":\"reasoning\"}}' \
+                 '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}' \
+                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
+                 Final answer\"}}' \
+                 '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
+                 7}}'",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Codex,
+            app_event_tx,
+            cmd: command,
+            db: database,
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            permission_mode: PermissionMode::AutoEdit,
+        })
+        .await;
+        let mut progress_updates = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::SessionProgressUpdated {
+                progress_message,
+                session_id,
+            } = event
+                && session_id == "session-id"
+            {
+                progress_updates.push(progress_message);
+            }
+        }
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "assist task should succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            progress_updates
+                .iter()
+                .filter(|entry| entry.as_deref() == Some("Searching the web"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            progress_updates
+                .iter()
+                .filter(|entry| entry.as_deref() == Some("Thinking"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            progress_updates
+                .iter()
+                .filter(|entry| entry.as_deref() == Some("Running a command"))
+                .count(),
+            1
+        );
+        assert_eq!(progress_updates.last(), Some(&None));
+        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+        assert!(output_text.contains("Web search completed"));
+        assert!(output_text.contains("Thinking completed"));
+        assert!(output_text.contains("Command completed"));
+        assert!(!output_text.contains("Searching the web"));
+        assert!(!output_text.contains("Running a command"));
     }
 
     #[tokio::test]

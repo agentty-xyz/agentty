@@ -62,6 +62,11 @@ pub(crate) enum AppEvent {
     },
     /// Requests a full session list refresh.
     RefreshSessions,
+    /// Indicates compact live progress text for an in-progress session.
+    SessionProgressUpdated {
+        progress_message: Option<String>,
+        session_id: String,
+    },
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
 }
@@ -72,6 +77,7 @@ struct AppEventBatch {
     git_status_update: Option<(u32, u32)>,
     has_git_status_update: bool,
     session_model_updates: HashMap<String, AgentModel>,
+    session_progress_updates: HashMap<String, Option<String>>,
     session_ids: HashSet<String>,
     session_permission_mode_updates: HashMap<String, PermissionMode>,
     should_force_reload: bool,
@@ -158,6 +164,7 @@ pub struct App {
     pub(crate) sessions: SessionManager,
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
     plan_followup_actions: HashMap<String, PlanFollowupAction>,
+    session_progress_messages: HashMap<String, String>,
 }
 
 impl App {
@@ -235,6 +242,7 @@ impl App {
             sessions,
             event_rx,
             plan_followup_actions: HashMap::new(),
+            session_progress_messages: HashMap::new(),
         }
     }
 
@@ -408,6 +416,18 @@ impl App {
     /// Returns a snapshot of pending post-plan actions by session id.
     pub fn plan_followup_actions_snapshot(&self) -> HashMap<String, PlanFollowupAction> {
         self.plan_followup_actions.clone()
+    }
+
+    /// Returns compact live progress text for a session, if available.
+    pub fn session_progress_message(&self, session_id: &str) -> Option<&str> {
+        self.session_progress_messages
+            .get(session_id)
+            .map(std::string::String::as_str)
+    }
+
+    /// Returns a snapshot of compact live progress text by session id.
+    pub fn session_progress_snapshot(&self) -> HashMap<String, String> {
+        self.session_progress_messages.clone()
     }
 
     /// Returns whether a session has pending post-plan actions.
@@ -603,12 +623,22 @@ impl App {
                 .apply_session_permission_mode_updated(&session_id, permission_mode);
         }
 
+        for (session_id, progress_message) in event_batch.session_progress_updates {
+            if let Some(progress_message) = progress_message {
+                self.session_progress_messages
+                    .insert(session_id, progress_message);
+            } else {
+                self.session_progress_messages.remove(&session_id);
+            }
+        }
+
         for session_id in &event_batch.session_ids {
             self.sessions.sync_session_from_handle(session_id);
         }
 
         self.mark_plan_followup_actions(&event_batch.session_ids, &previous_session_states);
         self.retain_valid_plan_followup_actions();
+        self.retain_valid_session_progress_messages();
     }
 
     fn mark_plan_followup_actions(
@@ -657,6 +687,21 @@ impl App {
                 })
         });
     }
+
+    fn retain_valid_session_progress_messages(&mut self) {
+        self.session_progress_messages.retain(|session_id, _| {
+            self.sessions
+                .sessions
+                .iter()
+                .find(|session| session.id == *session_id)
+                .is_some_and(|session| {
+                    matches!(
+                        session.status,
+                        Status::InProgress | Status::Rebasing | Status::Merging
+                    )
+                })
+        });
+    }
 }
 
 impl AppEventBatch {
@@ -684,6 +729,13 @@ impl AppEventBatch {
             }
             AppEvent::RefreshSessions => {
                 self.should_force_reload = true;
+            }
+            AppEvent::SessionProgressUpdated {
+                progress_message,
+                session_id,
+            } => {
+                self.session_progress_updates
+                    .insert(session_id, progress_message);
             }
             AppEvent::SessionUpdated { session_id } => {
                 self.session_ids.insert(session_id);
@@ -792,6 +844,28 @@ mod tests {
         assert_eq!(
             event_batch.session_permission_mode_updates.get("session-4"),
             Some(&PermissionMode::Autonomous)
+        );
+    }
+
+    #[test]
+    fn test_app_event_batch_collects_session_progress_updates() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::SessionProgressUpdated {
+            progress_message: Some("Searching the web".to_string()),
+            session_id: "session-1".to_string(),
+        });
+        event_batch.collect_event(AppEvent::SessionProgressUpdated {
+            progress_message: None,
+            session_id: "session-1".to_string(),
+        });
+
+        // Assert
+        assert_eq!(
+            event_batch.session_progress_updates.get("session-1"),
+            Some(&None)
         );
     }
 

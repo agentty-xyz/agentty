@@ -286,12 +286,18 @@ fn view_metrics(
 
 fn view_total_lines(app: &App, session_id: &str, session_index: usize, output_width: u16) -> u16 {
     let plan_followup_action = app.plan_followup_action(session_id);
+    let active_progress = app.session_progress_message(session_id);
 
     app.sessions
         .sessions
         .get(session_index)
         .map_or(0, |session| {
-            SessionChatPage::rendered_output_line_count(session, output_width, plan_followup_action)
+            SessionChatPage::rendered_output_line_count(
+                session,
+                output_width,
+                plan_followup_action,
+                active_progress,
+            )
         })
 }
 

@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -17,6 +19,7 @@ use crate::ui::{Component, Page};
 
 /// Chat page renderer for a single session.
 pub struct SessionChatPage<'a> {
+    pub active_progress: Option<&'a str>,
     pub mode: &'a AppMode,
     pub plan_followup_action: Option<PlanFollowupAction>,
     pub scroll_offset: Option<u16>,
@@ -32,8 +35,10 @@ impl<'a> SessionChatPage<'a> {
         scroll_offset: Option<u16>,
         mode: &'a AppMode,
         plan_followup_action: Option<PlanFollowupAction>,
+        active_progress: Option<&'a str>,
     ) -> Self {
         Self {
+            active_progress,
             mode,
             plan_followup_action,
             scroll_offset,
@@ -51,9 +56,16 @@ impl<'a> SessionChatPage<'a> {
         session: &Session,
         output_width: u16,
         plan_followup_action: Option<PlanFollowupAction>,
+        active_progress: Option<&str>,
     ) -> u16 {
         let output_area = Rect::new(0, 0, output_width, 0);
-        let lines = Self::output_lines(session, output_area, session.status, plan_followup_action);
+        let lines = Self::output_lines(
+            session,
+            output_area,
+            session.status,
+            plan_followup_action,
+            active_progress,
+        );
 
         u16::try_from(lines.len()).unwrap_or(u16::MAX)
     }
@@ -232,7 +244,13 @@ impl<'a> SessionChatPage<'a> {
             session.model.as_str(),
             session.permission_mode.label()
         );
-        let lines = Self::output_lines(session, output_area, status, self.plan_followup_action);
+        let lines = Self::output_lines(
+            session,
+            output_area,
+            status,
+            self.plan_followup_action,
+            self.active_progress,
+        );
         let final_scroll = self.final_scroll_offset(output_area, lines.len());
 
         let paragraph = Paragraph::new(lines)
@@ -252,6 +270,7 @@ impl<'a> SessionChatPage<'a> {
         output_area: Rect,
         status: Status,
         plan_followup_action: Option<PlanFollowupAction>,
+        active_progress: Option<&str>,
     ) -> Vec<Line<'static>> {
         let output_text = Self::output_text(session, status);
         let output_text = Self::output_text_with_spaced_user_input(output_text);
@@ -269,12 +288,9 @@ impl<'a> SessionChatPage<'a> {
                 lines.pop();
             }
             lines.push(Line::from(""));
+            let status_message = Self::status_message(status, active_progress);
             lines.push(Line::from(vec![Span::styled(
-                format!(
-                    "{} {}",
-                    Icon::current_spinner(),
-                    Self::status_message(status)
-                ),
+                format!("{} {}", Icon::current_spinner(), status_message),
                 Style::default().fg(status.color()),
             )]));
         } else {
@@ -363,12 +379,36 @@ impl<'a> SessionChatPage<'a> {
         ])
     }
 
-    fn status_message(status: Status) -> &'static str {
+    fn status_message(status: Status, active_progress: Option<&str>) -> String {
+        if let Some(progress) = active_progress
+            .map(str::trim)
+            .filter(|progress| !progress.is_empty())
+        {
+            let base_progress = progress.trim_end_matches('.');
+
+            return format!("{base_progress}{}", Self::animated_progress_suffix());
+        }
+
         match status {
-            Status::InProgress => "Thinking...",
-            Status::Rebasing => "Rebasing...",
-            Status::Merging => "Merging...",
-            Status::New | Status::Review | Status::Done | Status::Canceled => "",
+            Status::InProgress => "Thinking...".to_string(),
+            Status::Rebasing => "Rebasing...".to_string(),
+            Status::Merging => "Merging...".to_string(),
+            Status::New | Status::Review | Status::Done | Status::Canceled => String::new(),
+        }
+    }
+
+    fn animated_progress_suffix() -> &'static str {
+        let tick = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 300;
+
+        match tick % 4 {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
         }
     }
 
@@ -750,8 +790,13 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let lines =
-            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
+        let lines = SessionChatPage::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            None,
+            None,
+        );
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -772,8 +817,13 @@ mod tests {
         session.status = Status::Canceled;
 
         // Act
-        let lines =
-            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
+        let lines = SessionChatPage::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            None,
+            None,
+        );
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -788,10 +838,22 @@ mod tests {
     #[test]
     fn test_status_message_for_merging() {
         // Arrange & Act
-        let message = SessionChatPage::status_message(Status::Merging);
+        let message = SessionChatPage::status_message(Status::Merging, None);
 
         // Assert
         assert_eq!(message, "Merging...");
+    }
+
+    #[test]
+    fn test_status_message_uses_active_progress_with_animated_suffix() {
+        // Arrange & Act
+        let message =
+            SessionChatPage::status_message(Status::InProgress, Some("Searching the web"));
+        let suffix = &message["Searching the web".len()..];
+
+        // Assert
+        assert!(message.starts_with("Searching the web"));
+        assert!(matches!(suffix, "" | "." | ".." | "..."));
     }
 
     #[test]
@@ -802,8 +864,13 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let lines =
-            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
+        let lines = SessionChatPage::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            None,
+            None,
+        );
 
         // Assert
         assert!(lines.last().expect("lines").to_string().is_empty());
@@ -819,8 +886,13 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines =
-            SessionChatPage::output_lines(&session, Rect::new(0, 0, 80, 5), session.status, None);
+        let lines = SessionChatPage::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            None,
+            None,
+        );
 
         // Assert
         // Expected: "some output", "", "Spinner..."
@@ -865,7 +937,8 @@ mod tests {
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let rendered_line_count = SessionChatPage::rendered_output_line_count(&session, 20, None);
+        let rendered_line_count =
+            SessionChatPage::rendered_output_line_count(&session, 20, None, None);
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
@@ -888,6 +961,7 @@ mod tests {
             area,
             Status::Review,
             Some(PlanFollowupAction::ImplementPlan),
+            None,
         );
         let rendered = lines
             .iter()
