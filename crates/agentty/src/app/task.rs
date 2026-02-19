@@ -252,10 +252,6 @@ impl TaskService {
                     return Ok(None);
                 }
                 Err(commit_error) => {
-                    if !Self::is_commit_error_retryable(&commit_error) {
-                        return Err(commit_error);
-                    }
-
                     if failure_tracker.observe(&commit_error) {
                         return Err(format!(
                             "Auto-commit assistance made no progress: repeated identical commit \
@@ -274,28 +270,6 @@ impl TaskService {
         }
 
         Err("Failed to auto-commit after assistance attempts".to_string())
-    }
-
-    fn is_commit_error_retryable(commit_error: &str) -> bool {
-        let normalized_error = commit_error.to_ascii_lowercase();
-        let non_retryable_patterns = [
-            "author identity unknown",
-            "unable to auto-detect email address",
-            "please tell me who you are",
-            "gpg failed to sign the data",
-            "gpg: signing failed",
-            "commit hooks kept modifying files after",
-            "failed to execute git",
-            "not a git repository",
-        ];
-        if non_retryable_patterns
-            .iter()
-            .any(|pattern| normalized_error.contains(pattern))
-        {
-            return false;
-        }
-
-        true
     }
 
     async fn append_commit_assist_header(
@@ -653,43 +627,6 @@ mod tests {
 
         // Assert
         assert_eq!(formatted, "- line one\n- line two");
-    }
-
-    #[test]
-    fn test_is_commit_error_retryable_returns_false_for_identity_error() {
-        // Arrange
-        let commit_error = "Failed to commit: Author identity unknown";
-
-        // Act
-        let is_retryable = TaskService::is_commit_error_retryable(commit_error);
-
-        // Assert
-        assert!(!is_retryable);
-    }
-
-    #[test]
-    fn test_is_commit_error_retryable_returns_true_for_conflict_error() {
-        // Arrange
-        let commit_error =
-            "Failed to commit: Committing is not possible because you have unmerged files";
-
-        // Act
-        let is_retryable = TaskService::is_commit_error_retryable(commit_error);
-
-        // Assert
-        assert!(is_retryable);
-    }
-
-    #[test]
-    fn test_is_commit_error_retryable_returns_true_for_generic_failure() {
-        // Arrange
-        let commit_error = "Failed to commit: rustfmt failed";
-
-        // Act
-        let is_retryable = TaskService::is_commit_error_retryable(commit_error);
-
-        // Assert
-        assert!(is_retryable);
     }
 
     #[tokio::test]
