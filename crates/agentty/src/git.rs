@@ -624,9 +624,10 @@ pub async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<()
 /// all changes (committed and uncommitted) relative to the base branch.
 ///
 /// Uses `git add --intent-to-add` to mark untracked files in the index, then
-/// `git diff <base_branch>` to compare the working tree against the base
-/// branch. This shows all accumulated changes across commits plus any
-/// uncommitted work. Finally resets the index to restore the original state.
+/// finds the merge-base between `HEAD` and `base_branch` to diff against the
+/// fork point. This ensures only the session's changes are shown, excluding
+/// any new commits pushed to the base branch after the session was created.
+/// Finally resets the index to restore the original state.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
@@ -652,8 +653,22 @@ pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, Str
             return Err(format!("Git add --intent-to-add failed: {}", stderr.trim()));
         }
 
+        let merge_base_output = Command::new("git")
+            .args(["merge-base", "HEAD", &base_branch])
+            .current_dir(&repo_path)
+            .output()
+            .map_err(|e| format!("Failed to execute git: {e}"))?;
+
+        let diff_target = if merge_base_output.status.success() {
+            String::from_utf8_lossy(&merge_base_output.stdout)
+                .trim()
+                .to_string()
+        } else {
+            base_branch
+        };
+
         let diff_output = Command::new("git")
-            .args(["diff", &base_branch])
+            .args(["diff", &diff_target])
             .current_dir(&repo_path)
             .output()
             .map_err(|e| format!("Failed to execute git: {e}"))?;
