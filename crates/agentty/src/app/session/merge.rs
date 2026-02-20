@@ -50,12 +50,14 @@ struct MergeTaskInput {
     folder: PathBuf,
     id: String,
     output: Arc<Mutex<String>>,
+    permission_mode: PermissionMode,
     repo_root: PathBuf,
     session_model: AgentModel,
     source_branch: String,
     status: Arc<Mutex<Status>>,
 }
 
+#[derive(Clone)]
 struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
@@ -101,6 +103,7 @@ impl SessionManager {
         let db = services.db().clone();
         let folder = session.folder.clone();
         let id = session.id.clone();
+        let permission_mode = session.permission_mode;
         let session_model = session.model;
         let app_event_tx = services.event_sender();
 
@@ -147,6 +150,7 @@ impl SessionManager {
             folder,
             id: id.clone(),
             output,
+            permission_mode,
             repo_root,
             session_model,
             source_branch: session_branch(&id),
@@ -167,6 +171,7 @@ impl SessionManager {
             folder,
             id,
             output,
+            permission_mode,
             repo_root,
             session_model,
             source_branch,
@@ -174,14 +179,21 @@ impl SessionManager {
         } = input;
 
         let merge_result: Result<String, String> = async {
-            // Auto-commit any pending changes before merging to ensure all work
-            // is captured in the session branch.
-            if let Err(error) = Self::commit_changes(&folder, true).await
-                && !error.contains("Nothing to commit")
-            {
-                return Err(format!(
-                    "Failed to commit pending changes before merge: {error}"
-                ));
+            // Rebase onto the base branch first to ensure the merge is clean and
+            // includes all recent changes. This also handles auto-commit and
+            // conflict resolution via the agent.
+            let rebase_input = RebaseAssistInput {
+                app_event_tx: app_event_tx.clone(),
+                base_branch: base_branch.clone(),
+                db: db.clone(),
+                folder: folder.clone(),
+                id: id.clone(),
+                output: Arc::clone(&output),
+                permission_mode,
+                session_model,
+            };
+            if let Err(error) = Self::execute_rebase_workflow(rebase_input).await {
+                return Err(format!("Merge failed during rebase step: {error}"));
             }
 
             let squash_diff = {
@@ -358,16 +370,6 @@ impl SessionManager {
         } = input;
 
         let rebase_result: Result<String, String> = async {
-            // Auto-commit any pending changes before rebasing to avoid
-            // "cannot rebase: You have unstaged changes".
-            if let Err(error) = Self::commit_changes(&folder, true).await
-                && !error.contains("Nothing to commit")
-            {
-                return Err(format!(
-                    "Failed to commit pending changes before rebase: {error}"
-                ));
-            }
-
             let rebase_input = RebaseAssistInput {
                 app_event_tx: app_event_tx.clone(),
                 base_branch: base_branch.clone(),
@@ -378,19 +380,35 @@ impl SessionManager {
                 permission_mode,
                 session_model,
             };
-            if let Err(error) = Self::run_rebase_assist_loop(rebase_input).await {
-                return Err(format!("Failed to rebase: {error}"));
-            }
 
-            let source_branch = session_branch(&id);
-
-            Ok(format!(
-                "Successfully rebased {source_branch} onto {base_branch}"
-            ))
+            Self::execute_rebase_workflow(rebase_input).await
         }
         .await;
 
         Self::finalize_rebase_task(rebase_result, &output, &db, &app_event_tx, &id, &status).await;
+    }
+
+    async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, String> {
+        // Auto-commit any pending changes before rebasing to avoid
+        // "cannot rebase: You have unstaged changes".
+        if let Err(error) = Self::commit_changes(&input.folder, true).await
+            && !error.contains("Nothing to commit")
+        {
+            return Err(format!(
+                "Failed to commit pending changes before rebase: {error}"
+            ));
+        }
+
+        if let Err(error) = Self::run_rebase_assist_loop(input.clone()).await {
+            return Err(format!("Failed to rebase: {error}"));
+        }
+
+        let source_branch = session_branch(&input.id);
+        let base_branch = &input.base_branch;
+
+        Ok(format!(
+            "Successfully rebased {source_branch} onto {base_branch}"
+        ))
     }
 
     async fn finalize_rebase_task(
@@ -964,5 +982,33 @@ mod tests {
 
         // Assert
         assert_eq!(summary, "Session finished with status `Done`.");
+    }
+
+    #[tokio::test]
+    async fn test_rebase_assist_input_clone() {
+        // Arrange
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let input = RebaseAssistInput {
+            app_event_tx: tx,
+            base_branch: "main".to_string(),
+            db,
+            folder: PathBuf::from("/tmp/test"),
+            id: "session-123".to_string(),
+            output: Arc::new(Mutex::new(String::new())),
+            permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+
+        // Act
+        #[allow(clippy::clone_on_copy)] // Explicit clone to test derivation
+        let cloned_input = input.clone();
+
+        // Assert
+        assert_eq!(input.base_branch, cloned_input.base_branch);
+        assert_eq!(input.id, cloned_input.id);
+        assert_eq!(input.folder, cloned_input.folder);
+        assert_eq!(input.permission_mode, cloned_input.permission_mode);
+        assert_eq!(input.session_model, cloned_input.session_model);
     }
 }
