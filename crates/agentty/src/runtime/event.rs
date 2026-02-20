@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crossterm::event::Event;
@@ -32,19 +33,27 @@ impl EventSource for CrosstermEventSource {
     }
 }
 
-pub(crate) fn spawn_event_reader(event_tx: mpsc::UnboundedSender<Event>) {
+pub(crate) fn spawn_event_reader(
+    event_tx: mpsc::UnboundedSender<Event>,
+    shutdown: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
     let event_source: Arc<dyn EventSource> = Arc::new(CrosstermEventSource);
 
-    let _event_reader = spawn_event_reader_with_source(event_source, event_tx);
+    spawn_event_reader_with_source(event_source, event_tx, shutdown)
 }
 
 fn spawn_event_reader_with_source(
     event_source: Arc<dyn EventSource>,
     event_tx: mpsc::UnboundedSender<Event>,
+    shutdown: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         loop {
-            match event_source.poll(Duration::from_millis(250)) {
+            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            match event_source.poll(Duration::from_millis(50)) {
                 Ok(true) => {
                     if let Ok(event) = event_source.read()
                         && event_tx.send(event).is_err()
@@ -141,7 +150,7 @@ mod tests {
         let mut sequence = Sequence::new();
         mock_source
             .expect_poll()
-            .with(eq(Duration::from_millis(250)))
+            .with(eq(Duration::from_millis(50)))
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Ok(true));
@@ -157,15 +166,16 @@ mod tests {
             });
         mock_source
             .expect_poll()
-            .with(eq(Duration::from_millis(250)))
+            .with(eq(Duration::from_millis(50)))
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Err(io::Error::new(ErrorKind::Interrupted, "stop")));
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
 
         // Act
-        let join_handle = spawn_event_reader_with_source(event_source, event_tx);
+        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
         let received_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
             .expect("timed out waiting for event")
@@ -184,7 +194,7 @@ mod tests {
         let mut mock_source = MockEventSource::new();
         mock_source
             .expect_poll()
-            .with(eq(Duration::from_millis(250)))
+            .with(eq(Duration::from_millis(50)))
             .times(1)
             .returning(|_| Ok(true));
         mock_source.expect_read().times(1).returning(|| {
@@ -196,9 +206,10 @@ mod tests {
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         drop(event_rx);
+        let shutdown = Arc::new(AtomicBool::new(false));
 
         // Act
-        let join_handle = spawn_event_reader_with_source(event_source, event_tx);
+        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
         let join_result = join_handle.join();
 
         // Assert
@@ -212,22 +223,23 @@ mod tests {
         let mut sequence = Sequence::new();
         mock_source
             .expect_poll()
-            .with(eq(Duration::from_millis(250)))
+            .with(eq(Duration::from_millis(50)))
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Ok(false));
         mock_source
             .expect_poll()
-            .with(eq(Duration::from_millis(250)))
+            .with(eq(Duration::from_millis(50)))
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Err(io::Error::new(ErrorKind::Interrupted, "stop")));
         mock_source.expect_read().times(0);
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
 
         // Act
-        let join_handle = spawn_event_reader_with_source(event_source, event_tx);
+        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
         let join_result = join_handle.join();
         let queued_event = event_rx.try_recv();
 

@@ -1,4 +1,6 @@
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use ratatui::Terminal;
@@ -31,13 +33,15 @@ pub async fn run(app: &mut App) -> io::Result<()> {
     // Spawn a dedicated thread for crossterm event reading so the main async
     // loop can yield to tokio between iterations.
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    event::spawn_event_reader(event_tx);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    event::spawn_event_reader(event_tx, shutdown.clone());
 
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await?;
 
+    shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     terminal.show_cursor()?;
 
     Ok(())
