@@ -9,5 +9,6 @@ Reusable UI widgets implementing the `Component` trait.
 - [footer_bar.rs](footer_bar.rs) - Footer bar component.
 - [help_overlay.rs](help_overlay.rs) - Help overlay popup component.
 - [mod.rs](mod.rs) - Component module exports.
+- [session_output.rs](session_output.rs) - Session chat output panel component.
 - [status_bar.rs](status_bar.rs) - Status bar component.
 - [tab.rs](tab.rs) - Tabs navigation component.
