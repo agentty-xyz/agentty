@@ -232,9 +232,13 @@ impl<'a> SessionChatPage<'a> {
 
     fn render_output_panel(&self, f: &mut Frame, output_area: Rect, session: &Session) {
         let status = session.status;
-        let max_title_width = output_area.width.saturating_sub(4) as usize;
+        let status_str = status.to_string();
+        let max_title_width = output_area
+            .width
+            .saturating_sub(u16::try_from(status_str.len()).unwrap_or(0))
+            .saturating_sub(8) as usize;
         let truncated_title = truncate_with_ellipsis(session.display_title(), max_title_width);
-        let title = format!(" {truncated_title} ");
+        let title = format!(" {status_str} - {truncated_title} ");
 
         let lines = Self::output_lines(
             session,
@@ -429,8 +433,7 @@ impl<'a> SessionChatPage<'a> {
                 "commits"
             };
             let title = format!(
-                " {} - {commit_count} {commits_label} [{}] ({}) ",
-                session.status,
+                " {commit_count} {commits_label} [{}] ({}) ",
                 session.model.as_str(),
                 session.permission_mode.label()
             );
