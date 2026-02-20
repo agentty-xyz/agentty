@@ -14,7 +14,7 @@ use crate::model::{
     extract_at_mention_query,
 };
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
-use crate::ui::util::{calculate_input_height, wrap_lines};
+use crate::ui::util::{calculate_input_height, truncate_with_ellipsis, wrap_lines};
 use crate::ui::{Component, Page};
 
 /// Chat page renderer for a single session.
@@ -232,18 +232,10 @@ impl<'a> SessionChatPage<'a> {
 
     fn render_output_panel(&self, f: &mut Frame, output_area: Rect, session: &Session) {
         let status = session.status;
-        let commit_count = session.commit_count;
-        let commits_label = if commit_count == 1 {
-            "commit"
-        } else {
-            "commits"
-        };
-        let title = format!(
-            " {} — {status} - {commit_count} {commits_label} [{}] ({}) ",
-            session.display_title(),
-            session.model.as_str(),
-            session.permission_mode.label()
-        );
+        let max_title_width = output_area.width.saturating_sub(4) as usize;
+        let truncated_title = truncate_with_ellipsis(session.display_title(), max_title_width);
+        let title = format!(" {truncated_title} ");
+
         let lines = Self::output_lines(
             session,
             output_area,
@@ -430,11 +422,18 @@ impl<'a> SessionChatPage<'a> {
             ..
         } = self.mode
         {
-            let title = if session.prompt.is_empty() {
-                " New Chat "
+            let commit_count = session.commit_count;
+            let commits_label = if commit_count == 1 {
+                "commit"
             } else {
-                " Reply "
+                "commits"
             };
+            let title = format!(
+                " {} - {commit_count} {commits_label} [{}] ({}) ",
+                session.status,
+                session.model.as_str(),
+                session.permission_mode.label()
+            );
 
             let menu = if input.text().starts_with('/') {
                 Self::build_slash_menu(
@@ -454,8 +453,14 @@ impl<'a> SessionChatPage<'a> {
                 None
             };
 
-            ChatInput::new(title, input.text(), input.cursor, "Type your message", menu)
-                .render(f, bottom_area);
+            ChatInput::new(
+                &title,
+                input.text(),
+                input.cursor,
+                "Type your message",
+                menu,
+            )
+            .render(f, bottom_area);
 
             return;
         }
