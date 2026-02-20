@@ -8,3 +8,4 @@ pub mod lock;
 pub mod model;
 pub mod runtime;
 pub mod ui;
+pub mod version;

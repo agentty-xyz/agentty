@@ -6,18 +6,118 @@ use ratatui::widgets::Paragraph;
 
 use crate::ui::Component;
 
-pub struct StatusBar;
+/// Top status bar showing current version and update availability.
+pub struct StatusBar {
+    current_version: String,
+    latest_available_version: Option<String>,
+}
+
+impl StatusBar {
+    /// Creates a status bar from the current and latest available versions.
+    pub fn new(current_version: String, latest_available_version: Option<String>) -> Self {
+        Self {
+            current_version,
+            latest_available_version,
+        }
+    }
+}
 
 impl Component for StatusBar {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let version = env!("CARGO_PKG_VERSION");
-        let status_bar = Paragraph::new(Line::from(Span::styled(
-            format!(" Agentty v{version}"),
+        let mut version_spans = vec![Span::styled(
+            format!(" Current version {}", self.current_version),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )))
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+        )];
+        if let Some(latest_available_version) = &self.latest_available_version {
+            version_spans.push(Span::raw(" | "));
+            version_spans.push(Span::styled(
+                format!("New version {latest_available_version} available"),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        let status_bar = Paragraph::new(Line::from(version_spans))
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
         f.render_widget(status_bar, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_status_bar_new_stores_versions() {
+        // Arrange
+        let current_version = "v0.1.12".to_string();
+        let latest_available_version = Some("v0.1.13".to_string());
+
+        // Act
+        let status_bar = StatusBar::new(current_version.clone(), latest_available_version.clone());
+
+        // Assert
+        assert_eq!(status_bar.current_version, current_version);
+        assert_eq!(
+            status_bar.latest_available_version,
+            latest_available_version
+        );
+    }
+
+    #[test]
+    fn test_status_bar_render_shows_current_version_without_update() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(80, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let status_bar = StatusBar::new("v0.1.12".to_string(), None);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::ui::Component::render(&status_bar, frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(text.contains("Current version v0.1.12"));
+        assert!(!text.contains("New version"));
+    }
+
+    #[test]
+    fn test_status_bar_render_shows_update_notice_when_available() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let status_bar = StatusBar::new("v0.1.12".to_string(), Some("v0.1.13".to_string()));
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::ui::Component::render(&status_bar, frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(text.contains("Current version v0.1.12"));
+        assert!(text.contains("New version v0.1.13 available"));
     }
 }

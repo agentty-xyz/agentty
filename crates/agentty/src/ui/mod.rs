@@ -30,6 +30,7 @@ pub struct RenderContext<'a> {
     pub current_tab: Tab,
     pub git_branch: Option<&'a str>,
     pub git_status: Option<(u32, u32)>,
+    pub latest_available_version: Option<&'a str>,
     pub mode: &'a AppMode,
     pub plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
     pub projects: &'a [Project],
@@ -101,7 +102,13 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
             .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(area);
 
-        pages::onboarding::OnboardingPage.render(f, onboarding_chunks[0]);
+        pages::onboarding::OnboardingPage::new(
+            current_version_display_text(),
+            context
+                .latest_available_version
+                .map(std::string::ToString::to_string),
+        )
+        .render(f, onboarding_chunks[0]);
         render_footer_bar(
             f,
             onboarding_chunks[1],
@@ -128,7 +135,13 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     let content_area = outer_chunks[1];
     let footer_bar_area = outer_chunks[2];
 
-    components::status_bar::StatusBar.render(f, status_bar_area);
+    components::status_bar::StatusBar::new(
+        current_version_display_text(),
+        context
+            .latest_available_version
+            .map(std::string::ToString::to_string),
+    )
+    .render(f, status_bar_area);
     render_footer_bar(
         f,
         footer_bar_area,
@@ -570,6 +583,10 @@ fn render_help(
 /// Returns `true` when the onboarding page should replace the normal UI.
 fn should_render_onboarding(mode: &AppMode, show_onboarding: bool) -> bool {
     matches!(mode, AppMode::List) && show_onboarding
+}
+
+fn current_version_display_text() -> String {
+    format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Renders the footer bar with directory, branch, and git status info.

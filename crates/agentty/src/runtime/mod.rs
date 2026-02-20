@@ -73,6 +73,9 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let current_working_dir = app.working_dir().to_path_buf();
     let current_git_branch = app.git_branch().map(std::string::ToString::to_string);
     let current_git_status = app.git_status_info();
+    let latest_available_version = app
+        .latest_available_version()
+        .map(std::string::ToString::to_string);
     let current_active_project_id = app.active_project_id();
     let plan_followup_actions = app.plan_followup_actions_snapshot();
     let session_progress_messages = app.session_progress_snapshot();
@@ -89,6 +92,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
                 current_tab,
                 git_branch: current_git_branch.as_deref(),
                 git_status: current_git_status,
+                latest_available_version: latest_available_version.as_deref(),
                 mode,
                 plan_followup_actions: &plan_followup_actions,
                 projects,

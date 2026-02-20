@@ -120,6 +120,28 @@ impl TaskService {
         });
     }
 
+    /// Spawns a one-shot background check for newer stable `agentty` releases.
+    ///
+    /// The task emits [`AppEvent::VersionAvailabilityUpdated`] with
+    /// `Some("vX.Y.Z")` only when a newer stable version is detected.
+    #[cfg(not(test))]
+    pub(super) fn spawn_version_check_task(app_event_tx: mpsc::UnboundedSender<AppEvent>) {
+        tokio::spawn(async move {
+            let latest_available_version = crate::version::latest_stable_version_tag()
+                .await
+                .filter(|latest_version| {
+                    crate::version::is_newer_than_current_version(
+                        env!("CARGO_PKG_VERSION"),
+                        latest_version,
+                    )
+                });
+
+            let _ = app_event_tx.send(AppEvent::VersionAvailabilityUpdated {
+                latest_available_version,
+            });
+        });
+    }
+
     /// Executes one agent command, captures output, persists stats, and
     /// commits.
     ///

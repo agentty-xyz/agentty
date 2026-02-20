@@ -47,6 +47,10 @@ pub fn agentty_home() -> PathBuf {
 pub(crate) enum AppEvent {
     /// Indicates latest ahead/behind information from the git status worker.
     GitStatusUpdated { status: Option<(u32, u32)> },
+    /// Indicates whether a newer stable `agentty` release is available.
+    VersionAvailabilityUpdated {
+        latest_available_version: Option<String>,
+    },
     /// Indicates a session history reset has been persisted.
     SessionHistoryCleared { session_id: String },
     /// Indicates a session model selection has been persisted.
@@ -75,6 +79,8 @@ struct AppEventBatch {
     cleared_session_history_ids: HashSet<String>,
     git_status_update: Option<(u32, u32)>,
     has_git_status_update: bool,
+    has_latest_available_version_update: bool,
+    latest_available_version_update: Option<String>,
     session_model_updates: HashMap<String, AgentModel>,
     session_progress_updates: HashMap<String, Option<String>>,
     session_ids: HashSet<String>,
@@ -162,6 +168,7 @@ pub struct App {
     pub(crate) services: AppServices,
     pub(crate) sessions: SessionManager,
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    latest_available_version: Option<String>,
     plan_followup_actions: HashMap<String, PlanFollowupAction>,
     session_progress_messages: HashMap<String, String>,
 }
@@ -225,6 +232,10 @@ impl App {
             ),
         );
 
+        #[cfg(not(test))]
+        {
+            task::TaskService::spawn_version_check_task(event_tx.clone());
+        }
         if projects.has_git_branch() {
             task::TaskService::spawn_git_status_task(
                 projects.working_dir(),
@@ -240,6 +251,7 @@ impl App {
             services,
             sessions,
             event_rx,
+            latest_available_version: None,
             plan_followup_actions: HashMap::new(),
             session_progress_messages: HashMap::new(),
         }
@@ -263,6 +275,11 @@ impl App {
     /// Returns the latest ahead/behind snapshot from reducer-applied events.
     pub fn git_status_info(&self) -> Option<(u32, u32)> {
         self.projects.git_status()
+    }
+
+    /// Returns the newer stable `agentty` version when an update is available.
+    pub fn latest_available_version(&self) -> Option<&str> {
+        self.latest_available_version.as_deref()
     }
 
     /// Returns whether the onboarding screen should be shown.
@@ -608,6 +625,10 @@ impl App {
             self.projects.set_git_status(event_batch.git_status_update);
         }
 
+        if event_batch.has_latest_available_version_update {
+            self.latest_available_version = event_batch.latest_available_version_update;
+        }
+
         for session_id in &event_batch.cleared_session_history_ids {
             self.sessions.apply_session_history_cleared(session_id);
         }
@@ -710,6 +731,12 @@ impl AppEventBatch {
                 self.has_git_status_update = true;
                 self.git_status_update = status;
             }
+            AppEvent::VersionAvailabilityUpdated {
+                latest_available_version,
+            } => {
+                self.has_latest_available_version_update = true;
+                self.latest_available_version_update = latest_available_version;
+            }
             AppEvent::SessionHistoryCleared { session_id } => {
                 self.cleared_session_history_ids.insert(session_id);
             }
@@ -809,6 +836,24 @@ mod tests {
     }
 
     #[test]
+    fn test_app_event_batch_collects_version_availability_update() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::VersionAvailabilityUpdated {
+            latest_available_version: Some("v0.1.13".to_string()),
+        });
+
+        // Assert
+        assert!(event_batch.has_latest_available_version_update);
+        assert_eq!(
+            event_batch.latest_available_version_update.as_deref(),
+            Some("v0.1.13")
+        );
+    }
+
+    #[test]
     fn test_app_event_batch_collects_session_updates() {
         // Arrange
         let mut event_batch = AppEventBatch::default();
@@ -887,6 +932,36 @@ mod tests {
 
         // Assert
         assert_eq!(app.git_status_info(), Some((5, 3)));
+    }
+
+    #[tokio::test]
+    async fn test_apply_app_events_updates_latest_available_version() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base_path = temp_dir.path().join("wt");
+        let working_dir = temp_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let mut app = App::new(base_path, working_dir, None, database).await;
+
+        // Act
+        app.apply_app_events(AppEvent::VersionAvailabilityUpdated {
+            latest_available_version: Some("v0.1.13".to_string()),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(app.latest_available_version(), Some("v0.1.13"));
+
+        // Act
+        app.apply_app_events(AppEvent::VersionAvailabilityUpdated {
+            latest_available_version: None,
+        })
+        .await;
+
+        // Assert
+        assert_eq!(app.latest_available_version(), None);
     }
 
     #[tokio::test]

@@ -23,3 +23,4 @@
 - [lock.rs](lock.rs) - Single-instance session lock using POSIX `flock`.
 - [main.rs](main.rs) - Binary composition root for lock, DB bootstrap, and runtime launch.
 - [model.rs](model.rs) - Core domain models (`Session`, `Status`, `AppMode`).
+- [version.rs](version.rs) - Version discovery and comparison helpers for update notices.
