@@ -2,109 +2,99 @@
 
 use std::process::Command;
 
-const AGENTTY_GITHUB_REPO: &str = "https://github.com/opencloudtool/agentty";
-const TAG_REF_PREFIX: &str = "refs/tags/";
+use semver::Version;
+use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct StableVersion {
-    major: u64,
-    minor: u64,
-    patch: u64,
+const AGENTTY_NPM_PACKAGE: &str = "agentty";
+const NPM_REGISTRY_LATEST_URL: &str = "https://registry.npmjs.org/agentty/latest";
+
+#[derive(Debug, Deserialize)]
+struct NpmRegistryLatestResponse {
+    version: String,
 }
 
-impl StableVersion {
-    fn to_tag(self) -> String {
-        format!("v{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
-
-/// Returns the latest stable `vX.Y.Z` tag from the official GitHub repository.
-pub async fn latest_stable_version_tag() -> Option<String> {
-    tokio::task::spawn_blocking(fetch_latest_stable_version_tag_sync)
+/// Returns the latest npmjs version tag (`vX.Y.Z`) for `agentty`.
+pub async fn latest_npm_version_tag() -> Option<String> {
+    tokio::task::spawn_blocking(fetch_latest_npm_version_tag_sync)
         .await
         .ok()
         .flatten()
 }
 
-/// Returns `true` when `candidate_version` is a newer stable version.
+/// Returns `true` when `candidate_version` is newer than `current_version`.
 pub(crate) fn is_newer_than_current_version(
     current_version: &str,
     candidate_version: &str,
 ) -> bool {
-    let Some(current_version) = parse_stable_version(current_version) else {
+    let Some(current_version) = parse_version(current_version) else {
         return false;
     };
-    let Some(candidate_version) = parse_stable_version(candidate_version) else {
+
+    let Some(candidate_version) = parse_version(candidate_version) else {
         return false;
     };
 
     candidate_version > current_version
 }
 
-fn fetch_latest_stable_version_tag_sync() -> Option<String> {
-    let output = Command::new("git")
-        .args(["ls-remote", "--tags", "--refs", AGENTTY_GITHUB_REPO, "v*"])
+fn fetch_latest_npm_version_tag_sync() -> Option<String> {
+    if let Some(latest_version) = fetch_latest_version_with_npm_cli() {
+        return Some(version_tag(&latest_version));
+    }
+
+    let latest_version = fetch_latest_version_with_registry_curl()?;
+
+    Some(version_tag(&latest_version))
+}
+
+fn fetch_latest_version_with_npm_cli() -> Option<Version> {
+    let output = Command::new("npm")
+        .args(["view", AGENTTY_NPM_PACKAGE, "version", "--json"])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
 
-    let refs_output = String::from_utf8_lossy(&output.stdout);
+    let response = String::from_utf8_lossy(&output.stdout);
 
-    latest_stable_version_tag_from_ls_remote_output(refs_output.as_ref())
+    parse_npm_cli_version_response(response.as_ref())
 }
 
-fn latest_stable_version_tag_from_ls_remote_output(refs_output: &str) -> Option<String> {
-    let mut latest_version = None;
-    for ref_line in refs_output.lines() {
-        let Some(tag_name) = parse_tag_name_from_ref_line(ref_line) else {
-            continue;
-        };
-        let Some(parsed_version) = parse_stable_version(tag_name) else {
-            continue;
-        };
-        if latest_version.is_none_or(|current_version| parsed_version > current_version) {
-            latest_version = Some(parsed_version);
-        }
+fn parse_npm_cli_version_response(response: &str) -> Option<Version> {
+    let version: String = serde_json::from_str(response).ok()?;
+
+    parse_version(&version)
+}
+
+fn fetch_latest_version_with_registry_curl() -> Option<Version> {
+    let output = Command::new("curl")
+        .args(["-fsSL", NPM_REGISTRY_LATEST_URL])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
 
-    latest_version.map(StableVersion::to_tag)
+    let response = String::from_utf8_lossy(&output.stdout);
+
+    parse_registry_latest_response(response.as_ref())
 }
 
-fn parse_tag_name_from_ref_line(ref_line: &str) -> Option<&str> {
-    let (_, reference_name) = ref_line.split_once('\t')?;
+fn parse_registry_latest_response(response: &str) -> Option<Version> {
+    let payload: NpmRegistryLatestResponse = serde_json::from_str(response).ok()?;
 
-    reference_name.strip_prefix(TAG_REF_PREFIX)
+    parse_version(&payload.version)
 }
 
-fn parse_stable_version(version: &str) -> Option<StableVersion> {
+fn parse_version(version: &str) -> Option<Version> {
     let normalized_version = version.strip_prefix('v').unwrap_or(version);
-    if normalized_version.contains('-') || normalized_version.contains('+') {
-        return None;
-    }
 
-    let mut version_parts = normalized_version.split('.');
-    let major = parse_version_part(version_parts.next()?)?;
-    let minor = parse_version_part(version_parts.next()?)?;
-    let patch = parse_version_part(version_parts.next()?)?;
-    if version_parts.next().is_some() {
-        return None;
-    }
-
-    Some(StableVersion {
-        major,
-        minor,
-        patch,
-    })
+    Version::parse(normalized_version).ok()
 }
 
-fn parse_version_part(version_part: &str) -> Option<u64> {
-    if version_part.is_empty() {
-        return None;
-    }
-
-    version_part.parse::<u64>().ok()
+fn version_tag(version: &Version) -> String {
+    format!("v{version}")
 }
 
 #[cfg(test)]
@@ -112,79 +102,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_stable_version_accepts_prefixed_version() {
+    fn test_parse_version_accepts_prefixed_version() {
         // Arrange
         let version = "v1.2.3";
 
         // Act
-        let parsed_version = parse_stable_version(version);
+        let parsed_version = parse_version(version);
 
         // Assert
-        assert_eq!(
-            parsed_version,
-            Some(StableVersion {
-                major: 1,
-                minor: 2,
-                patch: 3
-            })
-        );
+        assert_eq!(parsed_version, Some(Version::new(1, 2, 3)));
     }
 
     #[test]
-    fn test_parse_stable_version_rejects_prerelease_version() {
+    fn test_parse_version_rejects_invalid_version() {
         // Arrange
-        let version = "v1.2.3-beta.1";
+        let version = "vnext";
 
         // Act
-        let parsed_version = parse_stable_version(version);
+        let parsed_version = parse_version(version);
 
         // Assert
         assert_eq!(parsed_version, None);
     }
 
     #[test]
-    fn test_latest_stable_version_tag_from_ls_remote_output_returns_latest_stable() {
+    fn test_parse_npm_cli_version_response_accepts_json_string() {
         // Arrange
-        let refs_output = concat!(
-            "abcdef0\trefs/tags/v0.1.8\n",
-            "abcdef1\trefs/tags/v0.1.12\n",
-            "abcdef2\trefs/tags/v0.1.9\n",
-        );
+        let response = "\"0.1.14\"";
 
         // Act
-        let latest_version_tag = latest_stable_version_tag_from_ls_remote_output(refs_output);
+        let parsed_version = parse_npm_cli_version_response(response);
 
         // Assert
-        assert_eq!(latest_version_tag.as_deref(), Some("v0.1.12"));
+        assert_eq!(parsed_version, Some(Version::new(0, 1, 14)));
     }
 
     #[test]
-    fn test_latest_stable_version_tag_from_ls_remote_output_ignores_prerelease_and_invalid_tags() {
+    fn test_parse_registry_latest_response_extracts_version() {
         // Arrange
-        let refs_output = concat!(
-            "abcdef0\trefs/tags/v0.1.11\n",
-            "abcdef1\trefs/tags/v0.1.12-beta.1\n",
-            "abcdef2\trefs/tags/vnext\n",
-            "abcdef3\trefs/tags/notes\n",
-        );
+        let response = r#"{"name":"agentty","version":"0.1.14"}"#;
 
         // Act
-        let latest_version_tag = latest_stable_version_tag_from_ls_remote_output(refs_output);
+        let parsed_version = parse_registry_latest_response(response);
 
         // Assert
-        assert_eq!(latest_version_tag.as_deref(), Some("v0.1.11"));
+        assert_eq!(parsed_version, Some(Version::new(0, 1, 14)));
     }
 
     #[test]
-    fn test_latest_stable_version_tag_from_ls_remote_output_returns_none_for_empty_input() {
+    fn test_version_tag_prefixes_semver_with_v() {
         // Arrange
-        let refs_output = "";
+        let version = Version::new(0, 1, 14);
 
         // Act
-        let latest_version_tag = latest_stable_version_tag_from_ls_remote_output(refs_output);
+        let version_tag = version_tag(&version);
 
         // Assert
-        assert_eq!(latest_version_tag, None);
+        assert_eq!(version_tag, "v0.1.14");
     }
 
     #[test]

@@ -23,6 +23,7 @@ dependencies = [
  "mockall",
  "nix 0.31.1",
  "ratatui",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",

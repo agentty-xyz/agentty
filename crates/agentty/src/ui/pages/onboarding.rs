@@ -33,14 +33,17 @@ impl OnboardingPage {
     }
 
     fn current_version_message(&self) -> String {
-        format!("Current version {}", self.current_version)
+        self.current_version.clone()
     }
 
     fn update_notice_message(&self) -> Option<String> {
         self.latest_available_version
             .as_ref()
             .map(|latest_available_version| {
-                format!("New version {latest_available_version} available")
+                format!(
+                    "{latest_available_version} version available update with npm i -g \
+                     agentty@latest"
+                )
             })
     }
 
@@ -179,8 +182,8 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Current version v0.1.12"));
-        assert!(!text.contains("New version"));
+        assert!(text.contains("v0.1.12"));
+        assert!(!text.contains("version available update"));
     }
 
     #[test]
@@ -201,7 +204,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Current version v0.1.12"));
-        assert!(text.contains("New version v0.1.13 available"));
+        assert!(text.contains("v0.1.12"));
+        assert!(text.contains("v0.1.13 version available update with npm i -g agentty@latest"));
     }
 }

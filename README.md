@@ -87,8 +87,8 @@ This allows agents to work on code changes without affecting your main working d
 
 ### Version Update Notice
 
-- On startup, Agentty checks for the latest stable release tag from GitHub.
-- If a newer version exists, an inline `New version vX.Y.Z available` notice is shown:
+- On startup, Agentty checks npmjs for the latest `agentty` version.
+- If a newer version exists, an inline `vX.Y.Z version available update with npm i -g agentty@latest` notice is shown:
   - in the top status bar next to the current version
   - on the onboarding screen when there are no sessions
 

@@ -25,7 +25,7 @@ impl StatusBar {
 impl Component for StatusBar {
     fn render(&self, f: &mut Frame, area: Rect) {
         let mut version_spans = vec![Span::styled(
-            format!(" Current version {}", self.current_version),
+            format!(" Agentty {}", self.current_version),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -33,7 +33,10 @@ impl Component for StatusBar {
         if let Some(latest_available_version) = &self.latest_available_version {
             version_spans.push(Span::raw(" | "));
             version_spans.push(Span::styled(
-                format!("New version {latest_available_version} available"),
+                format!(
+                    "{latest_available_version} version available update with npm i -g \
+                     agentty@latest"
+                ),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -90,8 +93,8 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Current version v0.1.12"));
-        assert!(!text.contains("New version"));
+        assert!(text.contains("Agentty v0.1.12"));
+        assert!(!text.contains("version available update"));
     }
 
     #[test]
@@ -117,7 +120,7 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Current version v0.1.12"));
-        assert!(text.contains("New version v0.1.13 available"));
+        assert!(text.contains("Agentty v0.1.12"));
+        assert!(text.contains("v0.1.13 version available update with npm i -g agentty@latest"));
     }
 }
