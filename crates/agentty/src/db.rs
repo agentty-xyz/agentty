@@ -91,10 +91,10 @@ pub struct SessionRow {
     pub base_branch: String,
     pub created_at: i64,
     pub id: String,
-    pub input_tokens: Option<i64>,
+    pub input_tokens: i64,
     pub model: String,
     pub output: String,
-    pub output_tokens: Option<i64>,
+    pub output_tokens: i64,
     pub permission_mode: String,
     pub project_id: Option<i64>,
     pub prompt: String,
@@ -474,20 +474,20 @@ WHERE id = ?
     /// # Errors
     /// Returns an error if the stats update fails.
     pub async fn update_session_stats(&self, id: &str, stats: &SessionStats) -> Result<(), String> {
-        if stats.input_tokens.is_none() && stats.output_tokens.is_none() {
+        if stats.input_tokens == 0 && stats.output_tokens == 0 {
             return Ok(());
         }
 
         sqlx::query(
             r"
 UPDATE session
-SET input_tokens = COALESCE(input_tokens, 0) + COALESCE(?, 0),
-    output_tokens = COALESCE(output_tokens, 0) + COALESCE(?, 0)
+SET input_tokens = input_tokens + ?,
+    output_tokens = output_tokens + ?
 WHERE id = ?
 ",
         )
-        .bind(stats.input_tokens)
-        .bind(stats.output_tokens)
+        .bind(stats.input_tokens.cast_signed())
+        .bind(stats.output_tokens.cast_signed())
         .bind(id)
         .execute(&self.pool)
         .await
@@ -1496,16 +1496,16 @@ WHERE id = 'beta'
 
         // Act
         let stats = SessionStats {
-            input_tokens: Some(1000),
-            output_tokens: Some(500),
+            input_tokens: 1000,
+            output_tokens: 500,
         };
         let result = db.update_session_stats("sess1", &stats).await;
 
         // Assert
         assert!(result.is_ok());
         let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].input_tokens, Some(1000));
-        assert_eq!(sessions[0].output_tokens, Some(500));
+        assert_eq!(sessions[0].input_tokens, 1000);
+        assert_eq!(sessions[0].output_tokens, 500);
     }
 
     #[tokio::test]
@@ -1522,16 +1522,16 @@ WHERE id = 'beta'
 
         // Act
         let first = SessionStats {
-            input_tokens: Some(1000),
-            output_tokens: Some(500),
+            input_tokens: 1000,
+            output_tokens: 500,
         };
         db.update_session_stats("sess1", &first)
             .await
             .expect("first update");
 
         let second = SessionStats {
-            input_tokens: Some(2000),
-            output_tokens: Some(700),
+            input_tokens: 2000,
+            output_tokens: 700,
         };
         db.update_session_stats("sess1", &second)
             .await
@@ -1539,12 +1539,12 @@ WHERE id = 'beta'
 
         // Assert
         let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].input_tokens, Some(3000));
-        assert_eq!(sessions[0].output_tokens, Some(1200));
+        assert_eq!(sessions[0].input_tokens, 3000);
+        assert_eq!(sessions[0].output_tokens, 1200);
     }
 
     #[tokio::test]
-    async fn test_update_session_stats_noop_when_both_none() {
+    async fn test_update_session_stats_noop_when_both_zero() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
         let project_id = db
@@ -1557,20 +1557,20 @@ WHERE id = 'beta'
 
         // Act
         let stats = SessionStats {
-            input_tokens: None,
-            output_tokens: None,
+            input_tokens: 0,
+            output_tokens: 0,
         };
         let result = db.update_session_stats("sess1", &stats).await;
 
         // Assert
         assert!(result.is_ok());
         let sessions = db.load_sessions().await.expect("failed to load");
-        assert_eq!(sessions[0].input_tokens, None);
-        assert_eq!(sessions[0].output_tokens, None);
+        assert_eq!(sessions[0].input_tokens, 0);
+        assert_eq!(sessions[0].output_tokens, 0);
     }
 
     #[tokio::test]
-    async fn test_load_sessions_stats_null_by_default() {
+    async fn test_load_sessions_stats_zero_by_default() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
         let project_id = db
@@ -1585,8 +1585,8 @@ WHERE id = 'beta'
         let sessions = db.load_sessions().await.expect("failed to load");
 
         // Assert
-        assert_eq!(sessions[0].input_tokens, None);
-        assert_eq!(sessions[0].output_tokens, None);
+        assert_eq!(sessions[0].input_tokens, 0);
+        assert_eq!(sessions[0].output_tokens, 0);
     }
 
     #[tokio::test]
@@ -1642,8 +1642,8 @@ WHERE id = 'beta'
             .await
             .expect("failed to update summary");
         let stats = SessionStats {
-            input_tokens: Some(1000),
-            output_tokens: Some(500),
+            input_tokens: 1000,
+            output_tokens: 500,
         };
         db.update_session_stats("sess1", &stats)
             .await
@@ -1660,8 +1660,8 @@ WHERE id = 'beta'
         assert_eq!(sessions[0].summary, None);
         assert_eq!(sessions[0].title, None);
         assert_eq!(sessions[0].status, "New");
-        assert_eq!(sessions[0].input_tokens, Some(1000));
-        assert_eq!(sessions[0].output_tokens, Some(500));
+        assert_eq!(sessions[0].input_tokens, 1000);
+        assert_eq!(sessions[0].output_tokens, 500);
         // Preserved fields
         assert_eq!(sessions[0].model, "claude-opus-4-6");
         assert_eq!(sessions[0].base_branch, "main");

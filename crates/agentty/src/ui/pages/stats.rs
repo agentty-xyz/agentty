@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use crate::model::Session;
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
-use crate::ui::util::format_optional_tokens;
+use crate::ui::util::format_token_count;
 
 /// Stats dashboard showing per-session token statistics.
 pub struct StatsPage<'a> {
@@ -44,8 +44,8 @@ impl Page for StatsPage<'_> {
                 Cell::from(session.display_title().to_string()),
                 Cell::from(session.project_name.clone()),
                 Cell::from(session.model.as_str()),
-                Cell::from(format_optional_tokens(session.stats.input_tokens)),
-                Cell::from(format_optional_tokens(session.stats.output_tokens)),
+                Cell::from(format_token_count(session.stats.input_tokens)),
+                Cell::from(format_token_count(session.stats.output_tokens)),
             ];
 
             Row::new(cells).height(1)
@@ -82,31 +82,19 @@ impl StatsPage<'_> {
         let help = Paragraph::new("q: quit").style(Style::default().fg(Color::Gray));
         f.render_widget(help, footer_chunks[0]);
 
-        let total_input: i64 = self
+        let total_input: u64 = self
             .sessions
             .iter()
-            .filter_map(|session| session.stats.input_tokens)
+            .map(|session| session.stats.input_tokens)
             .sum();
-        let total_output: i64 = self
+        let total_output: u64 = self
             .sessions
             .iter()
-            .filter_map(|session| session.stats.output_tokens)
+            .map(|session| session.stats.output_tokens)
             .sum();
-        let has_tokens = self
-            .sessions
-            .iter()
-            .any(|session| session.stats.input_tokens.is_some());
 
-        let input_display = if has_tokens {
-            format_optional_tokens(Some(total_input))
-        } else {
-            "-".to_string()
-        };
-        let output_display = if has_tokens {
-            format_optional_tokens(Some(total_output))
-        } else {
-            "-".to_string()
-        };
+        let input_display = format_token_count(total_input);
+        let output_display = format_token_count(total_output);
 
         let summary = format!(
             "Sessions: {} | Input: {} | Output: {}",

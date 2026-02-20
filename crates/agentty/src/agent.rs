@@ -584,11 +584,18 @@ impl AgentKind {
             response.result?
         };
         let stats = SessionStats {
-            input_tokens: response.usage.as_ref().and_then(|usage| usage.input_tokens),
+            input_tokens: response
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.input_tokens)
+                .unwrap_or(0)
+                .cast_unsigned(),
             output_tokens: response
                 .usage
                 .as_ref()
-                .and_then(|usage| usage.output_tokens),
+                .and_then(|usage| usage.output_tokens)
+                .unwrap_or(0)
+                .cast_unsigned(),
         };
 
         Some(ParsedResponse { content, stats })
@@ -714,31 +721,26 @@ impl AgentKind {
             return SessionStats::default();
         };
 
-        let mut total_input: i64 = 0;
-        let mut total_output: i64 = 0;
+        let mut total_input: u64 = 0;
+        let mut total_output: u64 = 0;
 
         for model_stats in models.values() {
             if let Some(tokens) = &model_stats.tokens {
-                total_input += tokens.input.unwrap_or(0);
-                total_output += tokens.candidates.unwrap_or(0);
+                total_input += tokens.input.unwrap_or(0).cast_unsigned();
+                total_output += tokens.candidates.unwrap_or(0).cast_unsigned();
             }
         }
 
-        if total_input == 0 && total_output == 0 {
-            return SessionStats::default();
-        }
-
         SessionStats {
-            input_tokens: Some(total_input),
-            output_tokens: Some(total_output),
+            input_tokens: total_input,
+            output_tokens: total_output,
         }
     }
 
     fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
         let mut last_message: Option<String> = None;
-        let mut total_input_tokens: i64 = 0;
-        let mut total_output_tokens: i64 = 0;
-        let mut has_usage = false;
+        let mut total_input_tokens: u64 = 0;
+        let mut total_output_tokens: u64 = 0;
 
         for line in stdout.lines() {
             let trimmed = line.trim();
@@ -752,9 +754,8 @@ impl AgentKind {
             if event.event_type.as_deref() == Some("turn.completed")
                 && let Some(usage) = event.usage
             {
-                total_input_tokens += usage.input_tokens.unwrap_or(0);
-                total_output_tokens += usage.output_tokens.unwrap_or(0);
-                has_usage = true;
+                total_input_tokens += usage.input_tokens.unwrap_or(0).cast_unsigned();
+                total_output_tokens += usage.output_tokens.unwrap_or(0).cast_unsigned();
             }
 
             if event.event_type.as_deref() != Some("item.completed") {
@@ -771,13 +772,9 @@ impl AgentKind {
             }
         }
 
-        let stats = if has_usage {
-            SessionStats {
-                input_tokens: Some(total_input_tokens),
-                output_tokens: Some(total_output_tokens),
-            }
-        } else {
-            SessionStats::default()
+        let stats = SessionStats {
+            input_tokens: total_input_tokens,
+            output_tokens: total_output_tokens,
         };
 
         last_message.map(|content| ParsedResponse { content, stats })
@@ -1347,8 +1344,8 @@ mod tests {
 
         // Assert
         assert_eq!(result.content, "Hello world");
-        assert_eq!(result.stats.input_tokens, Some(100));
-        assert_eq!(result.stats.output_tokens, Some(25));
+        assert_eq!(result.stats.input_tokens, 100);
+        assert_eq!(result.stats.output_tokens, 25);
     }
 
     #[test]
@@ -1362,8 +1359,8 @@ mod tests {
 
         // Assert
         assert_eq!(result.content, "Hello world");
-        assert_eq!(result.stats.input_tokens, Some(100));
-        assert_eq!(result.stats.output_tokens, Some(25));
+        assert_eq!(result.stats.input_tokens, 100);
+        assert_eq!(result.stats.output_tokens, 25);
     }
 
     #[test]
@@ -1389,8 +1386,8 @@ mod tests {
         // Assert — plan from denial is preferred over terse result
         assert!(result.content.starts_with("# Plan: Create hello.txt"));
         assert!(result.content.contains("Detailed plan content here."));
-        assert_eq!(result.stats.input_tokens, Some(200));
-        assert_eq!(result.stats.output_tokens, Some(50));
+        assert_eq!(result.stats.input_tokens, 200);
+        assert_eq!(result.stats.output_tokens, 50);
     }
 
     #[test]
@@ -1465,8 +1462,8 @@ mod tests {
 
         // Assert
         assert_eq!(result.content, "Hello from Gemini");
-        assert_eq!(result.stats.input_tokens, Some(11));
-        assert_eq!(result.stats.output_tokens, Some(7));
+        assert_eq!(result.stats.input_tokens, 11);
+        assert_eq!(result.stats.output_tokens, 7);
     }
 
     #[test]
@@ -1483,8 +1480,8 @@ mod tests {
 
         // Assert
         assert_eq!(result.content, "Final answer");
-        assert_eq!(result.stats.input_tokens, Some(100));
-        assert_eq!(result.stats.output_tokens, Some(50));
+        assert_eq!(result.stats.input_tokens, 100);
+        assert_eq!(result.stats.output_tokens, 50);
     }
 
     #[test]
@@ -1685,8 +1682,8 @@ mod tests {
 
         // Assert
         assert_eq!(result.content, "Done!");
-        assert_eq!(result.stats.input_tokens, Some(1000));
-        assert_eq!(result.stats.output_tokens, Some(200));
+        assert_eq!(result.stats.input_tokens, 1000);
+        assert_eq!(result.stats.output_tokens, 200);
     }
 
     #[test]
@@ -1936,7 +1933,7 @@ mod tests {
         let result = AgentKind::Gemini.parse_response(stdout, "", PermissionMode::AutoEdit);
 
         // Assert — tokens are summed across models
-        assert_eq!(result.stats.input_tokens, Some(1500));
-        assert_eq!(result.stats.output_tokens, Some(300));
+        assert_eq!(result.stats.input_tokens, 1500);
+        assert_eq!(result.stats.output_tokens, 300);
     }
 }

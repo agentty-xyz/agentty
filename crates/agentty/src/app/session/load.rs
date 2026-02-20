@@ -91,8 +91,8 @@ impl SessionManager {
                 prompt: row.prompt,
                 size,
                 stats: SessionStats {
-                    input_tokens: row.input_tokens,
-                    output_tokens: row.output_tokens,
+                    input_tokens: row.input_tokens.cast_unsigned(),
+                    output_tokens: row.output_tokens.cast_unsigned(),
                 },
                 status,
                 summary: row.summary,

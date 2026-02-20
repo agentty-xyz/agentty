@@ -449,7 +449,7 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
 }
 
 /// Formats a token count for display: "500", "1.5k", "1.5M".
-pub fn format_token_count(count: i64) -> String {
+pub fn format_token_count(count: u64) -> String {
     if count >= 1_000_000 {
         return format_scaled_token_count(count, 1_000_000, "M");
     }
@@ -460,17 +460,9 @@ pub fn format_token_count(count: i64) -> String {
     count.to_string()
 }
 
-/// Formats an optional token count, returning "-" when absent.
-pub fn format_optional_tokens(value: Option<i64>) -> String {
-    match value {
-        Some(count) => format_token_count(count),
-        None => "-".to_string(),
-    }
-}
-
-fn format_scaled_token_count(count: i64, divisor: i64, suffix: &str) -> String {
+fn format_scaled_token_count(count: u64, divisor: u64, suffix: &str) -> String {
     let scaled_tenths =
-        ((i128::from(count) * 10) + (i128::from(divisor) / 2)) / i128::from(divisor);
+        ((u128::from(count) * 10) + (u128::from(divisor) / 2)) / u128::from(divisor);
     let whole = scaled_tenths / 10;
     let decimal = scaled_tenths % 10;
 
@@ -807,10 +799,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_optional_tokens() {
+    fn test_format_token_count() {
         // Arrange & Act & Assert
-        assert_eq!(format_optional_tokens(Some(1500)), "1.5k");
-        assert_eq!(format_optional_tokens(None), "-");
+        assert_eq!(format_token_count(0), "0");
+        assert_eq!(format_token_count(500), "500");
+        assert_eq!(format_token_count(1500), "1.5k");
+        assert_eq!(format_token_count(1_500_000), "1.5M");
     }
 
     #[test]

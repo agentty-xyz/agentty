@@ -733,8 +733,8 @@ impl PaletteCommand {
 /// Per-session token statistics.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionStats {
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 /// Pure data model for a session, used across UI rendering and persistence.

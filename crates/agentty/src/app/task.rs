@@ -928,8 +928,8 @@ mod tests {
             .load_sessions()
             .await
             .expect("failed to load sessions");
-        assert_eq!(sessions[0].input_tokens, Some(11));
-        assert_eq!(sessions[0].output_tokens, Some(7));
+        assert_eq!(sessions[0].input_tokens, 11);
+        assert_eq!(sessions[0].output_tokens, 7);
     }
 
     #[tokio::test]
@@ -993,8 +993,8 @@ mod tests {
             .load_sessions()
             .await
             .expect("failed to load sessions");
-        assert_eq!(sessions[0].input_tokens, Some(11));
-        assert_eq!(sessions[0].output_tokens, Some(7));
+        assert_eq!(sessions[0].input_tokens, 11);
+        assert_eq!(sessions[0].output_tokens, 7);
     }
 
     #[tokio::test]
@@ -1059,8 +1059,8 @@ mod tests {
             .load_sessions()
             .await
             .expect("failed to load sessions");
-        assert_eq!(sessions[0].input_tokens, Some(11));
-        assert_eq!(sessions[0].output_tokens, Some(7));
+        assert_eq!(sessions[0].input_tokens, 11);
+        assert_eq!(sessions[0].output_tokens, 7);
     }
 
     #[tokio::test]

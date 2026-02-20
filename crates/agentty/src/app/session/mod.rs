@@ -2305,8 +2305,8 @@ mod tests {
         wait_for_status(&mut app, &session_id, Status::Review).await;
         let session_id = app.sessions.sessions[0].id.clone();
         let stats = SessionStats {
-            input_tokens: Some(100),
-            output_tokens: Some(50),
+            input_tokens: 100,
+            output_tokens: 50,
         };
         app.services
             .db()
@@ -2333,8 +2333,8 @@ mod tests {
         assert_eq!(session.summary, None);
         assert_eq!(session.title, None);
         assert_eq!(session.status, Status::New);
-        assert_eq!(session.stats.input_tokens, Some(100));
-        assert_eq!(session.stats.output_tokens, Some(50));
+        assert_eq!(session.stats.input_tokens, 100);
+        assert_eq!(session.stats.output_tokens, 50);
 
         // Verify DB was updated
         let db_sessions = app
@@ -2348,8 +2348,8 @@ mod tests {
         assert_eq!(db_sessions[0].summary, None);
         assert_eq!(db_sessions[0].title, None);
         assert_eq!(db_sessions[0].status, "New");
-        assert_eq!(db_sessions[0].input_tokens, Some(100));
-        assert_eq!(db_sessions[0].output_tokens, Some(50));
+        assert_eq!(db_sessions[0].input_tokens, 100);
+        assert_eq!(db_sessions[0].output_tokens, 50);
     }
 
     #[tokio::test]
