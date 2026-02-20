@@ -9,7 +9,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::icon::Icon;
 use crate::model::{PlanFollowupAction, Session, Status};
 use crate::ui::Component;
-use crate::ui::util::{truncate_with_ellipsis, wrap_lines};
+use crate::ui::markdown::render_markdown;
+use crate::ui::util::truncate_with_ellipsis;
 
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
@@ -68,10 +69,7 @@ impl<'a> SessionOutput<'a> {
         let output_text = Self::output_text(session, status);
         let output_text = Self::output_text_with_spaced_user_input(output_text);
         let inner_width = output_area.width.saturating_sub(2) as usize;
-        let mut lines = wrap_lines(&output_text, inner_width)
-            .into_iter()
-            .map(|line| Line::from(line.to_string()))
-            .collect::<Vec<_>>();
+        let mut lines = render_markdown(&output_text, inner_width);
 
         if matches!(
             status,
@@ -343,6 +341,33 @@ mod tests {
         // Assert
         assert!(text.contains("canceled summary"));
         assert!(!text.contains("streamed output"));
+    }
+
+    #[test]
+    fn test_output_lines_render_user_prompt_with_cyan_bold_styling() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = " › /model gemini".to_string();
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            None,
+            None,
+        );
+
+        // Assert
+        let first_line = lines.first().expect("expected output line");
+        assert_eq!(first_line.to_string(), " › /model gemini");
+        assert_eq!(first_line.spans[0].style.fg, Some(Color::Cyan));
+        assert!(
+            first_line.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
     }
 
     #[test]
