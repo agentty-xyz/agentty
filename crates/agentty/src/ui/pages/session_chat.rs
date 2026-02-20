@@ -14,7 +14,8 @@ use crate::model::{
     extract_at_mention_query,
 };
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
-use crate::ui::util::{calculate_input_height, truncate_with_ellipsis, wrap_lines};
+use crate::ui::markdown::render_markdown;
+use crate::ui::util::{calculate_input_height, truncate_with_ellipsis};
 use crate::ui::{Component, Page};
 
 /// Chat page renderer for a single session.
@@ -271,10 +272,7 @@ impl<'a> SessionChatPage<'a> {
         let output_text = Self::output_text(session, status);
         let output_text = Self::output_text_with_spaced_user_input(output_text);
         let inner_width = output_area.width.saturating_sub(2) as usize;
-        let mut lines = wrap_lines(&output_text, inner_width)
-            .into_iter()
-            .map(|line| Line::from(line.to_string()))
-            .collect::<Vec<_>>();
+        let mut lines = render_markdown(&output_text, inner_width);
 
         if matches!(
             status,

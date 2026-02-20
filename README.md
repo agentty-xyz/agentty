@@ -79,6 +79,12 @@ Agentty creates isolated worktrees for each session:
 
 This allows agents to work on code changes without affecting your main working directory.
 
+### Styled Session Output
+
+- Agent responses in chat view now render a markdown subset with terminal styling.
+- Supported formatting includes headings, bold/italic text, inline code, fenced code blocks, lists, blockquotes, and horizontal rules.
+- User prompt lines (` › ...`) remain visually distinct in cyan bold styling.
+
 ### Version Update Notice
 
 - On startup, Agentty checks for the latest stable release tag from GitHub.

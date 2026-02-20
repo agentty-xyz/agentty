@@ -448,6 +448,59 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
+/// Word-wraps a sequence of styled spans into multiple lines at the given
+/// width.
+///
+/// Span styles are preserved across line breaks. A bold word that wraps to the
+/// next line remains bold on that line.
+pub fn wrap_styled_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::from(spans)];
+    }
+
+    let mut wrapped_lines: Vec<Line<'static>> = Vec::new();
+    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_width: usize = 0;
+    let mut needs_space = false;
+
+    for span in spans {
+        let style = span.style;
+        let content = span.content.into_owned();
+
+        for word in content.split_whitespace() {
+            let word_len = word.chars().count();
+            let additional_space_width = usize::from(needs_space && current_width > 0);
+
+            if current_width + additional_space_width + word_len > width
+                && !current_spans.is_empty()
+            {
+                wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
+                current_width = 0;
+                needs_space = false;
+            }
+
+            if needs_space && current_width > 0 {
+                current_spans.push(Span::styled(" ".to_string(), style));
+                current_width += 1;
+            }
+
+            current_spans.push(Span::styled(word.to_string(), style));
+            current_width += word_len;
+            needs_space = true;
+        }
+    }
+
+    if !current_spans.is_empty() {
+        wrapped_lines.push(Line::from(current_spans));
+    }
+
+    if wrapped_lines.is_empty() {
+        wrapped_lines.push(Line::from(""));
+    }
+
+    wrapped_lines
+}
+
 /// Formats a token count for display: "500", "1.5k", "1.5M".
 pub fn format_token_count(count: u64) -> String {
     if count >= 1_000_000 {
@@ -713,6 +766,56 @@ mod tests {
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].to_string(), "hello");
         assert_eq!(wrapped[1].to_string(), "world");
+    }
+
+    #[test]
+    fn test_wrap_styled_line_wraps_and_preserves_style() {
+        // Arrange
+        let style = Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD);
+        let spans = vec![Span::styled("hello world".to_string(), style)];
+
+        // Act
+        let wrapped = wrap_styled_line(spans, 5);
+
+        // Assert
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].to_string(), "hello");
+        assert_eq!(wrapped[1].to_string(), "world");
+        assert_eq!(wrapped[0].spans[0].style, style);
+        assert_eq!(wrapped[1].spans[0].style, style);
+    }
+
+    #[test]
+    fn test_wrap_styled_line_zero_width_returns_original_line() {
+        // Arrange
+        let style = Style::default().fg(Color::Blue);
+        let spans = vec![Span::styled("one two".to_string(), style)];
+
+        // Act
+        let wrapped = wrap_styled_line(spans, 0);
+
+        // Assert
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0].to_string(), "one two");
+        assert_eq!(wrapped[0].spans[0].style, style);
+    }
+
+    #[test]
+    fn test_wrap_styled_line_collapses_extra_whitespace() {
+        // Arrange
+        let spans = vec![
+            Span::styled("hello   ".to_string(), Style::default().fg(Color::Green)),
+            Span::styled("   world".to_string(), Style::default().fg(Color::Red)),
+        ];
+
+        // Act
+        let wrapped = wrap_styled_line(spans, 20);
+
+        // Assert
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0].to_string(), "hello world");
     }
 
     #[test]
