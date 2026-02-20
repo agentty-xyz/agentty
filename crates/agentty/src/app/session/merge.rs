@@ -28,7 +28,7 @@ const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
 };
 const REBASE_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/rebase_assist_prompt.md");
-const SESSION_SUMMARY_TIMEOUT: Duration = Duration::from_secs(8);
+const SESSION_SUMMARY_TIMEOUT: Duration = Duration::from_mins(2);
 const MERGE_COMMIT_MESSAGE_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/merge_commit_message_prompt.md");
 const SESSION_TERMINAL_SUMMARY_PROMPT_TEMPLATE: &str =
@@ -831,18 +831,6 @@ impl SessionManager {
         session_model: AgentModel,
         terminal_status: Status,
     ) -> Result<String, String> {
-        if !summary_folder.is_dir() {
-            return Ok(Self::fallback_terminal_summary_without_worktree(
-                terminal_status,
-            ));
-        }
-
-        if diff.trim().is_empty() {
-            return Ok(Self::fallback_terminal_summary_without_changes(
-                terminal_status,
-            ));
-        }
-
         let prompt = Self::terminal_summary_prompt(terminal_status, diff);
         let model_task = {
             let summary_folder = summary_folder.to_path_buf();
@@ -907,14 +895,6 @@ impl SessionManager {
     fn fallback_terminal_summary(terminal_status: Status) -> String {
         format!("Session finished with status `{terminal_status}`.")
     }
-
-    fn fallback_terminal_summary_without_worktree(terminal_status: Status) -> String {
-        format!("Session finished with status `{terminal_status}`. Worktree was not available.")
-    }
-
-    fn fallback_terminal_summary_without_changes(terminal_status: Status) -> String {
-        format!("Session finished with status `{terminal_status}`. No code changes were detected.")
-    }
 }
 
 #[cfg(test)]
@@ -958,5 +938,31 @@ mod tests {
 
         // Assert
         assert_eq!(summary, "- src/main.rs\n- src/lib.rs");
+    }
+
+    #[test]
+    fn test_terminal_summary_prompt_interpolates_status_and_diff() {
+        // Arrange
+        let terminal_status = Status::Done;
+        let diff = "diff --git a/src/main.rs b/src/main.rs";
+
+        // Act
+        let prompt = SessionManager::terminal_summary_prompt(terminal_status, diff);
+
+        // Assert
+        assert!(prompt.contains("The session ended with status: `Done`."));
+        assert!(prompt.contains("Diff:\ndiff --git a/src/main.rs b/src/main.rs"));
+    }
+
+    #[test]
+    fn test_fallback_terminal_summary_mentions_status() {
+        // Arrange
+        let terminal_status = Status::Done;
+
+        // Act
+        let summary = SessionManager::fallback_terminal_summary(terminal_status);
+
+        // Assert
+        assert_eq!(summary, "Session finished with status `Done`.");
     }
 }
