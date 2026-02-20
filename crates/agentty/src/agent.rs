@@ -242,7 +242,7 @@ pub enum AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModel {
     Gemini3FlashPreview,
-    Gemini3ProPreview,
+    Gemini31ProPreview,
     Gpt53Codex,
     Gpt52Codex,
     ClaudeOpus46,
@@ -254,7 +254,7 @@ impl AgentModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
-            Self::Gemini3ProPreview => "gemini-3-pro-preview",
+            Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt53Codex => "gpt-5.3-codex",
             Self::Gpt52Codex => "gpt-5.2-codex",
             Self::ClaudeOpus46 => "claude-opus-4-6",
@@ -265,7 +265,7 @@ impl AgentModel {
 
     pub fn kind(self) -> AgentKind {
         match self {
-            Self::Gemini3FlashPreview | Self::Gemini3ProPreview => AgentKind::Gemini,
+            Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt53Codex | Self::Gpt52Codex => AgentKind::Codex,
             Self::ClaudeOpus46 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
@@ -280,7 +280,7 @@ impl FromStr for AgentModel {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
-            "gemini-3-pro-preview" => Ok(Self::Gemini3ProPreview),
+            "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.3-codex" => Ok(Self::Gpt53Codex),
             "gpt-5.2-codex" => Ok(Self::Gpt52Codex),
             "claude-opus-4-6" => Ok(Self::ClaudeOpus46),
@@ -299,7 +299,7 @@ impl AgentSelectionMetadata for AgentModel {
     fn description(&self) -> &'static str {
         match self {
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
-            Self::Gemini3ProPreview => "Higher-quality Gemini model for deeper reasoning.",
+            Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gpt53Codex => "Latest Codex model for coding quality.",
             Self::Gpt52Codex => "Faster Codex model with lower cost.",
             Self::ClaudeOpus46 => "Top-tier Claude model for complex tasks.",
@@ -432,7 +432,7 @@ impl AgentKind {
     pub fn models(self) -> &'static [AgentModel] {
         const GEMINI_MODELS: &[AgentModel] = &[
             AgentModel::Gemini3FlashPreview,
-            AgentModel::Gemini3ProPreview,
+            AgentModel::Gemini31ProPreview,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeOpus46,
@@ -926,7 +926,7 @@ mod tests {
             &backend,
             dir.path(),
             "follow-up",
-            "gemini-3-pro-preview",
+            "gemini-3.1-pro-preview",
             PermissionMode::AutoEdit,
         );
 
@@ -936,7 +936,7 @@ mod tests {
         assert!(debug.contains("follow-up"));
         assert!(debug.contains("--resume"));
         assert!(debug.contains("latest"));
-        assert!(debug.contains("gemini-3-pro-preview"));
+        assert!(debug.contains("gemini-3.1-pro-preview"));
         assert!(debug.contains("--output-format"));
         assert!(debug.contains("\"json\""));
     }
@@ -1252,7 +1252,7 @@ mod tests {
             gemini_models,
             &[
                 AgentModel::Gemini3FlashPreview,
-                AgentModel::Gemini3ProPreview,
+                AgentModel::Gemini31ProPreview,
             ]
         );
         assert_eq!(
@@ -1273,8 +1273,8 @@ mod tests {
     fn test_agent_kind_parse_model() {
         // Arrange & Act & Assert
         assert_eq!(
-            AgentKind::Gemini.parse_model("gemini-3-pro-preview"),
-            Some(AgentModel::Gemini3ProPreview)
+            AgentKind::Gemini.parse_model("gemini-3.1-pro-preview"),
+            Some(AgentModel::Gemini31ProPreview)
         );
         assert_eq!(
             AgentKind::Codex.parse_model("gpt-5.2-codex"),
@@ -1925,7 +1925,7 @@ mod tests {
                     "gemini-3-flash-preview": {
                         "tokens": { "input": 1000, "candidates": 200 }
                     },
-                    "gemini-3-pro-preview": {
+                    "gemini-3.1-pro-preview": {
                         "tokens": { "input": 500, "candidates": 100 }
                     }
                 }
