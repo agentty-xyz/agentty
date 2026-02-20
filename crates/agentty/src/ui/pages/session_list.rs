@@ -48,7 +48,7 @@ impl Page for SessionListPage<'_> {
 
         let block = Block::default().borders(Borders::ALL).title("Sessions");
         let column_constraints = [
-            Constraint::Min(0),
+            Constraint::Fill(1),
             project_column_width(self.sessions),
             model_column_width(self.sessions),
             mode_column_width(),
@@ -173,7 +173,7 @@ where
         .fold(header.chars().count(), usize::max);
     let column_width = u16::try_from(column_width).unwrap_or(u16::MAX);
 
-    Constraint::Min(column_width)
+    Constraint::Length(column_width)
 }
 
 #[cfg(test)]
@@ -191,7 +191,7 @@ mod tests {
         let width = text_column_width("Project", project_names.into_iter());
 
         // Assert
-        assert_eq!(width, Constraint::Min(expected_width));
+        assert_eq!(width, Constraint::Length(expected_width));
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         let width = text_column_width("Model", models.into_iter());
 
         // Assert
-        assert_eq!(width, Constraint::Min(expected_width));
+        assert_eq!(width, Constraint::Length(expected_width));
     }
 
     #[test]
@@ -216,7 +216,7 @@ mod tests {
         let width = mode_column_width();
 
         // Assert
-        assert_eq!(width, Constraint::Min(expected_width));
+        assert_eq!(width, Constraint::Length(expected_width));
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
         let width = size_column_width();
 
         // Assert
-        assert_eq!(width, Constraint::Min(expected_width));
+        assert_eq!(width, Constraint::Length(expected_width));
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
         let width = status_column_width();
 
         // Assert
-        assert_eq!(width, Constraint::Min(expected_width));
+        assert_eq!(width, Constraint::Length(expected_width));
     }
 
     #[test]

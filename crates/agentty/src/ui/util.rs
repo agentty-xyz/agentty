@@ -727,7 +727,7 @@ mod tests {
     fn test_first_table_column_width_uses_remaining_layout_space() {
         // Arrange
         let constraints = [
-            Constraint::Min(0),
+            Constraint::Fill(1),
             Constraint::Length(7),
             Constraint::Length(5),
             Constraint::Length(4),
