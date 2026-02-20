@@ -97,7 +97,7 @@ impl AgentBackend for GeminiBackend {
             .arg("--approval-mode")
             .arg(approval_mode)
             .arg("--output-format")
-            .arg("json")
+            .arg("stream-json")
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -125,7 +125,7 @@ impl AgentBackend for ClaudeBackend {
         cmd.arg("-p").arg(prompt.as_ref());
         Self::apply_permission_args(&mut cmd, permission_mode);
         cmd.arg("--output-format")
-            .arg("json")
+            .arg("stream-json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -148,7 +148,7 @@ impl AgentBackend for ClaudeBackend {
         cmd.arg("-c").arg("-p").arg(prompt.as_ref());
         Self::apply_permission_args(&mut cmd, permission_mode);
         cmd.arg("--output-format")
-            .arg("json")
+            .arg("stream-json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -370,6 +370,21 @@ struct GeminiResponse {
     stats: Option<GeminiStats>,
 }
 
+/// Gemini CLI stream event shape (`--output-format stream-json`).
+#[derive(Deserialize)]
+struct GeminiStreamEvent {
+    #[serde(rename = "type")]
+    event_type: Option<String>,
+    stats: Option<GeminiStreamResultStats>,
+}
+
+/// Token usage from a Gemini stream `result` event.
+#[derive(Deserialize)]
+struct GeminiStreamResultStats {
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+}
+
 /// Top-level `stats` object from the Gemini CLI JSON output.
 #[derive(Deserialize)]
 struct GeminiStats {
@@ -569,17 +584,47 @@ impl AgentKind {
             return Some(parsed_response);
         }
 
-        for line in stdout.lines().rev() {
+        let mut latest_legacy_response: Option<ParsedResponse> = None;
+        let mut stream_response = String::new();
+        let mut stream_stats: Option<SessionStats> = None;
+
+        for line in stdout.lines() {
             let trimmed_line = line.trim();
             if trimmed_line.is_empty() {
                 continue;
             }
+
             if let Some(parsed_response) = Self::parse_gemini_response_payload(trimmed_line) {
-                return Some(parsed_response);
+                latest_legacy_response = Some(parsed_response);
+
+                continue;
+            }
+
+            if let Some(stream_chunk) = Self::extract_gemini_stream_response(trimmed_line) {
+                stream_response.push_str(&stream_chunk);
+
+                continue;
+            }
+
+            if let Some(parsed_stream_stats) = Self::extract_gemini_stream_stats(trimmed_line) {
+                stream_stats = Some(parsed_stream_stats);
             }
         }
 
-        None
+        if let Some(parsed_response) = latest_legacy_response {
+            return Some(parsed_response);
+        }
+
+        if stream_response.is_empty() && stream_stats.is_none() {
+            return None;
+        }
+
+        let stats = stream_stats.unwrap_or_default();
+
+        Some(ParsedResponse {
+            content: stream_response,
+            stats,
+        })
     }
 
     fn parse_gemini_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
@@ -588,11 +633,12 @@ impl AgentKind {
             return None;
         }
 
-        if let Some(content) = Self::extract_gemini_stream_response(trimmed_line) {
+        let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
+
+        if let Some(content) = Self::extract_gemini_stream_response_from_json(&stream_event) {
             return Some((content, true));
         }
 
-        let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
         let progress_message = Self::compact_progress_message_from_json(&stream_event)?;
 
         Some((progress_message, false))
@@ -644,9 +690,49 @@ impl AgentKind {
     }
 
     fn extract_gemini_stream_response(stdout_line: &str) -> Option<String> {
-        let response = serde_json::from_str::<GeminiResponse>(stdout_line).ok()?;
+        let stream_event = serde_json::from_str::<serde_json::Value>(stdout_line).ok()?;
 
-        response.response
+        Self::extract_gemini_stream_response_from_json(&stream_event)
+    }
+
+    fn extract_gemini_stream_response_from_json(
+        stream_event: &serde_json::Value,
+    ) -> Option<String> {
+        if let Some(legacy_response) = stream_event
+            .get("response")
+            .and_then(serde_json::Value::as_str)
+        {
+            return Some(legacy_response.to_string());
+        }
+
+        if stream_event.get("type").and_then(serde_json::Value::as_str) != Some("message") {
+            return None;
+        }
+
+        if stream_event.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+            return None;
+        }
+
+        stream_event
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string)
+    }
+
+    fn extract_gemini_stream_stats(stdout_line: &str) -> Option<SessionStats> {
+        let stream_event = serde_json::from_str::<GeminiStreamEvent>(stdout_line).ok()?;
+        if stream_event.event_type.as_deref() != Some("result") {
+            return None;
+        }
+
+        let stats = stream_event
+            .stats
+            .map_or_else(SessionStats::default, |stats| SessionStats {
+                input_tokens: stats.input_tokens.unwrap_or(0).cast_unsigned(),
+                output_tokens: stats.output_tokens.unwrap_or(0).cast_unsigned(),
+            });
+
+        Some(stats)
     }
 
     fn compact_progress_message_from_json(stream_event: &serde_json::Value) -> Option<String> {
@@ -962,7 +1048,7 @@ mod tests {
         assert!(debug.contains("latest"));
         assert!(debug.contains("gemini-3-pro-preview"));
         assert!(debug.contains("--output-format"));
-        assert!(debug.contains("\"json\""));
+        assert!(debug.contains("\"stream-json\""));
     }
 
     #[test]
@@ -1014,7 +1100,7 @@ mod tests {
         assert!(debug.contains("--approval-mode"));
         assert!(debug.contains("auto_edit"));
         assert!(debug.contains("--output-format"));
-        assert!(debug.contains("\"json\""));
+        assert!(debug.contains("\"stream-json\""));
         assert!(!debug.contains("--resume"));
     }
 
@@ -1059,7 +1145,7 @@ mod tests {
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
         assert!(debug.contains("--output-format"));
-        assert!(debug.contains("\"json\""));
+        assert!(debug.contains("\"stream-json\""));
         assert!(!debug.contains("-c"));
         assert_eq!(
             command_env_value(&cmd, "ANTHROPIC_MODEL"),
@@ -1092,7 +1178,7 @@ mod tests {
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
         assert!(debug.contains("--output-format"));
-        assert!(debug.contains("\"json\""));
+        assert!(debug.contains("\"stream-json\""));
         assert_eq!(
             command_env_value(&cmd, "ANTHROPIC_MODEL"),
             Some("claude-haiku-4-5-20251001".to_string())
@@ -1571,6 +1657,22 @@ mod tests {
     }
 
     #[test]
+    fn test_gemini_parse_response_valid_stream_json() {
+        // Arrange
+        let stdout = r#"{"type":"message","role":"assistant","content":"Hello "}
+{"type":"message","role":"assistant","content":"from Gemini"}
+{"type":"result","status":"success","stats":{"input_tokens":11,"output_tokens":7}}"#;
+
+        // Act
+        let result = AgentKind::Gemini.parse_response(stdout, "", PermissionMode::AutoEdit);
+
+        // Assert
+        assert_eq!(result.content, "Hello from Gemini");
+        assert_eq!(result.stats.input_tokens, 11);
+        assert_eq!(result.stats.output_tokens, 7);
+    }
+
+    #[test]
     fn test_codex_parse_response_valid_ndjson() {
         // Arrange
         let stdout = r#"{"type":"thread.started","thread_id":"abc123"}
@@ -1678,7 +1780,8 @@ mod tests {
     #[test]
     fn test_gemini_parse_stream_output_line_for_search_tool() {
         // Arrange
-        let line = r#"{"type":"tool_call","name":"google_search"}"#;
+        let line =
+            r#"{"type":"tool_use","tool_name":"google_search","tool_id":"tool-1","parameters":{}}"#;
 
         // Act
         let streamed = AgentKind::Gemini.parse_stream_output_line(line);
@@ -1688,7 +1791,19 @@ mod tests {
     }
 
     #[test]
-    fn test_gemini_parse_stream_output_line_for_response() {
+    fn test_gemini_parse_stream_output_line_for_stream_json_assistant_message() {
+        // Arrange
+        let line = r#"{"type":"message","role":"assistant","content":"Final answer","delta":true}"#;
+
+        // Act
+        let streamed = AgentKind::Gemini.parse_stream_output_line(line);
+
+        // Assert
+        assert_eq!(streamed, Some(("Final answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_gemini_parse_stream_output_line_for_legacy_response() {
         // Arrange
         let line = r#"{"response":"Final answer","stats":{}}"#;
 
@@ -1697,6 +1812,18 @@ mod tests {
 
         // Assert
         assert_eq!(streamed, Some(("Final answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_gemini_parse_stream_output_line_ignores_user_message() {
+        // Arrange
+        let line = r#"{"type":"message","role":"user","content":"Please update this file"}"#;
+
+        // Act
+        let streamed = AgentKind::Gemini.parse_stream_output_line(line);
+
+        // Assert
+        assert!(streamed.is_none());
     }
 
     #[test]

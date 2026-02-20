@@ -1047,10 +1047,13 @@ mod tests {
         command
             .args([
                 "-lc",
-                "printf '%s\\n' '{\"type\":\"tool_call\",\"name\":\"google_search\"}' \
-                 '{\"response\":\"Final \
-                 answer\",\"stats\":{\"models\":{\"gemini-3-flash-preview\":{\"tokens\":{\"input\"\
-                 :11,\"candidates\":7}}}}}'",
+                "printf '%s\\n' \
+                 '{\"type\":\"tool_use\",\"tool_name\":\"google_search\",\"tool_id\":\"tool-1\",\"\
+                 parameters\":{}}' \
+                 '{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Final \
+                 answer\",\"delta\":true}' \
+                 '{\"type\":\"result\",\"status\":\"success\",\"stats\":{\"input_tokens\":11,\"\
+                 output_tokens\":7}}'",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
