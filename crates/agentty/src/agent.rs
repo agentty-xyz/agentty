@@ -124,7 +124,8 @@ impl AgentBackend for ClaudeBackend {
         let mut cmd = Command::new("claude");
         cmd.arg("-p").arg(prompt.as_ref());
         Self::apply_permission_args(&mut cmd, permission_mode);
-        cmd.arg("--output-format")
+        cmd.arg("--verbose")
+            .arg("--output-format")
             .arg("stream-json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
@@ -147,7 +148,8 @@ impl AgentBackend for ClaudeBackend {
         let mut cmd = Command::new("claude");
         cmd.arg("-c").arg("-p").arg(prompt.as_ref());
         Self::apply_permission_args(&mut cmd, permission_mode);
-        cmd.arg("--output-format")
+        cmd.arg("--verbose")
+            .arg("--output-format")
             .arg("stream-json")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
@@ -1144,6 +1146,7 @@ mod tests {
         assert!(debug.contains("hello"));
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
+        assert!(debug.contains("--verbose"));
         assert!(debug.contains("--output-format"));
         assert!(debug.contains("\"stream-json\""));
         assert!(!debug.contains("-c"));
@@ -1177,6 +1180,7 @@ mod tests {
         assert!(debug.contains("follow-up"));
         assert!(debug.contains("--allowedTools"));
         assert!(debug.contains("Edit"));
+        assert!(debug.contains("--verbose"));
         assert!(debug.contains("--output-format"));
         assert!(debug.contains("\"stream-json\""));
         assert_eq!(
