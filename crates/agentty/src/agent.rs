@@ -172,7 +172,7 @@ impl ClaudeBackend {
     fn apply_permission_args(cmd: &mut Command, permission_mode: PermissionMode) {
         match permission_mode {
             PermissionMode::AutoEdit => {
-                cmd.arg("--allowedTools").arg("Edit");
+                cmd.arg("--allowedTools").arg("Edit,WebSearch,WebFetch");
             }
             PermissionMode::Autonomous => {
                 cmd.arg("--dangerously-skip-permissions");
@@ -1154,7 +1154,7 @@ mod tests {
         assert!(debug.contains("-p"));
         assert!(debug.contains("hello"));
         assert!(debug.contains("--allowedTools"));
-        assert!(debug.contains("Edit"));
+        assert!(debug.contains("Edit,WebSearch,WebFetch"));
         assert!(debug.contains("--verbose"));
         assert!(debug.contains("--output-format"));
         assert!(debug.contains("\"stream-json\""));
@@ -1188,7 +1188,7 @@ mod tests {
         assert!(debug.contains("-p"));
         assert!(debug.contains("follow-up"));
         assert!(debug.contains("--allowedTools"));
-        assert!(debug.contains("Edit"));
+        assert!(debug.contains("Edit,WebSearch,WebFetch"));
         assert!(debug.contains("--verbose"));
         assert!(debug.contains("--output-format"));
         assert!(debug.contains("\"stream-json\""));
