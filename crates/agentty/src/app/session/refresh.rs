@@ -61,13 +61,15 @@ impl SessionManager {
             .and_then(|index| self.sessions.get(index))
             .map(|session| session.id.clone());
 
-        self.sessions = Self::load_sessions(
+        let (sessions, stats_activity) = Self::load_sessions(
             services.base_path(),
             services.db(),
             projects,
             &mut self.handles,
         )
         .await;
+        self.sessions = sessions;
+        self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);
 

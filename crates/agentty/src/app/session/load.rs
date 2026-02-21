@@ -8,7 +8,9 @@ use crate::agent::{AgentKind, AgentModel};
 use crate::app::SessionManager;
 use crate::db::Database;
 use crate::git;
-use crate::model::{Project, Session, SessionHandles, SessionSize, SessionStats, Status};
+use crate::model::{
+    DailyActivity, Project, Session, SessionHandles, SessionSize, SessionStats, Status,
+};
 
 impl SessionManager {
     /// Loads session models from the database and reuses live handles when
@@ -17,12 +19,16 @@ impl SessionManager {
     /// Existing handles are updated in place to preserve `Arc` identity so
     /// that background workers holding cloned references continue to work.
     /// New handles are inserted for sessions that don't have entries yet.
+    ///
+    /// Returns both loaded sessions and aggregated daily activity counts.
     pub(crate) async fn load_sessions(
         base: &Path,
         db: &Database,
         projects: &[Project],
         handles: &mut HashMap<String, SessionHandles>,
-    ) -> Vec<Session> {
+    ) -> (Vec<Session>, Vec<DailyActivity>) {
+        const SECONDS_PER_DAY: i64 = 86_400;
+
         let project_names: HashMap<i64, String> = projects
             .iter()
             .filter_map(|project| {
@@ -32,7 +38,9 @@ impl SessionManager {
             .collect();
 
         let db_rows = db.load_sessions().await.unwrap_or_default();
+        let mut activity_by_day: HashMap<i64, u32> = HashMap::new();
         let mut sessions: Vec<Session> = Vec::new();
+
         for row in db_rows {
             let folder = session_folder(base, &row.id);
             let status = row.status.parse::<Status>().unwrap_or(Status::Done);
@@ -76,6 +84,11 @@ impl SessionManager {
 
                 computed_size
             };
+
+            let created_day_key = row.created_at.div_euclid(SECONDS_PER_DAY);
+            let day_entry = activity_by_day.entry(created_day_key).or_insert(0);
+            *day_entry = day_entry.saturating_add(1);
+
             sessions.push(Session {
                 base_branch: row.base_branch,
                 folder,
@@ -96,7 +109,16 @@ impl SessionManager {
             });
         }
 
-        sessions
+        let mut stats_activity: Vec<DailyActivity> = activity_by_day
+            .into_iter()
+            .map(|(day_key, session_count)| DailyActivity {
+                day_key,
+                session_count,
+            })
+            .collect();
+        stats_activity.sort_by_key(|activity| activity.day_key);
+
+        (sessions, stats_activity)
     }
 
     async fn session_size_for_folder(folder: &Path, base_branch: &str) -> SessionSize {

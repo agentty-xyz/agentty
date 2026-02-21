@@ -85,6 +85,11 @@ This allows agents to work on code changes without affecting your main working d
 - Supported formatting includes headings, bold/italic text, inline code, fenced code blocks, lists, blockquotes, and horizontal rules.
 - User prompt lines (` › ...`) remain visually distinct in cyan bold styling.
 
+### Stats Activity Heatmap
+
+- The `Stats` tab now includes a GitHub-style activity heatmap for session creation activity over the last 53 weeks.
+- Heatmap intensity scales with daily session counts, alongside the existing per-session token table and totals.
+
 ### Version Update Notice
 
 - On startup, Agentty checks npmjs for the latest `agentty` version.

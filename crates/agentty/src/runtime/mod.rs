@@ -82,7 +82,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let show_onboarding = app.should_show_onboarding();
     let mode = &app.mode;
     let projects = &app.projects;
-    let (sessions, table_state) = app.sessions.render_parts();
+    let (sessions, stats_activity, table_state) = app.sessions.render_parts();
     let settings = &mut app.settings;
 
     terminal.draw(|frame| {
@@ -100,6 +100,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
                 session_progress_messages: &session_progress_messages,
                 settings,
                 show_onboarding,
+                stats_activity,
                 sessions,
                 table_state,
                 working_dir: &current_working_dir,

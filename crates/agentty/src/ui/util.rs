@@ -1,6 +1,16 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+
+use crate::model::DailyActivity;
+
+const HEATMAP_DAY_COUNT: usize = 7;
+const HEATMAP_DAY_COUNT_I64: i64 = 7;
+const HEATMAP_WEEK_COUNT: usize = 53;
+const HEATMAP_WEEK_COUNT_I64: i64 = 53;
+const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
@@ -513,6 +523,65 @@ pub fn format_token_count(count: u64) -> String {
     count.to_string()
 }
 
+/// Returns the current UTC day key as days since Unix epoch.
+pub fn current_day_key_utc() -> i64 {
+    let now_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| i64::try_from(duration.as_secs()).unwrap_or(0));
+
+    activity_day_key(now_seconds)
+}
+
+/// Converts Unix timestamp seconds to a UTC day key.
+pub fn activity_day_key(timestamp_seconds: i64) -> i64 {
+    timestamp_seconds.div_euclid(SECONDS_PER_DAY)
+}
+
+/// Builds a 53-week x 7-day heatmap grid from daily activity counts.
+///
+/// Rows are Monday through Sunday and columns are oldest to newest week.
+pub fn build_activity_heatmap_grid(activity: &[DailyActivity], end_day_key: i64) -> Vec<Vec<u32>> {
+    let mut grid = vec![vec![0_u32; HEATMAP_WEEK_COUNT]; HEATMAP_DAY_COUNT];
+    let start_week_day_key = heatmap_start_week_day_key(end_day_key);
+    let end_day_limit = start_week_day_key + (HEATMAP_WEEK_COUNT_I64 * HEATMAP_DAY_COUNT_I64) - 1;
+
+    for daily_activity in activity {
+        let day_key = daily_activity.day_key;
+        if day_key < start_week_day_key || day_key > end_day_limit {
+            continue;
+        }
+
+        let week_index =
+            usize::try_from((day_key - start_week_day_key) / HEATMAP_DAY_COUNT_I64).unwrap_or(0);
+        let weekday_index = weekday_index_monday(day_key);
+
+        let day_cell = &mut grid[weekday_index][week_index];
+        *day_cell = day_cell.saturating_add(daily_activity.session_count);
+    }
+
+    grid
+}
+
+/// Returns an activity intensity level from `0` to `4` for one heatmap cell.
+pub fn heatmap_intensity_level(count: u32, max_count: u32) -> u8 {
+    if count == 0 || max_count == 0 {
+        return 0;
+    }
+
+    let scaled = (count.saturating_mul(4)).div_ceil(max_count);
+
+    u8::try_from(scaled.min(4)).unwrap_or(4)
+}
+
+/// Returns the maximum daily activity count in a heatmap grid.
+pub fn heatmap_max_count(grid: &[Vec<u32>]) -> u32 {
+    grid.iter()
+        .flat_map(|row| row.iter())
+        .copied()
+        .max()
+        .unwrap_or(0)
+}
+
 fn format_scaled_token_count(count: u64, divisor: u64, suffix: &str) -> String {
     let scaled_tenths =
         ((u128::from(count) * 10) + (u128::from(divisor) / 2)) / u128::from(divisor);
@@ -520,6 +589,19 @@ fn format_scaled_token_count(count: u64, divisor: u64, suffix: &str) -> String {
     let decimal = scaled_tenths % 10;
 
     format!("{whole}.{decimal}{suffix}")
+}
+
+fn heatmap_start_week_day_key(end_day_key: i64) -> i64 {
+    let end_week_start =
+        end_day_key - i64::try_from(weekday_index_monday(end_day_key)).unwrap_or(0);
+
+    end_week_start - ((HEATMAP_WEEK_COUNT_I64 - 1) * HEATMAP_DAY_COUNT_I64)
+}
+
+fn weekday_index_monday(day_key: i64) -> usize {
+    let weekday_value = (day_key + 3).rem_euclid(HEATMAP_DAY_COUNT_I64);
+
+    usize::try_from(weekday_value).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -908,6 +990,59 @@ mod tests {
         assert_eq!(format_token_count(500), "500");
         assert_eq!(format_token_count(1500), "1.5k");
         assert_eq!(format_token_count(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn test_build_activity_heatmap_grid_places_values_in_expected_cells() {
+        // Arrange
+        let end_day_key = 0_i64;
+        let activity = vec![
+            DailyActivity {
+                day_key: 0,
+                session_count: 2,
+            },
+            DailyActivity {
+                day_key: -3,
+                session_count: 1,
+            },
+        ];
+
+        // Act
+        let grid = build_activity_heatmap_grid(&activity, end_day_key);
+
+        // Assert
+        assert_eq!(grid[3][52], 2);
+        assert_eq!(grid[0][52], 1);
+    }
+
+    #[test]
+    fn test_heatmap_intensity_level_scales_from_zero_to_max() {
+        // Arrange
+        let max_count = 8_u32;
+
+        // Act
+        let zero = heatmap_intensity_level(0, max_count);
+        let low = heatmap_intensity_level(1, max_count);
+        let medium = heatmap_intensity_level(4, max_count);
+        let max = heatmap_intensity_level(8, max_count);
+
+        // Assert
+        assert_eq!(zero, 0);
+        assert_eq!(low, 1);
+        assert_eq!(medium, 2);
+        assert_eq!(max, 4);
+    }
+
+    #[test]
+    fn test_heatmap_max_count_returns_largest_daily_value() {
+        // Arrange
+        let grid = vec![vec![0, 2, 1], vec![3, 4, 0]];
+
+        // Act
+        let max_count = heatmap_max_count(&grid);
+
+        // Assert
+        assert_eq!(max_count, 4);
     }
 
     #[test]

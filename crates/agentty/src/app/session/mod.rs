@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use crate::agent::AgentModel;
 use crate::app::settings::SettingName;
 use crate::app::{AppServices, SessionState};
-use crate::model::{PermissionMode, Session, Status};
+use crate::model::{DailyActivity, PermissionMode, Session, Status};
 
 mod access;
 mod lifecycle;
@@ -32,6 +32,7 @@ pub struct SessionManager {
     default_session_permission_mode: PermissionMode,
     pending_history_replay: HashSet<String>,
     state: SessionState,
+    stats_activity: Vec<DailyActivity>,
     workers: HashMap<String, mpsc::UnboundedSender<crate::app::session::worker::SessionCommand>>,
 }
 
@@ -41,12 +42,14 @@ impl SessionManager {
         default_session_model: AgentModel,
         default_session_permission_mode: PermissionMode,
         state: SessionState,
+        stats_activity: Vec<DailyActivity>,
     ) -> Self {
         Self {
             default_session_model,
             default_session_permission_mode,
             pending_history_replay: HashSet::new(),
             state,
+            stats_activity,
             workers: HashMap::new(),
         }
     }
@@ -66,9 +69,13 @@ impl SessionManager {
             .unwrap_or(fallback_model)
     }
 
-    /// Returns split immutable/mutable references needed by render.
-    pub(crate) fn render_parts(&mut self) -> (&[Session], &mut TableState) {
-        (&self.state.sessions, &mut self.state.table_state)
+    /// Returns session snapshots, heatmap activity, and table state for render.
+    pub(crate) fn render_parts(&mut self) -> (&[Session], &[DailyActivity], &mut TableState) {
+        (
+            &self.state.sessions,
+            &self.stats_activity,
+            &mut self.state.table_state,
+        )
     }
 
     /// Applies reducer updates after session history was cleared.
@@ -181,8 +188,8 @@ mod tests {
     use crate::db::Database;
     use crate::git;
     use crate::model::{
-        AppMode, PermissionMode, SESSION_DATA_DIR, Session, SessionHandles, SessionSize,
-        SessionStats, Status,
+        AppMode, DailyActivity, PermissionMode, Project, SESSION_DATA_DIR, Session, SessionHandles,
+        SessionSize, SessionStats, Status,
     };
 
     fn create_mock_backend() -> MockAgentBackend {
@@ -1164,6 +1171,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_load_sessions_aggregates_daily_activity() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("alpha000", "claude-opus-4-6", "main", "Done", project_id)
+            .await
+            .expect("failed to insert alpha000");
+        db.insert_session("beta0000", "claude-opus-4-6", "main", "Done", project_id)
+            .await
+            .expect("failed to insert beta0000");
+        db.insert_session("gamma000", "claude-opus-4-6", "main", "Done", project_id)
+            .await
+            .expect("failed to insert gamma000");
+        let seconds_per_day = 86_400_i64;
+        let day_key_one = 10_i64;
+        let day_key_two = 11_i64;
+
+        sqlx::query("UPDATE session SET created_at = ? WHERE id = ?")
+            .bind(day_key_one * seconds_per_day + 10)
+            .bind("alpha000")
+            .execute(db.pool())
+            .await
+            .expect("failed to update alpha000 created_at");
+        sqlx::query("UPDATE session SET created_at = ? WHERE id = ?")
+            .bind(day_key_one * seconds_per_day + 600)
+            .bind("beta0000")
+            .execute(db.pool())
+            .await
+            .expect("failed to update beta0000 created_at");
+        sqlx::query("UPDATE session SET created_at = ? WHERE id = ?")
+            .bind(day_key_two * seconds_per_day + 50)
+            .bind("gamma000")
+            .execute(db.pool())
+            .await
+            .expect("failed to update gamma000 created_at");
+        let projects: Vec<Project> = Vec::new();
+        let mut handles: HashMap<String, SessionHandles> = HashMap::new();
+
+        // Act
+        let (sessions, stats_activity) =
+            SessionManager::load_sessions(dir.path(), &db, &projects, &mut handles).await;
+
+        // Assert
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(
+            stats_activity,
+            vec![
+                DailyActivity {
+                    day_key: day_key_one,
+                    session_count: 2,
+                },
+                DailyActivity {
+                    day_key: day_key_two,
+                    session_count: 1,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -1415,7 +1488,7 @@ mod tests {
             .expect("failed to write test file");
 
         // Act
-        let reloaded_sessions = SessionManager::load_sessions(
+        let (reloaded_sessions, _) = SessionManager::load_sessions(
             app.services.base_path(),
             app.services.db(),
             &app.projects,
@@ -1470,7 +1543,7 @@ mod tests {
             .expect("failed to write test file");
 
         // Act
-        let reloaded_sessions = SessionManager::load_sessions(
+        let (reloaded_sessions, _) = SessionManager::load_sessions(
             app.services.base_path(),
             app.services.db(),
             &app.projects,

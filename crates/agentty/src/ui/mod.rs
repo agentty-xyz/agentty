@@ -13,7 +13,8 @@ use ratatui::widgets::TableState;
 use crate::app::session::session_branch;
 use crate::app::{SettingsManager, Tab};
 use crate::model::{
-    AppMode, HelpContext, PaletteCommand, PaletteFocus, PlanFollowupAction, Project, Session,
+    AppMode, DailyActivity, HelpContext, PaletteCommand, PaletteFocus, PlanFollowupAction, Project,
+    Session,
 };
 
 /// A trait for UI pages that enforces a standard rendering interface.
@@ -39,6 +40,7 @@ pub struct RenderContext<'a> {
     pub session_progress_messages: &'a HashMap<String, String>,
     pub settings: &'a mut SettingsManager,
     pub show_onboarding: bool,
+    pub stats_activity: &'a [DailyActivity],
     pub sessions: &'a [Session],
     pub table_state: &'a mut TableState,
     pub working_dir: &'a Path,
@@ -59,6 +61,7 @@ struct HelpBackgroundRenderContext<'a> {
     session_progress_messages: &'a HashMap<String, String>,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
 }
 
@@ -69,6 +72,7 @@ struct CommandPaletteRenderContext<'a> {
     selected_index: usize,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
 }
 
@@ -80,6 +84,7 @@ struct CommandOptionRenderContext<'a> {
     selected_index: usize,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
 }
 
@@ -90,6 +95,7 @@ struct ListModeRenderContext<'a> {
     projects: &'a [Project],
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
 }
 
@@ -100,6 +106,7 @@ struct SessionModeRenderContext<'a> {
     session_progress_messages: &'a HashMap<String, String>,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
 }
 
@@ -173,6 +180,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
         projects,
         session_progress_messages,
         settings,
+        stats_activity,
         sessions,
         table_state,
         ..
@@ -192,6 +200,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
                 projects,
                 sessions,
                 settings,
+                stats_activity,
                 table_state,
             },
         ),
@@ -208,6 +217,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
                 session_progress_messages,
                 sessions,
                 settings,
+                stats_activity,
                 table_state,
             },
         ),
@@ -222,19 +232,36 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
         projects,
         sessions,
         settings,
+        stats_activity,
         table_state,
     } = context;
 
     match mode {
         AppMode::List => {
-            render_list_background(f, area, sessions, settings, table_state, current_tab);
+            render_list_background(
+                f,
+                area,
+                sessions,
+                settings,
+                stats_activity,
+                table_state,
+                current_tab,
+            );
         }
         AppMode::ConfirmDeleteSession {
             selected_confirmation_index,
             session_title,
             ..
         } => {
-            render_list_background(f, area, sessions, settings, table_state, current_tab);
+            render_list_background(
+                f,
+                area,
+                sessions,
+                settings,
+                stats_activity,
+                table_state,
+                current_tab,
+            );
 
             let message = format!("Delete session \"{session_title}\"?");
             components::confirmation_overlay::ConfirmationOverlay::new(
@@ -251,15 +278,16 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
         } => render_command_palette(
             f,
             area,
-            command_palette_context(
+            CommandPaletteRenderContext {
                 current_tab,
-                *focus,
+                focus: *focus,
                 input,
-                *selected_index,
+                selected_index: *selected_index,
                 sessions,
                 settings,
+                stats_activity,
                 table_state,
-            ),
+            },
         ),
         AppMode::CommandOption {
             command,
@@ -275,6 +303,7 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
                 selected_index: *selected_index,
                 sessions,
                 settings,
+                stats_activity,
                 table_state,
             },
         ),
@@ -290,6 +319,7 @@ fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRe
         session_progress_messages,
         sessions,
         settings,
+        stats_activity,
         table_state,
     } = context;
 
@@ -346,15 +376,16 @@ fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRe
             area,
             context,
             *scroll_offset,
-            help_background_context(
+            HelpBackgroundRenderContext {
                 context,
                 current_tab,
                 plan_followup_actions,
                 session_progress_messages,
                 sessions,
                 settings,
+                stats_activity,
                 table_state,
-            ),
+            },
         ),
         _ => {}
     }
@@ -411,46 +442,6 @@ fn render_diff_mode(
     }
 }
 
-fn command_palette_context<'a>(
-    current_tab: Tab,
-    focus: PaletteFocus,
-    input: &'a str,
-    selected_index: usize,
-    sessions: &'a [Session],
-    settings: &'a mut SettingsManager,
-    table_state: &'a mut TableState,
-) -> CommandPaletteRenderContext<'a> {
-    CommandPaletteRenderContext {
-        current_tab,
-        focus,
-        input,
-        selected_index,
-        sessions,
-        settings,
-        table_state,
-    }
-}
-
-fn help_background_context<'a>(
-    context: &'a HelpContext,
-    current_tab: Tab,
-    plan_followup_actions: &'a HashMap<String, PlanFollowupAction>,
-    session_progress_messages: &'a HashMap<String, String>,
-    sessions: &'a [Session],
-    settings: &'a mut SettingsManager,
-    table_state: &'a mut TableState,
-) -> HelpBackgroundRenderContext<'a> {
-    HelpBackgroundRenderContext {
-        context,
-        current_tab,
-        plan_followup_actions,
-        session_progress_messages,
-        sessions,
-        settings,
-        table_state,
-    }
-}
-
 fn render_session_chat_mode(
     f: &mut Frame,
     area: Rect,
@@ -490,11 +481,20 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         session_progress_messages,
         sessions,
         settings,
+        stats_activity,
         table_state,
     } = context;
     match context {
         HelpContext::List => {
-            render_list_background(f, area, sessions, settings, table_state, current_tab);
+            render_list_background(
+                f,
+                area,
+                sessions,
+                settings,
+                stats_activity,
+                table_state,
+                current_tab,
+            );
         }
         HelpContext::View {
             session_id,
@@ -551,9 +551,18 @@ fn render_command_palette(f: &mut Frame, area: Rect, context: CommandPaletteRend
         selected_index,
         sessions,
         settings,
+        stats_activity,
         table_state,
     } = context;
-    render_list_background(f, area, sessions, settings, table_state, current_tab);
+    render_list_background(
+        f,
+        area,
+        sessions,
+        settings,
+        stats_activity,
+        table_state,
+        current_tab,
+    );
     components::command_palette::CommandPaletteInput::new(input, selected_index, focus)
         .render(f, area);
 }
@@ -567,9 +576,18 @@ fn render_command_options(f: &mut Frame, area: Rect, context: CommandOptionRende
         selected_index,
         sessions,
         settings,
+        stats_activity,
         table_state,
     } = context;
-    render_list_background(f, area, sessions, settings, table_state, current_tab);
+    render_list_background(
+        f,
+        area,
+        sessions,
+        settings,
+        stats_activity,
+        table_state,
+        current_tab,
+    );
     components::command_palette::CommandOptionList::new(
         command,
         selected_index,
@@ -645,6 +663,7 @@ fn render_list_background(
     content_area: Rect,
     sessions: &[Session],
     settings: &mut SettingsManager,
+    stats_activity: &[DailyActivity],
     table_state: &mut TableState,
     current_tab: Tab,
 ) {
@@ -659,7 +678,7 @@ fn render_list_background(
             pages::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
         }
         Tab::Stats => {
-            pages::stats::StatsPage::new(sessions).render(f, chunks[1]);
+            pages::stats::StatsPage::new(sessions, stats_activity).render(f, chunks[1]);
         }
         Tab::Settings => {
             pages::settings::SettingsPage::new(settings).render(f, chunks[1]);

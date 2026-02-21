@@ -746,6 +746,15 @@ pub struct SessionStats {
     pub output_tokens: u64,
 }
 
+/// Aggregated activity count for one UTC day.
+///
+/// `day_key` is the number of days since Unix epoch (`1970-01-01`) in UTC.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DailyActivity {
+    pub day_key: i64,
+    pub session_count: u32,
+}
+
 /// Pure data model for a session, used across UI rendering and persistence.
 ///
 /// Live runtime state (output streaming and status transitions) is managed

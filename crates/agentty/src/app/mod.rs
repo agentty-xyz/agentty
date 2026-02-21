@@ -203,7 +203,7 @@ impl App {
 
         let mut table_state = TableState::default();
         let mut handles = HashMap::new();
-        let sessions =
+        let (sessions, stats_activity) =
             SessionManager::load_sessions(&base_path, &db, &projects, &mut handles).await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
@@ -242,6 +242,7 @@ impl App {
                 sessions_row_count,
                 sessions_updated_at_max,
             ),
+            stats_activity,
         );
 
         #[cfg(not(test))]
