@@ -1,42 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ config.title }} | Terminal UI for Coding Agents</title>
-  <meta name="description" content="{{ config.description }}">
-  <link rel="canonical" href="{{ config.base_url }}">
-  <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
-</head>
-<body>
-  <main class="page">
-    <header class="hero">
-      <p class="kicker">agentty.xyz</p>
-      <h1>{{ config.title }}</h1>
-      <p class="lead">
-        Run coding agents from your terminal with isolated git worktrees,
-        live diffs, and session-level controls.
-      </p>
-      <div class="actions">
-        <a class="button button-primary" href="{{ config.extra.github_repo }}">View on GitHub</a>
-        <a class="button" href="{{ config.extra.npm_package }}">Install from npm</a>
-      </div>
-
-      <div class="install-widget">
-        <div class="install-tabs">
-          <button class="install-tab active" data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh">sh</button>
-          <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
-          <button class="install-tab" data-cmd="npm install -g agentty">npm</button>
-          <button class="install-tab" data-cmd="npx agentty">npx</button>
-        </div>
-        <div class="install-command">
-          <span class="install-prompt">$</span>
-          <code class="install-cmd-text">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh</code>
-          <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
-        </div>
-      </div>
-
-      <script>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{{ config.title }} | Terminal UI for Coding Agents</title>
+        <meta name="description" content="{{ config.description }}">
+        <link rel="canonical" href="{{ config.base_url }}">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
+              rel="stylesheet">
+        <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+    </head>
+    <body>
+        <nav class="topnav">
+            <div class="topnav-inner">
+                <span class="nav-brand">&gt; agentty</span>
+                <a class="nav-github"
+                   href="{{ config.extra.github_repo }}"
+                   aria-label="GitHub"
+                   target="_blank"
+                   rel="noopener">
+                    <svg xmlns="http://www.w3.org/2000/svg"
+                         width="22"
+                         height="22"
+                         viewBox="0 0 24 24"
+                         fill="currentColor"
+                         aria-hidden="true">
+                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.39.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 3-.4c1.02 0 2.04.13 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.21.7.82.58C20.56 21.8 24 17.3 24 12 24 5.37 18.63 0 12 0z" />
+                    </svg>
+                </a>
+            </div>
+        </nav>
+        <main class="page">
+            <section class="hero">
+                <pre class="logo">    _    ____ _____ _   _ _____ _____ __   __
+   / \  / ___| ____| \ | |_   _|_   _|\ \ / /
+  / _ \| |  _|  _| |  \| | | |   | |   \ V /
+ / ___ \ |_| | |___| |\  | | |   | |    | |
+/_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
+                <p class="lead">
+                    Run coding agents from your terminal with isolated worktrees,
+                    live diffs, and session-level controls.
+                </p>
+            </section>
+            <section class="section">
+                <h2 class="section-title">// installation</h2>
+                <div class="install-widget">
+                    <div class="install-tabs">
+                        <button class="install-tab active"
+                                data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh">
+                            sh
+                        </button>
+                        <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
+                        <button class="install-tab" data-cmd="npm install -g agentty">npm</button>
+                        <button class="install-tab" data-cmd="npx agentty">npx</button>
+                    </div>
+                    <div class="install-command">
+                        <span class="install-prompt">$</span>
+                        <code class="install-cmd-text">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh</code>
+                        <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
+                    </div>
+                </div>
+                <script>
         (function () {
           var tabs = document.querySelectorAll('.install-tab');
           var cmdText = document.querySelector('.install-cmd-text');
@@ -57,23 +83,71 @@
             });
           });
         })();
-      </script>
-    </header>
-
-    <section class="card-grid">
-      <article class="card">
-        <h2>Isolated By Default</h2>
-        <p>Each session runs in its own worktree and branch, so experiments stay contained.</p>
-      </article>
-      <article class="card">
-        <h2>Built For Flow</h2>
-        <p>Review diffs, switch models, and iterate without leaving the TUI.</p>
-      </article>
-      <article class="card">
-        <h2>Fast Setup</h2>
-        <p>Install with npm, cargo, or shell script and start an agent session in minutes.</p>
-      </article>
-    </section>
-  </main>
-</body>
+                </script>
+            </section>
+            <section class="section">
+                <h2 class="section-title">// features</h2>
+                <div class="card-grid">
+                    <article class="card">
+                        <div class="card-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg"
+                                 width="20"
+                                 height="20"
+                                 viewBox="0 0 24 24"
+                                 fill="none"
+                                 stroke="currentColor"
+                                 stroke-width="2"
+                                 stroke-linecap="round"
+                                 stroke-linejoin="round"
+                                 aria-hidden="true">
+                                <circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" />
+                                <path d="M6 21V9a9 9 0 0 0 9 9" />
+                            </svg>
+                        </div>
+                        <h3 class="card-title">Isolated By Default</h3>
+                        <p class="card-desc">Each session runs in its own worktree and branch, so experiments stay contained.</p>
+                    </article>
+                    <article class="card">
+                        <div class="card-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg"
+                                 width="20"
+                                 height="20"
+                                 viewBox="0 0 24 24"
+                                 fill="none"
+                                 stroke="currentColor"
+                                 stroke-width="2"
+                                 stroke-linecap="round"
+                                 stroke-linejoin="round"
+                                 aria-hidden="true">
+                                <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+                            </svg>
+                        </div>
+                        <h3 class="card-title">Built For Flow</h3>
+                        <p class="card-desc">Review diffs, switch models, and iterate without leaving the TUI.</p>
+                    </article>
+                    <article class="card">
+                        <div class="card-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg"
+                                 width="20"
+                                 height="20"
+                                 viewBox="0 0 24 24"
+                                 fill="none"
+                                 stroke="currentColor"
+                                 stroke-width="2"
+                                 stroke-linecap="round"
+                                 stroke-linejoin="round"
+                                 aria-hidden="true">
+                                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                            </svg>
+                        </div>
+                        <h3 class="card-title">Fast Setup</h3>
+                        <p class="card-desc">Install with npm, cargo, or shell script and start an agent session in minutes.</p>
+                    </article>
+                </div>
+            </section>
+            <footer class="site-footer">
+                <p>Built for developers who want control over their AI coding sessions.</p>
+            </footer>
+        </main>
+    </body>
 </html>

@@ -1,12 +1,12 @@
 :root {
-  color-scheme: light;
-  --background: #f4f6f8;
-  --card: #ffffff;
-  --text: #1a1e23;
-  --muted: #4f5b66;
-  --accent: #0f766e;
-  --accent-hover: #115e59;
-  --border: #dbe2ea;
+  --background: #080c08;
+  --surface: #0d160d;
+  --text: #3ddd6a;
+  --muted: #507a5c;
+  --dim: #2a5935;
+  --border: #1b3d20;
+  --accent: #3ddd6a;
+  --accent-dim: #2ab355;
 }
 
 * {
@@ -15,92 +15,106 @@
 
 body {
   margin: 0;
-  font-family: "Share Tech Mono", monospace;
-  background:
-    radial-gradient(circle at top right, #d0ece8 0%, transparent 40%),
-    radial-gradient(circle at bottom left, #d9e7f8 0%, transparent 35%),
-    var(--background);
+  font-family: "Share Tech Mono", "Courier New", monospace;
+  background: var(--background);
   color: var(--text);
   min-height: 100vh;
 }
 
+/* ── Navigation ──────────────────────────────────────────────── */
+
+.topnav {
+  border-bottom: 1px solid var(--border);
+}
+
+.topnav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+}
+
+.nav-brand {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.nav-github {
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  opacity: 0.75;
+  transition: opacity 150ms ease;
+}
+
+.nav-github:hover {
+  opacity: 1;
+}
+
+/* ── Page layout ─────────────────────────────────────────────── */
+
 .page {
   margin: 0 auto;
-  max-width: 980px;
-  padding: 3.5rem 1.25rem 4rem;
+  max-width: 800px;
+  padding: 4rem 1.5rem 5rem;
 }
+
+/* ── Hero ────────────────────────────────────────────────────── */
 
 .hero {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 2.5rem 1.5rem;
-  box-shadow: 0 20px 40px rgba(26, 30, 35, 0.08);
+  text-align: center;
+  margin-bottom: 4rem;
 }
 
-.kicker {
-  margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.logo {
+  font-family: inherit;
+  font-size: clamp(0.55rem, 1.5vw, 0.85rem);
+  line-height: 1.4;
   color: var(--accent);
-}
-
-h1 {
-  margin: 0.5rem 0 0;
-  font-size: clamp(2rem, 5vw, 3.4rem);
-  line-height: 1.05;
+  text-shadow: 0 0 12px rgba(61, 221, 106, 0.4);
+  margin: 0 0 2rem;
+  display: inline-block;
+  text-align: left;
+  white-space: pre;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .lead {
   color: var(--muted);
-  font-size: 1.1rem;
-  line-height: 1.6;
-  max-width: 44ch;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin: 0 auto 2rem;
+  max-width: 52ch;
 }
 
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-top: 1.25rem;
+/* ── Sections ────────────────────────────────────────────────── */
+
+.section {
+  margin-bottom: 3.5rem;
 }
 
-.button {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.7rem 1.1rem;
-  color: var(--text);
+.section-title {
+  font-size: 1rem;
   font-weight: 600;
-  text-decoration: none;
-  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+  color: var(--accent);
+  margin: 0 0 1.25rem;
+  letter-spacing: 0.03em;
 }
 
-.button:hover {
-  border-color: #b3c3d5;
-  background-color: #eef3f8;
-}
-
-.button-primary {
-  background-color: var(--accent);
-  border-color: var(--accent);
-  color: #ffffff;
-}
-
-.button-primary:hover {
-  background-color: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
+/* ── Install widget ──────────────────────────────────────────── */
 
 .install-widget {
-  margin-top: 1.25rem;
+  width: 100%;
 }
 
 .install-tabs {
   display: flex;
-  gap: 0.25rem;
+  gap: 0.15rem;
   margin-bottom: -1px;
 }
 
@@ -108,35 +122,34 @@ h1 {
   background: none;
   border: 1px solid transparent;
   border-radius: 6px 6px 0 0;
-  padding: 0.35rem 0.75rem;
+  padding: 0.3rem 0.7rem;
   font-family: inherit;
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--muted);
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+  transition: color 120ms ease, border-color 120ms ease;
 }
 
 .install-tab:hover {
   color: var(--text);
-  background-color: #eef3f8;
 }
 
 .install-tab.active {
   color: var(--accent);
-  background-color: var(--card);
   border-color: var(--border);
-  border-bottom-color: var(--card);
+  border-bottom-color: var(--surface);
+  background: var(--surface);
 }
 
 .install-command {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  background: var(--card);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 0 6px 6px 6px;
-  padding: 0.6rem 0.85rem;
+  padding: 0.65rem 0.9rem;
   overflow-x: auto;
 }
 
@@ -150,7 +163,7 @@ h1 {
 .install-cmd-text {
   flex: 1;
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -168,36 +181,60 @@ h1 {
   color: var(--muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+  transition: color 120ms ease, border-color 120ms ease;
 }
 
 .copy-btn:hover {
   color: var(--accent);
   border-color: var(--accent);
-  background-color: #eef3f8;
 }
+
+/* ── Feature cards ───────────────────────────────────────────── */
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1rem;
-  margin-top: 1rem;
 }
 
 .card {
-  background: var(--card);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 1rem;
+  border-radius: 10px;
+  padding: 1.25rem;
 }
 
-.card h2 {
-  margin-top: 0;
-  font-size: 1.1rem;
+.card-icon {
+  color: var(--accent);
+  margin-bottom: 0.9rem;
+  display: flex;
 }
 
-.card p {
-  margin-bottom: 0;
+.card-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.card-desc {
+  margin: 0;
+  font-size: 0.82rem;
   color: var(--muted);
-  line-height: 1.55;
+  line-height: 1.6;
+}
+
+/* ── Footer ──────────────────────────────────────────────────── */
+
+.site-footer {
+  text-align: center;
+  margin-top: 4rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+}
+
+.site-footer p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--dim);
 }
