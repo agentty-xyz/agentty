@@ -67,20 +67,12 @@ impl Page for SessionListPage<'_> {
             TABLE_COLUMN_SPACING,
             selection_width,
         );
-        let rows = self.sessions.iter().map(|session| {
-            let status = session.status;
-            let display_title = truncate_with_ellipsis(session.display_title(), title_column_width);
-            let cells = vec![
-                Cell::from(display_title),
-                Cell::from(session.project_name.clone()),
-                Cell::from(session.model.as_str()),
-                Cell::from(session.permission_mode.display_label()),
-                Cell::from(session.size.to_string())
-                    .style(Style::default().fg(size_color(session.size))),
-                Cell::from(format!("{status}")).style(Style::default().fg(status.color())),
-            ];
-            Row::new(cells).height(1)
-        });
+        let table_rows = grouped_session_rows(self.sessions);
+        let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
+        let selected_row = selected_render_row(&table_rows, selected_session_id);
+        let rows = table_rows
+            .iter()
+            .map(|table_row| render_table_row(table_row, title_column_width));
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
@@ -88,7 +80,10 @@ impl Page for SessionListPage<'_> {
             .row_highlight_style(selected_style)
             .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
+        let previous_selection = self.table_state.selected();
+        self.table_state.select(selected_row);
         f.render_stateful_widget(table, main_area, self.table_state);
+        self.table_state.select(previous_selection);
 
         let mut help_text = "q: quit | /: command | a: add".to_string();
         if !self.sessions.is_empty() {
@@ -99,6 +94,113 @@ impl Page for SessionListPage<'_> {
         let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, footer_area);
     }
+}
+
+/// Render rows for grouped session list display.
+enum SessionTableRow<'a> {
+    GroupLabel(SessionGroup),
+    Session(&'a Session),
+}
+
+/// Session list groups shown in the table.
+#[derive(Clone, Copy)]
+enum SessionGroup {
+    ActiveSessions,
+    MergeQueue,
+}
+
+impl SessionGroup {
+    /// Returns the display label for a session group.
+    fn label(self) -> &'static str {
+        match self {
+            Self::MergeQueue => "Merge queue",
+            Self::ActiveSessions => "Active sessions",
+        }
+    }
+}
+
+/// Returns grouped display rows with merge queue sessions listed first.
+fn grouped_session_rows(sessions: &[Session]) -> Vec<SessionTableRow<'_>> {
+    let mut rows = Vec::with_capacity(sessions.len() + 2);
+    rows.push(SessionTableRow::GroupLabel(SessionGroup::MergeQueue));
+    rows.extend(
+        sessions
+            .iter()
+            .filter(|session| is_merge_queue_session(session))
+            .map(SessionTableRow::Session),
+    );
+    rows.push(SessionTableRow::GroupLabel(SessionGroup::ActiveSessions));
+    rows.extend(
+        sessions
+            .iter()
+            .filter(|session| !is_merge_queue_session(session))
+            .map(SessionTableRow::Session),
+    );
+
+    rows
+}
+
+/// Returns `true` when a session belongs to the merge queue group.
+fn is_merge_queue_session(session: &Session) -> bool {
+    session.status == Status::Merging
+}
+
+/// Resolves the selected session id from the original session ordering.
+fn selected_session_id(sessions: &[Session], selected_index: Option<usize>) -> Option<&str> {
+    selected_index
+        .and_then(|index| sessions.get(index))
+        .map(|session| session.id.as_str())
+}
+
+/// Maps selected session id to the grouped table row index.
+fn selected_render_row(
+    rows: &[SessionTableRow<'_>],
+    selected_session_id: Option<&str>,
+) -> Option<usize> {
+    let selected_session_id = selected_session_id?;
+
+    rows.iter().position(|row| match row {
+        SessionTableRow::GroupLabel(_) => false,
+        SessionTableRow::Session(session) => session.id == selected_session_id,
+    })
+}
+
+/// Converts one grouped row descriptor into a `ratatui` table row.
+fn render_table_row(row: &SessionTableRow<'_>, title_column_width: usize) -> Row<'static> {
+    match row {
+        SessionTableRow::GroupLabel(group) => render_group_label_row(*group),
+        SessionTableRow::Session(session) => render_session_row(session, title_column_width),
+    }
+}
+
+/// Renders a non-selectable group label row.
+fn render_group_label_row(group: SessionGroup) -> Row<'static> {
+    let cells = vec![
+        Cell::from(group.label()).style(Style::default().fg(Color::Cyan)),
+        Cell::from(""),
+        Cell::from(""),
+        Cell::from(""),
+        Cell::from(""),
+        Cell::from(""),
+    ];
+
+    Row::new(cells).height(1)
+}
+
+/// Renders one session row.
+fn render_session_row(session: &Session, title_column_width: usize) -> Row<'static> {
+    let status = session.status;
+    let display_title = truncate_with_ellipsis(session.display_title(), title_column_width);
+    let cells = vec![
+        Cell::from(display_title),
+        Cell::from(session.project_name.clone()),
+        Cell::from(session.model.as_str()),
+        Cell::from(session.permission_mode.display_label()),
+        Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
+        Cell::from(format!("{status}")).style(Style::default().fg(status.color())),
+    ];
+
+    Row::new(cells).height(1)
 }
 
 pub(crate) fn project_column_width(sessions: &[Session]) -> Constraint {
@@ -178,7 +280,78 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::agent::AgentModel;
+
+    fn test_session(id: &str, status: Status) -> Session {
+        Session {
+            base_branch: "main".to_string(),
+            folder: PathBuf::new(),
+            id: id.to_string(),
+            model: AgentModel::Gemini3FlashPreview,
+            output: String::new(),
+            permission_mode: PermissionMode::AutoEdit,
+            project_name: "project".to_string(),
+            prompt: String::new(),
+            size: SessionSize::Xs,
+            stats: crate::model::SessionStats::default(),
+            status,
+            summary: None,
+            title: Some(id.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_grouped_session_rows_orders_merge_queue_before_active_sessions() {
+        // Arrange
+        let sessions = vec![
+            test_session("active-1", Status::Review),
+            test_session("merge-1", Status::Merging),
+            test_session("active-2", Status::New),
+        ];
+
+        // Act
+        let rows = grouped_session_rows(&sessions);
+        let labels_and_ids = rows
+            .iter()
+            .map(|row| match row {
+                SessionTableRow::GroupLabel(group) => group.label().to_string(),
+                SessionTableRow::Session(session) => session.id.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            labels_and_ids,
+            vec![
+                SessionGroup::MergeQueue.label().to_string(),
+                "merge-1".to_string(),
+                SessionGroup::ActiveSessions.label().to_string(),
+                "active-1".to_string(),
+                "active-2".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_selected_render_row_maps_original_selection_to_grouped_index() {
+        // Arrange
+        let sessions = vec![
+            test_session("active-1", Status::Review),
+            test_session("merge-1", Status::Merging),
+            test_session("active-2", Status::New),
+        ];
+        let rows = grouped_session_rows(&sessions);
+        let selected_session_id = selected_session_id(&sessions, Some(2));
+
+        // Act
+        let row_index = selected_render_row(&rows, selected_session_id);
+
+        // Assert
+        assert_eq!(row_index, Some(4));
+    }
 
     #[test]
     fn test_project_column_width_uses_longest_project_value() {
