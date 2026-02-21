@@ -107,6 +107,7 @@ enum SessionTableRow<'a> {
 #[derive(Clone, Copy)]
 enum SessionGroup {
     ActiveSessions,
+    Archive,
     MergeQueue,
 }
 
@@ -116,13 +117,15 @@ impl SessionGroup {
         match self {
             Self::MergeQueue => "Merge queue",
             Self::ActiveSessions => "Active sessions",
+            Self::Archive => "Archive",
         }
     }
 }
 
-/// Returns grouped display rows with merge queue sessions listed first.
+/// Returns grouped display rows with merge queue, active, then archive
+/// sessions.
 fn grouped_session_rows(sessions: &[Session]) -> Vec<SessionTableRow<'_>> {
-    let mut rows = Vec::with_capacity(sessions.len() + 2);
+    let mut rows = Vec::with_capacity(sessions.len() + 3);
     rows.push(SessionTableRow::GroupLabel(SessionGroup::MergeQueue));
     rows.extend(
         sessions
@@ -134,7 +137,14 @@ fn grouped_session_rows(sessions: &[Session]) -> Vec<SessionTableRow<'_>> {
     rows.extend(
         sessions
             .iter()
-            .filter(|session| !is_merge_queue_session(session))
+            .filter(|session| !is_merge_queue_session(session) && !is_archive_session(session))
+            .map(SessionTableRow::Session),
+    );
+    rows.push(SessionTableRow::GroupLabel(SessionGroup::Archive));
+    rows.extend(
+        sessions
+            .iter()
+            .filter(|session| is_archive_session(session))
             .map(SessionTableRow::Session),
     );
 
@@ -144,6 +154,11 @@ fn grouped_session_rows(sessions: &[Session]) -> Vec<SessionTableRow<'_>> {
 /// Returns `true` when a session belongs to the merge queue group.
 fn is_merge_queue_session(session: &Session) -> bool {
     session.status == Status::Merging
+}
+
+/// Returns `true` when a session belongs to the archive group.
+fn is_archive_session(session: &Session) -> bool {
+    matches!(session.status, Status::Done | Status::Canceled)
 }
 
 /// Resolves the selected session id from the original session ordering.
@@ -306,11 +321,13 @@ mod tests {
     }
 
     #[test]
-    fn test_grouped_session_rows_orders_merge_queue_before_active_sessions() {
+    fn test_grouped_session_rows_orders_merge_queue_before_active_and_archive_sessions() {
         // Arrange
         let sessions = vec![
             test_session("active-1", Status::Review),
             test_session("merge-1", Status::Merging),
+            test_session("done-1", Status::Done),
+            test_session("canceled-1", Status::Canceled),
             test_session("active-2", Status::New),
         ];
 
@@ -333,6 +350,9 @@ mod tests {
                 SessionGroup::ActiveSessions.label().to_string(),
                 "active-1".to_string(),
                 "active-2".to_string(),
+                SessionGroup::Archive.label().to_string(),
+                "done-1".to_string(),
+                "canceled-1".to_string(),
             ]
         );
     }
