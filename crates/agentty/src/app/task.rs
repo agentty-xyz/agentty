@@ -699,6 +699,9 @@ impl TaskService {
 
     /// Handles parsed response content and reconciles progress state
     /// transitions.
+    ///
+    /// Streamed response entries are separated by a blank line to improve
+    /// readability in chat output.
     async fn handle_response_content_line(
         stream_context: &StreamOutputContext,
         stream_text: &str,
@@ -717,8 +720,9 @@ impl TaskService {
             session_output_batch.push('\n');
         }
 
-        session_output_batch.push_str(stream_text);
-        session_output_batch.push('\n');
+        let normalized_stream_text = stream_text.trim_end_matches('\n');
+        session_output_batch.push_str(normalized_stream_text);
+        session_output_batch.push_str("\n\n");
 
         if should_flush {
             Self::flush_session_output_batch(stream_context, session_output_batch).await;
@@ -1115,6 +1119,63 @@ mod tests {
             .expect("failed to load sessions");
         assert_eq!(sessions[0].input_tokens, 11);
         assert_eq!(sessions[0].output_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_assist_task_streams_codex_output_with_spacing_between_messages() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-id", "gpt-5.3-codex", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-lc",
+                "printf '%s\\n' \
+                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
+                 First message\"}}' \
+                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
+                 Final answer\"}}' \
+                 '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
+                 7}}'",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Act
+        let result = TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
+            agent: AgentKind::Codex,
+            app_event_tx,
+            cmd: command,
+            db: database,
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::Gpt53Codex,
+        })
+        .await;
+        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "assist task should succeed: {:?}",
+            result.err()
+        );
+        assert!(output_text.contains("First message\n\nFinal answer"));
+        assert_eq!(output_text.matches("Final answer").count(), 1);
     }
 
     #[tokio::test]
