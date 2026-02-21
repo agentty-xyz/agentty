@@ -92,6 +92,7 @@ impl SessionManager {
 
             sessions.push(Session {
                 base_branch: row.base_branch,
+                created_at: row.created_at,
                 folder,
                 id: row.id,
                 model: session_model,
@@ -107,6 +108,7 @@ impl SessionManager {
                 status,
                 summary: row.summary,
                 title: row.title,
+                updated_at: row.updated_at,
             });
         }
 

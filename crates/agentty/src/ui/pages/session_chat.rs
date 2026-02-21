@@ -319,6 +319,7 @@ mod tests {
     fn session_fixture() -> Session {
         Session {
             base_branch: "main".to_string(),
+            created_at: 0,
             folder: PathBuf::new(),
             id: "session-id".to_string(),
             model: AgentModel::Gemini3FlashPreview,
@@ -331,6 +332,7 @@ mod tests {
             status: Status::New,
             summary: None,
             title: None,
+            updated_at: 0,
         }
     }
 

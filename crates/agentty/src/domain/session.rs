@@ -191,8 +191,11 @@ pub struct DailyActivity {
     pub session_count: u32,
 }
 
+/// In-memory snapshot of one persisted session row used by the UI and app
+/// orchestration layers.
 pub struct Session {
     pub base_branch: String,
+    pub created_at: i64,
     pub folder: PathBuf,
     pub id: String,
     pub model: AgentModel,
@@ -205,6 +208,7 @@ pub struct Session {
     pub status: Status,
     pub summary: Option<String>,
     pub title: Option<String>,
+    pub updated_at: i64,
 }
 
 impl Session {

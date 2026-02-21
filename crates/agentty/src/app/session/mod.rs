@@ -288,6 +288,7 @@ mod tests {
             .insert(id.to_string(), SessionHandles::new(String::new(), status));
         app.sessions.sessions.push(Session {
             base_branch: "main".to_string(),
+            created_at: 0,
             folder,
             id: id.to_string(),
             model: AgentModel::Gemini3FlashPreview,
@@ -300,6 +301,7 @@ mod tests {
             status,
             summary: None,
             title: Some(prompt.to_string()),
+            updated_at: 0,
         });
         if app.sessions.table_state.selected().is_none() {
             app.sessions.table_state.select(Some(0));

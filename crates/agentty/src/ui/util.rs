@@ -10,6 +10,9 @@ const HEATMAP_DAY_COUNT: usize = 7;
 const HEATMAP_DAY_COUNT_I64: i64 = 7;
 const HEATMAP_WEEK_COUNT: usize = 53;
 const HEATMAP_WEEK_COUNT_I64: i64 = 53;
+const HEATMAP_MONTH_LABELS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Split an area into a centered content column with side gutters.
@@ -523,6 +526,33 @@ pub fn format_token_count(count: u64) -> String {
     count.to_string()
 }
 
+/// Formats elapsed seconds using a compact display suitable for dashboard
+/// summaries.
+pub fn format_duration_compact(duration_seconds: i64) -> String {
+    if duration_seconds <= 0 {
+        return "0m".to_string();
+    }
+
+    let duration_seconds = u64::try_from(duration_seconds).unwrap_or(0);
+    let day_count = duration_seconds / 86_400;
+    let hour_count = (duration_seconds % 86_400) / 3_600;
+    let minute_count = (duration_seconds % 3_600) / 60;
+
+    if day_count > 0 {
+        return format!("{day_count}d {hour_count}h");
+    }
+
+    if hour_count > 0 {
+        return format!("{hour_count}h {minute_count}m");
+    }
+
+    if minute_count > 0 {
+        return format!("{minute_count}m");
+    }
+
+    "<1m".to_string()
+}
+
 /// Returns the current UTC day key as days since Unix epoch.
 pub fn current_day_key_utc() -> i64 {
     let now_seconds = SystemTime::now()
@@ -560,6 +590,64 @@ pub fn build_activity_heatmap_grid(activity: &[DailyActivity], end_day_key: i64)
     }
 
     grid
+}
+
+/// Returns month label anchor points for each visible heatmap week.
+///
+/// Each tuple contains `(week_index, month_label)` where `week_index` is in
+/// oldest-to-newest order across the 53-week heatmap.
+pub fn heatmap_month_markers(end_day_key: i64) -> Vec<(usize, &'static str)> {
+    let mut markers: Vec<(usize, &'static str)> = Vec::new();
+    let start_week_day_key = heatmap_start_week_day_key(end_day_key);
+    let mut previous_month_label: Option<&'static str> = None;
+
+    for week_index in 0..HEATMAP_WEEK_COUNT {
+        let week_start_day_key =
+            start_week_day_key + (i64::try_from(week_index).unwrap_or(0) * HEATMAP_DAY_COUNT_I64);
+        let month_label = month_label_from_day_key(week_start_day_key);
+        if previous_month_label == Some(month_label) {
+            continue;
+        }
+
+        markers.push((week_index, month_label));
+        previous_month_label = Some(month_label);
+    }
+
+    markers
+}
+
+/// Builds the month-label row displayed above heatmap week columns.
+///
+/// `day_label_width` is the prefix width reserved for weekday labels and
+/// `cell_width` is the width of each heatmap week column in characters.
+pub fn build_heatmap_month_row(
+    end_day_key: i64,
+    day_label_width: usize,
+    cell_width: usize,
+) -> String {
+    let total_width = day_label_width + (HEATMAP_WEEK_COUNT * cell_width);
+    let mut row_characters = vec![' '; total_width];
+    let mut last_label_end = 0_usize;
+
+    for (week_index, month_label) in heatmap_month_markers(end_day_key) {
+        let label_start = day_label_width + (week_index * cell_width);
+        if label_start < last_label_end {
+            continue;
+        }
+
+        for (label_offset, character) in month_label.chars().enumerate() {
+            let write_index = label_start + label_offset;
+            if write_index >= row_characters.len() {
+                break;
+            }
+
+            row_characters[write_index] = character;
+        }
+
+        last_label_end = label_start + month_label.len();
+    }
+
+    row_characters.into_iter().collect()
 }
 
 /// Returns an activity intensity level from `0` to `4` for one heatmap cell.
@@ -602,6 +690,48 @@ fn weekday_index_monday(day_key: i64) -> usize {
     let weekday_value = (day_key + 3).rem_euclid(HEATMAP_DAY_COUNT_I64);
 
     usize::try_from(weekday_value).unwrap_or(0)
+}
+
+fn month_label_from_day_key(day_key: i64) -> &'static str {
+    let month_number = month_number_from_day_key(day_key);
+    let month_index = usize::from(month_number.saturating_sub(1));
+
+    HEATMAP_MONTH_LABELS
+        .get(month_index)
+        .copied()
+        .unwrap_or("Jan")
+}
+
+fn month_number_from_day_key(day_key: i64) -> u8 {
+    let (_year, month_number, _day) = civil_from_days(day_key);
+
+    month_number
+}
+
+/// Converts a Unix day key (`1970-01-01` origin) into Gregorian
+/// `(year, month, day)` values.
+fn civil_from_days(day_key: i64) -> (i32, u8, u8) {
+    let shifted_day_key = day_key + 719_468;
+    let era = if shifted_day_key >= 0 {
+        shifted_day_key
+    } else {
+        shifted_day_key - 146_096
+    } / 146_097;
+    let day_of_era = shifted_day_key - (era * 146_097);
+    let year_of_era =
+        (day_of_era - (day_of_era / 1_460) + (day_of_era / 36_524) - (day_of_era / 146_096)) / 365;
+    let year = year_of_era + (era * 400);
+    let day_of_year = day_of_era - (365 * year_of_era + (year_of_era / 4) - (year_of_era / 100));
+    let month_partition = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_partition + 2) / 5 + 1;
+    let month = month_partition + if month_partition < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+
+    (
+        i32::try_from(year).unwrap_or(1970),
+        u8::try_from(month).unwrap_or(1),
+        u8::try_from(day).unwrap_or(1),
+    )
 }
 
 #[cfg(test)]
@@ -993,6 +1123,23 @@ mod tests {
     }
 
     #[test]
+    fn test_format_duration_compact() {
+        // Arrange & Act
+        let zero = format_duration_compact(0);
+        let less_than_one_minute = format_duration_compact(59);
+        let one_minute = format_duration_compact(60);
+        let one_hour = format_duration_compact(3_600);
+        let one_day = format_duration_compact(90_061);
+
+        // Assert
+        assert_eq!(zero, "0m");
+        assert_eq!(less_than_one_minute, "<1m");
+        assert_eq!(one_minute, "1m");
+        assert_eq!(one_hour, "1h 0m");
+        assert_eq!(one_day, "1d 1h");
+    }
+
+    #[test]
     fn test_build_activity_heatmap_grid_places_values_in_expected_cells() {
         // Arrange
         let end_day_key = 0_i64;
@@ -1013,6 +1160,32 @@ mod tests {
         // Assert
         assert_eq!(grid[3][52], 2);
         assert_eq!(grid[0][52], 1);
+    }
+
+    #[test]
+    fn test_heatmap_month_markers_start_on_month_changes() {
+        // Arrange
+        let end_day_key = 0_i64;
+
+        // Act
+        let markers = heatmap_month_markers(end_day_key);
+
+        // Assert
+        assert_eq!(markers.first(), Some(&(0, "Dec")));
+        assert!(markers.iter().any(|marker| marker.1 == "Jan"));
+    }
+
+    #[test]
+    fn test_build_heatmap_month_row_places_labels_on_week_columns() {
+        // Arrange
+        let end_day_key = 0_i64;
+
+        // Act
+        let month_row = build_heatmap_month_row(end_day_key, 4, 2);
+
+        // Assert
+        assert!(month_row.starts_with("    Dec"));
+        assert_eq!(month_row.chars().count(), 110);
     }
 
     #[test]

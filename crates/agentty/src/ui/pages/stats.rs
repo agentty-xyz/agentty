@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -8,12 +10,23 @@ use crate::domain::session::{DailyActivity, Session};
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
 use crate::ui::util::{
-    build_activity_heatmap_grid, current_day_key_utc, format_token_count, heatmap_intensity_level,
-    heatmap_max_count,
+    build_activity_heatmap_grid, build_heatmap_month_row, current_day_key_utc,
+    format_duration_compact, format_token_count, heatmap_intensity_level, heatmap_max_count,
 };
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const HEATMAP_SECTION_HEIGHT: u16 = 10;
+const HEATMAP_CELL_WIDTH: usize = 2;
+const HEATMAP_DAY_LABEL_WIDTH: usize = 4;
+const HEATMAP_SECTION_HEIGHT: u16 = 11;
+const SUMMARY_SECTION_WIDTH: u16 = 44;
+
+/// Token totals and session counts aggregated for a model.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ModelSummary {
+    input_tokens: u64,
+    output_tokens: u64,
+    session_count: usize,
+}
 
 /// Stats dashboard showing activity heatmap and per-session token statistics.
 pub struct StatsPage<'a> {
@@ -48,7 +61,16 @@ impl Page for StatsPage<'_> {
             ])
             .split(main_area);
 
-        self.render_heatmap(f, main_chunks[0]);
+        let top_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(SUMMARY_SECTION_WIDTH),
+            ])
+            .split(main_chunks[0]);
+
+        self.render_heatmap(f, top_chunks[0]);
+        self.render_summary(f, top_chunks[1]);
         self.render_table(f, main_chunks[1]);
         self.render_footer(f, footer_area);
     }
@@ -63,6 +85,17 @@ impl StatsPage<'_> {
         );
 
         f.render_widget(heatmap, area);
+    }
+
+    /// Renders aggregate session metrics beside the heatmap.
+    fn render_summary(&self, f: &mut Frame, area: Rect) {
+        let summary = Paragraph::new(self.build_summary_lines()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Session Stats"),
+        );
+
+        f.render_widget(summary, area);
     }
 
     fn render_table(&self, f: &mut Frame, area: Rect) {
@@ -145,6 +178,12 @@ impl StatsPage<'_> {
         let grid = build_activity_heatmap_grid(self.stats_activity, end_day_key);
         let max_count = heatmap_max_count(&grid);
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let month_row =
+            build_heatmap_month_row(end_day_key, HEATMAP_DAY_LABEL_WIDTH, HEATMAP_CELL_WIDTH);
+        lines.push(Line::from(Span::styled(
+            month_row,
+            Style::default().fg(Color::Gray),
+        )));
 
         for (day_index, day_label) in DAY_LABELS.iter().enumerate() {
             let mut spans = vec![Span::styled(
@@ -178,6 +217,116 @@ impl StatsPage<'_> {
         lines
     }
 
+    /// Builds summary lines for favorite model, longest session, and
+    /// per-model token totals.
+    fn build_summary_lines(&self) -> Vec<Line<'static>> {
+        let model_summaries = self.model_summaries();
+        let favorite_model =
+            Self::favorite_model_name(&model_summaries).unwrap_or_else(|| "n/a".to_string());
+        let longest_session = self.longest_session_summary();
+        let longest_label = longest_session.unwrap_or_else(|| "n/a".to_string());
+        let mut lines = vec![
+            Line::from(format!("Favorite model: {favorite_model}")),
+            Line::from(format!("Longest session: {longest_label}")),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Tokens by model",
+                Style::default().fg(Color::Gray),
+            )),
+        ];
+
+        if model_summaries.is_empty() {
+            lines.push(Line::from("No sessions yet"));
+
+            return lines;
+        }
+
+        for (model_name, summary) in model_summaries {
+            let input_tokens = format_token_count(summary.input_tokens);
+            let output_tokens = format_token_count(summary.output_tokens);
+            lines.push(Line::from(format!(
+                "{model_name} ({})",
+                summary.session_count
+            )));
+            lines.push(Line::from(format!(
+                "  In {input_tokens} | Out {output_tokens}"
+            )));
+        }
+
+        lines
+    }
+
+    /// Returns the model with the highest session count.
+    fn favorite_model_name(model_summaries: &BTreeMap<String, ModelSummary>) -> Option<String> {
+        let mut favorite: Option<(&str, &ModelSummary)> = None;
+
+        for (model_name, summary) in model_summaries {
+            favorite = match favorite {
+                None => Some((model_name.as_str(), summary)),
+                Some((_favorite_name, favorite_summary))
+                    if summary.session_count > favorite_summary.session_count =>
+                {
+                    Some((model_name.as_str(), summary))
+                }
+                Some((favorite_name, favorite_summary))
+                    if summary.session_count == favorite_summary.session_count
+                        && model_name.as_str() < favorite_name =>
+                {
+                    Some((model_name.as_str(), summary))
+                }
+                _ => favorite,
+            };
+        }
+
+        favorite.map(|(model_name, summary)| format!("{model_name} ({})", summary.session_count))
+    }
+
+    /// Returns a display label for the longest session duration.
+    fn longest_session_summary(&self) -> Option<String> {
+        let mut longest_duration = 0_i64;
+        let mut longest_title = String::new();
+
+        for session in self.sessions {
+            let duration_seconds = session.updated_at.saturating_sub(session.created_at).max(0);
+            if duration_seconds <= longest_duration {
+                continue;
+            }
+
+            longest_duration = duration_seconds;
+            longest_title = session.display_title().to_string();
+        }
+
+        if longest_duration == 0 {
+            return None;
+        }
+
+        Some(format!(
+            "{} ({})",
+            longest_title,
+            format_duration_compact(longest_duration)
+        ))
+    }
+
+    /// Aggregates token totals and session counts grouped by model name.
+    fn model_summaries(&self) -> BTreeMap<String, ModelSummary> {
+        let mut model_summaries: BTreeMap<String, ModelSummary> = BTreeMap::new();
+
+        for session in self.sessions {
+            let entry = model_summaries
+                .entry(session.model.as_str().to_string())
+                .or_default();
+            entry.session_count += 1;
+            entry.input_tokens = entry
+                .input_tokens
+                .saturating_add(session.stats.input_tokens);
+            entry.output_tokens = entry
+                .output_tokens
+                .saturating_add(session.stats.output_tokens);
+        }
+
+        model_summaries
+    }
+
     fn heatmap_color(intensity: u8) -> Color {
         match intensity {
             1 => Color::Rgb(14, 68, 41),
@@ -199,23 +348,45 @@ mod tests {
     use crate::domain::session::{SessionSize, SessionStats, Status};
 
     fn session_fixture() -> Session {
+        session_fixture_with(
+            "session-id",
+            "Stats Session",
+            AgentModel::Gemini3FlashPreview,
+            1_500,
+            700,
+            0,
+            1_800,
+        )
+    }
+
+    fn session_fixture_with(
+        session_id: &str,
+        title: &str,
+        model: AgentModel,
+        input_tokens: u64,
+        output_tokens: u64,
+        created_at: i64,
+        updated_at: i64,
+    ) -> Session {
         Session {
             base_branch: "main".to_string(),
+            created_at,
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
-            model: AgentModel::Gemini3FlashPreview,
+            id: session_id.to_string(),
+            model,
             output: String::new(),
             permission_mode: PermissionMode::default(),
             project_name: "project".to_string(),
             prompt: String::new(),
             size: SessionSize::Xs,
             stats: SessionStats {
-                input_tokens: 1500,
-                output_tokens: 700,
+                input_tokens,
+                output_tokens,
             },
             status: Status::Review,
             summary: None,
-            title: Some("Stats Session".to_string()),
+            title: Some(title.to_string()),
+            updated_at,
         }
     }
 
@@ -252,6 +423,61 @@ mod tests {
         assert!(text.contains("Activity Heatmap"));
         assert!(text.contains("Less"));
         assert!(text.contains("More"));
+    }
+
+    #[test]
+    fn test_render_shows_session_summary_panel_metrics() {
+        // Arrange
+        let sessions = vec![
+            session_fixture_with(
+                "session-1",
+                "Longest Session",
+                AgentModel::Gpt53Codex,
+                1_000,
+                500,
+                0,
+                7_200,
+            ),
+            session_fixture_with(
+                "session-2",
+                "Second Session",
+                AgentModel::Gpt53Codex,
+                2_000,
+                700,
+                10,
+                20,
+            ),
+            session_fixture_with(
+                "session-3",
+                "Claude Session",
+                AgentModel::ClaudeOpus46,
+                300,
+                200,
+                30,
+                90,
+            ),
+        ];
+        let activity: Vec<DailyActivity> = Vec::new();
+        let mut page = StatsPage::new(&sessions, &activity);
+        let backend = ratatui::backend::TestBackend::new(220, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::ui::Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw stats page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Session Stats"));
+        assert!(text.contains("Favorite model: gpt-5.3-codex (2)"));
+        assert!(text.contains("Longest session: Longest Session (2h 0m)"));
+        assert!(text.contains("gpt-5.3-codex (2)"));
+        assert!(text.contains("In 3.0k | Out 1.2k"));
+        assert!(text.contains("claude-opus-4-6 (1)"));
     }
 
     #[test]

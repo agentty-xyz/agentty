@@ -348,6 +348,7 @@ mod tests {
     fn test_session(id: &str, status: Status) -> Session {
         Session {
             base_branch: "main".to_string(),
+            created_at: 0,
             folder: PathBuf::new(),
             id: id.to_string(),
             model: AgentModel::Gemini3FlashPreview,
@@ -360,6 +361,7 @@ mod tests {
             status,
             summary: None,
             title: Some(id.to_string()),
+            updated_at: 0,
         }
     }
 
