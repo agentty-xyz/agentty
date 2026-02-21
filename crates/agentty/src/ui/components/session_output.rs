@@ -117,32 +117,70 @@ impl<'a> SessionOutput<'a> {
         &session.output
     }
 
+    /// Adds visual spacing around user prompt blocks while preserving pasted
+    /// multiline prompts as one contiguous message.
     fn output_text_with_spaced_user_input(output_text: &str) -> String {
         let raw_lines = output_text.split('\n').collect::<Vec<_>>();
         let mut formatted_lines = Vec::with_capacity(raw_lines.len());
+        let mut line_index = 0;
 
-        for (index, line) in raw_lines.iter().enumerate() {
-            let is_user_input = line.starts_with(" › ");
-            if is_user_input
-                && formatted_lines
-                    .last()
-                    .is_some_and(|item: &String| !item.is_empty())
+        while line_index < raw_lines.len() {
+            let line = raw_lines[line_index];
+            if !line.starts_with(" › ") {
+                formatted_lines.push(line.to_string());
+                line_index += 1;
+
+                continue;
+            }
+
+            if formatted_lines
+                .last()
+                .is_some_and(|item: &String| !item.is_empty())
             {
                 formatted_lines.push(String::new());
             }
 
-            formatted_lines.push((*line).to_string());
+            let block_end_index = Self::user_prompt_block_end_index(&raw_lines, line_index);
+            formatted_lines.extend(
+                raw_lines[line_index..=block_end_index]
+                    .iter()
+                    .map(ToString::to_string),
+            );
+            line_index = block_end_index + 1;
 
-            if is_user_input {
-                let next_line_is_empty =
-                    raw_lines.get(index + 1).is_some_and(|next| next.is_empty());
-                if !next_line_is_empty {
-                    formatted_lines.push(String::new());
-                }
+            let next_line_is_empty = raw_lines
+                .get(line_index)
+                .is_none_or(|next_line| next_line.is_empty());
+            if !next_line_is_empty {
+                formatted_lines.push(String::new());
             }
         }
 
         formatted_lines.join("\n")
+    }
+
+    /// Returns the final non-empty line index for a user prompt block that
+    /// starts at `start_index`.
+    fn user_prompt_block_end_index(raw_lines: &[&str], start_index: usize) -> usize {
+        let mut candidate_index = start_index + 1;
+
+        while candidate_index < raw_lines.len() {
+            let candidate_line = raw_lines[candidate_index];
+            if candidate_line.is_empty() || candidate_line.starts_with(" › ") {
+                break;
+            }
+
+            candidate_index += 1;
+        }
+
+        if raw_lines
+            .get(candidate_index)
+            .is_some_and(|candidate_line| candidate_line.is_empty())
+        {
+            return candidate_index.saturating_sub(1).max(start_index);
+        }
+
+        start_index
     }
 
     fn status_message(status: Status, active_progress: Option<&str>) -> String {
@@ -484,6 +522,21 @@ mod tests {
 
         // Assert
         assert_eq!(spaced, output);
+    }
+
+    #[test]
+    fn test_output_text_with_spaced_user_input_keeps_multiline_user_prompt_together() {
+        // Arrange
+        let output = "assistant output\n › first line\nsecond line\n\nagent response";
+
+        // Act
+        let spaced = SessionOutput::output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(
+            spaced,
+            "assistant output\n\n › first line\nsecond line\n\nagent response"
+        );
     }
 
     #[test]
