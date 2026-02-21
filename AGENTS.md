@@ -161,6 +161,7 @@ minimal output (errors only).
   - Configuration values: `workspace = true`
 - This improves readability and clearly distinguishes code from prose.
 - **Rust Docs:** Add `///` doc comments to structs and all public functions/types in touched Rust files.
+- **Contextual Docs:** When touching a file for code changes and updating docs, also add or refresh missing/stale doc comments for related sibling and parent elements (for example `struct`, `enum`, `impl`, and closely related items) when needed for clarity.
 
 ## Git Conventions
 - For all commit preparation and commit message work, use `skills/git-commit/SKILL.md`.
