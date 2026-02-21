@@ -357,6 +357,110 @@ mod tests {
         );
     }
 
+    /// Returns the current session status or `Done` when session is missing.
+    fn session_status_or_done(app: &App, session_id: &str) -> Status {
+        app.sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map_or(Status::Done, |session| session.status)
+    }
+
+    /// Returns whether a session currently has `Done` status.
+    fn is_session_done(app: &App, session_id: &str) -> bool {
+        app.sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.status == Status::Done)
+    }
+
+    /// Writes and commits one test change in a session worktree.
+    async fn commit_worktree_change(folder: &Path, file_name: &str, content: &str, message: &str) {
+        std::fs::write(folder.join(file_name), content).expect("failed to write queued change");
+        git::commit_all(folder.to_path_buf(), message.to_string(), false)
+            .await
+            .expect("failed to commit queued change");
+    }
+
+    /// Waits for the first merge to finish and asserts second merge has not
+    /// started prematurely.
+    async fn wait_for_first_merge_to_complete_before_second_starts(
+        app: &mut App,
+        first_session_id: &str,
+        second_session_id: &str,
+    ) {
+        let mut first_merge_completed = false;
+
+        for _ in 0..5000 {
+            app.process_pending_app_events().await;
+            app.sessions.sync_from_handles();
+
+            let first_status = session_status_or_done(app, first_session_id);
+            let second_status = session_status_or_done(app, second_session_id);
+            if first_status == Status::Done {
+                first_merge_completed = true;
+
+                break;
+            }
+
+            assert_ne!(
+                second_status,
+                Status::Merging,
+                "second merge started before first completed"
+            );
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        assert!(
+            first_merge_completed,
+            "first merge did not complete within timeout"
+        );
+    }
+
+    /// Waits for the queued second merge to enter `Merging` or `Done`.
+    async fn wait_for_second_merge_to_start(app: &mut App, second_session_id: &str) {
+        let mut second_merge_started = false;
+
+        for _ in 0..5000 {
+            app.process_pending_app_events().await;
+            app.sessions.sync_from_handles();
+
+            let second_status = session_status_or_done(app, second_session_id);
+            if matches!(second_status, Status::Merging | Status::Done) {
+                second_merge_started = true;
+
+                break;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        assert!(
+            second_merge_started,
+            "second merge did not start after first completed"
+        );
+    }
+
+    /// Waits until both provided sessions are marked as `Done`.
+    async fn wait_for_all_sessions_done(
+        app: &mut App,
+        first_session_id: &str,
+        second_session_id: &str,
+    ) {
+        for _ in 0..5000 {
+            app.process_pending_app_events().await;
+            app.sessions.sync_from_handles();
+
+            if is_session_done(app, first_session_id) && is_session_done(app, second_session_id) {
+                return;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     #[tokio::test]
     async fn test_new_app_empty() {
         // Arrange
@@ -1780,7 +1884,7 @@ mod tests {
     async fn test_merge_session_invalid_id() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        let app = new_test_app(dir.path().to_path_buf()).await;
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
 
         // Act
         let result = app.merge_session("missing").await;
@@ -1905,6 +2009,74 @@ mod tests {
             refreshed_session.summary.as_deref(),
             Some(commit_summary.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn test_merge_session_queue_processes_sessions_in_fifo_order() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        create_and_start_session(&mut app, "Queue merge one").await;
+        create_and_start_session(&mut app, "Queue merge two").await;
+        let first_session_id = app.sessions.sessions[0].id.clone();
+        let second_session_id = app.sessions.sessions[1].id.clone();
+        wait_for_status_with_retries(&mut app, &first_session_id, Status::Review, 200).await;
+        wait_for_status_with_retries(&mut app, &second_session_id, Status::Review, 200).await;
+
+        let first_folder = app.sessions.sessions[0].folder.clone();
+        let second_folder = app.sessions.sessions[1].folder.clone();
+
+        commit_worktree_change(
+            &first_folder,
+            "queue-first.txt",
+            "first change",
+            "Queue merge one commit",
+        )
+        .await;
+        commit_worktree_change(
+            &second_folder,
+            "queue-second.txt",
+            "second change",
+            "Queue merge two commit",
+        )
+        .await;
+
+        // Act
+        let first_merge_result = app.merge_session(&first_session_id).await;
+        let second_merge_result = app.merge_session(&second_session_id).await;
+
+        // Assert
+        assert!(
+            first_merge_result.is_ok(),
+            "first merge request should succeed: {:?}",
+            first_merge_result.err()
+        );
+        assert!(
+            second_merge_result.is_ok(),
+            "second merge request should enqueue: {:?}",
+            second_merge_result.err()
+        );
+
+        wait_for_first_merge_to_complete_before_second_starts(
+            &mut app,
+            &first_session_id,
+            &second_session_id,
+        )
+        .await;
+        wait_for_second_merge_to_start(&mut app, &second_session_id).await;
+
+        assert!(
+            session_status_or_done(&app, &first_session_id) == Status::Done,
+            "first merge should be complete before second starts"
+        );
+
+        wait_for_all_sessions_done(&mut app, &first_session_id, &second_session_id).await;
+
+        app.sessions.sync_from_handles();
+        let first_status = session_status_or_done(&app, &first_session_id);
+        let second_status = session_status_or_done(&app, &second_session_id);
+        assert_eq!(first_status, Status::Done);
+        assert_eq!(second_status, Status::Done);
     }
 
     #[tokio::test]

@@ -18,11 +18,13 @@ use crate::model::{
 };
 
 mod assist;
+mod merge_queue;
 mod project;
 mod service;
 pub(crate) mod session;
 mod task;
 
+use merge_queue::{MergeQueue, MergeQueueProgress};
 pub use project::ProjectManager;
 pub use service::AppServices;
 pub use session::SessionManager;
@@ -169,6 +171,7 @@ pub struct App {
     pub(crate) sessions: SessionManager,
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
     latest_available_version: Option<String>,
+    merge_queue: MergeQueue,
     plan_followup_actions: HashMap<String, PlanFollowupAction>,
     session_progress_messages: HashMap<String, String>,
 }
@@ -252,6 +255,7 @@ impl App {
             sessions,
             event_rx,
             latest_available_version: None,
+            merge_queue: MergeQueue::default(),
             plan_followup_actions: HashMap::new(),
             session_progress_messages: HashMap::new(),
         }
@@ -523,12 +527,20 @@ impl App {
     /// Starts squash-merge workflow for a reviewed session.
     ///
     /// # Errors
-    /// Returns an error if session is not mergeable or state transition is
-    /// invalid.
-    pub async fn merge_session(&self, session_id: &str) -> Result<(), String> {
-        self.sessions
-            .merge_session(session_id, &self.projects, &self.services)
-            .await
+    /// Returns an error if session is not mergeable, queueing fails, or
+    /// immediate merge start fails while the queue is idle.
+    pub async fn merge_session(&mut self, session_id: &str) -> Result<(), String> {
+        if self.merge_queue.is_queued_or_active(session_id) {
+            return Ok(());
+        }
+
+        self.validate_merge_request(session_id)?;
+        self.merge_queue.enqueue(session_id.to_string());
+        if self.merge_queue.has_active() {
+            return Ok(());
+        }
+
+        self.start_next_merge_from_queue(true).await
     }
 
     /// Rebases a reviewed session branch onto its base branch.
@@ -656,9 +668,92 @@ impl App {
             self.sessions.sync_session_from_handle(session_id);
         }
 
+        self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
+            .await;
         self.mark_plan_followup_actions(&event_batch.session_ids, &previous_session_states);
         self.retain_valid_plan_followup_actions();
         self.retain_valid_session_progress_messages();
+    }
+
+    /// Validates whether a session is currently eligible for merge queueing.
+    ///
+    /// # Errors
+    /// Returns an error when the session does not exist or is not in `Review`.
+    fn validate_merge_request(&self, session_id: &str) -> Result<(), String> {
+        let session = self.sessions.session_or_err(session_id)?;
+        if session.status != Status::Review {
+            return Err("Session must be in review status".to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Starts the next pending merge request when no merge is currently active.
+    ///
+    /// When `stop_on_failure` is `true`, returns the first start error.
+    /// Otherwise, failed entries are skipped and the queue continues.
+    ///
+    /// # Errors
+    /// Returns an error when starting a queued merge fails and
+    /// `stop_on_failure` is enabled.
+    async fn start_next_merge_from_queue(&mut self, stop_on_failure: bool) -> Result<(), String> {
+        if self.merge_queue.has_active() {
+            return Ok(());
+        }
+
+        while let Some(next_session_id) = self.merge_queue.pop_next() {
+            match self
+                .sessions
+                .merge_session(&next_session_id, &self.projects, &self.services)
+                .await
+            {
+                Ok(()) => {
+                    self.merge_queue.set_active(next_session_id);
+
+                    return Ok(());
+                }
+                Err(error) => {
+                    let merge_error = format!("\n[Merge Error] {error}\n");
+                    self.append_output_for_session(&next_session_id, &merge_error)
+                        .await;
+
+                    if stop_on_failure {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Advances queue state after reducer-applied status changes.
+    ///
+    /// The queue advances when the active merge session transitions from
+    /// `Merging` to `Done` or disappears from the refreshed session list.
+    async fn handle_merge_queue_progress(
+        &mut self,
+        session_ids: &HashSet<String>,
+        previous_session_states: &HashMap<String, (PermissionMode, Status)>,
+    ) {
+        let current_status = self
+            .merge_queue
+            .active_session_id()
+            .and_then(|active_session_id| {
+                self.sessions
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == active_session_id)
+                    .map(|session| session.status)
+            });
+        let progress = self.merge_queue.progress_from_status_updates(
+            current_status,
+            session_ids,
+            previous_session_states,
+        );
+        if progress == MergeQueueProgress::StartNext {
+            let _ = self.start_next_merge_from_queue(false).await;
+        }
     }
 
     fn mark_plan_followup_actions(

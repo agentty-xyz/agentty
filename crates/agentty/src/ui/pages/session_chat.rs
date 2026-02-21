@@ -288,11 +288,11 @@ impl<'a> SessionChatPage<'a> {
 
         if plan_followup_action.is_some() {
             return "q: back | \u{2190}/\u{2192}: choose action | enter: confirm | d: diff | m: \
-                    merge | r: rebase | S-Tab: mode | j/k: scroll | ?: help";
+                    queue merge | r: rebase | S-Tab: mode | j/k: scroll | ?: help";
         }
 
-        "q: back | enter: reply | o: open | d: diff | m: merge | r: rebase | S-Tab: mode | j/k: \
-         scroll | ?: help"
+        "q: back | enter: reply | o: open | d: diff | m: queue merge | r: rebase | S-Tab: mode | \
+         j/k: scroll | ?: help"
     }
 }
 
@@ -608,7 +608,7 @@ mod tests {
         let help_text = SessionChatPage::view_help_text(&session, None);
 
         // Assert
-        assert!(help_text.contains("m: merge"));
+        assert!(help_text.contains("m: queue merge"));
         assert!(help_text.contains("r: rebase"));
     }
 
@@ -622,7 +622,7 @@ mod tests {
             SessionChatPage::view_help_text(&session, Some(PlanFollowupAction::ImplementPlan));
 
         // Assert
-        assert!(help_text.contains("m: merge"));
+        assert!(help_text.contains("m: queue merge"));
         assert!(help_text.contains("r: rebase"));
     }
 }

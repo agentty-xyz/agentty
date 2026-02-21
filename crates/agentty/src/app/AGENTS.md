@@ -32,6 +32,7 @@ Application-layer workflows and orchestration.
 
 ## Directory Index
 - [assist.rs](assist.rs) - Shared assistance helpers for commit/rebase recovery loops.
+- [merge_queue.rs](merge_queue.rs) - Session merge queue orchestration and background workflow helpers.
 - [mod.rs](mod.rs) - Shared app state and module wiring.
 - [project.rs](project.rs) - Project discovery and switching logic.
 - [session/](session/) - Session workflows and their local docs/index.
