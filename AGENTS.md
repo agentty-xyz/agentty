@@ -181,6 +181,7 @@ git worktree prune
 
 ## Agent Instructions
 - **MANDATORY:** Update the relevant `AGENTS.md` file only when a user instruction establishes a critical, persistent preference, convention, or workflow rule that should apply across future sessions (e.g., quality gates, coding standards, review policy, process constraints). Do not update `AGENTS.md` for routine one-off implementation requests in regular source files. Both `CLAUDE.md` and `GEMINI.md` are symlinks to `AGENTS.md`, so a single update keeps all AI assistants in sync.
+- **MANDATORY:** Document all added or updated code using docstrings. When touching existing code, add or refresh docstrings so the changed behavior is clearly described.
 - **Directory Indexing:** Maintain the "Directory Index" section in the local `AGENTS.md`. If you create, rename, or delete a file/directory, update the index immediately to reflect the change.
 - **Context First:** Before listing a directory or reading source code, ALWAYS read the local `AGENTS.md` first. This provides immediate context on the folder structure and file purposes, reducing the need for broad discovery actions.
 - **Context7 First for Fresh Tool Info:** If Context7 is connected as an MCP server, use it to retrieve the latest documentation and API details for the tools and libraries used in the task.
