@@ -4,11 +4,13 @@ use ratatui::text::{Line, Span};
 use crate::ui::util::wrap_styled_line;
 
 const USER_PROMPT_PREFIX: &str = " › ";
+const STATS_LABEL_WIDTH: usize = 22;
 
 #[derive(Clone, Copy)]
 enum BlockState {
     Paragraph,
     FencedCode,
+    FencedStats,
 }
 
 /// Converts markdown text into styled, word-wrapped lines for terminal display.
@@ -19,8 +21,8 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
     for raw_line in text.split('\n') {
         if is_fence_delimiter(raw_line) {
             block_state = match block_state {
-                BlockState::Paragraph => BlockState::FencedCode,
-                BlockState::FencedCode => BlockState::Paragraph,
+                BlockState::Paragraph => opening_fence_block_state(raw_line),
+                BlockState::FencedCode | BlockState::FencedStats => BlockState::Paragraph,
             };
 
             continue;
@@ -29,6 +31,7 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
         match block_state {
             BlockState::Paragraph => rendered_lines.extend(render_markdown_line(raw_line, width)),
             BlockState::FencedCode => rendered_lines.extend(render_code_line(raw_line, width)),
+            BlockState::FencedStats => rendered_lines.extend(render_stats_line(raw_line, width)),
         }
     }
 
@@ -137,6 +140,28 @@ fn render_code_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
     wrap_verbatim_line(raw_line, code_block_style(), width)
 }
 
+fn render_stats_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
+    if raw_line.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    if let Some((metric, value)) = parse_stats_metric_line(raw_line) {
+        let metric_cell = format!("{metric:<STATS_LABEL_WIDTH$}");
+        let spans = vec![
+            Span::styled(metric_cell, stats_metric_style()),
+            Span::styled(value.to_string(), stats_value_style()),
+        ];
+
+        return wrap_verbatim_spans(spans, width);
+    }
+
+    if raw_line == "Tokens Usage" {
+        return wrap_verbatim_line(raw_line, stats_section_style(), width);
+    }
+
+    wrap_verbatim_line(raw_line, Style::default(), width)
+}
+
 fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::from(vec![Span::styled(content.to_string(), style)])];
@@ -172,6 +197,53 @@ fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'st
     }
 
     wrapped_lines
+}
+
+fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::from(spans)];
+    }
+
+    let mut wrapped_lines = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_width = 0;
+
+    for span in spans {
+        let style = span.style;
+        let content = span.content.into_owned();
+
+        for character in content.chars() {
+            if current_width == width {
+                wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
+                current_width = 0;
+            }
+
+            push_verbatim_span_character(&mut current_spans, style, character);
+            current_width += 1;
+        }
+    }
+
+    if !current_spans.is_empty() {
+        wrapped_lines.push(Line::from(current_spans));
+    }
+
+    if wrapped_lines.is_empty() {
+        wrapped_lines.push(Line::from(""));
+    }
+
+    wrapped_lines
+}
+
+fn push_verbatim_span_character(spans: &mut Vec<Span<'static>>, style: Style, character: char) {
+    if let Some(last_span) = spans.last_mut()
+        && last_span.style == style
+    {
+        last_span.content.to_mut().push(character);
+
+        return;
+    }
+
+    spans.push(Span::styled(character.to_string(), style));
 }
 
 fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
@@ -278,8 +350,26 @@ fn parse_numbered_content(raw_line: &str) -> Option<(String, &str)> {
     Some((format!("{digits}. "), content))
 }
 
+fn opening_fence_block_state(raw_line: &str) -> BlockState {
+    if is_stats_fence(raw_line) {
+        return BlockState::FencedStats;
+    }
+
+    BlockState::FencedCode
+}
+
 fn is_fence_delimiter(raw_line: &str) -> bool {
     raw_line.trim().starts_with("```")
+}
+
+fn is_stats_fence(raw_line: &str) -> bool {
+    raw_line.trim().starts_with("```stats")
+}
+
+fn parse_stats_metric_line(raw_line: &str) -> Option<(&str, &str)> {
+    let (metric, value) = raw_line.split_once('\t')?;
+
+    Some((metric, value))
 }
 
 fn is_horizontal_rule(raw_line: &str) -> bool {
@@ -332,6 +422,22 @@ fn horizontal_rule_style() -> Style {
 
 fn code_block_style() -> Style {
     Style::default().fg(Color::Gray).bg(Color::Black)
+}
+
+fn stats_metric_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn stats_section_style() -> Style {
+    Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn stats_value_style() -> Style {
+    inline_code_style()
 }
 
 fn user_prompt_style() -> Style {
@@ -474,6 +580,42 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].to_string(), "**raw**");
         assert_eq!(lines[0].spans[0].style, code_block_style());
+    }
+
+    #[test]
+    fn test_render_markdown_renders_stats_metric_with_fixed_alignment() {
+        // Arrange
+        let input = "```stats\nSession ID\tsession-id\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].to_string().find("session-id"),
+            Some(STATS_LABEL_WIDTH)
+        );
+        assert!(lines[0].spans.iter().any(|span| {
+            span.content.as_ref().contains("Session ID") && span.style == stats_metric_style()
+        }));
+        assert!(lines[0].spans.iter().any(|span| {
+            span.content.as_ref().contains("session-id") && span.style == stats_value_style()
+        }));
+    }
+
+    #[test]
+    fn test_render_markdown_renders_stats_section_title_style() {
+        // Arrange
+        let input = "```stats\nTokens Usage\n```";
+
+        // Act
+        let lines = render_markdown(input, 80);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), "Tokens Usage");
+        assert_eq!(lines[0].spans[0].style, stats_section_style());
     }
 
     #[test]

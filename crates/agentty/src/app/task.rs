@@ -58,6 +58,7 @@ pub(super) struct RunAgentAssistTaskInput {
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
     pub(super) permission_mode: PermissionMode,
+    pub(super) session_model: AgentModel,
 }
 
 /// Shared context for streaming incremental agent output as it arrives.
@@ -220,6 +221,9 @@ impl TaskService {
                     }
 
                     let _ = db.update_session_stats(&id, &parsed.stats).await;
+                    let _ = db
+                        .upsert_session_usage(&id, session_model.as_str(), &parsed.stats)
+                        .await;
                     Self::handle_auto_commit(AssistContext {
                         app_event_tx: app_event_tx.clone(),
                         db: db.clone(),
@@ -377,6 +381,7 @@ impl TaskService {
             id,
             output,
             permission_mode,
+            session_model,
         } = input;
 
         let mut tokio_cmd = tokio::process::Command::from(cmd);
@@ -427,6 +432,9 @@ impl TaskService {
             Self::append_session_output(&output, &db, &app_event_tx, &id, &parsed.content).await;
         }
         let _ = db.update_session_stats(&id, &parsed.stats).await;
+        let _ = db
+            .upsert_session_usage(&id, session_model.as_str(), &parsed.stats)
+            .await;
 
         Ok(())
     }
@@ -1027,6 +1035,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::ClaudeOpus46,
         })
         .await;
 
@@ -1086,6 +1095,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::Gpt53Codex,
         })
         .await;
 
@@ -1151,6 +1161,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::ClaudeOpus46,
         })
         .await;
 
@@ -1220,6 +1231,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::Gemini3FlashPreview,
         })
         .await;
 
@@ -1286,6 +1298,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::Gpt53Codex,
         })
         .await;
         let mut progress_updates = Vec::new();
@@ -1375,6 +1388,7 @@ mod tests {
             id: "session-id".to_string(),
             output,
             permission_mode: PermissionMode::AutoEdit,
+            session_model: AgentModel::ClaudeOpus46,
         })
         .await;
 

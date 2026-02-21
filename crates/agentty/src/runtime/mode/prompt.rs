@@ -372,6 +372,16 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                     }
                     let _ = app.clear_session_history(&prompt_context.session_id).await;
                 }
+                "/stats" => {
+                    if let AppMode::Prompt {
+                        input, slash_state, ..
+                    } = &mut app.mode
+                    {
+                        input.take_text();
+                        slash_state.reset();
+                    }
+                    handle_stats_command(app, prompt_context).await;
+                }
                 _ => {
                     // /model — advance to Agent stage
                     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
@@ -449,9 +459,138 @@ async fn append_output_for_session(app: &App, session_id: &str, output: &str) {
     app.append_output_for_session(session_id, output).await;
 }
 
+async fn handle_stats_command(app: &App, prompt_context: &PromptContext) {
+    let stats_output = build_stats_output(app.services.db(), &prompt_context.session_id).await;
+    append_output_for_session(app, &prompt_context.session_id, &stats_output).await;
+}
+
+struct TokenUsageRow {
+    in_tokens: String,
+    model: String,
+    out_tokens: String,
+}
+
+async fn build_stats_output(db: &crate::db::Database, session_id: &str) -> String {
+    let session_time = load_session_time_text(db, session_id).await;
+    let usage_rows_result = build_token_usage_rows(db.load_session_usage(session_id).await);
+
+    build_stats_markdown(session_id, &session_time, usage_rows_result)
+}
+
+async fn load_session_time_text(db: &crate::db::Database, session_id: &str) -> String {
+    match db.load_session_timestamps(session_id).await {
+        Ok(Some((created_at, updated_at))) => {
+            let duration_seconds = (updated_at - created_at).max(0);
+
+            format_duration(duration_seconds)
+        }
+        Ok(None) | Err(_) => "Unavailable".to_string(),
+    }
+}
+
+fn build_token_usage_rows(
+    usage_rows_result: Result<Vec<crate::db::SessionUsageRow>, String>,
+) -> Result<Vec<TokenUsageRow>, String> {
+    match usage_rows_result {
+        Ok(usage_rows) => {
+            let rows = usage_rows
+                .into_iter()
+                .map(|row| TokenUsageRow {
+                    in_tokens: crate::ui::util::format_token_count(row.input_tokens.unsigned_abs()),
+                    model: row.model,
+                    out_tokens: crate::ui::util::format_token_count(
+                        row.output_tokens.unsigned_abs(),
+                    ),
+                })
+                .collect();
+
+            Ok(rows)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn build_stats_markdown(
+    session_id: &str,
+    session_time: &str,
+    usage_rows_result: Result<Vec<TokenUsageRow>, String>,
+) -> String {
+    let mut lines = vec![
+        format_stats_metric_line("Session ID", session_id),
+        format_stats_metric_line("Session Time", session_time),
+        String::new(),
+        "Tokens Usage".to_string(),
+    ];
+
+    lines.extend(build_token_usage_lines(usage_rows_result));
+
+    format!(
+        "\n## Session Stats\n\n```stats\n{}\n```\n",
+        lines.join("\n")
+    )
+}
+
+fn format_stats_metric_line(metric: &str, value: &str) -> String {
+    format!("{metric}\t{value}")
+}
+
+fn build_token_usage_lines(usage_rows_result: Result<Vec<TokenUsageRow>, String>) -> Vec<String> {
+    match usage_rows_result {
+        Ok(usage_rows) if usage_rows.is_empty() => vec!["No token usage recorded.".to_string()],
+        Ok(usage_rows) => render_token_usage_table_lines(&usage_rows),
+        Err(error) => vec![
+            "Usage unavailable.".to_string(),
+            format_stats_metric_line("Error", &error),
+        ],
+    }
+}
+
+fn render_token_usage_table_lines(usage_rows: &[TokenUsageRow]) -> Vec<String> {
+    let model_width = usage_rows
+        .iter()
+        .map(|row| row.model.chars().count())
+        .max()
+        .unwrap_or_default()
+        .max("Model".chars().count());
+    let in_width = usage_rows
+        .iter()
+        .map(|row| row.in_tokens.chars().count())
+        .max()
+        .unwrap_or_default()
+        .max("In".chars().count());
+    let out_width = usage_rows
+        .iter()
+        .map(|row| row.out_tokens.chars().count())
+        .max()
+        .unwrap_or_default()
+        .max("Out".chars().count());
+
+    let mut lines = vec![format!(
+        "{:<model_width$}  {:>in_width$}  {:>out_width$}",
+        "Model", "In", "Out"
+    )];
+
+    lines.extend(usage_rows.iter().map(|row| {
+        format!(
+            "{:<model_width$}  {:>in_width$}  {:>out_width$}",
+            row.model, row.in_tokens, row.out_tokens
+        )
+    }));
+
+    lines
+}
+
+fn format_duration(total_seconds: i64) -> String {
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
 fn prompt_slash_commands(input: &str) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/clear", "/model"];
+    let mut commands = vec!["/clear", "/model", "/stats"];
     commands.retain(|command| command.starts_with(&lowered));
 
     commands
@@ -962,7 +1101,16 @@ mod tests {
         let commands = prompt_slash_commands("/");
 
         // Assert
-        assert_eq!(commands, vec!["/clear", "/model"]);
+        assert_eq!(commands, vec!["/clear", "/model", "/stats"]);
+    }
+
+    #[test]
+    fn test_prompt_slash_commands_match_stats() {
+        // Arrange & Act
+        let commands = prompt_slash_commands("/s");
+
+        // Assert
+        assert_eq!(commands, vec!["/stats"]);
     }
 
     #[test]
@@ -1198,5 +1346,92 @@ mod tests {
         // Assert
         assert!(matches!(app.mode, AppMode::List));
         assert!(app.sessions.sessions.is_empty());
+    }
+
+    #[test]
+    fn test_format_duration_zero() {
+        // Arrange & Act
+        let result = format_duration(0);
+
+        // Assert
+        assert_eq!(result, "00:00:00");
+    }
+
+    #[test]
+    fn test_format_duration_mixed() {
+        // Arrange & Act
+        let result = format_duration(3661);
+
+        // Assert
+        assert_eq!(result, "01:01:01");
+    }
+
+    #[test]
+    fn test_format_duration_large() {
+        // Arrange & Act
+        let result = format_duration(86400);
+
+        // Assert
+        assert_eq!(result, "24:00:00");
+    }
+
+    #[test]
+    fn test_format_stats_metric_line_uses_tab_delimiter() {
+        // Arrange & Act
+        let session_line = format_stats_metric_line("Session ID", "session-id");
+        let error_line = format_stats_metric_line("Error", "boom");
+
+        // Assert
+        assert_eq!(session_line, "Session ID\tsession-id");
+        assert_eq!(error_line, "Error\tboom");
+    }
+
+    #[test]
+    fn test_build_stats_markdown_renders_aligned_usage_table_without_box() {
+        // Arrange
+        let usage_rows_result = Ok(vec![TokenUsageRow {
+            in_tokens: "1.2k".to_string(),
+            model: "gemini-2.5-flash".to_string(),
+            out_tokens: "650".to_string(),
+        }]);
+
+        // Act
+        let result = build_stats_markdown("session-id", "00:20:15", usage_rows_result);
+
+        // Assert
+        assert!(result.starts_with("\n## Session Stats\n\n```stats\n"));
+        assert!(result.contains("Session ID\tsession-id"));
+        assert!(result.contains("Session Time\t00:20:15"));
+        assert!(result.contains("Tokens Usage"));
+        assert!(result.contains("Model"));
+        assert!(result.contains("gemini-2.5-flash"));
+        assert!(result.contains("1.2k"));
+        assert!(result.contains("650"));
+        assert!(!result.contains('+'));
+        assert!(!result.contains('|'));
+
+        let session_id_index = result.find("Session ID").expect("expected session id");
+        let session_time_index = result.find("Session Time").expect("expected session time");
+        let token_usage_index = result
+            .find("Tokens Usage")
+            .expect("expected token usage title");
+        let model_header_index = result.find("Model").expect("expected model header");
+
+        assert!(session_id_index < session_time_index);
+        assert!(session_time_index < token_usage_index);
+        assert!(token_usage_index < model_header_index);
+    }
+
+    #[test]
+    fn test_build_stats_markdown_renders_no_usage_message() {
+        // Arrange
+        let usage_rows_result = Ok(Vec::new());
+
+        // Act
+        let result = build_stats_markdown("session-id", "00:20:15", usage_rows_result);
+
+        // Assert
+        assert!(result.contains("Tokens Usage"));
+        assert!(result.contains("No token usage recorded."));
     }
 }

@@ -119,6 +119,17 @@ pub struct SessionOperationRow {
     pub status: String,
 }
 
+/// Row returned when loading per-model token usage from the `session_usage`
+/// table.
+pub struct SessionUsageRow {
+    pub created_at: i64,
+    pub input_tokens: i64,
+    pub invocation_count: i64,
+    pub model: String,
+    pub output_tokens: i64,
+    pub session_id: Option<String>,
+}
+
 impl Database {
     /// Opens the `SQLite` database and runs embedded migrations.
     ///
@@ -957,6 +968,104 @@ WHERE name = ?
         .map_err(|err| format!("Failed to get setting: {err}"))?;
 
         Ok(row.map(|row| row.get("value")))
+    }
+
+    /// Accumulates per-model token usage for a session.
+    ///
+    /// Each call inserts a new row if the `(session_id, model)` pair does not
+    /// exist, or adds the provided values to the existing totals.
+    /// `invocation_count` is incremented by 1 on each call.
+    ///
+    /// # Errors
+    /// Returns an error if the upsert fails.
+    pub async fn upsert_session_usage(
+        &self,
+        session_id: &str,
+        model: &str,
+        stats: &SessionStats,
+    ) -> Result<(), String> {
+        if stats.input_tokens == 0 && stats.output_tokens == 0 {
+            return Ok(());
+        }
+
+        sqlx::query(
+            r"
+INSERT INTO session_usage (session_id, model, input_tokens, output_tokens, invocation_count)
+VALUES (?, ?, ?, ?, 1)
+ON CONFLICT(session_id, model) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    invocation_count = invocation_count + 1
+",
+        )
+        .bind(session_id)
+        .bind(model)
+        .bind(stats.input_tokens.cast_signed())
+        .bind(stats.output_tokens.cast_signed())
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to upsert session usage: {err}"))?;
+
+        Ok(())
+    }
+
+    /// Loads per-model token usage rows for a session, ordered by model name.
+    ///
+    /// # Errors
+    /// Returns an error if the query fails.
+    pub async fn load_session_usage(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionUsageRow>, String> {
+        let rows = sqlx::query(
+            r"
+SELECT session_id, model, created_at, input_tokens, invocation_count, output_tokens
+FROM session_usage
+WHERE session_id = ?
+ORDER BY model
+",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to load session usage: {err}"))?;
+
+        Ok(rows
+            .iter()
+            .map(|row| SessionUsageRow {
+                created_at: row.get("created_at"),
+                input_tokens: row.get("input_tokens"),
+                invocation_count: row.get("invocation_count"),
+                model: row.get("model"),
+                output_tokens: row.get("output_tokens"),
+                session_id: row.get("session_id"),
+            })
+            .collect())
+    }
+
+    /// Returns `(created_at, updated_at)` timestamps for a session.
+    ///
+    /// Returns `None` if the session does not exist.
+    ///
+    /// # Errors
+    /// Returns an error if the query fails.
+    pub async fn load_session_timestamps(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(i64, i64)>, String> {
+        let row = sqlx::query_as::<_, (i64, i64)>(
+            r"
+SELECT created_at, updated_at
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to load session timestamps: {err}"))?;
+
+        Ok(row)
     }
 }
 
@@ -1937,5 +2046,255 @@ VALUES (?, ?)
         // Assert
         assert!(is_requested);
         assert!(!pending_after_cancel);
+    }
+
+    // ── session_usage ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_upsert_session_usage_inserts_and_loads() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+        let stats = SessionStats {
+            input_tokens: 100,
+            output_tokens: 50,
+        };
+
+        // Act
+        db.upsert_session_usage("s1", "claude-opus-4-6", &stats)
+            .await
+            .expect("failed to upsert");
+        let rows = db
+            .load_session_usage("s1")
+            .await
+            .expect("failed to load usage");
+
+        // Assert
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "claude-opus-4-6");
+        assert_eq!(rows[0].input_tokens, 100);
+        assert_eq!(rows[0].output_tokens, 50);
+        assert_eq!(rows[0].invocation_count, 1);
+        assert_eq!(rows[0].session_id.as_deref(), Some("s1"));
+    }
+
+    #[tokio::test]
+    async fn test_upsert_session_usage_accumulates_across_calls() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+        let stats = SessionStats {
+            input_tokens: 100,
+            output_tokens: 50,
+        };
+
+        // Act
+        db.upsert_session_usage("s1", "claude-opus-4-6", &stats)
+            .await
+            .expect("failed to upsert first");
+        db.upsert_session_usage("s1", "claude-opus-4-6", &stats)
+            .await
+            .expect("failed to upsert second");
+        let rows = db
+            .load_session_usage("s1")
+            .await
+            .expect("failed to load usage");
+
+        // Assert
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 200);
+        assert_eq!(rows[0].output_tokens, 100);
+        assert_eq!(rows[0].invocation_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_session_usage_noop_when_both_zero() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+        let stats = SessionStats {
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+
+        // Act
+        db.upsert_session_usage("s1", "claude-opus-4-6", &stats)
+            .await
+            .expect("failed to upsert");
+        let rows = db
+            .load_session_usage("s1")
+            .await
+            .expect("failed to load usage");
+
+        // Assert
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_session_usage_multiple_models() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+
+        // Act
+        db.upsert_session_usage(
+            "s1",
+            "claude-opus-4-6",
+            &SessionStats {
+                input_tokens: 100,
+                output_tokens: 50,
+            },
+        )
+        .await
+        .expect("failed to upsert claude");
+        db.upsert_session_usage(
+            "s1",
+            "gemini-3-flash-preview",
+            &SessionStats {
+                input_tokens: 200,
+                output_tokens: 80,
+            },
+        )
+        .await
+        .expect("failed to upsert gemini");
+        let rows = db
+            .load_session_usage("s1")
+            .await
+            .expect("failed to load usage");
+
+        // Assert
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].model, "claude-opus-4-6");
+        assert_eq!(rows[1].model, "gemini-3-flash-preview");
+    }
+
+    #[tokio::test]
+    async fn test_load_session_usage_empty() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+
+        // Act
+        let rows = db
+            .load_session_usage("s1")
+            .await
+            .expect("failed to load usage");
+
+        // Assert
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_session_usage_survives_session_deletion() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+        db.upsert_session_usage(
+            "s1",
+            "claude-opus-4-6",
+            &SessionStats {
+                input_tokens: 500,
+                output_tokens: 200,
+            },
+        )
+        .await
+        .expect("failed to upsert usage");
+
+        // Act
+        db.delete_session("s1")
+            .await
+            .expect("failed to delete session");
+
+        // Assert — usage row survives with NULL session_id (ON DELETE SET NULL)
+        let row = sqlx::query(
+            r"SELECT session_id, input_tokens, output_tokens FROM session_usage WHERE model = ?",
+        )
+        .bind("claude-opus-4-6")
+        .fetch_optional(&db.pool)
+        .await
+        .expect("failed to query");
+        let row = row.expect("usage row should still exist");
+        let session_id: Option<String> = row.get("session_id");
+        assert!(
+            session_id.is_none(),
+            "session_id should be NULL after delete"
+        );
+        assert_eq!(row.get::<i64, _>("input_tokens"), 500);
+        assert_eq!(row.get::<i64, _>("output_tokens"), 200);
+    }
+
+    #[tokio::test]
+    async fn test_load_session_timestamps_returns_values() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session("s1", "claude-opus-4-6", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+
+        // Act
+        let timestamps = db
+            .load_session_timestamps("s1")
+            .await
+            .expect("failed to load timestamps");
+
+        // Assert
+        let (created_at, updated_at) = timestamps.expect("timestamps should exist");
+        assert!(created_at > 0);
+        assert!(updated_at > 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_session_timestamps_not_found() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+
+        // Act
+        let timestamps = db
+            .load_session_timestamps("nonexistent")
+            .await
+            .expect("failed to load timestamps");
+
+        // Assert
+        assert!(timestamps.is_none());
     }
 }

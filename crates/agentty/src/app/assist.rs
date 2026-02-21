@@ -136,6 +136,7 @@ pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> R
         id: context.id.clone(),
         output: Arc::clone(&context.output),
         permission_mode: effective_permission_mode,
+        session_model: context.session_model,
     })
     .await
 }
