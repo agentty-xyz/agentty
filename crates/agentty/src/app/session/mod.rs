@@ -176,13 +176,13 @@ mod tests {
 
     use super::*;
     use crate::agent::{AgentKind, AgentModel, MockAgentBackend};
-    use crate::app::App;
     use crate::app::settings::SettingName;
+    use crate::app::{App, Tab};
     use crate::db::Database;
     use crate::git;
     use crate::model::{
         AppMode, PermissionMode, SESSION_DATA_DIR, Session, SessionHandles, SessionSize,
-        SessionStats, Status, Tab,
+        SessionStats, Status,
     };
 
     fn create_mock_backend() -> MockAgentBackend {
@@ -1825,13 +1825,13 @@ mod tests {
         let mut app = new_test_app(dir.path().to_path_buf()).await;
 
         // Act & Assert
-        assert_eq!(app.current_tab, Tab::Sessions);
-        app.next_tab();
-        assert_eq!(app.current_tab, Tab::Stats);
-        app.next_tab();
-        assert_eq!(app.current_tab, Tab::Settings);
-        app.next_tab();
-        assert_eq!(app.current_tab, Tab::Sessions);
+        assert_eq!(app.tabs.current(), Tab::Sessions);
+        app.tabs.next();
+        assert_eq!(app.tabs.current(), Tab::Stats);
+        app.tabs.next();
+        assert_eq!(app.tabs.current(), Tab::Settings);
+        app.tabs.next();
+        assert_eq!(app.tabs.current(), Tab::Sessions);
     }
 
     #[tokio::test]

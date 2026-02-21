@@ -2,10 +2,9 @@ use std::io;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::App;
+use crate::app::{App, Tab};
 use crate::model::{
     AppMode, HelpContext, InputState, PaletteFocus, PromptHistoryState, PromptSlashState, Status,
-    Tab,
 };
 use crate::runtime::EventResult;
 
@@ -14,7 +13,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     match key.code {
         KeyCode::Char('q') => return Ok(EventResult::Quit),
         KeyCode::Tab => {
-            app.next_tab();
+            app.tabs.next();
         }
         KeyCode::Char('/') => {
             app.mode = AppMode::CommandPalette {
@@ -35,12 +34,12 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 scroll_offset: None,
             };
         }
-        KeyCode::Char('j') | KeyCode::Down => match app.current_tab {
+        KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Sessions => app.next(),
             Tab::Stats => {}
             Tab::Settings => app.settings.next(),
         },
-        KeyCode::Char('k') | KeyCode::Up => match app.current_tab {
+        KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Sessions => app.previous(),
             Tab::Stats => {}
             Tab::Settings => app.settings.previous(),
@@ -61,7 +60,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 return Ok(EventResult::Continue);
             }
 
-            match app.current_tab {
+            match app.tabs.current() {
                 Tab::Sessions => {
                     if let Some(session_index) = app.sessions.table_state.selected()
                         && let Some(session) = app.sessions.sessions.get(session_index)

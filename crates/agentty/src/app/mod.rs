@@ -13,9 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{AgentKind, AgentModel};
 use crate::db::Database;
-use crate::model::{
-    AppMode, PermissionMode, PlanFollowupAction, Session, SessionHandles, Status, Tab,
-};
+use crate::model::{AppMode, PermissionMode, PlanFollowupAction, Session, SessionHandles, Status};
 
 mod assist;
 mod merge_queue;
@@ -23,6 +21,7 @@ mod project;
 mod service;
 pub(crate) mod session;
 pub(crate) mod settings;
+pub(crate) mod tab;
 mod task;
 
 use merge_queue::{MergeQueue, MergeQueueProgress};
@@ -30,6 +29,7 @@ pub use project::ProjectManager;
 pub use service::AppServices;
 pub use session::SessionManager;
 pub use settings::SettingsManager;
+pub use tab::{Tab, TabManager};
 
 /// Relative directory name used for session git worktrees under `~/.agentty`.
 pub const AGENTTY_WT_DIR: &str = "wt";
@@ -166,9 +166,10 @@ impl SessionState {
 
 /// Stores application state and coordinates session/project workflows.
 pub struct App {
-    pub current_tab: Tab,
     pub mode: AppMode,
     pub settings: SettingsManager,
+    /// Manages the selected top-level list tab.
+    pub tabs: TabManager,
     pub(crate) projects: ProjectManager,
     pub(crate) services: AppServices,
     pub(crate) sessions: SessionManager,
@@ -256,9 +257,9 @@ impl App {
         }
 
         Self {
-            current_tab: Tab::Sessions,
             mode: AppMode::List,
             settings,
+            tabs: TabManager::new(),
             projects,
             services,
             sessions,
@@ -298,11 +299,6 @@ impl App {
     /// Returns whether the onboarding screen should be shown.
     pub fn should_show_onboarding(&self) -> bool {
         self.sessions.sessions.is_empty()
-    }
-
-    /// Selects the next top-level tab.
-    pub fn next_tab(&mut self) {
-        self.current_tab = self.current_tab.next();
     }
 
     /// Moves selection to the next session in the list.

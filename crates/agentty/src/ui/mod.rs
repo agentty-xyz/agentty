@@ -10,10 +10,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::SettingsManager;
 use crate::app::session::session_branch;
+use crate::app::{SettingsManager, Tab};
 use crate::model::{
-    AppMode, HelpContext, PaletteCommand, PaletteFocus, PlanFollowupAction, Project, Session, Tab,
+    AppMode, HelpContext, PaletteCommand, PaletteFocus, PlanFollowupAction, Project, Session,
 };
 
 /// A trait for UI pages that enforces a standard rendering interface.

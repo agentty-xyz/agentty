@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Padding, Paragraph};
 
-use crate::model::Tab;
+use crate::app::Tab;
 use crate::ui::Component;
 
 pub struct Tabs {

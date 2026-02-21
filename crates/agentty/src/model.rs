@@ -19,13 +19,6 @@ pub struct Project {
     pub path: PathBuf,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tab {
-    Sessions,
-    Stats,
-    Settings,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PermissionMode {
     #[default]
@@ -808,25 +801,6 @@ impl SessionHandles {
     }
 }
 
-impl Tab {
-    pub fn title(self) -> &'static str {
-        match self {
-            Tab::Sessions => "Sessions",
-            Tab::Stats => "Stats",
-            Tab::Settings => "Settings",
-        }
-    }
-
-    #[must_use]
-    pub fn next(self) -> Self {
-        match self {
-            Tab::Sessions => Tab::Stats,
-            Tab::Stats => Tab::Settings,
-            Tab::Settings => Tab::Sessions,
-        }
-    }
-}
-
 impl Status {
     pub fn can_transition_to(self, next: Status) -> bool {
         if self == next {
@@ -1153,22 +1127,6 @@ mod tests {
         assert_eq!(state.entries, vec!["one".to_string()]);
         assert_eq!(state.selected_index, None);
         assert_eq!(state.draft_text, None);
-    }
-
-    #[test]
-    fn test_tab_title() {
-        // Arrange & Act & Assert
-        assert_eq!(Tab::Sessions.title(), "Sessions");
-        assert_eq!(Tab::Stats.title(), "Stats");
-        assert_eq!(Tab::Settings.title(), "Settings");
-    }
-
-    #[test]
-    fn test_tab_next() {
-        // Arrange & Act & Assert
-        assert_eq!(Tab::Sessions.next(), Tab::Stats);
-        assert_eq!(Tab::Stats.next(), Tab::Settings);
-        assert_eq!(Tab::Settings.next(), Tab::Sessions);
     }
 
     #[test]
