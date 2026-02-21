@@ -357,6 +357,7 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
         session_id: view_context.session_id.clone(),
         diff,
         scroll_offset: 0,
+        file_explorer_selected_index: 0,
     };
 }
 

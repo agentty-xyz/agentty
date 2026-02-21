@@ -171,6 +171,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 diff: "diff content".to_string(),
                 scroll_offset: 7,
+                file_explorer_selected_index: 0,
             },
             scroll_offset: 3,
         };
@@ -188,6 +189,7 @@ mod tests {
                 ref session_id,
                 ref diff,
                 scroll_offset: 7,
+                file_explorer_selected_index: 0,
             } if session_id == "s1" && diff == "diff content"
         ));
     }

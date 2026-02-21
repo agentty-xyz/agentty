@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use crate::ui::Component;
 use crate::ui::util::{DiffLine, DiffLineKind};
@@ -27,6 +27,7 @@ const ROOT_TREE_PREFIX: &str = "";
 /// Diff file explorer panel rendering the changed file list.
 pub struct FileExplorer {
     file_list_lines: Vec<Line<'static>>,
+    selected_index: usize,
 }
 
 /// A file entry in the tree along with optional rename origin metadata.
@@ -85,10 +86,18 @@ impl FileTreeNode {
 
 impl FileExplorer {
     /// Creates a new file explorer component from parsed diff lines.
-    pub fn new(parsed_lines: &[DiffLine<'_>]) -> Self {
+    pub fn new(parsed_lines: &[DiffLine<'_>], selected_index: usize) -> Self {
+        let file_list_lines = Self::file_list_lines(parsed_lines);
+
         Self {
-            file_list_lines: Self::file_list_lines(parsed_lines),
+            file_list_lines,
+            selected_index,
         }
+    }
+
+    /// Returns the number of items (files and folders) in the explorer list.
+    pub fn count_items(parsed_lines: &[DiffLine<'_>]) -> usize {
+        Self::file_list_lines(parsed_lines).len()
     }
 
     /// Builds tree-rendered lines from parsed diff headers.
@@ -219,14 +228,24 @@ impl FileExplorer {
 
 impl Component for FileExplorer {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let file_list_paragraph = Paragraph::new(self.file_list_lines.clone()).block(
-            Block::default().borders(Borders::ALL).title(Span::styled(
+        let items: Vec<ListItem> = self
+            .file_list_lines
+            .iter()
+            .cloned()
+            .map(ListItem::new)
+            .collect();
+
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(Span::styled(
                 FILE_EXPLORER_TITLE,
                 Style::default().fg(Color::Cyan),
-            )),
-        );
+            )))
+            .highlight_style(Style::default().bg(Color::DarkGray));
 
-        f.render_widget(file_list_paragraph, area);
+        let mut state = ListState::default();
+        state.select(Some(self.selected_index));
+
+        f.render_stateful_widget(list, area, &mut state);
     }
 }
 

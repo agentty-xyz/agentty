@@ -3,6 +3,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::app::App;
 use crate::model::{AppMode, HelpContext};
 use crate::runtime::EventResult;
+use crate::ui::components::file_explorer::FileExplorer;
+use crate::ui::util::parse_diff_lines;
 
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     if key.code == KeyCode::Char('?') {
@@ -11,6 +13,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
             session_id,
             diff,
             scroll_offset,
+            file_explorer_selected_index,
         } = mode
         {
             app.mode = AppMode::Help {
@@ -18,6 +21,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                     session_id,
                     diff,
                     scroll_offset,
+                    file_explorer_selected_index,
                 },
                 scroll_offset: 0,
             };
@@ -30,8 +34,9 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
 
     if let AppMode::Diff {
         session_id,
-        diff: _,
+        diff,
         scroll_offset,
+        file_explorer_selected_index,
     } = &mut app.mode
     {
         match key.code {
@@ -41,10 +46,20 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                     scroll_offset: None,
                 };
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') => {
+                let parsed = parse_diff_lines(diff);
+                let count = FileExplorer::count_items(&parsed);
+                *file_explorer_selected_index = file_explorer_selected_index
+                    .saturating_add(1)
+                    .min(count.saturating_sub(1));
+            }
+            KeyCode::Char('k') => {
+                *file_explorer_selected_index = file_explorer_selected_index.saturating_sub(1);
+            }
+            KeyCode::Down => {
                 *scroll_offset = scroll_offset.saturating_add(1);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Up => {
                 *scroll_offset = scroll_offset.saturating_sub(1);
             }
             _ => {}
@@ -81,6 +96,7 @@ mod tests {
             session_id: "session-id".to_string(),
             diff: "diff output".to_string(),
             scroll_offset: 7,
+            file_explorer_selected_index: 0,
         };
 
         // Act
@@ -108,6 +124,7 @@ mod tests {
             session_id: "session-id".to_string(),
             diff: "diff output".to_string(),
             scroll_offset: 0,
+            file_explorer_selected_index: 0,
         };
 
         // Act
@@ -132,6 +149,7 @@ mod tests {
             session_id: "session-id".to_string(),
             diff: "diff output".to_string(),
             scroll_offset: 0,
+            file_explorer_selected_index: 0,
         };
 
         // Act
@@ -173,6 +191,7 @@ mod tests {
             session_id: "session-id".to_string(),
             diff: "diff output".to_string(),
             scroll_offset: 5,
+            file_explorer_selected_index: 3,
         };
 
         // Act
@@ -190,6 +209,7 @@ mod tests {
                     ref session_id,
                     ref diff,
                     scroll_offset: 5,
+                    file_explorer_selected_index: 3,
                 },
                 scroll_offset: 0,
             } if session_id == "session-id" && diff == "diff output"

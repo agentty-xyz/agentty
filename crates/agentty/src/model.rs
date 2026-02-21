@@ -566,6 +566,7 @@ pub enum AppMode {
         session_id: String,
         diff: String,
         scroll_offset: u16,
+        file_explorer_selected_index: usize,
     },
     CommandPalette {
         input: String,
@@ -594,6 +595,7 @@ pub enum HelpContext {
         session_id: String,
         diff: String,
         scroll_offset: u16,
+        file_explorer_selected_index: usize,
     },
 }
 
@@ -650,10 +652,12 @@ impl HelpContext {
                 session_id,
                 diff,
                 scroll_offset,
+                file_explorer_selected_index,
             } => AppMode::Diff {
                 session_id,
                 diff,
                 scroll_offset,
+                file_explorer_selected_index,
             },
         }
     }
@@ -1598,6 +1602,7 @@ mod tests {
             session_id: "s1".to_string(),
             diff: "diff".to_string(),
             scroll_offset: 5,
+            file_explorer_selected_index: 0,
         };
 
         // Act
@@ -1648,6 +1653,7 @@ mod tests {
             session_id: "s1".to_string(),
             diff: "diff content".to_string(),
             scroll_offset: 3,
+            file_explorer_selected_index: 0,
         };
 
         // Act
@@ -1660,6 +1666,7 @@ mod tests {
                 ref session_id,
                 ref diff,
                 scroll_offset: 3,
+                file_explorer_selected_index: 0,
             } if session_id == "s1" && diff == "diff content"
         ));
     }
@@ -1673,6 +1680,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 diff: "diff".to_string(),
                 scroll_offset: 0,
+                file_explorer_selected_index: 0,
             }
             .title(),
             "Keybindings"

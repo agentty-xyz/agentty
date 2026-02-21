@@ -310,7 +310,16 @@ fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRe
             session_id,
             diff,
             scroll_offset,
-        } => render_diff_mode(f, area, sessions, session_id, diff, *scroll_offset),
+            file_explorer_selected_index,
+        } => render_diff_mode(
+            f,
+            area,
+            sessions,
+            session_id,
+            diff,
+            *scroll_offset,
+            *file_explorer_selected_index,
+        ),
         AppMode::Help {
             context,
             scroll_offset,
@@ -370,9 +379,16 @@ fn render_diff_mode(
     session_id: &str,
     diff: &str,
     scroll_offset: u16,
+    file_explorer_selected_index: usize,
 ) {
     if let Some(session) = sessions.iter().find(|session| session.id == session_id) {
-        pages::diff::DiffPage::new(session, diff.to_string(), scroll_offset).render(f, area);
+        pages::diff::DiffPage::new(
+            session,
+            diff.to_string(),
+            scroll_offset,
+            file_explorer_selected_index,
+        )
+        .render(f, area);
     }
 }
 
@@ -528,9 +544,16 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             session_id,
             diff,
             scroll_offset: diff_scroll,
+            file_explorer_selected_index,
         } => {
             if let Some(session) = sessions.iter().find(|session| session.id == *session_id) {
-                pages::diff::DiffPage::new(session, diff.clone(), *diff_scroll).render(f, area);
+                pages::diff::DiffPage::new(
+                    session,
+                    diff.clone(),
+                    *diff_scroll,
+                    *file_explorer_selected_index,
+                )
+                .render(f, area);
             }
         }
     }

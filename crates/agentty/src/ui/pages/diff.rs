@@ -26,15 +26,22 @@ pub struct DiffPage<'a> {
     pub diff: String,
     pub scroll_offset: u16,
     pub session: &'a Session,
+    pub file_explorer_selected_index: usize,
 }
 
 impl<'a> DiffPage<'a> {
     /// Creates a diff page for the given session and scroll position.
-    pub fn new(session: &'a Session, diff: String, scroll_offset: u16) -> Self {
+    pub fn new(
+        session: &'a Session,
+        diff: String,
+        scroll_offset: u16,
+        file_explorer_selected_index: usize,
+    ) -> Self {
         Self {
             diff,
             scroll_offset,
             session,
+            file_explorer_selected_index,
         }
     }
 
@@ -149,7 +156,7 @@ impl Page for DiffPage<'_> {
 
         let parsed = parse_diff_lines(&self.diff);
 
-        FileExplorer::new(&parsed).render(f, file_list_area);
+        FileExplorer::new(&parsed, self.file_explorer_selected_index).render(f, file_list_area);
         self.render_diff_content(f, diff_area, &parsed);
 
         let help_message = Paragraph::new("q: back | j/k: scroll | ?: help")
