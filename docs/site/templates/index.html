@@ -10,13 +10,26 @@
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
               rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+        <style type="text/tailwindcss">
+            @theme {
+                --color-bg: #080c08;
+                --color-surface: #0d160d;
+                --color-accent: #3ddd6a;
+                --color-muted: #507a5c;
+                --color-dim: #2a5935;
+                --color-border: #1b3d20;
+                --color-accent-dim: #2ab355;
+                --font-mono: "Share Tech Mono", "Courier New", monospace;
+            }
+        </style>
         <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
     </head>
-    <body>
-        <nav class="topnav">
-            <div class="topnav-inner">
-                <span class="nav-brand">&gt; agentty</span>
-                <a class="nav-github"
+    <body class="font-mono bg-bg text-accent min-h-screen">
+        <nav class="border-b border-border">
+            <div class="flex items-center justify-between max-w-[800px] mx-auto px-6 py-3">
+                <span class="text-base font-semibold text-accent tracking-[0.02em]">&gt; agentty</span>
+                <a class="text-accent flex items-center opacity-75 hover:opacity-100 transition-opacity duration-150"
                    href="{{ config.extra.github_repo }}"
                    aria-label="GitHub"
                    target="_blank"
@@ -32,34 +45,39 @@
                 </a>
             </div>
         </nav>
-        <main class="page">
-            <section class="hero">
-                <pre class="logo">    _    ____ _____ _   _ _____ _____ __   __
+        <main class="mx-auto max-w-[800px] px-6 pt-16 pb-20">
+            <section class="text-center mb-16">
+                <pre class="logo text-accent leading-snug m-0 mb-8 inline-block text-left whitespace-pre overflow-x-auto max-w-full">    _    ____ _____ _   _ _____ _____ __   __
    / \  / ___| ____| \ | |_   _|_   _|\ \ / /
   / _ \| |  _|  _| |  \| | | |   | |   \ V /
  / ___ \ |_| | |___| |\  | | |   | |    | |
 /_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
-                <p class="lead">
+                <p class="text-muted text-[0.95rem] leading-[1.7] mx-auto mb-8 max-w-[52ch]">
                     Run coding agents from your terminal with isolated worktrees,
                     live diffs, and session-level controls.
                 </p>
             </section>
-            <section class="section">
-                <h2 class="section-title">// installation</h2>
-                <div class="install-widget">
-                    <div class="install-tabs">
-                        <button class="install-tab active"
+            <section class="mb-14">
+                <h2 class="text-base font-semibold text-accent m-0 mb-5 tracking-[0.03em]">// installation</h2>
+                <div class="w-full">
+                    <div class="install-tabs flex gap-[0.15rem]">
+                        <button class="install-tab active bg-transparent border border-transparent rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
                                 data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh">
                             sh
                         </button>
-                        <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
-                        <button class="install-tab" data-cmd="npm install -g agentty">npm</button>
-                        <button class="install-tab" data-cmd="npx agentty">npx</button>
+                        <button class="install-tab bg-transparent border border-transparent rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                                data-cmd="cargo install agentty">cargo</button>
+                        <button class="install-tab bg-transparent border border-transparent rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                                data-cmd="npm install -g agentty">npm</button>
+                        <button class="install-tab bg-transparent border border-transparent rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                                data-cmd="npx agentty">npx</button>
                     </div>
-                    <div class="install-command">
-                        <span class="install-prompt">$</span>
-                        <code class="install-cmd-text">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh</code>
-                        <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
+                    <div class="flex items-center gap-2 bg-surface border border-border rounded-b-md rounded-tr-md px-[0.9rem] py-[0.65rem] overflow-x-auto">
+                        <span class="text-accent font-bold shrink-0 select-none">$</span>
+                        <code class="install-cmd-text grow font-mono text-[0.82rem] text-accent whitespace-nowrap overflow-hidden text-ellipsis">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh</code>
+                        <button class="copy-btn bg-transparent border border-border rounded px-[0.55rem] py-[0.2rem] font-mono text-[0.75rem] font-semibold text-muted cursor-pointer shrink-0 transition-colors duration-[120ms] hover:text-accent hover:border-accent"
+                                title="Copy to clipboard"
+                                aria-label="Copy command">copy</button>
                     </div>
                 </div>
                 <script>
@@ -85,11 +103,11 @@
         })();
                 </script>
             </section>
-            <section class="section">
-                <h2 class="section-title">// features</h2>
-                <div class="card-grid">
-                    <article class="card">
-                        <div class="card-icon">
+            <section class="mb-14">
+                <h2 class="text-base font-semibold text-accent m-0 mb-5 tracking-[0.03em]">// features</h2>
+                <div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
+                    <article class="bg-surface border border-border rounded-[10px] p-5">
+                        <div class="text-accent mb-[0.9rem] flex">
                             <svg xmlns="http://www.w3.org/2000/svg"
                                  width="20"
                                  height="20"
@@ -104,11 +122,13 @@
                                 <path d="M6 21V9a9 9 0 0 0 9 9" />
                             </svg>
                         </div>
-                        <h3 class="card-title">Isolated By Default</h3>
-                        <p class="card-desc">Each session runs in its own worktree and branch, so experiments stay contained.</p>
+                        <h3 class="m-0 mb-2 text-[0.95rem] font-semibold text-accent">Isolated By Default</h3>
+                        <p class="m-0 text-[0.82rem] text-muted leading-[1.6]">
+                            Each session runs in its own worktree and branch, so experiments stay contained.
+                        </p>
                     </article>
-                    <article class="card">
-                        <div class="card-icon">
+                    <article class="bg-surface border border-border rounded-[10px] p-5">
+                        <div class="text-accent mb-[0.9rem] flex">
                             <svg xmlns="http://www.w3.org/2000/svg"
                                  width="20"
                                  height="20"
@@ -122,11 +142,13 @@
                                 <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
                             </svg>
                         </div>
-                        <h3 class="card-title">Built For Flow</h3>
-                        <p class="card-desc">Review diffs, switch models, and iterate without leaving the TUI.</p>
+                        <h3 class="m-0 mb-2 text-[0.95rem] font-semibold text-accent">Built For Flow</h3>
+                        <p class="m-0 text-[0.82rem] text-muted leading-[1.6]">
+                            Review diffs, switch models, and iterate without leaving the TUI.
+                        </p>
                     </article>
-                    <article class="card">
-                        <div class="card-icon">
+                    <article class="bg-surface border border-border rounded-[10px] p-5">
+                        <div class="text-accent mb-[0.9rem] flex">
                             <svg xmlns="http://www.w3.org/2000/svg"
                                  width="20"
                                  height="20"
@@ -140,13 +162,15 @@
                                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                             </svg>
                         </div>
-                        <h3 class="card-title">Fast Setup</h3>
-                        <p class="card-desc">Install with npm, cargo, or shell script and start an agent session in minutes.</p>
+                        <h3 class="m-0 mb-2 text-[0.95rem] font-semibold text-accent">Fast Setup</h3>
+                        <p class="m-0 text-[0.82rem] text-muted leading-[1.6]">
+                            Install with npm, cargo, or shell script and start an agent session in minutes.
+                        </p>
                     </article>
                 </div>
             </section>
-            <footer class="site-footer">
-                <p>Built for developers who want control over their AI coding sessions.</p>
+            <footer class="text-center mt-16 pt-8 border-t border-border">
+                <p class="m-0 text-[0.8rem] text-dim">Built for developers who want control over their AI coding sessions.</p>
             </footer>
         </main>
     </body>
