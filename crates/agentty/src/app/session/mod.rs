@@ -9,12 +9,11 @@ use std::time::Duration;
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
-use crate::domain::agent::AgentModel;
 use crate::app::settings::SettingName;
 use crate::app::{AppServices, SessionState};
+use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::{Session, Status};
-use crate::model::DailyActivity;
+use crate::domain::session::{DailyActivity, Session, Status};
 
 mod access;
 mod lifecycle;
@@ -184,17 +183,18 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::domain::agent::{AgentKind, AgentModel};
-    use crate::infra::agent::MockAgentBackend;
     use crate::app::settings::SettingName;
     use crate::app::{App, Tab};
+    use crate::domain::agent::{AgentKind, AgentModel};
+    use crate::domain::permission::PermissionMode;
+    use crate::domain::project::Project;
+    use crate::domain::session::{
+        DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
+    };
+    use crate::infra::agent::MockAgentBackend;
     use crate::infra::db::Database;
     use crate::infra::git;
     use crate::ui::state::app_mode::AppMode;
-    use crate::domain::permission::PermissionMode;
-    use crate::domain::session::{SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status};
-    use crate::domain::project::Project;
-    use crate::model::DailyActivity;
 
     fn create_mock_backend() -> MockAgentBackend {
         let mut mock = MockAgentBackend::new();
@@ -324,6 +324,7 @@ mod tests {
         retries: usize,
     ) {
         for _ in 0..retries {
+            app.process_pending_app_events().await;
             app.sessions.sync_from_handles();
             let Some(session) = app
                 .sessions
@@ -339,6 +340,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
+        app.process_pending_app_events().await;
         app.sessions.sync_from_handles();
         let session = app
             .sessions

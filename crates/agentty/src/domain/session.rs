@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
 
@@ -167,6 +167,15 @@ impl FromStr for SessionSize {
 pub struct SessionStats {
     pub input_tokens: u64,
     pub output_tokens: u64,
+}
+
+/// Aggregated activity count for one UTC day.
+///
+/// `day_key` is the number of days since Unix epoch (`1970-01-01`) in UTC.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DailyActivity {
+    pub day_key: i64,
+    pub session_count: u32,
 }
 
 pub struct Session {

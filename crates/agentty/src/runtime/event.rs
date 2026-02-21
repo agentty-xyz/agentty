@@ -138,7 +138,8 @@ mod tests {
     use std::io::ErrorKind;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use mockall::{Sequence, predicate::eq};
+    use mockall::Sequence;
+    use mockall::predicate::eq;
 
     use super::*;
 

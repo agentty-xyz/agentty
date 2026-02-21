@@ -1,6 +1,6 @@
-use crate::domain::input::InputState;
 use super::palette::{PaletteCommand, PaletteFocus};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
+use crate::domain::input::InputState;
 
 pub enum AppMode {
     List,

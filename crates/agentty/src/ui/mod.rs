@@ -16,8 +16,7 @@ use crate::app::session::session_branch;
 use crate::app::{SettingsManager, Tab};
 use crate::domain::permission::PlanFollowupAction;
 use crate::domain::project::Project;
-use crate::domain::session::Session;
-use crate::model::DailyActivity;
+use crate::domain::session::{DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::state::palette::{PaletteCommand, PaletteFocus};
 

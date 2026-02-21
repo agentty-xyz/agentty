@@ -8,10 +8,10 @@ use crate::domain::input::extract_at_mention_query;
 use crate::domain::permission::PlanFollowupAction;
 use crate::domain::session::{Session, Status};
 use crate::file_list;
-use crate::ui::state::app_mode::AppMode;
-use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::components::session_output::SessionOutput;
+use crate::ui::state::app_mode::AppMode;
+use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::calculate_input_height;
 use crate::ui::{Component, Page};
 

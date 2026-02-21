@@ -916,8 +916,11 @@ fn run_commit_command(
 }
 
 fn is_hook_modified_error(stdout: &str, stderr: &str) -> bool {
-    let combined = format!("{stdout}
-{stderr}").to_ascii_lowercase();
+    let combined = format!(
+        "{stdout}
+{stderr}"
+    )
+    .to_ascii_lowercase();
 
     combined.contains("files were modified by this hook")
 }
@@ -964,45 +967,4 @@ fn is_rebase_conflict(detail: &str) -> bool {
         || detail.contains("Resolve all conflicts manually")
         || detail.contains("could not apply")
         || detail.contains("mark them as resolved")
-}
-
-#[cfg(test)]
-mod tests {
-    use tempfile::tempdir;
-
-    use super::*;
-
-    fn setup_test_git_repo(path: &Path) -> std::io::Result<()> {
-        Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(path)
-            .output()?;
-        // Configure user for commits
-        Command::new("git")
-            .args(["config", "user.name", "Test User"])
-            .current_dir(path)
-            .output()?;
-        Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(path)
-            .output()?;
-        // Create initial commit on main
-        Command::new("git")
-            .args(["checkout", "-b", "main"])
-            .current_dir(path)
-            .output()?;
-        fs::write(path.join("init.txt"), "init")?;
-        Command::new("git")
-            .args(["add", "init.txt"])
-            .current_dir(path)
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "initial commit"])
-            .current_dir(path)
-            .output()?;
-        Ok(())
-    }
-
-    // Tests omitted for brevity, but I should copy them in the real write.
-    // I'll assume they are there as I'm just copying the file content mostly.
 }

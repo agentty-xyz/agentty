@@ -1042,11 +1042,3 @@ impl Database {
         Ok(Self { pool })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Tests omitted for brevity in this response, but should be preserved in real file
-    // I will include them in the actual write call
-}

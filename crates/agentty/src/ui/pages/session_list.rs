@@ -285,6 +285,7 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
+    use crate::domain::session::SessionStats;
 
     fn test_session(id: &str, status: Status) -> Session {
         Session {
@@ -297,7 +298,7 @@ mod tests {
             project_name: "project".to_string(),
             prompt: String::new(),
             size: SessionSize::Xs,
-            stats: crate::model::SessionStats::default(),
+            stats: SessionStats::default(),
             status,
             summary: None,
             title: Some(id.to_string()),

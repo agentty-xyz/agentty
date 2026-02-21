@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::model::DailyActivity;
+use crate::domain::session::DailyActivity;
 
 const HEATMAP_DAY_COUNT: usize = 7;
 const HEATMAP_DAY_COUNT_I64: i64 = 7;

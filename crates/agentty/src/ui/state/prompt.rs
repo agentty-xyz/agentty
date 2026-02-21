@@ -1,5 +1,5 @@
-use crate::domain::file::FileEntry;
 use crate::domain::agent::AgentKind;
+use crate::domain::file::FileEntry;
 
 /// UI state for prompt `@` file and directory mention selection.
 #[derive(Clone, Debug)]

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use ratatui::style::Color;
 
 use crate::agent::{AgentKind, AgentModel};
-use crate::file_list::FileEntry;
+use crate::domain::file::FileEntry;
 use crate::icon::Icon;
 
 pub const PLAN_MODE_INSTRUCTIONS: &str = include_str!("../resources/plan_mode.md");

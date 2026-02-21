@@ -10,17 +10,17 @@ use tokio::sync::mpsc;
 
 use super::access::{SESSION_HANDLES_NOT_FOUND_ERROR, SESSION_NOT_FOUND_ERROR};
 use super::{COMMIT_MESSAGE, session_branch};
-use crate::domain::agent::AgentModel;
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, effective_permission_mode,
     format_detail_lines, run_agent_assist,
 };
 use crate::app::task::TaskService;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
-use crate::infra::db::Database;
-use crate::infra::git;
+use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
+use crate::infra::db::Database;
+use crate::infra::git;
 
 const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -750,13 +750,12 @@ impl SessionManager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let parsed =
-            crate::infra::agent::parse_response(
-                session_model.kind(),
-                &stdout,
-                &stderr,
-                PermissionMode::AutoEdit
-            );
+        let parsed = crate::infra::agent::parse_response(
+            session_model.kind(),
+            &stdout,
+            &stderr,
+            PermissionMode::AutoEdit,
+        );
         let content = parsed.content.trim().to_string();
 
         if content.is_empty() {

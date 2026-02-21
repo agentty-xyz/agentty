@@ -8,15 +8,15 @@ use uuid::Uuid;
 
 use super::access::SESSION_NOT_FOUND_ERROR;
 use super::{session_branch, session_folder};
-use crate::infra::agent::AgentBackend;
-use crate::domain::agent::AgentModel;
 use crate::app::session::worker::SessionCommand;
 use crate::app::settings::SettingName;
 use crate::app::task::TaskService;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
-use crate::infra::git;
+use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
+use crate::infra::agent::AgentBackend;
+use crate::infra::git;
 
 impl SessionManager {
     /// Moves selection to the next session in the list.
@@ -234,12 +234,8 @@ impl SessionManager {
         )
         .await;
 
-        let command = crate::infra::agent::create_backend(session_model.kind()).build_start_command(
-            &folder,
-            &prompt,
-            session_model.as_str(),
-            permission_mode,
-        );
+        let command = crate::infra::agent::create_backend(session_model.kind())
+            .build_start_command(&folder, &prompt, session_model.as_str(), permission_mode);
         let operation_id = Uuid::new_v4().to_string();
         self.enqueue_session_command(
             services,

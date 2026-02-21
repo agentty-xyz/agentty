@@ -11,16 +11,16 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt as _, AsyncRead};
 use tokio::sync::mpsc;
 
-use crate::domain::agent::{AgentKind, AgentModel};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, effective_permission_mode,
     format_detail_lines, run_agent_assist,
 };
 use crate::app::{AppEvent, SessionManager};
-use crate::infra::db::Database;
-use crate::infra::git;
+use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
+use crate::infra::db::Database;
+use crate::infra::git;
 
 const AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../resources/auto_commit_assist_prompt.md");
@@ -132,8 +132,21 @@ impl TaskService {
     ///
     /// The task emits [`AppEvent::VersionAvailabilityUpdated`] with
     /// `Some("vX.Y.Z")` only when a newer version is detected.
-    #[cfg(not(test))]
-    pub(super) fn spawn_version_check_task(app_event_tx: mpsc::UnboundedSender<AppEvent>) {
+    ///
+    /// In tests, it emits an immediate `None` update instead of spawning the
+    /// network check so test runs stay deterministic and offline.
+    pub(super) fn spawn_version_check_task(app_event_tx: &mpsc::UnboundedSender<AppEvent>) {
+        #[cfg(test)]
+        {
+            let _ = app_event_tx.send(AppEvent::VersionAvailabilityUpdated {
+                latest_available_version: None,
+            });
+        }
+
+        #[cfg(not(test))]
+        let app_event_tx = app_event_tx.clone();
+
+        #[cfg(not(test))]
         tokio::spawn(async move {
             let latest_available_version =
                 crate::version::latest_npm_version_tag()

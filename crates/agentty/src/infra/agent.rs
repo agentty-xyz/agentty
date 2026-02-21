@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
-use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::AgentKind;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::SessionStats;
 
@@ -388,7 +388,10 @@ pub fn parse_response(
 /// The returned tuple is `(text, is_response_content)`, where
 /// `is_response_content` is `true` when `text` is model-authored content
 /// that should prevent duplicate final output append.
-pub(crate) fn parse_stream_output_line(kind: AgentKind, stdout_line: &str) -> Option<(String, bool)> {
+pub(crate) fn parse_stream_output_line(
+    kind: AgentKind,
+    stdout_line: &str,
+) -> Option<(String, bool)> {
     match kind {
         AgentKind::Claude => parse_claude_stream_output_line(stdout_line),
         AgentKind::Gemini => parse_gemini_stream_output_line(stdout_line),
@@ -396,14 +399,9 @@ pub(crate) fn parse_stream_output_line(kind: AgentKind, stdout_line: &str) -> Op
     }
 }
 
-fn parse_claude_response(
-    stdout: &str,
-    permission_mode: PermissionMode,
-) -> Option<ParsedResponse> {
+fn parse_claude_response(stdout: &str, permission_mode: PermissionMode) -> Option<ParsedResponse> {
     let trimmed_stdout = stdout.trim();
-    if let Some(parsed_response) =
-        parse_claude_response_payload(trimmed_stdout, permission_mode)
-    {
+    if let Some(parsed_response) = parse_claude_response_payload(trimmed_stdout, permission_mode) {
         return Some(parsed_response);
     }
 
@@ -412,8 +410,7 @@ fn parse_claude_response(
         if trimmed_line.is_empty() {
             continue;
         }
-        if let Some(parsed_response) =
-            parse_claude_response_payload(trimmed_line, permission_mode)
+        if let Some(parsed_response) = parse_claude_response_payload(trimmed_line, permission_mode)
         {
             return Some(parsed_response);
         }
@@ -521,8 +518,7 @@ fn parse_claude_response_payload(
 ) -> Option<ParsedResponse> {
     let response = serde_json::from_str::<ClaudeResponse>(stdout).ok()?;
     let content = if permission_mode == PermissionMode::Plan {
-        extract_plan_from_denials(response.permission_denials.as_deref())
-            .or(response.result)?
+        extract_plan_from_denials(response.permission_denials.as_deref()).or(response.result)?
     } else {
         response.result?
     };
@@ -554,8 +550,7 @@ fn parse_gemini_response_payload(stdout: &str) -> Option<ParsedResponse> {
 
 fn extract_claude_stream_result(stdout_line: &str) -> Option<String> {
     let response = serde_json::from_str::<ClaudeResponse>(stdout_line).ok()?;
-    let extracted_plan =
-        extract_plan_from_denials(response.permission_denials.as_deref());
+    let extracted_plan = extract_plan_from_denials(response.permission_denials.as_deref());
 
     extracted_plan.or(response.result)
 }
@@ -566,9 +561,7 @@ fn extract_gemini_stream_response(stdout_line: &str) -> Option<String> {
     extract_gemini_stream_response_from_json(&stream_event)
 }
 
-fn extract_gemini_stream_response_from_json(
-    stream_event: &serde_json::Value,
-) -> Option<String> {
+fn extract_gemini_stream_response_from_json(stream_event: &serde_json::Value) -> Option<String> {
     if let Some(legacy_response) = stream_event
         .get("response")
         .and_then(serde_json::Value::as_str)
@@ -588,7 +581,7 @@ fn extract_gemini_stream_response_from_json(
         .get("content")
         .and_then(serde_json::Value::as_str)
         .map(ToString::to_string)
-    }
+}
 
 fn extract_gemini_stream_stats(stdout_line: &str) -> Option<SessionStats> {
     let stream_event = serde_json::from_str::<GeminiStreamEvent>(stdout_line).ok()?;
@@ -611,25 +604,19 @@ fn compact_progress_message_from_json(stream_event: &serde_json::Value) -> Optio
         .get("item")
         .and_then(|item| item.get("type"))
         .and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        item_type.and_then(compact_progress_message_from_stream_label)
-    {
+    if let Some(progress_message) = item_type.and_then(compact_progress_message_from_stream_label) {
         return Some(progress_message);
     }
 
     let tool_name = stream_event
         .get("tool_name")
         .and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        tool_name.and_then(compact_progress_message_from_stream_label)
-    {
+    if let Some(progress_message) = tool_name.and_then(compact_progress_message_from_stream_label) {
         return Some(progress_message);
     }
 
     let name = stream_event.get("name").and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        name.and_then(compact_progress_message_from_stream_label)
-    {
+    if let Some(progress_message) = name.and_then(compact_progress_message_from_stream_label) {
         return Some(progress_message);
     }
 
@@ -637,33 +624,26 @@ fn compact_progress_message_from_json(stream_event: &serde_json::Value) -> Optio
         .get("tool")
         .and_then(|tool| tool.get("name"))
         .and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        tool_name.and_then(compact_progress_message_from_stream_label)
-    {
+    if let Some(progress_message) = tool_name.and_then(compact_progress_message_from_stream_label) {
         return Some(progress_message);
     }
 
     let event = stream_event
         .get("event")
         .and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        event.and_then(compact_progress_message_from_stream_label)
-    {
+    if let Some(progress_message) = event.and_then(compact_progress_message_from_stream_label) {
         return Some(progress_message);
     }
 
     let subtype = stream_event
         .get("subtype")
         .and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        subtype.and_then(compact_progress_message_from_stream_label)
-    {
+    if let Some(progress_message) = subtype.and_then(compact_progress_message_from_stream_label) {
         return Some(progress_message);
     }
 
     let event_type = stream_event.get("type").and_then(serde_json::Value::as_str);
-    if let Some(progress_message) =
-        event_type.and_then(compact_progress_message_from_stream_label)
+    if let Some(progress_message) = event_type.and_then(compact_progress_message_from_stream_label)
     {
         return Some(progress_message);
     }
@@ -813,22 +793,9 @@ fn fallback_response(stdout: &str, stderr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     use tempfile::tempdir;
 
     use super::*;
-    use crate::domain::agent::AgentSelectionMetadata;
-
-    fn command_env_value(command: &Command, key: &str) -> Option<String> {
-        command.get_envs().find_map(|(name, value)| {
-            if name.to_string_lossy() != key {
-                return None;
-            }
-
-            value.map(|entry| entry.to_string_lossy().to_string())
-        })
-    }
 
     #[test]
     fn test_gemini_setup_creates_no_files() {
@@ -847,9 +814,4 @@ mod tests {
             0
         );
     }
-
-    // ... (rest of tests, updating AgentKind::method calls to standalone function calls) ...
-    // For brevity in this turn, I will just write the implementation.
-    // The tests in src/agent.rs need to be adapted or I should copy them and fix.
-    // I'll copy the key tests and update them.
 }

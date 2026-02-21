@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::app::task::TaskService;
 use crate::app::{AppEvent, AppServices, SessionManager};
+use crate::domain::project::Project;
 use crate::infra::db::Database;
 use crate::infra::git;
-use crate::domain::project::Project;
 
 /// Project domain state and git status tracking.
 pub struct ProjectManager {

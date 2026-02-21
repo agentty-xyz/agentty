@@ -4,8 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
-use crate::domain::session::Session;
-use crate::model::DailyActivity;
+use crate::domain::session::{DailyActivity, Session};
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
 use crate::ui::util::{
@@ -196,7 +195,8 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::model::{PermissionMode, SessionSize, SessionStats, Status};
+    use crate::domain::permission::PermissionMode;
+    use crate::domain::session::{SessionSize, SessionStats, Status};
 
     fn session_fixture() -> Session {
         Session {

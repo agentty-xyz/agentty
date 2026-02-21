@@ -3,10 +3,10 @@ use std::io;
 use crossterm::event::{self, KeyCode, KeyEvent};
 
 use crate::app::App;
-use crate::infra::git;
 use crate::domain::input::InputState;
 use crate::domain::permission::{PermissionMode, PlanFollowupAction};
 use crate::domain::session::Status;
+use crate::infra::git;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::pages::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{AppMode, HelpContext};

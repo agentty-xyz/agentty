@@ -4,13 +4,14 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::session_folder;
-use crate::domain::agent::{AgentKind, AgentModel};
 use crate::app::SessionManager;
+use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::project::Project;
+use crate::domain::session::{
+    DailyActivity, Session, SessionHandles, SessionSize, SessionStats, Status,
+};
 use crate::infra::db::Database;
 use crate::infra::git;
-use crate::domain::project::Project;
-use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
-use crate::model::DailyActivity;
 
 impl SessionManager {
     /// Loads session models from the database and reuses live handles when

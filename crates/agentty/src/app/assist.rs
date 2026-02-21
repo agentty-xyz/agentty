@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use crate::domain::agent::AgentModel;
 use crate::app::AppEvent;
 use crate::app::task::{RunAgentAssistTaskInput, TaskService};
-use crate::infra::db::Database;
+use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
+use crate::infra::db::Database;
 
 /// Policy knobs controlling one assisted recovery loop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

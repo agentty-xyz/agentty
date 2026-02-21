@@ -2,13 +2,13 @@ use std::io;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 
-use crate::domain::agent::AgentKind;
 use crate::app::App;
-use crate::file_list;
+use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
+use crate::file_list;
+use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
-use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::util::{move_input_cursor_down, move_input_cursor_up};
 
 struct PromptContext {
@@ -814,6 +814,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::domain::file::FileEntry;
     use crate::infra::db::Database;
     use crate::ui::state::prompt::{PromptAtMentionState, PromptHistoryState};
 
@@ -1273,7 +1274,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_at_mention_select_dismisses_stale_mention_state() {
         // Arrange
-        let state = PromptAtMentionState::new(vec![file_list::FileEntry {
+        let state = PromptAtMentionState::new(vec![FileEntry {
             is_dir: false,
             path: "src/main.rs".to_string(),
         }]);
@@ -1298,7 +1299,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_at_mention_select_inserts_directory_with_trailing_slash() {
         // Arrange
-        let state = PromptAtMentionState::new(vec![file_list::FileEntry {
+        let state = PromptAtMentionState::new(vec![FileEntry {
             is_dir: true,
             path: "src".to_string(),
         }]);
