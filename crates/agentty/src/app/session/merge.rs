@@ -1,5 +1,7 @@
 //! Merge, rebase, and cleanup workflows for session branches.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -25,7 +27,10 @@ use crate::infra::git;
 const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_attempts: 3,
-    max_identical_failure_streak: 2,
+    // Allow up to 3 consecutive identical-content observations before
+    // giving up, so the agent gets a genuine second chance when partial
+    // progress is made inside a file without fully clearing all markers.
+    max_identical_failure_streak: 3,
 };
 const REBASE_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/rebase_assist_prompt.md");
@@ -480,8 +485,11 @@ impl SessionManager {
             }
         }
 
+        let mut previous_conflict_files: Vec<String> = vec![];
+
         for assist_attempt in 1..=REBASE_ASSIST_POLICY.max_attempts {
-            let conflicted_files = Self::load_conflicted_files(&input).await?;
+            let conflicted_files =
+                Self::load_conflicted_files(&input, &previous_conflict_files).await?;
             if conflicted_files.is_empty() {
                 let continue_step = Self::run_rebase_continue(&input).await?;
                 match continue_step {
@@ -511,7 +519,8 @@ impl SessionManager {
                 continue;
             }
 
-            let conflict_fingerprint = Self::conflicted_file_fingerprint(&conflicted_files);
+            let conflict_fingerprint =
+                Self::conflicted_file_fingerprint(&input.folder, &conflicted_files);
             if failure_tracker.observe(&conflict_fingerprint) {
                 Self::abort_rebase_after_assist_failure(&input.folder).await;
 
@@ -524,8 +533,10 @@ impl SessionManager {
             Self::append_rebase_assist_header(&input, assist_attempt, &conflicted_files).await;
             Self::run_rebase_assist_agent(&input, &conflicted_files).await?;
 
-            let has_unmerged_paths = Self::stage_and_check_unmerged_paths(&input).await?;
-            if has_unmerged_paths {
+            let still_has_conflicts =
+                Self::stage_and_check_for_conflicts(&input, &conflicted_files).await?;
+            previous_conflict_files = conflicted_files;
+            if still_has_conflicts {
                 if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
                     Self::abort_rebase_after_assist_failure(&input.folder).await;
 
@@ -592,15 +603,39 @@ impl SessionManager {
         Ok(result)
     }
 
-    /// Loads currently conflicted files from the worktree.
+    /// Loads all conflicted files from the worktree.
+    ///
+    /// Returns the union of two sets:
+    /// - Files with *unmerged* index entries (classic rebase conflict state).
+    /// - Files that were staged (`git add`) while still containing `<<<<<<<`
+    ///   conflict markers, scoped to the provided `previous_conflict_files`.
+    ///   This catches the case where an agent partially resolves a conflict and
+    ///   stages the file without removing all markers, which would otherwise
+    ///   make the file appear resolved.
+    ///
+    /// On the first call (no known prior conflicts), pass an empty slice for
+    /// `previous_conflict_files`; only unmerged entries will be returned.
     ///
     /// # Errors
-    /// Returns an error if conflicted files cannot be queried via git.
-    async fn load_conflicted_files(input: &RebaseAssistInput) -> Result<Vec<String>, String> {
+    /// Returns an error if either git query fails.
+    async fn load_conflicted_files(
+        input: &RebaseAssistInput,
+        previous_conflict_files: &[String],
+    ) -> Result<Vec<String>, String> {
         let folder = input.folder.clone();
-        let conflicted_files = git::list_conflicted_files(folder).await?;
+        let mut conflicted = git::list_conflicted_files(folder.clone()).await?;
 
-        Ok(conflicted_files)
+        let staged_with_markers =
+            git::list_staged_conflict_marker_files(folder, previous_conflict_files.to_vec())
+                .await?;
+        for file in staged_with_markers {
+            if !conflicted.contains(&file) {
+                conflicted.push(file);
+            }
+        }
+        conflicted.sort_unstable();
+
+        Ok(conflicted)
     }
 
     /// Appends an informational header for one rebase assistance attempt.
@@ -639,18 +674,36 @@ impl SessionManager {
             .map_err(|error| format!("Rebase assistance failed: {error}"))
     }
 
-    /// Stages worktree edits and checks whether unresolved paths remain.
+    /// Stages all worktree edits and checks whether any conflicts remain.
+    ///
+    /// Performs two checks after staging:
+    /// 1. Unmerged index entries — files that were never resolved (`git add`d).
+    /// 2. Staged content with `<<<<<<<` markers in `conflict_files` — files
+    ///    that were staged while still containing residual conflict markers.
+    ///
+    /// Both checks are required because `git add` transitions a file from
+    /// "Unmerged" to "Modified-in-index", making it invisible to the unmerged
+    /// check even when conflict markers remain in its content.
     ///
     /// # Errors
-    /// Returns an error when staging or unresolved-path checks fail.
-    async fn stage_and_check_unmerged_paths(input: &RebaseAssistInput) -> Result<bool, String> {
+    /// Returns an error when staging or either conflict check fails.
+    async fn stage_and_check_for_conflicts(
+        input: &RebaseAssistInput,
+        conflict_files: &[String],
+    ) -> Result<bool, String> {
         let folder = input.folder.clone();
         git::stage_all(folder).await?;
 
         let folder = input.folder.clone();
-        let has_unmerged_paths = git::has_unmerged_paths(folder).await?;
+        if git::has_unmerged_paths(folder).await? {
+            return Ok(true);
+        }
 
-        Ok(has_unmerged_paths)
+        let folder = input.folder.clone();
+        let staged_with_markers =
+            git::list_staged_conflict_marker_files(folder, conflict_files.to_vec()).await?;
+
+        Ok(!staged_with_markers.is_empty())
     }
 
     /// Continues an in-progress rebase after conflict edits are applied.
@@ -685,11 +738,28 @@ impl SessionManager {
         format_detail_lines(&conflicted_files.join("\n"))
     }
 
-    fn conflicted_file_fingerprint(conflicted_files: &[String]) -> String {
-        let mut normalized_paths = conflicted_files.to_vec();
-        normalized_paths.sort_unstable();
+    /// Computes a content-based fingerprint for the current set of conflicted
+    /// files.
+    ///
+    /// Reads each file from disk and hashes both its path and content so that
+    /// partial progress made by the rebase-assist agent (e.g. removing some
+    /// but not all conflict markers) changes the fingerprint and prevents the
+    /// [`FailureTracker`] from firing prematurely. The fingerprint is
+    /// order-independent because paths are sorted before hashing.
+    fn conflicted_file_fingerprint(folder: &Path, conflicted_files: &[String]) -> String {
+        let mut sorted_files = conflicted_files.to_vec();
+        sorted_files.sort_unstable();
 
-        normalized_paths.join("\n")
+        let mut hasher = DefaultHasher::new();
+        for file in &sorted_files {
+            file.hash(&mut hasher);
+            let file_path = folder.join(file);
+            if let Ok(content) = std::fs::read(&file_path) {
+                content.hash(&mut hasher);
+            }
+        }
+
+        format!("{:016x}", hasher.finish())
     }
 
     fn assist_context(input: &RebaseAssistInput) -> AssistContext {
@@ -964,5 +1034,113 @@ mod tests {
         assert_eq!(input.folder, cloned_input.folder);
         assert_eq!(input.permission_mode, cloned_input.permission_mode);
         assert_eq!(input.session_model, cloned_input.session_model);
+    }
+
+    #[test]
+    fn test_conflicted_file_fingerprint_changes_with_file_content() {
+        // Arrange
+        let temp_dir = std::env::temp_dir().join(format!(
+            "agentty_fp_content_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let file_path = temp_dir.join("conflict.rs");
+        let files = vec!["conflict.rs".to_string()];
+
+        // Act
+        std::fs::write(&file_path, "<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>>")
+            .expect("write initial content");
+        let fingerprint_before = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        std::fs::write(
+            &file_path,
+            "<<<<<<< HEAD\nfoo_patched\n=======\nbar\n>>>>>>>",
+        )
+        .expect("write patched content");
+        let fingerprint_after = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+
+        // Assert — partial progress changes the fingerprint
+        assert_ne!(fingerprint_before, fingerprint_after);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_conflicted_file_fingerprint_stable_for_unchanged_content() {
+        // Arrange
+        let temp_dir = std::env::temp_dir().join(format!(
+            "agentty_fp_stable_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        std::fs::write(temp_dir.join("conflict.rs"), "same content").expect("write file");
+        let files = vec!["conflict.rs".to_string()];
+
+        // Act
+        let fingerprint_a = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        let fingerprint_b = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+
+        // Assert — identical content produces identical fingerprint
+        assert_eq!(fingerprint_a, fingerprint_b);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_conflicted_file_fingerprint_order_independent() {
+        // Arrange
+        let temp_dir = std::env::temp_dir().join(format!(
+            "agentty_fp_order_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        std::fs::write(temp_dir.join("a.rs"), "content a").expect("write a.rs");
+        std::fs::write(temp_dir.join("b.rs"), "content b").expect("write b.rs");
+
+        // Act
+        let fingerprint_ab = SessionManager::conflicted_file_fingerprint(
+            &temp_dir,
+            &["a.rs".to_string(), "b.rs".to_string()],
+        );
+        let fingerprint_ba = SessionManager::conflicted_file_fingerprint(
+            &temp_dir,
+            &["b.rs".to_string(), "a.rs".to_string()],
+        );
+
+        // Assert — order of file list does not affect the fingerprint
+        assert_eq!(fingerprint_ab, fingerprint_ba);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_conflicted_file_fingerprint_missing_file_is_stable() {
+        // Arrange — reference a file that does not exist on disk
+        let temp_dir = std::env::temp_dir().join(format!(
+            "agentty_fp_missing_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let files = vec!["nonexistent.rs".to_string()];
+
+        // Act — should not panic; missing files are silently skipped
+        let fingerprint_a = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        let fingerprint_b = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+
+        // Assert — deterministic even when file is absent
+        assert_eq!(fingerprint_a, fingerprint_b);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -441,6 +441,71 @@ pub async fn has_unmerged_paths(repo_path: PathBuf) -> Result<bool, String> {
     Ok(!conflicted_files.is_empty())
 }
 
+/// Returns which of the given `paths` still contain git conflict markers
+/// (`<<<<<<<`) in their staged content.
+///
+/// Uses `git grep --cached -l` to search indexed content directly, so it
+/// detects files that were staged via `git add` while still containing
+/// unresolved conflict markers. The search is scoped to `paths` to avoid
+/// false positives from files that legitimately contain `<<<<<<<` (e.g.
+/// test fixtures or documentation).
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `paths` - Relative file paths to inspect (typically the files that were
+///   involved in the current conflict)
+///
+/// # Returns
+/// The subset of `paths` whose staged content contains lines starting with
+/// `<<<<<<<`. Returns an empty list when no matches are found or when
+/// `paths` is empty.
+///
+/// # Errors
+/// Returns an error if `git grep` cannot be executed or exits with an
+/// unexpected error code. An exit code of `1` (no matches) is treated as
+/// success with an empty result.
+pub async fn list_staged_conflict_marker_files(
+    repo_path: PathBuf,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+
+    spawn_blocking(move || {
+        let mut command = Command::new("git");
+        command
+            .args(["grep", "--cached", "-l", "^<<<<<<<", "--"])
+            .args(&paths)
+            .current_dir(&repo_path);
+        let output = command
+            .output()
+            .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+        // git grep exits with 1 when no matches are found — that is not an
+        // error. Any exit code above 1 signals an actual git error.
+        let exit_code = output.status.code().unwrap_or(2);
+        if !output.status.success() && exit_code != 1 {
+            let detail = command_output_detail(&output.stdout, &output.stderr);
+
+            return Err(format!(
+                "Failed to check for staged conflict markers: {detail}"
+            ));
+        }
+
+        let files = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .collect();
+
+        Ok(files)
+    })
+    .await
+    .map_err(|error| format!("Join error: {error}"))?
+}
+
 /// Returns conflicted file paths for the current index.
 ///
 /// # Arguments
@@ -962,9 +1027,83 @@ fn is_git_index_lock_error(detail: &str) -> bool {
 }
 
 /// Returns whether git output detail indicates a rebase conflict state.
+///
+/// Matches all known git messages that signal a conflict requiring manual
+/// resolution, including messages emitted when staging partially-resolved
+/// files and attempting `git rebase --continue` prematurely.
 fn is_rebase_conflict(detail: &str) -> bool {
     detail.contains("CONFLICT")
         || detail.contains("Resolve all conflicts manually")
         || detail.contains("could not apply")
         || detail.contains("mark them as resolved")
+        || detail.contains("unresolved conflict")
+        || detail.contains("Committing is not possible")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_rebase_conflict_detects_conflict_keyword() {
+        // Arrange
+        let detail = "CONFLICT (content): Merge conflict in src/main.rs";
+
+        // Act / Assert
+        assert!(is_rebase_conflict(detail));
+    }
+
+    #[test]
+    fn test_is_rebase_conflict_detects_could_not_apply() {
+        // Arrange
+        let detail = "error: could not apply abc1234... Update handler";
+
+        // Act / Assert
+        assert!(is_rebase_conflict(detail));
+    }
+
+    #[test]
+    fn test_is_rebase_conflict_detects_mark_as_resolved() {
+        // Arrange
+        let detail = "hint: mark them as resolved using git add";
+
+        // Act / Assert
+        assert!(is_rebase_conflict(detail));
+    }
+
+    #[test]
+    fn test_is_rebase_conflict_detects_unresolved_conflict() {
+        // Arrange
+        let detail = "fatal: Exiting because of an unresolved conflict.";
+
+        // Act / Assert
+        assert!(is_rebase_conflict(detail));
+    }
+
+    #[test]
+    fn test_is_rebase_conflict_detects_committing_not_possible() {
+        // Arrange
+        let detail = "error: Committing is not possible because you have unmerged files.";
+
+        // Act / Assert
+        assert!(is_rebase_conflict(detail));
+    }
+
+    #[test]
+    fn test_is_rebase_conflict_returns_false_for_unrelated_error() {
+        // Arrange
+        let detail = "fatal: not a git repository (or any parent up to mount point /)";
+
+        // Act / Assert
+        assert!(!is_rebase_conflict(detail));
+    }
+
+    #[test]
+    fn test_is_rebase_conflict_returns_false_for_index_lock_error() {
+        // Arrange
+        let detail = "fatal: Unable to create '.git/index.lock': File exists.";
+
+        // Act / Assert
+        assert!(!is_rebase_conflict(detail));
+    }
 }
