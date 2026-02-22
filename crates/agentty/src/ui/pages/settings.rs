@@ -1,16 +1,18 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::app::settings::SettingsManager;
 use crate::ui::Page;
 
+/// Renders the settings page table and inline editing hints.
 pub struct SettingsPage<'a> {
     manager: &'a mut SettingsManager,
 }
 
 impl<'a> SettingsPage<'a> {
+    /// Creates a settings page renderer bound to a mutable settings manager.
     pub fn new(manager: &'a mut SettingsManager) -> Self {
         Self { manager }
     }
@@ -34,13 +36,14 @@ impl Page for SettingsPage<'_> {
             .height(1)
             .bottom_margin(1);
 
-        let rows = vec![
-            Row::new(vec![
-                Cell::from("Default Model"),
-                Cell::from(self.manager.default_model.as_str()),
-            ])
-            .height(1),
-        ];
+        let rows = self
+            .manager
+            .settings_rows()
+            .into_iter()
+            .map(|(setting_name, setting_value)| {
+                Row::new(vec![Cell::from(setting_name), Cell::from(setting_value)]).height(1)
+            })
+            .collect::<Vec<_>>();
 
         let table = Table::new(
             rows,
@@ -52,5 +55,9 @@ impl Page for SettingsPage<'_> {
         .highlight_symbol(">> ");
 
         f.render_stateful_widget(table, main_area, &mut self.manager.table_state);
+
+        let footer = Paragraph::new(self.manager.footer_hint());
+
+        f.render_widget(footer, chunks[1]);
     }
 }

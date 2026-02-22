@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, Tab};
 use crate::domain::input::InputState;
@@ -12,6 +12,10 @@ use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
 /// Handles key input while the app is in list mode.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
+        return handle_settings_text_input(app, key).await;
+    }
+
     match key.code {
         KeyCode::Char('q') => return Ok(EventResult::Quit),
         KeyCode::Tab => {
@@ -76,7 +80,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                     }
                 }
                 Tab::Settings => {
-                    app.settings.cycle_model(&app.services).await;
+                    app.settings.handle_enter(&app.services).await;
                 }
                 Tab::Stats => {}
             }
@@ -108,6 +112,36 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Handles text input while a settings editor is active.
+async fn handle_settings_text_input(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    match key.code {
+        KeyCode::Enter => {
+            app.settings.handle_enter(&app.services).await;
+        }
+        KeyCode::Esc => {
+            app.settings.stop_text_input_editing();
+        }
+        KeyCode::Backspace => {
+            app.settings
+                .remove_selected_text_character(&app.services)
+                .await;
+        }
+        KeyCode::Char(character) if is_settings_text_key(key) => {
+            app.settings
+                .append_selected_text_character(&app.services, character)
+                .await;
+        }
+        _ => {}
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Returns whether a key event should insert text into a settings string value.
+fn is_settings_text_key(key: KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
 }
 
 #[cfg(test)]
@@ -180,6 +214,17 @@ mod tests {
             database,
         )
         .await;
+
+        (app, base_dir)
+    }
+
+    async fn new_test_app_for_settings() -> (App, tempfile::TempDir) {
+        let (mut app, base_dir) = new_test_app_with_git().await;
+        app.create_session()
+            .await
+            .expect("failed to create session for settings tests");
+        app.tabs.set(Tab::Settings);
+        app.settings.next();
 
         (app, base_dir)
     }
@@ -331,6 +376,83 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_starts_dev_server_editing_in_settings_tab() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(app.settings.is_editing_text_input());
+    }
+
+    #[tokio::test]
+    async fn test_handle_char_key_appends_dev_server_value_while_editing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.dev_server, "a");
+        assert_eq!(app.sessions.sessions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_backspace_key_removes_dev_server_character_while_editing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.dev_server = "abc".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.dev_server, "ab");
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_stops_dev_server_editing_when_already_editing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(!app.settings.is_editing_text_input());
     }
 
     #[tokio::test]
