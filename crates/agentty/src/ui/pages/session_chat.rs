@@ -275,17 +275,18 @@ impl<'a> SessionChatPage<'a> {
         f.render_widget(help_message, bottom_area);
     }
 
-    /// Returns bottom help text for session view mode.
+    /// Returns the static help text shown in the bottom panel for a given
+    /// session in view mode.
     ///
-    /// `InProgress` sessions intentionally expose only navigation and help
-    /// shortcuts while an agent response is running.
+    /// `InProgress` and `Done` sessions intentionally expose only navigation
+    /// and help shortcuts, including hiding the open-worktree shortcut.
     fn view_help_text(session: &Session, plan_followup: Option<&PlanFollowup>) -> &'static str {
         if session.status == Status::InProgress {
             return "q: back | j/k: scroll | ?: help";
         }
 
         if session.status == Status::Done {
-            return "q: back | o: open | j/k: scroll | ?: help";
+            return "q: back | j/k: scroll | ?: help";
         }
 
         if let Some(plan_followup) = plan_followup {
@@ -673,5 +674,19 @@ mod tests {
 
         // Assert
         assert!(help_text.contains("\u{2191}/\u{2193}"));
+    }
+
+    #[test]
+    fn test_view_help_text_done_hides_open_hint() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+
+        // Act
+        let help_text = SessionChatPage::view_help_text(&session, None);
+
+        // Assert
+        assert!(!help_text.contains("o: open"));
+        assert!(help_text.contains("j/k: scroll"));
     }
 }

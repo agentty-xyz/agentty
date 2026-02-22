@@ -29,6 +29,8 @@ struct ViewMetrics {
     view_height: u16,
 }
 
+/// Processes view-mode key presses and keeps the open-worktree shortcut
+/// disabled while a session is `Status::InProgress` or `Status::Done`.
 pub(crate) async fn handle(
     app: &mut App,
     terminal: &mut TuiTerminal,
@@ -47,7 +49,8 @@ pub(crate) async fn handle(
     let is_done = session.status == Status::Done;
     let is_in_progress = session.status == Status::InProgress;
     let is_action_allowed = is_view_action_allowed(session.status);
-    let is_worktree_open_allowed = is_view_worktree_open_allowed(session.status);
+    let can_open_worktree = is_view_worktree_open_allowed(session.status)
+        && can_open_session_worktree(session.status);
     let session_output = session.output.clone();
 
     if handle_plan_followup_action_key(app, key, &view_context).await {
@@ -58,7 +61,7 @@ pub(crate) async fn handle(
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
         }
-        KeyCode::Char('o') if is_worktree_open_allowed => {
+        KeyCode::Char('o') if can_open_worktree => {
             app.open_session_worktree_in_tmux().await;
         }
         KeyCode::Enter if is_action_allowed => {
@@ -165,6 +168,12 @@ fn switch_view_to_prompt(
         input: InputState::new(),
         scroll_offset,
     };
+}
+
+/// Returns whether the 'o' shortcut should open the worktree for the provided
+/// session status.
+fn can_open_session_worktree(status: Status) -> bool {
+    status != Status::Done
 }
 
 async fn handle_plan_followup_action_key(
@@ -932,5 +941,29 @@ mod tests {
                 scroll_offset: 0,
             } if !session_id.is_empty()
         ));
+    }
+
+    #[test]
+    fn test_can_open_session_worktree_disables_done_state() {
+        // Arrange
+        let status = Status::Done;
+
+        // Act
+        let result = can_open_session_worktree(status);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_can_open_session_worktree_enables_review_state() {
+        // Arrange
+        let status = Status::Review;
+
+        // Act
+        let result = can_open_session_worktree(status);
+
+        // Assert
+        assert!(result);
     }
 }
