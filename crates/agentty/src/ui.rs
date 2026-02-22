@@ -1,8 +1,12 @@
+pub mod activity_heatmap;
 pub mod components;
+pub mod diff_util;
 pub mod icon;
+pub mod layout;
 pub mod markdown;
 pub mod pages;
 pub mod state;
+pub mod text_util;
 pub mod util;
 
 use std::collections::HashMap;

@@ -46,9 +46,13 @@ When working within `crates/agentty/src/ui/`:
 - [AGENTS.md](AGENTS.md) - UI specific instructions.
 - [CLAUDE.md](CLAUDE.md) - Symlink to AGENTS.md.
 - [GEMINI.md](GEMINI.md) - Symlink to AGENTS.md.
+- [activity_heatmap.rs](activity_heatmap.rs) - Activity day-key and heatmap utility logic.
+- [diff_util.rs](diff_util.rs) - Unified diff parsing and wrapping helpers.
 - [icon.rs](icon.rs) - UI icons.
+- [layout.rs](layout.rs) - Input and layout calculation helpers.
 - [markdown.rs](markdown.rs) - Styled markdown renderer for session output.
 - [README.md](README.md) - Additional documentation.
 - [state/](state/) - UI state definitions.
 - [style.rs](style.rs) - UI styling constants.
-- [util.rs](util.rs) - Shared UI utilities and layout logic.
+- [text_util.rs](text_util.rs) - Text wrapping and compact formatting helpers.
+- [util.rs](util.rs) - Backward-compatible re-exports for UI utility modules.
