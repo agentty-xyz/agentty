@@ -4,5 +4,5 @@ Documentation and assets for Agentty.
 
 ## Directory Index
 
-- [demo/](demo/) - Demo assets and recordings.
+- [assets/](assets/) - Static documentation assets, including demos.
 - [site/](site/) - Zola source for the `agentty.xyz` landing page.

@@ -4,7 +4,7 @@
 
 A terminal UI tool for managing agents, built with Rust and [Ratatui](https://ratatui.rs).
 
-![Demo](/docs/demo/demo.gif)
+![Demo](/docs/assets/demo/demo.gif)
 
 ## Installation
 
