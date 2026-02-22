@@ -1,3 +1,5 @@
+//! Filesystem-backed index and fuzzy filtering used by `@` file mentions.
+
 use std::path::Path;
 
 use ignore::WalkBuilder;

@@ -5,7 +5,7 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 use crate::app::App;
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
-use crate::file_list;
+use crate::infra::file_index;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
@@ -764,7 +764,7 @@ async fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
             |session| session.folder.clone(),
         );
 
-    let entries = tokio::task::spawn_blocking(move || file_list::list_files(&session_folder))
+    let entries = tokio::task::spawn_blocking(move || file_index::list_files(&session_folder))
         .await
         .unwrap_or_default();
 
@@ -809,7 +809,7 @@ fn handle_at_mention_down(app: &mut App) {
                 .at_mention_query()
                 .map_or(String::new(), |(_, query)| query);
 
-            file_list::filter_entries(&state.all_entries, &query).len()
+            file_index::filter_entries(&state.all_entries, &query).len()
         }
         _ => return,
     };
@@ -834,7 +834,7 @@ fn handle_at_mention_select(app: &mut App) {
             ..
         } => {
             if let Some((at_start, query)) = input.at_mention_query() {
-                let filtered = file_list::filter_entries(&state.all_entries, &query);
+                let filtered = file_index::filter_entries(&state.all_entries, &query);
                 let clamped_index = state.selected_index.min(filtered.len().saturating_sub(1));
 
                 filtered.get(clamped_index).map(|entry| {

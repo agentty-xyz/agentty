@@ -7,7 +7,7 @@ use crate::domain::agent::{AgentKind, AgentSelectionMetadata};
 use crate::domain::input::extract_at_mention_query;
 use crate::domain::permission::PlanFollowup;
 use crate::domain::session::{Session, Status};
-use crate::file_list;
+use crate::infra::file_index;
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::components::session_output::SessionOutput;
 use crate::ui::state::app_mode::AppMode;
@@ -137,7 +137,7 @@ impl<'a> SessionChatPage<'a> {
         at_mention_state: &PromptAtMentionState,
     ) -> Option<SlashMenu<'static>> {
         let (_, query) = extract_at_mention_query(input_text, cursor)?;
-        let filtered = file_list::filter_entries(&at_mention_state.all_entries, &query);
+        let filtered = file_index::filter_entries(&at_mention_state.all_entries, &query);
 
         if filtered.is_empty() {
             return None;
