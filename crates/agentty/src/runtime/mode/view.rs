@@ -46,6 +46,8 @@ pub(crate) async fn handle(
     };
     let is_done = session.status == Status::Done;
     let is_in_progress = session.status == Status::InProgress;
+    let is_action_allowed = is_view_action_allowed(session.status);
+    let is_worktree_open_allowed = is_view_worktree_open_allowed(session.status);
     let session_output = session.output.clone();
 
     if handle_plan_followup_action_key(app, key, &view_context).await {
@@ -56,10 +58,10 @@ pub(crate) async fn handle(
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
         }
-        KeyCode::Char('o') => {
+        KeyCode::Char('o') if is_worktree_open_allowed => {
             app.open_session_worktree_in_tmux().await;
         }
-        KeyCode::Enter if !is_done => {
+        KeyCode::Enter if is_action_allowed => {
             switch_view_to_prompt(
                 app,
                 &view_context,
@@ -98,16 +100,18 @@ pub(crate) async fn handle(
                 view_metrics.view_height / 2,
             ));
         }
-        KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) && !is_done => {
+        KeyCode::Char('d')
+            if !key.modifiers.contains(event::KeyModifiers::CONTROL) && is_action_allowed =>
+        {
             show_diff_for_view_session(app, &view_context).await;
         }
-        KeyCode::Char('m') if !is_done => {
+        KeyCode::Char('m') if is_action_allowed => {
             merge_view_session(app, &view_context.session_id).await;
         }
-        KeyCode::Char('r') if !is_done => {
+        KeyCode::Char('r') if is_action_allowed => {
             rebase_view_session(app, &view_context.session_id).await;
         }
-        KeyCode::BackTab => {
+        KeyCode::BackTab if is_action_allowed => {
             let _ = app
                 .toggle_session_permission_mode(&view_context.session_id)
                 .await;
@@ -116,6 +120,7 @@ pub(crate) async fn handle(
             app.mode = AppMode::Help {
                 context: HelpContext::View {
                     is_done,
+                    is_in_progress,
                     session_id: view_context.session_id.clone(),
                     scroll_offset: view_context.scroll_offset,
                 },
@@ -132,6 +137,18 @@ pub(crate) async fn handle(
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Returns whether `o` can open the session worktree in tmux.
+fn is_view_worktree_open_allowed(status: Status) -> bool {
+    status != Status::InProgress
+}
+
+/// Returns whether non-navigation view shortcuts are available.
+///
+/// This covers `Enter`, `d`, `m`, `r`, and `S-Tab`.
+fn is_view_action_allowed(status: Status) -> bool {
+    !matches!(status, Status::Done | Status::InProgress)
 }
 
 fn switch_view_to_prompt(
@@ -486,6 +503,36 @@ mod tests {
         (app, base_dir, session_id)
     }
 
+    #[test]
+    fn test_is_view_worktree_open_allowed_returns_false_for_in_progress() {
+        // Arrange
+        let status = Status::InProgress;
+
+        // Act
+        let can_open = is_view_worktree_open_allowed(status);
+
+        // Assert
+        assert!(!can_open);
+    }
+
+    #[test]
+    fn test_is_view_action_allowed_only_for_non_done_non_in_progress_status() {
+        // Arrange
+        let review_status = Status::Review;
+        let in_progress_status = Status::InProgress;
+        let done_status = Status::Done;
+
+        // Act
+        let review_allowed = is_view_action_allowed(review_status);
+        let in_progress_allowed = is_view_action_allowed(in_progress_status);
+        let done_allowed = is_view_action_allowed(done_status);
+
+        // Assert
+        assert!(review_allowed);
+        assert!(!in_progress_allowed);
+        assert!(!done_allowed);
+    }
+
     #[tokio::test]
     async fn test_view_context_returns_none_for_non_view_mode() {
         // Arrange
@@ -809,17 +856,19 @@ mod tests {
             session_id: session_id.clone(),
             scroll_offset: Some(0),
         };
+        let plan_output = "### Questions\n1. Keep sqlite?\n2. Add telemetry?\n".to_string();
         app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
-        app.sessions.sessions[0].output =
-            "### Questions\n1. Keep sqlite?\n2. Add telemetry?\n".to_string();
+        app.sessions.sessions[0].output = plan_output.clone();
         app.sessions.sessions[0].status = Status::InProgress;
-        if let Some(handles) = app.sessions.handles.get(&session_id) {
-            if let Ok(mut output) = handles.output.lock() {
-                *output = "### Questions\n1. Keep sqlite?\n2. Add telemetry?\n".to_string();
-            }
-            if let Ok(mut status) = handles.status.lock() {
-                *status = Status::Review;
-            }
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut output) = handles.output.lock()
+        {
+            *output = plan_output;
+        }
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut status) = handles.status.lock()
+        {
+            *status = Status::Review;
         }
         app.apply_app_events(AppEvent::SessionUpdated {
             session_id: session_id.clone(),
@@ -863,6 +912,7 @@ mod tests {
         app.mode = AppMode::Help {
             context: HelpContext::View {
                 is_done: false,
+                is_in_progress: false,
                 session_id,
                 scroll_offset: scroll,
             },
@@ -875,6 +925,7 @@ mod tests {
             AppMode::Help {
                 context: HelpContext::View {
                     is_done: false,
+                    is_in_progress: false,
                     ref session_id,
                     scroll_offset: Some(3),
                 },

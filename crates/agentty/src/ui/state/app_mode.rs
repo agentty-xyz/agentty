@@ -56,6 +56,8 @@ pub enum HelpContext {
     List,
     View {
         is_done: bool,
+        /// Whether the originating session was actively running.
+        is_in_progress: bool,
         session_id: String,
         scroll_offset: Option<u16>,
     },
@@ -87,6 +89,19 @@ impl HelpContext {
             HelpContext::View { is_done: true, .. } => {
                 &[("q", "Quit"), ("j", "Scroll down"), ("k", "Scroll up")]
             }
+            HelpContext::View {
+                is_in_progress: true,
+                ..
+            } => &[
+                ("q", "Back to list"),
+                ("j", "Scroll down"),
+                ("k", "Scroll up"),
+                ("g", "Scroll to top"),
+                ("G", "Scroll to bottom"),
+                ("Ctrl+d", "Half page down"),
+                ("Ctrl+u", "Half page up"),
+                ("?", "Help"),
+            ],
             HelpContext::View { .. } => &[
                 ("q", "Back to list"),
                 ("Enter", "Reply"),
@@ -139,5 +154,58 @@ impl HelpContext {
     /// Display title for the help overlay header.
     pub fn title(&self) -> &'static str {
         "Keybindings"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
+        // Arrange
+        let context = HelpContext::View {
+            is_done: false,
+            is_in_progress: true,
+            session_id: "session-id".to_string(),
+            scroll_offset: Some(2),
+        };
+
+        // Act
+        let bindings = context.keybindings();
+
+        // Assert
+        assert!(bindings.contains(&("q", "Back to list")));
+        assert!(bindings.contains(&("j", "Scroll down")));
+        assert!(bindings.contains(&("k", "Scroll up")));
+        assert!(bindings.contains(&("?", "Help")));
+        assert!(!bindings.iter().any(|(key, _)| *key == "Enter"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "d"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "m"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "r"));
+        assert!(!bindings.iter().any(|(key, _)| *key == "S-Tab"));
+    }
+
+    #[test]
+    fn test_help_context_restore_mode_ignores_view_help_flags() {
+        // Arrange
+        let context = HelpContext::View {
+            is_done: false,
+            is_in_progress: true,
+            session_id: "session-id".to_string(),
+            scroll_offset: Some(4),
+        };
+
+        // Act
+        let mode = context.restore_mode();
+
+        // Assert
+        assert!(matches!(
+            mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(4),
+            } if session_id == "session-id"
+        ));
     }
 }

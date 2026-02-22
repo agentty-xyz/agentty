@@ -275,7 +275,15 @@ impl<'a> SessionChatPage<'a> {
         f.render_widget(help_message, bottom_area);
     }
 
+    /// Returns bottom help text for session view mode.
+    ///
+    /// `InProgress` sessions intentionally expose only navigation and help
+    /// shortcuts while an agent response is running.
     fn view_help_text(session: &Session, plan_followup: Option<&PlanFollowup>) -> &'static str {
+        if session.status == Status::InProgress {
+            return "q: back | j/k: scroll | ?: help";
+        }
+
         if session.status == Status::Done {
             return "q: back | o: open | j/k: scroll | ?: help";
         }
@@ -609,6 +617,19 @@ mod tests {
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
+    }
+
+    #[test]
+    fn test_view_help_text_in_progress_limits_actions_to_navigation() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+
+        // Act
+        let help_text = SessionChatPage::view_help_text(&session, None);
+
+        // Assert
+        assert_eq!(help_text, "q: back | j/k: scroll | ?: help");
     }
 
     #[test]
