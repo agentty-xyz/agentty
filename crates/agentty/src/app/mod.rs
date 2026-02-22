@@ -82,6 +82,10 @@ pub(crate) enum AppEvent {
         progress_message: Option<String>,
         session_id: String,
     },
+    /// Indicates completion of a list-mode sync workflow.
+    SyncMainCompleted {
+        result: Result<(), SyncSessionStartError>,
+    },
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
 }
@@ -98,6 +102,7 @@ struct AppEventBatch {
     session_ids: HashSet<String>,
     session_permission_mode_updates: HashMap<String, PermissionMode>,
     should_force_reload: bool,
+    sync_main_result: Option<Result<(), SyncSessionStartError>>,
 }
 
 // SessionState definition moved to state.rs
@@ -511,12 +516,23 @@ impl App {
             .await
     }
 
-    /// Synchronizes the selected project branch with its upstream.
-    ///
-    /// # Errors
-    /// Returns a [`SyncSessionStartError`] when sync cannot be started.
-    pub(crate) async fn sync_main(&self) -> Result<(), SyncSessionStartError> {
-        self.sessions.sync_main(&self.projects).await
+    /// Starts selected-project branch sync in the background and immediately
+    /// opens a loading popup.
+    pub(crate) fn start_sync_main(&mut self) {
+        self.mode = AppMode::SyncBlockedPopup {
+            is_loading: true,
+            message: "Synchronizing the selected project branch with its upstream.".to_string(),
+            title: "Sync in progress".to_string(),
+        };
+
+        let app_event_tx = self.services.event_sender();
+        let default_branch = self.projects.git_branch().map(str::to_string);
+        let working_dir = self.projects.working_dir().to_path_buf();
+
+        tokio::spawn(async move {
+            let result = SessionManager::sync_main_for_project(default_branch, working_dir).await;
+            let _ = app_event_tx.send(AppEvent::SyncMainCompleted { result });
+        });
     }
 
     /// Reloads sessions when metadata cache indicates changes.
@@ -632,6 +648,10 @@ impl App {
 
         for session_id in &event_batch.session_ids {
             self.sessions.sync_session_from_handle(session_id);
+        }
+
+        if let Some(sync_main_result) = event_batch.sync_main_result {
+            self.mode = Self::sync_main_popup_mode(sync_main_result);
         }
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
@@ -906,6 +926,30 @@ impl App {
 
         Some(window_id.to_string())
     }
+
+    /// Builds final sync popup mode from background sync completion result.
+    fn sync_main_popup_mode(sync_main_result: Result<(), SyncSessionStartError>) -> AppMode {
+        match sync_main_result {
+            Ok(()) => AppMode::SyncBlockedPopup {
+                is_loading: false,
+                message: "Successfully synchronized the selected project branch with its upstream."
+                    .to_string(),
+                title: "Sync complete".to_string(),
+            },
+            Err(sync_error @ SyncSessionStartError::MainHasUncommittedChanges { .. }) => {
+                AppMode::SyncBlockedPopup {
+                    is_loading: false,
+                    message: sync_error.detail_message(),
+                    title: "Sync blocked".to_string(),
+                }
+            }
+            Err(sync_error @ SyncSessionStartError::Other(_)) => AppMode::SyncBlockedPopup {
+                is_loading: false,
+                message: sync_error.detail_message(),
+                title: "Sync failed".to_string(),
+            },
+        }
+    }
 }
 
 impl AppEventBatch {
@@ -946,6 +990,9 @@ impl AppEventBatch {
             } => {
                 self.session_progress_updates
                     .insert(session_id, progress_message);
+            }
+            AppEvent::SyncMainCompleted { result } => {
+                self.sync_main_result = Some(result);
             }
             AppEvent::SessionUpdated { session_id } => {
                 self.session_ids.insert(session_id);

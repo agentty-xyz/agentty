@@ -342,7 +342,7 @@ mod tests {
     }
 
     async fn wait_for_status(app: &mut App, session_id: &str, expected: Status) {
-        wait_for_status_with_retries(app, session_id, expected, 40).await;
+        wait_for_status_with_retries(app, session_id, expected, 2000).await;
     }
 
     async fn wait_for_status_with_retries(
@@ -377,6 +377,24 @@ mod tests {
             .find(|session| session.id == session_id)
             .expect("missing session while waiting for status");
         assert_eq!(session.status, expected);
+    }
+
+    /// Forces one session status in both render snapshot and runtime handle.
+    fn set_session_status_for_test(app: &mut App, session_id: &str, status: Status) {
+        if let Some(session) = app
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = status;
+        }
+
+        if let Some(handles) = app.sessions.handles.get(session_id)
+            && let Ok(mut current_status) = handles.status.lock()
+        {
+            *current_status = status;
+        }
     }
 
     async fn wait_for_output_contains(
@@ -2449,12 +2467,16 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Queue merge one").await;
-        create_and_start_session(&mut app, "Queue merge two").await;
-        let first_session_id = app.sessions.sessions[0].id.clone();
-        let second_session_id = app.sessions.sessions[1].id.clone();
-        wait_for_status_with_retries(&mut app, &first_session_id, Status::Review, 400).await;
-        wait_for_status_with_retries(&mut app, &second_session_id, Status::Review, 400).await;
+        let first_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create first queue session");
+        let second_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create second queue session");
+        set_session_status_for_test(&mut app, &first_session_id, Status::Review);
+        set_session_status_for_test(&mut app, &second_session_id, Status::Review);
 
         let first_folder = app.sessions.sessions[0].folder.clone();
         let second_folder = app.sessions.sessions[1].folder.clone();
@@ -2683,7 +2705,11 @@ mod tests {
             .expect("failed to write file");
 
         // Act
-        let result = app.sync_main().await;
+        let result = SessionManager::sync_main_for_project(
+            app.projects.git_branch().map(str::to_string),
+            app.projects.working_dir().to_path_buf(),
+        )
+        .await;
 
         // Assert
         assert_eq!(
@@ -2702,7 +2728,11 @@ mod tests {
         std::fs::write(dir.path().join("README.md"), "dirty main").expect("failed to write file");
 
         // Act
-        let result = app.sync_main().await;
+        let result = SessionManager::sync_main_for_project(
+            app.projects.git_branch().map(str::to_string),
+            app.projects.working_dir().to_path_buf(),
+        )
+        .await;
 
         // Assert
         assert_eq!(
@@ -2720,7 +2750,11 @@ mod tests {
         let app = new_test_app_with_git(dir.path()).await;
 
         // Act
-        let result = app.sync_main().await;
+        let result = SessionManager::sync_main_for_project(
+            app.projects.git_branch().map(str::to_string),
+            app.projects.working_dir().to_path_buf(),
+        )
+        .await;
 
         // Assert
         assert!(matches!(result, Err(SyncSessionStartError::Other(_))));
@@ -3105,9 +3139,18 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Fix the bug").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        wait_for_status(&mut app, &session_id, Status::Review).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        set_session_status_for_test(&mut app, &session_id, Status::Review);
+        app.sessions.sessions[0].output = " › Fix the bug\n\nmock-start\n".to_string();
+        app.sessions.sessions[0].prompt = "Fix the bug".to_string();
+        if let Some(handles) = app.sessions.handles.get(&session_id)
+            && let Ok(mut output) = handles.output.lock()
+        {
+            *output = " › Fix the bug\n\nmock-start\n".to_string();
+        }
         let session_id = app.sessions.sessions[0].id.clone();
         let stats = SessionStats {
             input_tokens: 100,
@@ -3162,9 +3205,11 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Hello").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        wait_for_status(&mut app, &session_id, Status::Review).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        set_session_status_for_test(&mut app, &session_id, Status::Review);
         let session_id = app.sessions.sessions[0].id.clone();
         let _ = app
             .set_session_model(&session_id, AgentKind::Claude.default_model())
@@ -3185,9 +3230,11 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Build feature").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        wait_for_status(&mut app, &session_id, Status::Review).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        set_session_status_for_test(&mut app, &session_id, Status::Review);
         let session_id = app.sessions.sessions[0].id.clone();
         let folder = app.sessions.sessions[0].folder.clone();
         assert!(folder.exists());

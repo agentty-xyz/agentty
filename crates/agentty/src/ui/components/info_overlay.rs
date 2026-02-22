@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::ui::Component;
+use crate::ui::icon::Icon;
 
 const MIN_OVERLAY_HEIGHT: u16 = 7;
 const MIN_OVERLAY_WIDTH: u16 = 38;
@@ -13,6 +14,7 @@ const OVERLAY_WIDTH_PERCENT: u16 = 45;
 
 /// Centered informational popup used for non-destructive workflow guidance.
 pub struct InfoOverlay<'a> {
+    is_loading: bool,
     message: &'a str,
     title: &'a str,
 }
@@ -20,7 +22,16 @@ pub struct InfoOverlay<'a> {
 impl<'a> InfoOverlay<'a> {
     /// Creates an informational popup with title and body message.
     pub fn new(title: &'a str, message: &'a str) -> Self {
-        Self { message, title }
+        Self::with_loading_state(title, message, false)
+    }
+
+    /// Creates an informational popup with optional loading-state rendering.
+    pub fn with_loading_state(title: &'a str, message: &'a str, is_loading: bool) -> Self {
+        Self {
+            is_loading,
+            message,
+            title,
+        }
     }
 }
 
@@ -40,26 +51,41 @@ impl Component for InfoOverlay<'_> {
         );
 
         let title = format!(" {} ", self.title);
-        let ok_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
-        let paragraph = Paragraph::new(vec![
-            Line::from(Span::styled(
-                self.message,
-                Style::default().fg(Color::White),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(" OK ", ok_style)),
-        ])
-        .alignment(Alignment::Center)
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .title(Span::styled(title, Style::default().fg(Color::Yellow))),
-        );
+        let paragraph_lines = if self.is_loading {
+            let loading_line = format!("{} Sync in progress...", Icon::current_spinner());
+
+            vec![
+                Line::from(Span::styled(
+                    self.message,
+                    Style::default().fg(Color::White),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(loading_line, Style::default().fg(Color::Cyan))),
+            ]
+        } else {
+            let ok_style = Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
+
+            vec![
+                Line::from(Span::styled(
+                    self.message,
+                    Style::default().fg(Color::White),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(" OK ", ok_style)),
+            ]
+        };
+        let paragraph = Paragraph::new(paragraph_lines)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(Span::styled(title, Style::default().fg(Color::Yellow))),
+            );
 
         f.render_widget(Clear, popup_area);
         f.render_widget(paragraph, popup_area);
@@ -80,6 +106,7 @@ mod tests {
         let overlay = InfoOverlay::new(title, message);
 
         // Assert
+        assert!(!overlay.is_loading);
         assert_eq!(overlay.message, message);
         assert_eq!(overlay.title, title);
     }
@@ -105,5 +132,29 @@ mod tests {
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
         assert!(text.contains("OK"));
         assert!(text.contains("Main has uncommitted changes"));
+    }
+
+    #[test]
+    fn test_info_overlay_render_includes_loading_indicator_when_loading() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let overlay =
+            InfoOverlay::with_loading_state("Sync in progress", "Synchronizing branch", true);
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                crate::ui::Component::render(&overlay, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let content = buffer.content();
+        let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("Sync in progress..."));
+        assert!(!text.contains("OK"));
     }
 }

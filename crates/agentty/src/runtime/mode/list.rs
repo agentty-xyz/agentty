@@ -2,7 +2,7 @@ use std::io;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, SyncSessionStartError, Tab};
+use crate::app::{App, Tab};
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
@@ -97,7 +97,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             }
         }
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'s') => {
-            sync_main_branch(app).await;
+            sync_main_branch(app);
         }
         KeyCode::Char('?') => {
             app.mode = AppMode::Help {
@@ -141,37 +141,9 @@ fn is_settings_text_key(key: KeyEvent) -> bool {
     key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
 }
 
-/// Starts selected-project branch sync and always surfaces the result through
-/// an informational popup when the sync key is used.
-async fn sync_main_branch(app: &mut App) {
-    let sync_result = app.sync_main().await;
-    let start_error = match sync_result {
-        Ok(()) => {
-            app.mode = AppMode::SyncBlockedPopup {
-                message: "Successfully synchronized the selected project branch with its upstream."
-                    .to_string(),
-                title: "Sync complete".to_string(),
-            };
-
-            return;
-        }
-        Err(start_error) => start_error,
-    };
-
-    match start_error {
-        SyncSessionStartError::MainHasUncommittedChanges { .. } => {
-            app.mode = AppMode::SyncBlockedPopup {
-                message: start_error.detail_message(),
-                title: "Sync blocked".to_string(),
-            };
-        }
-        SyncSessionStartError::Other(_) => {
-            app.mode = AppMode::SyncBlockedPopup {
-                message: start_error.detail_message(),
-                title: "Sync failed".to_string(),
-            };
-        }
-    }
+/// Starts selected-project branch sync and immediately opens a loading popup.
+fn sync_main_branch(app: &mut App) {
+    app.start_sync_main();
 }
 
 /// Creates a new session and switches the UI to prompt mode for it.
@@ -194,9 +166,11 @@ async fn open_new_session_prompt(app: &mut App) -> io::Result<()> {
 mod tests {
     use std::path::Path;
     use std::process::Command;
+    use std::time::Duration;
 
     use crossterm::event::KeyModifiers;
     use tempfile::tempdir;
+    use tokio::time::sleep;
 
     use super::*;
     use crate::db::Database;
@@ -273,6 +247,29 @@ mod tests {
         app.settings.next();
 
         (app, base_dir)
+    }
+
+    /// Waits until sync popup transitions from loading to final state.
+    async fn wait_for_sync_popup_result(app: &mut App) {
+        let mut sync_finished = false;
+        for _ in 0..200 {
+            app.process_pending_app_events().await;
+
+            if matches!(
+                app.mode,
+                AppMode::SyncBlockedPopup {
+                    is_loading: false,
+                    ..
+                }
+            ) {
+                sync_finished = true;
+                break;
+            }
+
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        assert!(sync_finished, "timed out waiting for sync popup result");
     }
 
     #[tokio::test]
@@ -640,6 +637,20 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::SyncBlockedPopup {
+                is_loading: true,
+                ref title,
+                ..
+            } if title == "Sync in progress"
+        ));
+
+        // Act
+        wait_for_sync_popup_result(&mut app).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: false,
                 ref title,
                 ..
             } if title == "Sync failed"
@@ -669,6 +680,20 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::SyncBlockedPopup {
+                is_loading: true,
+                ref title,
+                ..
+            } if title == "Sync in progress"
+        ));
+
+        // Act
+        wait_for_sync_popup_result(&mut app).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: false,
                 ref title,
                 ..
             } if title == "Sync failed"
@@ -700,6 +725,20 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::SyncBlockedPopup {
+                is_loading: true,
+                ref title,
+                ..
+            } if title == "Sync in progress"
+        ));
+
+        // Act
+        wait_for_sync_popup_result(&mut app).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: false,
                 ref title,
                 ref message,
             } if title == "Sync blocked" && message.contains("`develop`")
@@ -725,6 +764,20 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::SyncBlockedPopup {
+                is_loading: true,
+                ref title,
+                ..
+            } if title == "Sync in progress"
+        ));
+
+        // Act
+        wait_for_sync_popup_result(&mut app).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: false,
                 ref title,
                 ref message,
             } if title == "Sync blocked" && message.contains("cannot run while `main` has uncommitted changes")

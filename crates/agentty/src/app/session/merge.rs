@@ -404,22 +404,21 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Synchronizes the selected project branch with its upstream.
+    /// Synchronizes a project branch with upstream using only project context.
     ///
-    /// This is a repository-level operation and does not mutate session state.
+    /// This helper is reused by background-triggered sync workflows and tests.
     ///
     /// # Errors
-    /// Returns a [`SyncSessionStartError`] when sync cannot be started or
+    /// Returns a [`SyncSessionStartError`] when project context is invalid or
     /// `git pull --rebase` fails.
-    pub(crate) async fn sync_main(
-        &self,
-        projects: &ProjectManager,
+    pub(crate) async fn sync_main_for_project(
+        default_branch: Option<String>,
+        working_dir: PathBuf,
     ) -> Result<(), SyncSessionStartError> {
-        let default_branch = projects.git_branch().map(str::to_string).ok_or_else(|| {
+        let default_branch = default_branch.ok_or_else(|| {
             SyncSessionStartError::Other("Active project has no git branch".to_string())
         })?;
 
-        let working_dir = projects.working_dir().to_path_buf();
         let _repo_root = git::find_git_repo_root(working_dir.clone())
             .await
             .ok_or_else(|| {

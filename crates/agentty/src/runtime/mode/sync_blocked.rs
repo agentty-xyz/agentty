@@ -6,7 +6,11 @@ use crate::ui::state::app_mode::AppMode;
 
 /// Handles key input while the sync informational popup is visible.
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
-    if !matches!(app.mode, AppMode::SyncBlockedPopup { .. }) {
+    let AppMode::SyncBlockedPopup { is_loading, .. } = &app.mode else {
+        return EventResult::Continue;
+    };
+
+    if *is_loading {
         return EventResult::Continue;
     }
 
@@ -50,6 +54,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
+            is_loading: false,
             message: "Main is dirty".to_string(),
             title: "Sync blocked".to_string(),
         };
@@ -67,6 +72,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
+            is_loading: false,
             message: "Main is dirty".to_string(),
             title: "Sync blocked".to_string(),
         };
@@ -84,6 +90,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
+            is_loading: false,
             message: "Main is dirty".to_string(),
             title: "Sync blocked".to_string(),
         };
@@ -97,5 +104,29 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::SyncBlockedPopup { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_does_not_close_loading_sync_popup() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::SyncBlockedPopup {
+            is_loading: true,
+            message: "Synchronizing...".to_string(),
+            title: "Sync in progress".to_string(),
+        };
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                is_loading: true,
+                ..
+            }
+        ));
     }
 }

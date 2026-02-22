@@ -95,6 +95,7 @@ struct CommandOptionRenderContext<'a> {
     table_state: &'a mut TableState,
 }
 
+/// Shared borrowed data required to render list-page backgrounds.
 struct ListBackgroundRenderContext<'a> {
     codex_usage_limits: Option<CodexUsageLimits>,
     current_tab: Tab,
@@ -114,6 +115,19 @@ struct ListModeRenderContext<'a> {
     settings: &'a mut SettingsManager,
     stats_activity: &'a [DailyActivity],
     table_state: &'a mut TableState,
+}
+
+/// Shared borrowed data required to render the sync popup overlay.
+struct SyncPopupRenderContext<'a> {
+    codex_usage_limits: Option<CodexUsageLimits>,
+    current_tab: Tab,
+    is_loading: bool,
+    message: &'a str,
+    sessions: &'a [Session],
+    settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
+    table_state: &'a mut TableState,
+    title: &'a str,
 }
 
 struct SessionModeRenderContext<'a> {
@@ -260,11 +274,8 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
         table_state,
     } = context;
 
-    if matches!(
-        mode,
-        AppMode::List | AppMode::Confirmation { .. } | AppMode::SyncBlockedPopup { .. }
-    ) {
-        render_list_background(
+    match mode {
+        AppMode::List => render_list_background(
             f,
             area,
             ListBackgroundRenderContext {
@@ -275,28 +286,20 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
                 stats_activity,
                 table_state,
             },
-        );
-    }
-
-    match mode {
-        AppMode::Confirmation { .. } => {
-            let AppMode::Confirmation {
-                confirmation_message,
-                confirmation_title,
-                selected_confirmation_index,
-                ..
-            } = mode
-            else {
-                unreachable!("matched confirmation mode above");
-            };
-
-            components::confirmation_overlay::ConfirmationOverlay::new(
-                confirmation_title,
-                confirmation_message,
-                *selected_confirmation_index == 0,
-            )
-            .render(f, area);
-        }
+        ),
+        AppMode::Confirmation { .. } => render_confirmation_overlay(
+            f,
+            area,
+            mode,
+            ListBackgroundRenderContext {
+                codex_usage_limits,
+                current_tab,
+                sessions,
+                settings,
+                stats_activity,
+                table_state,
+            },
+        ),
         AppMode::CommandPalette {
             input,
             selected_index,
@@ -335,11 +338,105 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
                 table_state,
             },
         ),
-        AppMode::SyncBlockedPopup { message, title } => {
-            components::info_overlay::InfoOverlay::new(title, message).render(f, area);
-        }
+        AppMode::SyncBlockedPopup {
+            is_loading,
+            message,
+            title,
+        } => render_sync_blocked_popup(
+            f,
+            area,
+            SyncPopupRenderContext {
+                codex_usage_limits,
+                current_tab,
+                is_loading: *is_loading,
+                message,
+                sessions,
+                settings,
+                stats_activity,
+                table_state,
+                title,
+            },
+        ),
         _ => {}
     }
+}
+
+/// Renders the list background and generic confirmation overlay.
+fn render_confirmation_overlay(
+    f: &mut Frame,
+    area: Rect,
+    mode: &AppMode,
+    context: ListBackgroundRenderContext<'_>,
+) {
+    let ListBackgroundRenderContext {
+        codex_usage_limits,
+        current_tab,
+        sessions,
+        settings,
+        stats_activity,
+        table_state,
+    } = context;
+
+    render_list_background(
+        f,
+        area,
+        ListBackgroundRenderContext {
+            codex_usage_limits,
+            current_tab,
+            sessions,
+            settings,
+            stats_activity,
+            table_state,
+        },
+    );
+
+    let AppMode::Confirmation {
+        confirmation_message,
+        confirmation_title,
+        selected_confirmation_index,
+        ..
+    } = mode
+    else {
+        unreachable!("matched confirmation mode above");
+    };
+
+    components::confirmation_overlay::ConfirmationOverlay::new(
+        confirmation_title,
+        confirmation_message,
+        *selected_confirmation_index == 0,
+    )
+    .render(f, area);
+}
+
+/// Renders the list background and sync informational popup overlay.
+fn render_sync_blocked_popup(f: &mut Frame, area: Rect, context: SyncPopupRenderContext<'_>) {
+    let SyncPopupRenderContext {
+        codex_usage_limits,
+        current_tab,
+        is_loading,
+        message,
+        sessions,
+        settings,
+        stats_activity,
+        table_state,
+        title,
+    } = context;
+
+    render_list_background(
+        f,
+        area,
+        ListBackgroundRenderContext {
+            codex_usage_limits,
+            current_tab,
+            sessions,
+            settings,
+            stats_activity,
+            table_state,
+        },
+    );
+
+    components::info_overlay::InfoOverlay::with_loading_state(title, message, is_loading)
+        .render(f, area);
 }
 
 fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRenderContext<'_>) {

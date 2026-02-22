@@ -15,7 +15,11 @@ pub enum AppMode {
     /// Informational popup displayed for sync outcomes, including success and
     /// blocked/failed states.
     SyncBlockedPopup {
+        /// Whether sync is still running in the background.
+        is_loading: bool,
+        /// Body text describing current sync state or final outcome.
         message: String,
+        /// Popup title describing sync state.
         title: String,
     },
     Prompt {
