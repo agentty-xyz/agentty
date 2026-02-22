@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, Lines};
 
 use super::session_folder;
 use crate::app::SessionManager;
@@ -22,6 +22,7 @@ use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
 const RATE_LIMITS_REQUEST_ID: &str = "rate-limits-read";
+const INITIALIZE_REQUEST_ID: &str = "init";
 const CODEX_APP_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// App-server response envelope used for parsing line-delimited JSON.
@@ -212,23 +213,62 @@ impl SessionManager {
             .ok()?;
 
         let mut stdin = child.stdin.take()?;
-        let request_input = [
+        let stdout = child.stdout.take()?;
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        let mut stdout_payload_lines = Vec::new();
+
+        if write_codex_app_server_stdin(
+            &mut stdin,
             r#"{"method":"initialize","id":"init","params":{"clientInfo":{"name":"agentty","title":"agentty","version":"0.0.0"},"capabilities":{"experimentalApi":true,"optOutNotificationMethods":null}}}"#,
-            r#"{"method":"initialized"}"#,
-            r#"{"method":"account/rateLimits/read","id":"rate-limits-read","params":{}}"#,
-        ]
-        .join("\n");
-        if stdin.write_all(request_input.as_bytes()).await.is_err() {
+        )
+        .await
+        .is_err()
+        {
             return None;
         }
 
+        wait_for_codex_app_server_response(
+            &mut stdout_lines,
+            &mut stdout_payload_lines,
+            INITIALIZE_REQUEST_ID,
+        )
+        .await?;
+
+        if write_codex_app_server_stdin(&mut stdin, r#"{"method":"initialized"}"#)
+            .await
+            .is_err()
+        {
+            return None;
+        }
+
+        if write_codex_app_server_stdin(
+            &mut stdin,
+            r#"{"method":"account/rateLimits/read","id":"rate-limits-read","params":{}}"#,
+        )
+        .await
+        .is_err()
+        {
+            return None;
+        }
+
+        wait_for_codex_app_server_response(
+            &mut stdout_lines,
+            &mut stdout_payload_lines,
+            RATE_LIMITS_REQUEST_ID,
+        )
+        .await?;
+
         drop(stdin);
 
-        let output = tokio::time::timeout(CODEX_APP_SERVER_TIMEOUT, child.wait_with_output())
+        if tokio::time::timeout(CODEX_APP_SERVER_TIMEOUT, child.wait())
             .await
-            .ok()?
-            .ok()?;
-        let stdout = String::from_utf8(output.stdout).ok()?;
+            .is_err()
+        {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+
+        let stdout = stdout_payload_lines.join("\n");
 
         parse_codex_usage_limits_response(&stdout)
     }
@@ -252,6 +292,54 @@ impl SessionManager {
 
         SessionSize::from_diff(&diff)
     }
+}
+
+/// Writes one JSON-RPC line to the Codex app-server `stdin` stream.
+async fn write_codex_app_server_stdin(
+    stdin: &mut tokio::process::ChildStdin,
+    payload: &str,
+) -> std::io::Result<()> {
+    stdin.write_all(payload.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+
+    stdin.flush().await
+}
+
+/// Reads app-server stdout lines until a response matching the requested id.
+///
+/// Every line is appended to `stdout_payload_lines` for downstream parsing.
+async fn wait_for_codex_app_server_response<R>(
+    stdout_lines: &mut Lines<BufReader<R>>,
+    stdout_payload_lines: &mut Vec<String>,
+    response_id: &str,
+) -> Option<()>
+where
+    R: AsyncRead + Unpin,
+{
+    tokio::time::timeout(CODEX_APP_SERVER_TIMEOUT, async {
+        loop {
+            let next_stdout_line = stdout_lines.next_line().await.ok()?;
+            let stdout_line = next_stdout_line?;
+            let matches_response = codex_app_server_response_matches_id(&stdout_line, response_id);
+
+            stdout_payload_lines.push(stdout_line);
+
+            if matches_response {
+                return Some(());
+            }
+        }
+    })
+    .await
+    .ok()?
+}
+
+/// Returns whether one app-server JSON line matches the provided response id.
+fn codex_app_server_response_matches_id(stdout_line: &str, response_id: &str) -> bool {
+    let Ok(envelope) = serde_json::from_str::<CodexAppServerEnvelope>(stdout_line) else {
+        return false;
+    };
+
+    envelope.id.as_deref() == Some(response_id)
 }
 
 /// Parses Codex app-server stdout and extracts account usage limits.
@@ -323,6 +411,10 @@ fn parse_codex_limit_window(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use tokio::io::BufReader;
+
     use super::*;
 
     #[test]
@@ -419,5 +511,78 @@ mod tests {
                 secondary: None,
             })
         );
+    }
+
+    #[test]
+    fn test_codex_app_server_response_matches_id_returns_true_for_matching_json_line() {
+        // Arrange
+        let stdout_line =
+            r#"{"id":"rate-limits-read","result":{"rateLimits":{"primary":{"usedPercent":30}}}}"#;
+
+        // Act
+        let matches_response =
+            codex_app_server_response_matches_id(stdout_line, RATE_LIMITS_REQUEST_ID);
+
+        // Assert
+        assert!(matches_response);
+    }
+
+    #[test]
+    fn test_codex_app_server_response_matches_id_returns_false_for_mismatched_json_line() {
+        // Arrange
+        let stdout_line = r#"{"id":"init","result":{"userAgent":"agentty/0.0.0"}}"#;
+
+        // Act
+        let matches_response =
+            codex_app_server_response_matches_id(stdout_line, RATE_LIMITS_REQUEST_ID);
+
+        // Assert
+        assert!(!matches_response);
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_codex_app_server_response_returns_some_when_id_is_seen() {
+        // Arrange
+        let stdout = [
+            r#"{"id":"init","result":{"userAgent":"agentty/0.0.0"}}"#,
+            r#"{"id":"rate-limits-read","result":{"rateLimits":{"primary":{"usedPercent":30}}}}"#,
+        ]
+        .join("\n");
+        let reader = BufReader::new(Cursor::new(stdout));
+        let mut stdout_lines = reader.lines();
+        let mut stdout_payload_lines = Vec::new();
+
+        // Act
+        let result = wait_for_codex_app_server_response(
+            &mut stdout_lines,
+            &mut stdout_payload_lines,
+            RATE_LIMITS_REQUEST_ID,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Some(()));
+        assert_eq!(stdout_payload_lines.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_codex_app_server_response_returns_none_when_id_is_missing() {
+        // Arrange
+        let stdout = r#"{"id":"init","result":{"userAgent":"agentty/0.0.0"}}"#;
+        let reader = BufReader::new(Cursor::new(stdout));
+        let mut stdout_lines = reader.lines();
+        let mut stdout_payload_lines = Vec::new();
+
+        // Act
+        let result = wait_for_codex_app_server_response(
+            &mut stdout_lines,
+            &mut stdout_payload_lines,
+            RATE_LIMITS_REQUEST_ID,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, None);
+        assert_eq!(stdout_payload_lines.len(), 1);
     }
 }
