@@ -115,7 +115,7 @@ pub(super) async fn append_assist_header(
     .await;
 }
 
-/// Executes one fresh assistance run using the provided prompt.
+/// Executes one assistance run using the current session context.
 ///
 /// # Errors
 /// Returns an error when the agent process cannot be spawned, fails, or is
@@ -123,12 +123,13 @@ pub(super) async fn append_assist_header(
 pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> Result<(), String> {
     let effective_permission_mode = effective_permission_mode(context.permission_mode);
     let backend = crate::infra::agent::create_backend(context.session_model.kind());
-    let command = backend.build_start_command(
+    let command = backend.build_resume_command(
         &context.folder,
         prompt,
         context.session_model.as_str(),
         effective_permission_mode,
         false,
+        None,
     );
 
     TaskService::run_agent_assist_task(RunAgentAssistTaskInput {
