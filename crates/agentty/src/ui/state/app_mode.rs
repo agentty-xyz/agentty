@@ -2,12 +2,15 @@ use super::palette::{PaletteCommand, PaletteFocus};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
 
+/// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
-    ConfirmDeleteSession {
+    /// Displays a generic confirmation overlay with `Yes` and `No` options.
+    Confirmation {
+        confirmation_message: String,
+        confirmation_title: String,
+        session_id: Option<String>,
         selected_confirmation_index: usize,
-        session_id: String,
-        session_title: String,
     },
     /// Informational popup displayed when sync cannot be started.
     SyncBlockedPopup {

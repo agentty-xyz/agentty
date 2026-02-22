@@ -191,8 +191,8 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
 
     match mode {
         AppMode::List
-        | AppMode::ConfirmDeleteSession { .. }
         | AppMode::SyncBlockedPopup { .. }
+        | AppMode::Confirmation { .. }
         | AppMode::CommandPalette { .. }
         | AppMode::CommandOption { .. } => render_list_mode_content(
             f,
@@ -228,6 +228,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     }
 }
 
+/// Renders all list-oriented content, including overlays and command menus.
 fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderContext<'_>) {
     let ListModeRenderContext {
         active_project_id,
@@ -252,11 +253,7 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
                 current_tab,
             );
         }
-        AppMode::ConfirmDeleteSession {
-            selected_confirmation_index,
-            session_title,
-            ..
-        } => {
+        AppMode::Confirmation { .. } => {
             render_list_background(
                 f,
                 area,
@@ -267,10 +264,19 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
                 current_tab,
             );
 
-            let message = format!("Delete session \"{session_title}\"?");
+            let AppMode::Confirmation {
+                confirmation_message,
+                confirmation_title,
+                selected_confirmation_index,
+                ..
+            } = mode
+            else {
+                unreachable!("matched confirmation mode above");
+            };
+
             components::confirmation_overlay::ConfirmationOverlay::new(
-                "Confirm Delete",
-                &message,
+                confirmation_title,
+                confirmation_message,
                 *selected_confirmation_index == 0,
             )
             .render(f, area);
@@ -644,7 +650,10 @@ fn render_footer_bar(
     git_status: Option<(u32, u32)>,
 ) {
     let session_id = match mode {
-        AppMode::ConfirmDeleteSession { session_id, .. }
+        AppMode::Confirmation {
+            session_id: Some(session_id),
+            ..
+        }
         | AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }
         | AppMode::Diff { session_id, .. }

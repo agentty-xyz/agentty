@@ -124,7 +124,10 @@ impl SessionManager {
     /// Switches back to list mode if the currently viewed session is missing.
     fn ensure_mode_session_exists(&self, mode: &mut AppMode) {
         let mode_session_id = match &*mode {
-            AppMode::ConfirmDeleteSession { session_id, .. }
+            AppMode::Confirmation {
+                session_id: Some(session_id),
+                ..
+            }
             | AppMode::Prompt { session_id, .. }
             | AppMode::View { session_id, .. }
             | AppMode::Diff { session_id, .. } => Some(session_id),

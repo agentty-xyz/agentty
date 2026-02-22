@@ -537,12 +537,18 @@ impl PromptHistoryState {
     }
 }
 
+/// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
+    /// Displays a confirmation overlay before deleting a session.
     ConfirmDeleteSession {
         selected_confirmation_index: usize,
         session_id: String,
         session_title: String,
+    },
+    /// Displays a confirmation overlay before quitting the application.
+    ConfirmQuit {
+        selected_confirmation_index: usize,
     },
     Prompt {
         at_mention_state: Option<PromptAtMentionState>,

@@ -11,13 +11,24 @@ use crate::ui::state::palette::PaletteFocus;
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
 /// Handles key input while the app is in list mode.
+///
+/// Pressing `q` opens a confirmation overlay instead of quitting immediately.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
         return handle_settings_text_input(app, key).await;
     }
 
     match key.code {
-        KeyCode::Char('q') => return Ok(EventResult::Quit),
+        KeyCode::Char('q') => {
+            app.mode = AppMode::Confirmation {
+                confirmation_message: "Quit agentty?".to_string(),
+                confirmation_title: "Confirm Quit".to_string(),
+                session_id: None,
+                selected_confirmation_index: 0,
+            };
+
+            return Ok(EventResult::Continue);
+        }
         KeyCode::Tab => {
             app.tabs.next();
         }
@@ -29,16 +40,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             };
         }
         KeyCode::Char('a') => {
-            let session_id = app.create_session().await.map_err(io::Error::other)?;
-
-            app.mode = AppMode::Prompt {
-                at_mention_state: None,
-                history_state: PromptHistoryState::new(Vec::new()),
-                slash_state: PromptSlashState::new(),
-                session_id,
-                input: InputState::new(),
-                scroll_offset: None,
-            };
+            open_new_session_prompt(app).await?;
         }
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Sessions => app.next(),
@@ -52,16 +54,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         },
         KeyCode::Enter => {
             if app.should_show_onboarding() {
-                let session_id = app.create_session().await.map_err(io::Error::other)?;
-
-                app.mode = AppMode::Prompt {
-                    at_mention_state: None,
-                    history_state: PromptHistoryState::new(Vec::new()),
-                    slash_state: PromptSlashState::new(),
-                    session_id,
-                    input: InputState::new(),
-                    scroll_offset: None,
-                };
+                open_new_session_prompt(app).await?;
 
                 return Ok(EventResult::Continue);
             }
@@ -90,10 +83,11 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 .selected_session()
                 .map(|session| (session.id.clone(), session.display_title().to_string()));
             if let Some((session_id, session_title)) = selected_session {
-                app.mode = AppMode::ConfirmDeleteSession {
+                app.mode = AppMode::Confirmation {
+                    confirmation_message: format!("Delete session \"{session_title}\"?"),
+                    confirmation_title: "Confirm Delete".to_string(),
+                    session_id: Some(session_id),
                     selected_confirmation_index: 0,
-                    session_id,
-                    session_title,
                 };
             }
         }
@@ -169,6 +163,22 @@ async fn sync_main_branch(app: &mut App) {
             };
         }
     }
+}
+
+/// Creates a new session and switches the UI to prompt mode for it.
+async fn open_new_session_prompt(app: &mut App) -> io::Result<()> {
+    let session_id = app.create_session().await.map_err(io::Error::other)?;
+
+    app.mode = AppMode::Prompt {
+        at_mention_state: None,
+        history_state: PromptHistoryState::new(Vec::new()),
+        slash_state: PromptSlashState::new(),
+        session_id,
+        input: InputState::new(),
+        scroll_offset: None,
+    };
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -257,7 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_quit_key_returns_quit_result() {
+    async fn test_handle_quit_key_shows_confirm_quit_overlay() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
 
@@ -270,7 +280,16 @@ mod tests {
         .expect("failed to handle key");
 
         // Assert
-        assert!(matches!(event_result, EventResult::Quit));
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                ref confirmation_message,
+                ref confirmation_title,
+                session_id: None,
+                selected_confirmation_index: 0,
+            } if confirmation_title == "Confirm Quit" && confirmation_message == "Quit agentty?"
+        ));
     }
 
     #[tokio::test]
@@ -530,11 +549,14 @@ mod tests {
         assert_eq!(app.sessions.sessions.len(), 1);
         assert!(matches!(
             app.mode,
-            AppMode::ConfirmDeleteSession {
+            AppMode::Confirmation {
+                ref confirmation_message,
+                ref confirmation_title,
+                session_id: Some(ref mode_session_id),
                 selected_confirmation_index: 0,
-                ref session_id,
-                ref session_title,
-            } if session_id == &expected_session_id && session_title == &expected_session_title
+            } if mode_session_id == &expected_session_id
+                && confirmation_title == "Confirm Delete"
+                && confirmation_message == &format!("Delete session \"{expected_session_title}\"?")
         ));
     }
 
