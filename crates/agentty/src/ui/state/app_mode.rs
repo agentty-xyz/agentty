@@ -9,6 +9,11 @@ pub enum AppMode {
         session_id: String,
         session_title: String,
     },
+    /// Informational popup displayed when sync cannot be started.
+    SyncBlockedPopup {
+        message: String,
+        title: String,
+    },
     Prompt {
         at_mention_state: Option<PromptAtMentionState>,
         history_state: PromptHistoryState,
@@ -68,6 +73,7 @@ impl HelpContext {
                 ("a", "Add session"),
                 ("d", "Delete session"),
                 ("c", "Cancel session"),
+                ("s", "Sync"),
                 ("o", "Open"),
                 ("Enter", "Open session"),
                 ("Tab", "Switch tab"),

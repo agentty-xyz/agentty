@@ -192,6 +192,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     match mode {
         AppMode::List
         | AppMode::ConfirmDeleteSession { .. }
+        | AppMode::SyncBlockedPopup { .. }
         | AppMode::CommandPalette { .. }
         | AppMode::CommandOption { .. } => render_list_mode_content(
             f,
@@ -310,6 +311,19 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
                 table_state,
             },
         ),
+        AppMode::SyncBlockedPopup { message, title } => {
+            render_list_background(
+                f,
+                area,
+                sessions,
+                settings,
+                stats_activity,
+                table_state,
+                current_tab,
+            );
+
+            components::info_overlay::InfoOverlay::new(title, message).render(f, area);
+        }
         _ => {}
     }
 }

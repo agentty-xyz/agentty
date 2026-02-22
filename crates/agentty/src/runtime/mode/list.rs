@@ -2,7 +2,7 @@ use std::io;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, Tab};
+use crate::app::{App, SyncSessionStartError, Tab};
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
@@ -102,6 +102,9 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 let _ = app.cancel_session(&session_id).await;
             }
         }
+        KeyCode::Char('s') => {
+            sync_main_branch(app).await;
+        }
         KeyCode::Char('?') => {
             app.mode = AppMode::Help {
                 context: HelpContext::List,
@@ -142,6 +145,30 @@ async fn handle_settings_text_input(app: &mut App, key: KeyEvent) -> io::Result<
 /// Returns whether a key event should insert text into a settings string value.
 fn is_settings_text_key(key: KeyEvent) -> bool {
     key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
+}
+
+/// Starts selected-project branch sync or opens an informational popup.
+async fn sync_main_branch(app: &mut App) {
+    let sync_result = app.sync_main().await;
+    let start_error = match sync_result {
+        Ok(()) => return,
+        Err(start_error) => start_error,
+    };
+
+    match start_error {
+        SyncSessionStartError::MainHasUncommittedChanges { .. } => {
+            app.mode = AppMode::SyncBlockedPopup {
+                message: start_error.detail_message(),
+                title: "Sync blocked".to_string(),
+            };
+        }
+        SyncSessionStartError::Other(_) => {
+            app.mode = AppMode::SyncBlockedPopup {
+                message: start_error.detail_message(),
+                title: "Sync failed".to_string(),
+            };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -556,6 +583,91 @@ mod tests {
                 context: HelpContext::List,
                 scroll_offset: 0,
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sync_key_shows_failure_when_upstream_is_missing() {
+        // Arrange
+        let (mut app, base_dir) = new_test_app_with_git().await;
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(base_dir.path())
+            .output()
+            .expect("failed to switch branch");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                ref title,
+                ..
+            } if title == "Sync failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sync_key_uses_selected_project_branch_in_popup_message() {
+        // Arrange
+        let (mut app, base_dir) = new_test_app_with_git().await;
+        app.projects.replace_context(
+            app.active_project_id(),
+            Some("develop".to_string()),
+            base_dir.path().to_path_buf(),
+        );
+        std::fs::write(base_dir.path().join("README.md"), "dirty develop")
+            .expect("failed to write");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                ref title,
+                ref message,
+            } if title == "Sync blocked" && message.contains("`develop`")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_sync_key_opens_popup_when_main_has_uncommitted_changes() {
+        // Arrange
+        let (mut app, base_dir) = new_test_app_with_git().await;
+        std::fs::write(base_dir.path().join("README.md"), "dirty main").expect("failed to write");
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::SyncBlockedPopup {
+                ref title,
+                ref message,
+            } if title == "Sync blocked" && message.contains("cannot run while `main` has uncommitted changes")
         ));
     }
 }

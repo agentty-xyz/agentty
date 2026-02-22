@@ -84,6 +84,29 @@ struct RebaseTaskInput {
     status: Arc<Mutex<Status>>,
 }
 
+/// User-facing reasons why repository branch sync cannot be started.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SyncSessionStartError {
+    /// Sync cannot run while the selected project branch has local
+    /// modifications.
+    MainHasUncommittedChanges { default_branch: String },
+    /// Generic start failure outside sync-specific policy constraints.
+    Other(String),
+}
+
+impl SyncSessionStartError {
+    /// Returns user-facing detail for non-popup sync start errors.
+    pub(crate) fn detail_message(&self) -> String {
+        match self {
+            Self::MainHasUncommittedChanges { default_branch } => format!(
+                "Sync cannot run while `{default_branch}` has uncommitted changes. Commit or \
+                 stash changes in `{default_branch}`, then try again."
+            ),
+            Self::Other(detail) => detail.clone(),
+        }
+    }
+}
+
 impl SessionManager {
     /// Starts a squash merge for a review-ready or queued session branch in
     /// the background.
@@ -377,6 +400,49 @@ impl SessionManager {
         tokio::spawn(async move {
             Self::run_rebase_task(rebase_task_input).await;
         });
+
+        Ok(())
+    }
+
+    /// Synchronizes the selected project branch with its upstream.
+    ///
+    /// This is a repository-level operation and does not mutate session state.
+    ///
+    /// # Errors
+    /// Returns a [`SyncSessionStartError`] when sync cannot be started or
+    /// `git pull --rebase` fails.
+    pub(crate) async fn sync_main(
+        &self,
+        projects: &ProjectManager,
+    ) -> Result<(), SyncSessionStartError> {
+        let default_branch = projects.git_branch().map(str::to_string).ok_or_else(|| {
+            SyncSessionStartError::Other("Active project has no git branch".to_string())
+        })?;
+
+        let working_dir = projects.working_dir().to_path_buf();
+        let _repo_root = git::find_git_repo_root(working_dir.clone())
+            .await
+            .ok_or_else(|| {
+                SyncSessionStartError::Other("Failed to find git repository root".to_string())
+            })?;
+
+        let is_default_branch_clean = git::is_worktree_clean(working_dir.clone())
+            .await
+            .map_err(SyncSessionStartError::Other)?;
+        if !is_default_branch_clean {
+            return Err(SyncSessionStartError::MainHasUncommittedChanges {
+                default_branch: default_branch.clone(),
+            });
+        }
+
+        let pull_result = git::pull_rebase(working_dir)
+            .await
+            .map_err(SyncSessionStartError::Other)?;
+        if let git::PullRebaseResult::Conflict { detail } = pull_result {
+            return Err(SyncSessionStartError::Other(format!(
+                "Sync stopped on rebase conflicts while updating `{default_branch}`: {detail}"
+            )));
+        }
 
         Ok(())
     }

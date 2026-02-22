@@ -14,6 +14,7 @@ pub(crate) async fn handle_key_event(
     match &app.mode {
         AppMode::List => mode::list::handle(app, key).await,
         AppMode::ConfirmDeleteSession { .. } => mode::delete_confirmation::handle(app, key).await,
+        AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
         AppMode::View { .. } => mode::view::handle(app, terminal, key).await,
         AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
         AppMode::Diff { .. } => Ok(mode::diff::handle(app, key)),

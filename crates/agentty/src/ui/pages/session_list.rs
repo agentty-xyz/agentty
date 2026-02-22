@@ -88,15 +88,21 @@ impl Page for SessionListPage<'_> {
         f.render_stateful_widget(table, main_area, self.table_state);
         self.table_state.select(previous_selection);
 
-        let mut help_text = "q: quit | /: command | a: add".to_string();
-        if !self.sessions.is_empty() {
-            help_text.push_str(" | d: delete | c: cancel");
-        }
-        help_text.push_str(" | Enter: view | j/k: nav | ?: help");
-
-        let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
+        let help_message = Paragraph::new(session_list_help_text(!self.sessions.is_empty()))
+            .style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, footer_area);
     }
+}
+
+/// Builds footer help text for session list mode.
+fn session_list_help_text(has_sessions: bool) -> String {
+    let mut help_text = "q: quit | /: command | a: add | s: sync".to_string();
+    if has_sessions {
+        help_text.push_str(" | d: delete | c: cancel");
+    }
+    help_text.push_str(" | Enter: view | j/k: nav | ?: help");
+
+    help_text
 }
 
 /// Prepares list table state for grouped row rendering.
@@ -596,5 +602,29 @@ mod tests {
         for (size, expected_color) in test_cases {
             assert_eq!(size_color(size), expected_color);
         }
+    }
+
+    #[test]
+    fn test_session_list_help_text_includes_sync_for_non_empty_sessions() {
+        // Arrange
+        let has_sessions = true;
+
+        // Act
+        let help_text = session_list_help_text(has_sessions);
+
+        // Assert
+        assert!(help_text.contains("s: sync"));
+    }
+
+    #[test]
+    fn test_session_list_help_text_includes_sync_for_empty_sessions() {
+        // Arrange
+        let has_sessions = false;
+
+        // Act
+        let help_text = session_list_help_text(has_sessions);
+
+        // Assert
+        assert!(help_text.contains("s: sync"));
     }
 }

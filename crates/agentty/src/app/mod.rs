@@ -33,6 +33,7 @@ use merge_queue::{MergeQueue, MergeQueueProgress};
 pub use project::ProjectManager;
 pub use service::AppServices;
 pub use session::SessionManager;
+pub(crate) use session::SyncSessionStartError;
 pub use settings::SettingsManager;
 pub use state::SessionState;
 pub use tab::{Tab, TabManager};
@@ -501,6 +502,14 @@ impl App {
         self.sessions
             .rebase_session(&self.services, session_id)
             .await
+    }
+
+    /// Synchronizes the selected project branch with its upstream.
+    ///
+    /// # Errors
+    /// Returns a [`SyncSessionStartError`] when sync cannot be started.
+    pub(crate) async fn sync_main(&self) -> Result<(), SyncSessionStartError> {
+        self.sessions.sync_main(&self.projects).await
     }
 
     /// Reloads sessions when metadata cache indicates changes.

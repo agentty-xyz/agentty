@@ -75,6 +75,9 @@ Agentty creates isolated worktrees for each session:
 - **Separate Working Directory:** Sessions work in isolated directories under `~/.agentty/wt/`
 - **Diff View:** Press `d` in the chat view to see real-time changes made by the agent
 - **Rebase Action:** Press `r` in the chat view to rebase the session branch onto its base branch
+- **Sync Action:** Press `s` in the session list to run session sync (`pull --rebase` + `push`) for review sessions
+  - Sync is available only when the active project branch is `main`
+  - Sync is blocked until `main` has no uncommitted changes
 - **Automatic Cleanup:** Worktrees and branches are automatically removed when sessions are deleted
 
 This allows agents to work on code changes without affecting your main working directory.

@@ -18,6 +18,15 @@ pub enum RebaseStepResult {
     Conflict { detail: String },
 }
 
+/// Result of attempting `git pull --rebase`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PullRebaseResult {
+    /// Pull and rebase completed successfully.
+    Completed,
+    /// Pull stopped because of merge conflicts.
+    Conflict { detail: String },
+}
+
 /// Outcome of attempting a squash merge operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SquashMergeOutcome {
@@ -765,6 +774,119 @@ pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, Str
     .map_err(|e| format!("Join error: {e}"))?
 }
 
+/// Returns whether a repository or worktree has no uncommitted changes.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// `true` when `git status --porcelain` is empty, `false` otherwise.
+///
+/// # Errors
+/// Returns an error if `git status --porcelain` cannot be executed.
+pub async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, String> {
+    spawn_blocking(move || {
+        let output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&repo_path)
+            .output()
+            .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+        if !output.status.success() {
+            let detail = command_output_detail(&output.stdout, &output.stderr);
+
+            return Err(format!("Git status --porcelain failed: {detail}"));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    })
+    .await
+    .map_err(|error| format!("Join error: {error}"))?
+}
+
+/// Runs `git pull --rebase` and returns conflict outcome when applicable.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// A [`PullRebaseResult`] describing whether pull/rebase completed or stopped
+/// on conflicts.
+///
+/// # Errors
+/// Returns an error for non-conflict pull/rebase failures.
+pub async fn pull_rebase(repo_path: PathBuf) -> Result<PullRebaseResult, String> {
+    spawn_blocking(move || {
+        let output = run_git_command_with_index_lock_retry(
+            &repo_path,
+            &["pull", "--rebase"],
+            &[("GIT_EDITOR", ":"), ("GIT_SEQUENCE_EDITOR", ":")],
+        )?;
+
+        if output.status.success() {
+            return Ok(PullRebaseResult::Completed);
+        }
+
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+        if is_rebase_conflict(&detail) {
+            return Ok(PullRebaseResult::Conflict { detail });
+        }
+
+        Err(format!("Failed to pull with rebase: {detail}."))
+    })
+    .await
+    .map_err(|error| format!("Join error: {error}"))?
+}
+
+/// Pushes the current branch to its upstream remote.
+///
+/// Falls back to `git push --set-upstream origin HEAD` when no upstream branch
+/// is configured.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// Ok(()) on success, Err(msg) with detailed error message on failure.
+///
+/// # Errors
+/// Returns an error if `git push` fails.
+pub async fn push_current_branch(repo_path: PathBuf) -> Result<(), String> {
+    spawn_blocking(move || {
+        let push_output = Command::new("git")
+            .arg("push")
+            .current_dir(&repo_path)
+            .output()
+            .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+        if push_output.status.success() {
+            return Ok(());
+        }
+
+        let push_detail = command_output_detail(&push_output.stdout, &push_output.stderr);
+        if !is_no_upstream_error(&push_detail) {
+            return Err(format!("Git push failed: {push_detail}"));
+        }
+
+        let upstream_output = Command::new("git")
+            .args(["push", "--set-upstream", "origin", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+        if !upstream_output.status.success() {
+            let upstream_detail =
+                command_output_detail(&upstream_output.stdout, &upstream_output.stderr);
+
+            return Err(format!("Git push failed: {upstream_detail}"));
+        }
+
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("Join error: {error}"))?
+}
+
 /// Fetches from the configured remote.
 ///
 /// # Arguments
@@ -1004,6 +1126,14 @@ fn is_hook_modified_error(stdout: &str, stderr: &str) -> bool {
     combined.contains("files were modified by this hook")
 }
 
+fn is_no_upstream_error(detail: &str) -> bool {
+    let normalized_detail = detail.to_ascii_lowercase();
+
+    normalized_detail.contains("has no upstream branch")
+        || normalized_detail.contains("no upstream branch")
+        || normalized_detail.contains("set-upstream")
+}
+
 fn normalize_repo_url(remote: &str) -> String {
     let trimmed = remote.trim_end_matches(".git");
     if let Some(path) = trimmed.strip_prefix("git@github.com:") {
@@ -1137,6 +1267,75 @@ mod tests {
 
         // Assert
         assert_eq!(result, Ok(SquashMergeOutcome::AlreadyPresentInTarget));
+    }
+
+    #[tokio::test]
+    async fn test_is_worktree_clean_returns_true_for_clean_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+
+        // Act
+        let is_clean = is_worktree_clean(dir.path().to_path_buf())
+            .await
+            .expect("failed to check worktree cleanliness");
+
+        // Assert
+        assert!(is_clean);
+    }
+
+    #[tokio::test]
+    async fn test_is_worktree_clean_returns_false_for_dirty_repo() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        fs::write(dir.path().join("README.md"), "dirty change").expect("failed to write change");
+
+        // Act
+        let is_clean = is_worktree_clean(dir.path().to_path_buf())
+            .await
+            .expect("failed to check worktree cleanliness");
+
+        // Assert
+        assert!(!is_clean);
+    }
+
+    #[tokio::test]
+    async fn test_pull_rebase_returns_error_without_upstream() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+
+        // Act
+        let result = pull_rebase(dir.path().to_path_buf()).await;
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_push_current_branch_returns_error_without_remote() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+
+        // Act
+        let result = push_current_branch(dir.path().to_path_buf()).await;
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_no_upstream_error_detects_upstream_hint() {
+        // Arrange
+        let detail = "fatal: The current branch main has no upstream branch.";
+
+        // Act
+        let is_no_upstream = is_no_upstream_error(detail);
+
+        // Assert
+        assert!(is_no_upstream);
     }
 
     #[test]

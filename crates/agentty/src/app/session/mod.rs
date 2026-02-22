@@ -22,6 +22,8 @@ mod merge;
 mod refresh;
 mod worker;
 
+pub(crate) use merge::SyncSessionStartError;
+
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 /// Default commit message used for automatic worktree commits.
@@ -184,7 +186,7 @@ mod tests {
 
     use super::*;
     use crate::app::settings::SettingName;
-    use crate::app::{App, Tab};
+    use crate::app::{App, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel};
     use crate::domain::permission::PermissionMode;
     use crate::domain::project::Project;
@@ -2574,6 +2576,63 @@ mod tests {
             "worktree should be clean after auto-commit"
         );
         app.refresh_sessions_now().await;
+    }
+
+    #[tokio::test]
+    async fn test_sync_main_uses_active_project_branch_from_context() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        app.projects.replace_context(
+            app.active_project_id(),
+            Some("develop".to_string()),
+            dir.path().to_path_buf(),
+        );
+        std::fs::write(dir.path().join("README.md"), "dirty develop")
+            .expect("failed to write file");
+
+        // Act
+        let result = app.sync_main().await;
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SyncSessionStartError::MainHasUncommittedChanges {
+                default_branch: "develop".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sync_main_requires_clean_selected_project_branch() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app_with_git(dir.path()).await;
+        std::fs::write(dir.path().join("README.md"), "dirty main").expect("failed to write file");
+
+        // Act
+        let result = app.sync_main().await;
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SyncSessionStartError::MainHasUncommittedChanges {
+                default_branch: "main".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sync_main_returns_error_without_upstream_remote() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let app = new_test_app_with_git(dir.path()).await;
+
+        // Act
+        let result = app.sync_main().await;
+
+        // Assert
+        assert!(matches!(result, Err(SyncSessionStartError::Other(_))));
     }
 
     #[tokio::test]
