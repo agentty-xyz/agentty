@@ -1,8 +1,10 @@
 //! Merge, rebase, and cleanup workflows for session branches.
 
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -36,6 +38,9 @@ const REBASE_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/rebase_assist_prompt.md");
 const MERGE_COMMIT_MESSAGE_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/merge_commit_message_prompt.md");
+
+/// Boxed async result used by sync conflict assistance boundary methods.
+type SyncAssistFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Deserialize)]
 /// Parsed response schema used when generating merge commit messages via model.
@@ -85,6 +90,260 @@ struct RebaseTaskInput {
     permission_mode: PermissionMode,
     session_model: AgentModel,
     status: Arc<Mutex<Status>>,
+}
+
+/// Input context for assisted conflict resolution during `sync main`.
+struct SyncRebaseAssistInput {
+    base_branch: String,
+    folder: PathBuf,
+    git_client: Arc<dyn GitClient>,
+    permission_mode: PermissionMode,
+    session_model: AgentModel,
+    sync_assist_client: Arc<dyn SyncAssistClient>,
+}
+
+/// Polymorphic input for shared assisted rebase loop orchestration.
+enum RebaseAssistLoopInput {
+    Session(RebaseAssistInput),
+    Project(SyncRebaseAssistInput),
+}
+
+impl RebaseAssistLoopInput {
+    /// Returns worktree path used for conflict fingerprinting.
+    fn folder(&self) -> &Path {
+        match self {
+            Self::Session(input) => &input.folder,
+            Self::Project(input) => &input.folder,
+        }
+    }
+
+    /// Builds conflict-state no-progress error text for the active workflow.
+    fn repeated_conflict_state_error(&self, detail: &str) -> String {
+        match self {
+            Self::Session(_) => format!(
+                "Rebase assistance made no progress: repeated identical conflict state. Last \
+                 detail: {detail}"
+            ),
+            Self::Project(_) => format!(
+                "Sync rebase assistance made no progress: repeated identical conflict state. Last \
+                 detail: {detail}"
+            ),
+        }
+    }
+
+    /// Builds unchanged-conflict-files no-progress error text for the active
+    /// workflow.
+    fn unchanged_conflict_files_error(&self) -> String {
+        match self {
+            Self::Session(_) => {
+                "Rebase assistance made no progress: conflicted files did not change".to_string()
+            }
+            Self::Project(_) => "Sync rebase assistance made no progress: conflicted files did \
+                                 not change"
+                .to_string(),
+        }
+    }
+
+    /// Builds unresolved-conflict-after-assistance error text for the active
+    /// workflow.
+    fn still_conflicted_error(&self, detail: &str) -> String {
+        match self {
+            Self::Session(_) => format!("Rebase still has conflicts after assistance: {detail}"),
+            Self::Project(_) => {
+                format!("Sync rebase still has conflicts after assistance: {detail}")
+            }
+        }
+    }
+
+    /// Returns final exhausted-attempts error text for the active workflow.
+    fn exhausted_error(&self) -> String {
+        match self {
+            Self::Session(_) => "Failed to complete assisted rebase".to_string(),
+            Self::Project(_) => "Failed to complete assisted sync rebase".to_string(),
+        }
+    }
+
+    /// Loads conflicted files for the active workflow.
+    ///
+    /// # Errors
+    /// Returns an error if conflicted-file inspection fails.
+    async fn load_conflicted_files(
+        &self,
+        previous_conflict_files: &[String],
+    ) -> Result<Vec<String>, String> {
+        match self {
+            Self::Session(input) => {
+                SessionManager::load_conflicted_files(input, previous_conflict_files).await
+            }
+            Self::Project(input) => {
+                SessionManager::load_sync_conflicted_files(input, previous_conflict_files).await
+            }
+        }
+    }
+
+    /// Executes one assistance attempt for the active workflow.
+    ///
+    /// # Errors
+    /// Returns an error when assistance command execution fails.
+    async fn run_assist_attempt(
+        &self,
+        assist_attempt: usize,
+        conflicted_files: &[String],
+    ) -> Result<(), String> {
+        match self {
+            Self::Session(input) => {
+                SessionManager::append_rebase_assist_header(
+                    input,
+                    assist_attempt,
+                    conflicted_files,
+                )
+                .await;
+                SessionManager::run_rebase_assist_agent(input, conflicted_files).await
+            }
+            Self::Project(input) => {
+                SessionManager::run_sync_rebase_assist_agent(input, conflicted_files).await
+            }
+        }
+    }
+
+    /// Stages edits and checks whether conflicts remain for the active
+    /// workflow.
+    ///
+    /// # Errors
+    /// Returns an error when staging or conflict checks fail.
+    async fn stage_and_check_for_conflicts(
+        &self,
+        conflict_files: &[String],
+    ) -> Result<bool, String> {
+        match self {
+            Self::Session(input) => {
+                SessionManager::stage_and_check_for_conflicts(input, conflict_files).await
+            }
+            Self::Project(input) => {
+                SessionManager::stage_and_check_for_sync_conflicts(input, conflict_files).await
+            }
+        }
+    }
+
+    /// Continues in-progress rebase for the active workflow.
+    ///
+    /// # Errors
+    /// Returns an error when `git rebase --continue` fails with non-conflict
+    /// errors.
+    async fn run_rebase_continue(&self) -> Result<git::RebaseStepResult, String> {
+        match self {
+            Self::Session(input) => SessionManager::run_rebase_continue(input).await,
+            Self::Project(input) => SessionManager::run_sync_rebase_continue(input).await,
+        }
+    }
+
+    /// Aborts rebase for the active workflow after assistance failure.
+    async fn abort_rebase_after_assist_failure(&self) {
+        match self {
+            Self::Session(input) => {
+                SessionManager::abort_rebase_after_assist_failure(input).await;
+            }
+            Self::Project(input) => {
+                SessionManager::abort_sync_rebase_after_assist_failure(input).await;
+            }
+        }
+    }
+}
+
+/// Async boundary for one sync rebase assistance attempt.
+#[cfg_attr(test, mockall::automock)]
+trait SyncAssistClient: Send + Sync {
+    /// Executes one agent-assisted edit attempt for the provided rebase prompt.
+    fn resolve_rebase_conflicts(
+        &self,
+        folder: PathBuf,
+        prompt: String,
+        permission_mode: PermissionMode,
+        session_model: AgentModel,
+    ) -> SyncAssistFuture<Result<(), String>>;
+}
+
+/// Production sync-assistance executor backed by real agent commands.
+struct RealSyncAssistClient;
+
+impl RealSyncAssistClient {
+    /// Runs one sync conflict assistance command in a blocking worker.
+    ///
+    /// # Errors
+    /// Returns an error when spawning, joining, or executing the agent command
+    /// fails.
+    async fn run_assist_command(
+        folder: PathBuf,
+        prompt: String,
+        permission_mode: PermissionMode,
+        session_model: AgentModel,
+    ) -> Result<(), String> {
+        let permission_mode = effective_permission_mode(permission_mode);
+
+        tokio::task::spawn_blocking(move || {
+            let backend = crate::infra::agent::create_backend(session_model.kind());
+            let mut command = backend.build_start_command(
+                &folder,
+                &prompt,
+                session_model.as_str(),
+                permission_mode,
+                false,
+            );
+            command.stdin(Stdio::null());
+
+            let output = command
+                .output()
+                .map_err(|error| format!("Failed to run sync rebase assist model: {error}"))?;
+            if output.status.success() {
+                return Ok(());
+            }
+
+            let detail = Self::assist_output_detail(&output.stdout, &output.stderr);
+
+            Err(format!(
+                "Sync rebase assistance failed with exit code {}: {detail}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+            ))
+        })
+        .await
+        .map_err(|error| format!("Failed to join sync rebase assist task: {error}"))?
+    }
+
+    /// Formats stdout/stderr text for sync-assist failure messages.
+    fn assist_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
+        let trimmed_stdout = String::from_utf8_lossy(stdout).trim().to_string();
+        let trimmed_stderr = String::from_utf8_lossy(stderr).trim().to_string();
+        if !trimmed_stderr.is_empty() && !trimmed_stdout.is_empty() {
+            return format!("stderr: {trimmed_stderr}; stdout: {trimmed_stdout}");
+        }
+
+        if !trimmed_stderr.is_empty() {
+            return format!("stderr: {trimmed_stderr}");
+        }
+
+        if !trimmed_stdout.is_empty() {
+            return format!("stdout: {trimmed_stdout}");
+        }
+
+        "no stdout or stderr output".to_string()
+    }
+}
+
+impl SyncAssistClient for RealSyncAssistClient {
+    fn resolve_rebase_conflicts(
+        &self,
+        folder: PathBuf,
+        prompt: String,
+        permission_mode: PermissionMode,
+        session_model: AgentModel,
+    ) -> SyncAssistFuture<Result<(), String>> {
+        Box::pin(async move {
+            Self::run_assist_command(folder, prompt, permission_mode, session_model).await
+        })
+    }
 }
 
 /// User-facing reasons why repository branch sync cannot be started.
@@ -432,11 +691,42 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns a [`SyncSessionStartError`] when project context is invalid or
-    /// updating the default branch fails (`git pull --rebase` or `git push`).
+    /// updating the default branch fails (`git pull --rebase`, assisted
+    /// conflict resolution, or `git push`).
     pub(crate) async fn sync_main_for_project(
         default_branch: Option<String>,
         working_dir: PathBuf,
         git_client: Arc<dyn GitClient>,
+        permission_mode: PermissionMode,
+        session_model: AgentModel,
+    ) -> Result<(), SyncSessionStartError> {
+        let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
+
+        Self::sync_main_for_project_with_assist_client(
+            default_branch,
+            working_dir,
+            git_client,
+            permission_mode,
+            session_model,
+            sync_assist_client,
+        )
+        .await
+    }
+
+    /// Synchronizes the selected project branch with optional mocked assistance
+    /// support for tests.
+    ///
+    /// # Errors
+    /// Returns a [`SyncSessionStartError`] when project context is invalid,
+    /// git operations fail, or rebase conflicts remain unresolved after
+    /// assisted attempts.
+    async fn sync_main_for_project_with_assist_client(
+        default_branch: Option<String>,
+        working_dir: PathBuf,
+        git_client: Arc<dyn GitClient>,
+        permission_mode: PermissionMode,
+        session_model: AgentModel,
+        sync_assist_client: Arc<dyn SyncAssistClient>,
     ) -> Result<(), SyncSessionStartError> {
         let default_branch = default_branch.ok_or_else(|| {
             SyncSessionStartError::Other("Active project has no git branch".to_string())
@@ -464,9 +754,22 @@ impl SessionManager {
             .await
             .map_err(SyncSessionStartError::Other)?;
         if let git::PullRebaseResult::Conflict { detail } = pull_result {
-            return Err(SyncSessionStartError::Other(format!(
-                "Sync stopped on rebase conflicts while updating `{default_branch}`: {detail}"
-            )));
+            let sync_rebase_input = SyncRebaseAssistInput {
+                base_branch: default_branch.clone(),
+                folder: working_dir.clone(),
+                git_client: Arc::clone(&git_client),
+                permission_mode,
+                session_model,
+                sync_assist_client,
+            };
+            if let Err(error) =
+                Self::run_sync_rebase_assist_loop(sync_rebase_input, detail.clone()).await
+            {
+                return Err(SyncSessionStartError::Other(format!(
+                    "Sync stopped on rebase conflicts while updating `{default_branch}`: \
+                     {detail}. Assisted resolution failed: {error}"
+                )));
+            }
         }
 
         git_client
@@ -475,6 +778,116 @@ impl SessionManager {
             .map_err(SyncSessionStartError::Other)?;
 
         Ok(())
+    }
+
+    /// Runs assisted conflict resolution for a main-project rebase in progress.
+    ///
+    /// # Errors
+    /// Returns an error when conflicts remain unresolved after all attempts or
+    /// when git/agent operations fail.
+    async fn run_sync_rebase_assist_loop(
+        input: SyncRebaseAssistInput,
+        initial_conflict_detail: String,
+    ) -> Result<(), String> {
+        Self::run_rebase_assist_loop_core(
+            RebaseAssistLoopInput::Project(input),
+            Some(initial_conflict_detail),
+        )
+        .await
+    }
+
+    /// Loads current conflicted files for sync assistance.
+    ///
+    /// # Errors
+    /// Returns an error if conflicted-file inspection fails.
+    async fn load_sync_conflicted_files(
+        input: &SyncRebaseAssistInput,
+        previous_conflict_files: &[String],
+    ) -> Result<Vec<String>, String> {
+        let folder = input.folder.clone();
+        let mut conflicted = input
+            .git_client
+            .list_conflicted_files(folder.clone())
+            .await?;
+
+        let staged_with_markers = input
+            .git_client
+            .list_staged_conflict_marker_files(folder, previous_conflict_files.to_vec())
+            .await?;
+        for file in staged_with_markers {
+            if !conflicted.contains(&file) {
+                conflicted.push(file);
+            }
+        }
+        conflicted.sort_unstable();
+
+        Ok(conflicted)
+    }
+
+    /// Executes one agent-assisted sync rebase conflict resolution attempt.
+    ///
+    /// # Errors
+    /// Returns an error when the assistance command fails.
+    async fn run_sync_rebase_assist_agent(
+        input: &SyncRebaseAssistInput,
+        conflicted_files: &[String],
+    ) -> Result<(), String> {
+        let prompt = Self::rebase_assist_prompt(&input.base_branch, conflicted_files);
+        input
+            .sync_assist_client
+            .resolve_rebase_conflicts(
+                input.folder.clone(),
+                prompt,
+                input.permission_mode,
+                input.session_model,
+            )
+            .await
+            .map_err(|error| format!("Sync rebase assistance failed: {error}"))
+    }
+
+    /// Stages sync edits and checks whether rebase conflicts remain.
+    ///
+    /// # Errors
+    /// Returns an error when staging or conflict checks fail.
+    async fn stage_and_check_for_sync_conflicts(
+        input: &SyncRebaseAssistInput,
+        conflict_files: &[String],
+    ) -> Result<bool, String> {
+        let folder = input.folder.clone();
+        input.git_client.stage_all(folder).await?;
+
+        let folder = input.folder.clone();
+        if input.git_client.has_unmerged_paths(folder).await? {
+            return Ok(true);
+        }
+
+        let folder = input.folder.clone();
+        let staged_with_markers = input
+            .git_client
+            .list_staged_conflict_marker_files(folder, conflict_files.to_vec())
+            .await?;
+
+        Ok(!staged_with_markers.is_empty())
+    }
+
+    /// Continues the in-progress sync rebase.
+    ///
+    /// # Errors
+    /// Returns an error when `git rebase --continue` fails with non-conflict
+    /// errors.
+    async fn run_sync_rebase_continue(
+        input: &SyncRebaseAssistInput,
+    ) -> Result<git::RebaseStepResult, String> {
+        let folder = input.folder.clone();
+        let result = input.git_client.rebase_continue(folder).await?;
+
+        Ok(result)
+    }
+
+    /// Aborts an in-progress sync rebase after assistance failure.
+    async fn abort_sync_rebase_after_assist_failure(input: &SyncRebaseAssistInput) {
+        let folder = input.folder.clone();
+        let _ = input.git_client.abort_rebase(folder).await;
     }
 
     async fn run_rebase_task(input: RebaseTaskInput) {
@@ -602,9 +1015,6 @@ impl SessionManager {
     /// Returns an error when conflict resolution fails after all attempts or
     /// when git/agent operations fail.
     async fn run_rebase_assist_loop(input: RebaseAssistInput) -> Result<(), String> {
-        let mut failure_tracker =
-            FailureTracker::new(REBASE_ASSIST_POLICY.max_identical_failure_streak);
-
         let rebase_in_progress = Self::is_rebase_in_progress(&input).await?;
         if !rebase_in_progress {
             let initial_step = Self::run_rebase_start(&input).await?;
@@ -613,33 +1023,48 @@ impl SessionManager {
             }
         }
 
+        Self::run_rebase_assist_loop_core(RebaseAssistLoopInput::Session(input), None).await
+    }
+
+    /// Executes shared bounded assistance loop for both session rebases and
+    /// main-project sync rebases.
+    ///
+    /// # Errors
+    /// Returns an error when assistance fails to make progress, rebase remains
+    /// conflicted after all attempts, or git operations fail.
+    async fn run_rebase_assist_loop_core(
+        assist_input: RebaseAssistLoopInput,
+        initial_conflict_detail: Option<String>,
+    ) -> Result<(), String> {
+        let mut failure_tracker =
+            FailureTracker::new(REBASE_ASSIST_POLICY.max_identical_failure_streak);
+        if let Some(initial_conflict_detail) = initial_conflict_detail {
+            let _ = failure_tracker.observe(&initial_conflict_detail);
+        }
+
         let mut previous_conflict_files: Vec<String> = vec![];
 
         for assist_attempt in 1..=REBASE_ASSIST_POLICY.max_attempts {
-            let conflicted_files =
-                Self::load_conflicted_files(&input, &previous_conflict_files).await?;
+            let conflicted_files = assist_input
+                .load_conflicted_files(&previous_conflict_files)
+                .await?;
             if conflicted_files.is_empty() {
-                let continue_step = Self::run_rebase_continue(&input).await?;
+                let continue_step = assist_input.run_rebase_continue().await?;
                 match continue_step {
                     git::RebaseStepResult::Completed => {
                         return Ok(());
                     }
                     git::RebaseStepResult::Conflict { detail } => {
                         if failure_tracker.observe(&detail) {
-                            Self::abort_rebase_after_assist_failure(&input).await;
+                            assist_input.abort_rebase_after_assist_failure().await;
 
-                            return Err(format!(
-                                "Rebase assistance made no progress: repeated identical conflict \
-                                 state. Last detail: {detail}"
-                            ));
+                            return Err(assist_input.repeated_conflict_state_error(&detail));
                         }
 
                         if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                            Self::abort_rebase_after_assist_failure(&input).await;
+                            assist_input.abort_rebase_after_assist_failure().await;
 
-                            return Err(format!(
-                                "Rebase still has conflicts after assistance: {detail}"
-                            ));
+                            return Err(assist_input.still_conflicted_error(&detail));
                         }
                     }
                 }
@@ -648,25 +1073,24 @@ impl SessionManager {
             }
 
             let conflict_fingerprint =
-                Self::conflicted_file_fingerprint(&input.folder, &conflicted_files);
+                Self::conflicted_file_fingerprint(assist_input.folder(), &conflicted_files);
             if failure_tracker.observe(&conflict_fingerprint) {
-                Self::abort_rebase_after_assist_failure(&input).await;
+                assist_input.abort_rebase_after_assist_failure().await;
 
-                return Err(
-                    "Rebase assistance made no progress: conflicted files did not change"
-                        .to_string(),
-                );
+                return Err(assist_input.unchanged_conflict_files_error());
             }
 
-            Self::append_rebase_assist_header(&input, assist_attempt, &conflicted_files).await;
-            Self::run_rebase_assist_agent(&input, &conflicted_files).await?;
+            assist_input
+                .run_assist_attempt(assist_attempt, &conflicted_files)
+                .await?;
 
-            let still_has_conflicts =
-                Self::stage_and_check_for_conflicts(&input, &conflicted_files).await?;
+            let still_has_conflicts = assist_input
+                .stage_and_check_for_conflicts(&conflicted_files)
+                .await?;
             previous_conflict_files = conflicted_files;
             if still_has_conflicts {
                 if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                    Self::abort_rebase_after_assist_failure(&input).await;
+                    assist_input.abort_rebase_after_assist_failure().await;
 
                     return Err(
                         "Conflicts remain unresolved after maximum assistance attempts".to_string(),
@@ -676,35 +1100,30 @@ impl SessionManager {
                 continue;
             }
 
-            let continue_step = Self::run_rebase_continue(&input).await?;
+            let continue_step = assist_input.run_rebase_continue().await?;
             match continue_step {
                 git::RebaseStepResult::Completed => {
                     return Ok(());
                 }
                 git::RebaseStepResult::Conflict { detail } => {
                     if failure_tracker.observe(&detail) {
-                        Self::abort_rebase_after_assist_failure(&input).await;
+                        assist_input.abort_rebase_after_assist_failure().await;
 
-                        return Err(format!(
-                            "Rebase assistance made no progress: repeated identical conflict \
-                             state. Last detail: {detail}"
-                        ));
+                        return Err(assist_input.repeated_conflict_state_error(&detail));
                     }
 
                     if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                        Self::abort_rebase_after_assist_failure(&input).await;
+                        assist_input.abort_rebase_after_assist_failure().await;
 
-                        return Err(format!(
-                            "Rebase still has conflicts after assistance: {detail}"
-                        ));
+                        return Err(assist_input.still_conflicted_error(&detail));
                     }
                 }
             }
         }
 
-        Self::abort_rebase_after_assist_failure(&input).await;
+        assist_input.abort_rebase_after_assist_failure().await;
 
-        Err("Failed to complete assisted rebase".to_string())
+        Err(assist_input.exhausted_error())
     }
 
     /// Returns whether the session worktree has an in-progress rebase.
@@ -1192,6 +1611,150 @@ mod tests {
         assert_eq!(input.folder, cloned_input.folder);
         assert_eq!(input.permission_mode, cloned_input.permission_mode);
         assert_eq!(input.session_model, cloned_input.session_model);
+    }
+
+    #[tokio::test]
+    async fn test_sync_main_for_project_resolves_conflicts_with_assistance() {
+        // Arrange
+        let working_dir = PathBuf::from("/tmp/sync-main-assist-success");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1)
+            .returning(|folder| Box::pin(async move { Some(folder) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_pull_rebase()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(git::PullRebaseResult::Conflict {
+                        detail: "CONFLICT (content): Merge conflict in src/lib.rs".to_string(),
+                    })
+                })
+            });
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(2)
+            .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+        mock_git_client
+            .expect_stage_all()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_has_unmerged_paths()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_rebase_continue()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_push_current_branch()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client.expect_abort_rebase().times(0);
+
+        let mut mock_sync_assist_client = MockSyncAssistClient::new();
+        mock_sync_assist_client
+            .expect_resolve_rebase_conflicts()
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+
+        // Act
+        let result = SessionManager::sync_main_for_project_with_assist_client(
+            Some("main".to_string()),
+            working_dir,
+            Arc::new(mock_git_client),
+            PermissionMode::AutoEdit,
+            AgentModel::Gemini3FlashPreview,
+            Arc::new(mock_sync_assist_client),
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok(), "sync should succeed after assistance");
+    }
+
+    #[tokio::test]
+    async fn test_sync_main_for_project_fails_after_max_assistance_attempts() {
+        // Arrange
+        let working_dir = PathBuf::from("/tmp/sync-main-assist-fail");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1)
+            .returning(|folder| Box::pin(async move { Some(folder) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_pull_rebase()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(git::PullRebaseResult::Conflict {
+                        detail: "CONFLICT (content): Merge conflict in src/lib.rs".to_string(),
+                    })
+                })
+            });
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+        mock_git_client
+            .expect_stage_all()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_has_unmerged_paths()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client.expect_rebase_continue().times(0);
+        mock_git_client.expect_push_current_branch().times(0);
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut mock_sync_assist_client = MockSyncAssistClient::new();
+        mock_sync_assist_client
+            .expect_resolve_rebase_conflicts()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+
+        // Act
+        let result = SessionManager::sync_main_for_project_with_assist_client(
+            Some("main".to_string()),
+            working_dir,
+            Arc::new(mock_git_client),
+            PermissionMode::AutoEdit,
+            AgentModel::Gemini3FlashPreview,
+            Arc::new(mock_sync_assist_client),
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("sync should fail when conflicts remain unresolved");
+        assert!(matches!(error, SyncSessionStartError::Other(_)));
+        assert!(
+            error
+                .detail_message()
+                .contains("Conflicts remain unresolved after maximum assistance attempts"),
+            "error detail should mention unresolved conflicts"
+        );
     }
 
     #[test]

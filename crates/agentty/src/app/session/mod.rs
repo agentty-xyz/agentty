@@ -91,6 +91,17 @@ impl SessionManager {
         Arc::clone(&self.git_client)
     }
 
+    /// Returns the default model used for session-scoped agent workflows.
+    pub(crate) fn default_session_model(&self) -> AgentModel {
+        self.default_session_model
+    }
+
+    /// Returns the default permission mode used for session-scoped agent
+    /// workflows.
+    pub(crate) fn default_session_permission_mode(&self) -> PermissionMode {
+        self.default_session_permission_mode
+    }
+
     /// Loads the default model persisted for new sessions.
     pub(crate) async fn load_default_session_model(
         services: &AppServices,
@@ -2698,6 +2709,8 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
+            PermissionMode::AutoEdit,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -2722,6 +2735,8 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
+            PermissionMode::AutoEdit,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -2745,6 +2760,8 @@ mod tests {
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
+            PermissionMode::AutoEdit,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -2810,6 +2827,8 @@ mod tests {
             Some("main".to_string()),
             dir.path().to_path_buf(),
             Arc::new(git::RealGitClient),
+            PermissionMode::AutoEdit,
+            AgentModel::Gemini3FlashPreview,
         )
         .await;
 

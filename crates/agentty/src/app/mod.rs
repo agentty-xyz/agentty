@@ -563,11 +563,18 @@ impl App {
         let default_branch = self.projects.git_branch().map(str::to_string);
         let working_dir = self.projects.working_dir().to_path_buf();
         let git_client = self.services.git_client();
+        let permission_mode = self.sessions.default_session_permission_mode();
+        let session_model = self.sessions.default_session_model();
 
         tokio::spawn(async move {
-            let result =
-                SessionManager::sync_main_for_project(default_branch, working_dir, git_client)
-                    .await;
+            let result = SessionManager::sync_main_for_project(
+                default_branch,
+                working_dir,
+                git_client,
+                permission_mode,
+                session_model,
+            )
+            .await;
             let _ = app_event_tx.send(AppEvent::SyncMainCompleted { result });
         });
     }
