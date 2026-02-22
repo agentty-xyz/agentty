@@ -45,11 +45,11 @@ impl PermissionMode {
     /// Transforms a prompt for the active permission mode.
     ///
     /// In `Plan` mode a concise instruction prefix and a labeled prompt
-    /// delimiter are added only for the initial planning prompt, so
-    /// follow-up replies can stay concise.
+    /// delimiter are added for both initial and follow-up prompts so
+    /// replies continue producing plan output instead of implementation.
     /// Other modes return the prompt unchanged.
-    pub fn apply_to_prompt(self, prompt: &str, is_initial_plan_prompt: bool) -> Cow<'_, str> {
-        if self == PermissionMode::Plan && is_initial_plan_prompt {
+    pub fn apply_to_prompt(self, prompt: &str, _is_initial_plan_prompt: bool) -> Cow<'_, str> {
+        if self == PermissionMode::Plan {
             return Cow::Owned(Self::plan_mode_prompt(prompt));
         }
 
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_to_prompt_keeps_followup_plan_prompt_unchanged() {
+    fn test_apply_to_prompt_wraps_followup_plan_prompt() {
         // Arrange
         let prompt = "Refine section 3";
 
@@ -193,7 +193,8 @@ mod tests {
         let transformed = PermissionMode::Plan.apply_to_prompt(prompt, false);
 
         // Assert
-        assert_eq!(transformed, prompt);
+        assert!(transformed.contains("[PLAN MODE]"));
+        assert!(transformed.contains(prompt));
     }
 
     #[test]

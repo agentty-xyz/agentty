@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use super::SESSION_REFRESH_INTERVAL;
 use crate::app::{AppServices, ProjectManager, SessionManager};
+use crate::domain::session::CodexUsageLimits;
 use crate::ui::state::app_mode::AppMode;
 
 impl SessionManager {
@@ -70,7 +71,8 @@ impl SessionManager {
         .await;
         let codex_usage_limits = Self::load_codex_usage_limits().await;
         self.sessions = sessions;
-        self.codex_usage_limits = codex_usage_limits;
+        self.codex_usage_limits =
+            merged_codex_usage_limits(self.codex_usage_limits, codex_usage_limits);
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);
@@ -150,6 +152,79 @@ impl SessionManager {
         {
             self.row_count = sessions_row_count;
             self.updated_at_max = sessions_updated_at_max;
+        }
+    }
+}
+
+/// Merges previous and freshly loaded Codex usage limits for UI rendering.
+///
+/// Refresh calls can fail transiently (for example due app-server timeouts). In
+/// that case, the previously loaded snapshot is preserved so usage bars do not
+/// disappear between replies.
+fn merged_codex_usage_limits(
+    previous_limits: Option<CodexUsageLimits>,
+    refreshed_limits: Option<CodexUsageLimits>,
+) -> Option<CodexUsageLimits> {
+    refreshed_limits.or(previous_limits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::session::CodexUsageLimitWindow;
+
+    #[test]
+    fn test_merged_codex_usage_limits_keeps_previous_snapshot_when_refresh_fails() {
+        // Arrange
+        let previous_limits = limits_fixture(24, 33);
+
+        // Act
+        let merged_limits = merged_codex_usage_limits(Some(previous_limits), None);
+
+        // Assert
+        assert_eq!(merged_limits, Some(previous_limits));
+    }
+
+    #[test]
+    fn test_merged_codex_usage_limits_replaces_previous_snapshot_when_refresh_succeeds() {
+        // Arrange
+        let previous_limits = limits_fixture(24, 33);
+        let refreshed_limits = limits_fixture(60, 70);
+
+        // Act
+        let merged_limits =
+            merged_codex_usage_limits(Some(previous_limits), Some(refreshed_limits));
+
+        // Assert
+        assert_eq!(merged_limits, Some(refreshed_limits));
+    }
+
+    #[test]
+    fn test_merged_codex_usage_limits_returns_none_when_no_snapshot_exists() {
+        // Arrange
+        let previous_limits = None;
+        let refreshed_limits = None;
+
+        // Act
+        let merged_limits = merged_codex_usage_limits(previous_limits, refreshed_limits);
+
+        // Assert
+        assert_eq!(merged_limits, None);
+    }
+
+    /// Builds deterministic Codex usage-limit snapshots for tests.
+    fn limits_fixture(primary_used_percent: u8, secondary_used_percent: u8) -> CodexUsageLimits {
+        CodexUsageLimits {
+            primary: Some(CodexUsageLimitWindow {
+                resets_at: Some(1),
+                used_percent: primary_used_percent,
+                window_minutes: Some(300),
+            }),
+            secondary: Some(CodexUsageLimitWindow {
+                resets_at: Some(2),
+                used_percent: secondary_used_percent,
+                window_minutes: Some(10_080),
+            }),
         }
     }
 }

@@ -185,16 +185,21 @@ pub struct SessionStats {
 /// One Codex usage-limit window (for example, 5-hour or weekly).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CodexUsageLimitWindow {
-    pub resets_at: i64,
+    /// Unix timestamp when the window resets. `None` when unavailable.
+    pub resets_at: Option<i64>,
+    /// Percent of the window already consumed in `[0, 100]`.
     pub used_percent: u8,
-    pub window_minutes: u32,
+    /// Duration of the window in minutes. `None` when unavailable.
+    pub window_minutes: Option<u32>,
 }
 
 /// Snapshot of account-level Codex usage limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CodexUsageLimits {
-    pub primary: CodexUsageLimitWindow,
-    pub secondary: CodexUsageLimitWindow,
+    /// Primary window when provided by Codex.
+    pub primary: Option<CodexUsageLimitWindow>,
+    /// Secondary window when provided by Codex.
+    pub secondary: Option<CodexUsageLimitWindow>,
 }
 
 /// Aggregated activity count for one UTC day.

@@ -813,10 +813,13 @@ mod tests {
         app.sessions.sessions[0].output =
             "### Questions\n1. Keep sqlite?\n2. Add telemetry?\n".to_string();
         app.sessions.sessions[0].status = Status::InProgress;
-        if let Some(handles) = app.sessions.handles.get(&session_id)
-            && let Ok(mut status) = handles.status.lock()
-        {
-            *status = Status::Review;
+        if let Some(handles) = app.sessions.handles.get(&session_id) {
+            if let Ok(mut output) = handles.output.lock() {
+                *output = "### Questions\n1. Keep sqlite?\n2. Add telemetry?\n".to_string();
+            }
+            if let Ok(mut status) = handles.status.lock() {
+                *status = Status::Review;
+            }
         }
         app.apply_app_events(AppEvent::SessionUpdated {
             session_id: session_id.clone(),

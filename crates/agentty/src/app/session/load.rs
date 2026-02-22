@@ -34,11 +34,15 @@ struct CodexAppServerEnvelope {
 struct CodexRateLimitsReadResult {
     #[serde(rename = "rateLimits")]
     rate_limits: Option<CodexRateLimitSnapshot>,
+    #[serde(rename = "rateLimitsByLimitId")]
+    rate_limits_by_limit_id: Option<HashMap<String, CodexRateLimitSnapshot>>,
 }
 
 /// Account-level Codex rate-limit snapshot payload.
 #[derive(Deserialize)]
 struct CodexRateLimitSnapshot {
+    #[serde(rename = "limitId")]
+    limit_id: Option<String>,
     primary: Option<CodexRateLimitWindowPayload>,
     secondary: Option<CodexRateLimitWindowPayload>,
 }
@@ -225,9 +229,16 @@ fn parse_codex_usage_limits_response(stdout: &str) -> Option<CodexUsageLimits> {
             continue;
         }
 
-        let snapshot = envelope.result?.rate_limits?;
-        let primary = parse_codex_limit_window(snapshot.primary)?;
-        let secondary = parse_codex_limit_window(snapshot.secondary)?;
+        let CodexRateLimitsReadResult {
+            rate_limits,
+            rate_limits_by_limit_id,
+        } = envelope.result?;
+        let snapshot = codex_rate_limit_snapshot(rate_limits, rate_limits_by_limit_id)?;
+        let primary = parse_codex_limit_window(snapshot.primary);
+        let secondary = parse_codex_limit_window(snapshot.secondary);
+        if primary.is_none() && secondary.is_none() {
+            continue;
+        }
 
         return Some(CodexUsageLimits { primary, secondary });
     }
@@ -235,22 +246,41 @@ fn parse_codex_usage_limits_response(stdout: &str) -> Option<CodexUsageLimits> {
     None
 }
 
+/// Picks the Codex bucket from a rate-limit response payload.
+fn codex_rate_limit_snapshot(
+    rate_limits: Option<CodexRateLimitSnapshot>,
+    rate_limits_by_limit_id: Option<HashMap<String, CodexRateLimitSnapshot>>,
+) -> Option<CodexRateLimitSnapshot> {
+    let codex_snapshot = rate_limits_by_limit_id.and_then(|limits| {
+        for (limit_key, snapshot) in limits {
+            if limit_key == "codex" || snapshot.limit_id.as_deref() == Some("codex") {
+                return Some(snapshot);
+            }
+        }
+
+        None
+    });
+    if codex_snapshot.is_some() {
+        return codex_snapshot;
+    }
+
+    rate_limits
+}
+
 /// Converts one app-server window payload to the domain usage window type.
 fn parse_codex_limit_window(
     window: Option<CodexRateLimitWindowPayload>,
 ) -> Option<CodexUsageLimitWindow> {
     let window = window?;
-    let resets_at = window.resets_at?;
     let used_percent_value = window.used_percent?.clamp(0, 100);
     let used_percent = u8::try_from(used_percent_value).ok()?;
-    let window_minutes_value = window.window_duration_mins?;
-    let window_minutes = u32::try_from(window_minutes_value).ok()?;
-    if window_minutes == 0 {
-        return None;
-    }
+    let window_minutes = window
+        .window_duration_mins
+        .and_then(|window_minutes_value| u32::try_from(window_minutes_value).ok())
+        .filter(|minutes| *minutes > 0);
 
     Some(CodexUsageLimitWindow {
-        resets_at,
+        resets_at: window.resets_at,
         used_percent,
         window_minutes,
     })
@@ -276,22 +306,22 @@ mod tests {
         assert_eq!(
             limits,
             Some(CodexUsageLimits {
-                primary: CodexUsageLimitWindow {
-                    resets_at: 1,
+                primary: Some(CodexUsageLimitWindow {
+                    resets_at: Some(1),
                     used_percent: 30,
-                    window_minutes: 300,
-                },
-                secondary: CodexUsageLimitWindow {
-                    resets_at: 2,
+                    window_minutes: Some(300),
+                }),
+                secondary: Some(CodexUsageLimitWindow {
+                    resets_at: Some(2),
                     used_percent: 26,
-                    window_minutes: 10_080,
-                },
+                    window_minutes: Some(10_080),
+                }),
             })
         );
     }
 
     #[test]
-    fn test_parse_codex_usage_limits_response_returns_none_for_missing_window() {
+    fn test_parse_codex_usage_limits_response_keeps_primary_when_secondary_missing() {
         // Arrange
         let stdout = r#"{"id":"rate-limits-read","result":{"rateLimits":{"primary":{"usedPercent":30,"windowDurationMins":300,"resetsAt":1}}}}"#;
 
@@ -299,6 +329,60 @@ mod tests {
         let limits = parse_codex_usage_limits_response(stdout);
 
         // Assert
-        assert!(limits.is_none());
+        assert_eq!(
+            limits,
+            Some(CodexUsageLimits {
+                primary: Some(CodexUsageLimitWindow {
+                    resets_at: Some(1),
+                    used_percent: 30,
+                    window_minutes: Some(300),
+                }),
+                secondary: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_codex_usage_limits_response_uses_codex_bucket_from_multi_limit_payload() {
+        // Arrange
+        let stdout = r#"{"id":"rate-limits-read","result":{"rateLimits":{"primary":{"usedPercent":40,"windowDurationMins":300,"resetsAt":1}},"rateLimitsByLimitId":{"chatgpt":{"limitId":"chatgpt","primary":{"usedPercent":10,"windowDurationMins":60,"resetsAt":1}},"codex":{"limitId":"codex","primary":{"usedPercent":55,"windowDurationMins":300,"resetsAt":8}}}}}"#;
+
+        // Act
+        let limits = parse_codex_usage_limits_response(stdout);
+
+        // Assert
+        assert_eq!(
+            limits,
+            Some(CodexUsageLimits {
+                primary: Some(CodexUsageLimitWindow {
+                    resets_at: Some(8),
+                    used_percent: 55,
+                    window_minutes: Some(300),
+                }),
+                secondary: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_codex_usage_limits_response_allows_nullable_window_fields() {
+        // Arrange
+        let stdout = r#"{"id":"rate-limits-read","result":{"rateLimits":{"primary":{"usedPercent":30,"windowDurationMins":null,"resetsAt":null}}}}"#;
+
+        // Act
+        let limits = parse_codex_usage_limits_response(stdout);
+
+        // Assert
+        assert_eq!(
+            limits,
+            Some(CodexUsageLimits {
+                primary: Some(CodexUsageLimitWindow {
+                    resets_at: None,
+                    used_percent: 30,
+                    window_minutes: None,
+                }),
+                secondary: None,
+            })
+        );
     }
 }

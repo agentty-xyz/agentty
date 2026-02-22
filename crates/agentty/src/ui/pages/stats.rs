@@ -204,10 +204,25 @@ impl StatsPage<'_> {
             ];
         };
         let now = Self::current_unix_timestamp();
-        let primary_line = Self::usage_line(codex_usage_limits.primary, now);
-        let secondary_line = Self::usage_line(codex_usage_limits.secondary, now);
+        let mut usage_lines: Vec<Line<'static>> = Vec::new();
 
-        vec![primary_line, secondary_line]
+        if let Some(primary_window) = codex_usage_limits.primary {
+            usage_lines.push(Self::usage_line(primary_window, now));
+        }
+        if let Some(secondary_window) = codex_usage_limits.secondary {
+            usage_lines.push(Self::usage_line(secondary_window, now));
+        }
+        if usage_lines.is_empty() {
+            return vec![
+                Line::from("Codex usage unavailable."),
+                Line::from(Span::styled(
+                    "Refresh stats to retry loading limits.",
+                    Style::default().fg(Color::Gray),
+                )),
+            ];
+        }
+
+        usage_lines
     }
 
     fn build_heatmap_lines(&self) -> Vec<Line<'static>> {
@@ -375,11 +390,12 @@ impl StatsPage<'_> {
     }
 
     /// Converts a usage window duration to a short label.
-    fn usage_window_label(window_minutes: u32) -> String {
+    fn usage_window_label(window_minutes: Option<u32>) -> String {
         match window_minutes {
-            300 => "5h limit".to_string(),
-            10_080 => "Weekly limit".to_string(),
-            _ => format!("{window_minutes}m limit"),
+            Some(300) => "5h limit".to_string(),
+            Some(10_080) => "Weekly limit".to_string(),
+            Some(window_minutes) => format!("{window_minutes}m limit"),
+            None => "Limit".to_string(),
         }
     }
 
@@ -392,7 +408,10 @@ impl StatsPage<'_> {
     }
 
     /// Returns a compact reset countdown for a Unix timestamp.
-    fn format_reset_eta(resets_at: i64, now: i64) -> String {
+    fn format_reset_eta(resets_at: Option<i64>, now: i64) -> String {
+        let Some(resets_at) = resets_at else {
+            return "reset unavailable".to_string();
+        };
         if resets_at <= now {
             return "resets now".to_string();
         }
@@ -571,16 +590,16 @@ mod tests {
         let sessions = vec![session_fixture()];
         let activity: Vec<DailyActivity> = Vec::new();
         let usage_limits = Some(CodexUsageLimits {
-            primary: CodexUsageLimitWindow {
-                resets_at: i64::MAX,
+            primary: Some(CodexUsageLimitWindow {
+                resets_at: Some(i64::MAX),
                 used_percent: 26,
-                window_minutes: 300,
-            },
-            secondary: CodexUsageLimitWindow {
-                resets_at: i64::MAX,
+                window_minutes: Some(300),
+            }),
+            secondary: Some(CodexUsageLimitWindow {
+                resets_at: Some(i64::MAX),
                 used_percent: 24,
-                window_minutes: 10_080,
-            },
+                window_minutes: Some(10_080),
+            }),
         });
         let mut page = StatsPage::new(&sessions, &activity, usage_limits);
         let backend = ratatui::backend::TestBackend::new(160, 30);
@@ -604,5 +623,36 @@ mod tests {
         assert!(text.contains("Sessions: 1"));
         assert!(text.contains("Input: 1.5k"));
         assert!(text.contains("Output: 700"));
+    }
+
+    #[test]
+    fn test_render_shows_single_usage_window_when_secondary_is_missing() {
+        // Arrange
+        let sessions = vec![session_fixture()];
+        let activity: Vec<DailyActivity> = Vec::new();
+        let usage_limits = Some(CodexUsageLimits {
+            primary: Some(CodexUsageLimitWindow {
+                resets_at: None,
+                used_percent: 26,
+                window_minutes: Some(300),
+            }),
+            secondary: None,
+        });
+        let mut page = StatsPage::new(&sessions, &activity, usage_limits);
+        let backend = ratatui::backend::TestBackend::new(160, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                crate::ui::Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw stats page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("5h limit"));
+        assert!(text.contains("reset unavailable"));
     }
 }
