@@ -9,6 +9,7 @@ use crate::domain::session::Status;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::pages::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::ui::state::help_action::{PlanFollowupNavigation, ViewSessionState};
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
 const IMPLEMENT_PLAN_PROMPT: &str = "Implement the approved plan from your previous response \
@@ -45,9 +46,10 @@ pub(crate) async fn handle(
     let Some(session) = app.sessions.sessions.get(view_context.session_index) else {
         return Ok(EventResult::Continue);
     };
-    let is_done = session.status == Status::Done;
     let is_in_progress = session.status == Status::InProgress;
     let is_action_allowed = is_view_action_allowed(session.status);
+    let plan_followup_navigation = view_plan_followup_navigation(app, &view_context.session_id);
+    let session_state = view_session_state(session.status);
     let can_open_worktree =
         is_view_worktree_open_allowed(session.status) && can_open_session_worktree(session.status);
     let session_output = session.output.clone();
@@ -119,15 +121,7 @@ pub(crate) async fn handle(
                 .await;
         }
         KeyCode::Char('?') => {
-            app.mode = AppMode::Help {
-                context: HelpContext::View {
-                    is_done,
-                    is_in_progress,
-                    session_id: view_context.session_id.clone(),
-                    scroll_offset: view_context.scroll_offset,
-                },
-                scroll_offset: 0,
-            };
+            open_view_help_overlay(app, &view_context, plan_followup_navigation, session_state);
 
             return Ok(EventResult::Continue);
         }
@@ -173,6 +167,40 @@ fn switch_view_to_prompt(
 /// session status.
 fn can_open_session_worktree(status: Status) -> bool {
     status != Status::Done
+}
+
+/// Resolves plan-followup navigation mode for the provided session.
+fn view_plan_followup_navigation(app: &App, session_id: &str) -> Option<PlanFollowupNavigation> {
+    app.plan_followup(session_id)?;
+
+    Some(PlanFollowupNavigation::Vertical)
+}
+
+/// Maps session status to view help session state.
+fn view_session_state(status: Status) -> ViewSessionState {
+    match status {
+        Status::Done => ViewSessionState::Done,
+        Status::InProgress => ViewSessionState::InProgress,
+        _ => ViewSessionState::Interactive,
+    }
+}
+
+/// Opens the help overlay while preserving the currently viewed session state.
+fn open_view_help_overlay(
+    app: &mut App,
+    view_context: &ViewContext,
+    plan_followup_navigation: Option<PlanFollowupNavigation>,
+    session_state: ViewSessionState,
+) {
+    app.mode = AppMode::Help {
+        context: HelpContext::View {
+            plan_followup_navigation,
+            session_id: view_context.session_id.clone(),
+            session_state,
+            scroll_offset: view_context.scroll_offset,
+        },
+        scroll_offset: 0,
+    };
 }
 
 /// Handles key events for the plan followup menu.
@@ -969,9 +997,9 @@ mod tests {
         // Act — simulate what the `?` arm does
         app.mode = AppMode::Help {
             context: HelpContext::View {
-                is_done: false,
-                is_in_progress: false,
+                plan_followup_navigation: None,
                 session_id,
+                session_state: ViewSessionState::Interactive,
                 scroll_offset: scroll,
             },
             scroll_offset: 0,
@@ -982,9 +1010,9 @@ mod tests {
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
-                    is_done: false,
-                    is_in_progress: false,
+                    plan_followup_navigation: None,
                     ref session_id,
+                    session_state: ViewSessionState::Interactive,
                     scroll_offset: Some(3),
                 },
                 scroll_offset: 0,

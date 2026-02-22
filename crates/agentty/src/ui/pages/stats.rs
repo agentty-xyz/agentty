@@ -12,6 +12,7 @@ use crate::domain::session::{
 };
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
+use crate::ui::state::help_action;
 use crate::ui::util::{
     activity_day_key_local, build_activity_heatmap_grid, build_heatmap_month_row,
     current_day_key_local, format_duration_compact, format_token_count, heatmap_intensity_level,
@@ -167,7 +168,8 @@ impl StatsPage<'_> {
             .constraints([Constraint::Min(0), Constraint::Min(0)])
             .split(area);
 
-        let help = Paragraph::new("q: quit").style(Style::default().fg(Color::Gray));
+        let help = Paragraph::new(help_action::footer_text(&help_action::stats_actions()))
+            .style(Style::default().fg(Color::Gray));
         f.render_widget(help, footer_chunks[0]);
 
         let total_input: u64 = self

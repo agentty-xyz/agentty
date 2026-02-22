@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::ui::Page;
+use crate::ui::state::help_action;
 use crate::ui::util::{first_table_column_width, truncate_with_ellipsis};
 
 const ROW_HIGHLIGHT_SYMBOL: &str = ">> ";
@@ -88,21 +89,25 @@ impl Page for SessionListPage<'_> {
         f.render_stateful_widget(table, main_area, self.table_state);
         self.table_state.select(previous_selection);
 
-        let help_message = Paragraph::new(session_list_help_text(!self.sessions.is_empty()))
+        let selected_session = self
+            .table_state
+            .selected()
+            .and_then(|selected_index| self.sessions.get(selected_index));
+        let help_message = Paragraph::new(session_list_help_text(selected_session))
             .style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, footer_area);
     }
 }
 
 /// Builds footer help text for session list mode.
-fn session_list_help_text(has_sessions: bool) -> String {
-    let mut help_text = "q: quit | /: command | a: add | s: sync".to_string();
-    if has_sessions {
-        help_text.push_str(" | d: delete | c: cancel");
-    }
-    help_text.push_str(" | Enter: view | j/k: nav | ?: help");
+fn session_list_help_text(selected_session: Option<&Session>) -> String {
+    let actions = help_action::session_list_actions(
+        selected_session.is_some_and(|session| session.status == Status::Review),
+        selected_session.is_some(),
+        selected_session.is_some_and(|session| !matches!(session.status, Status::Canceled)),
+    );
 
-    help_text
+    help_action::footer_text(&actions)
 }
 
 /// Prepares list table state for grouped row rendering.
@@ -607,24 +612,24 @@ mod tests {
     #[test]
     fn test_session_list_help_text_includes_sync_for_non_empty_sessions() {
         // Arrange
-        let has_sessions = true;
+        let session = test_session("session-1", Status::Review);
 
         // Act
-        let help_text = session_list_help_text(has_sessions);
+        let help_text = session_list_help_text(Some(&session));
 
         // Assert
         assert!(help_text.contains("s: sync"));
     }
 
     #[test]
-    fn test_session_list_help_text_includes_sync_for_empty_sessions() {
+    fn test_session_list_help_text_hides_cancel_for_non_review_session() {
         // Arrange
-        let has_sessions = false;
+        let session = test_session("session-1", Status::Done);
 
         // Act
-        let help_text = session_list_help_text(has_sessions);
+        let help_text = session_list_help_text(Some(&session));
 
         // Assert
-        assert!(help_text.contains("s: sync"));
+        assert!(!help_text.contains("c: cancel"));
     }
 }

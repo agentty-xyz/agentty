@@ -39,6 +39,7 @@ mod tests {
     use super::*;
     use crate::infra::db::Database;
     use crate::ui::state::app_mode::HelpContext;
+    use crate::ui::state::help_action::HelpAction;
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -56,7 +57,9 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
-            context: HelpContext::List,
+            context: HelpContext::List {
+                keybindings: vec![HelpAction::new("quit", "q", "Quit")],
+            },
             scroll_offset: 0,
         };
 
@@ -77,9 +80,9 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::View {
-                is_done: false,
-                is_in_progress: false,
+                plan_followup_navigation: None,
                 session_id: "s1".to_string(),
+                session_state: crate::ui::state::help_action::ViewSessionState::Interactive,
                 scroll_offset: Some(5),
             },
             scroll_offset: 0,
@@ -107,7 +110,9 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
-            context: HelpContext::List,
+            context: HelpContext::List {
+                keybindings: vec![HelpAction::new("quit", "q", "Quit")],
+            },
             scroll_offset: 0,
         };
 
@@ -129,7 +134,9 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
-            context: HelpContext::List,
+            context: HelpContext::List {
+                keybindings: vec![HelpAction::new("quit", "q", "Quit")],
+            },
             scroll_offset: 0,
         };
 

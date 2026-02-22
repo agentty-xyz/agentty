@@ -7,6 +7,9 @@ use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
 use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::ui::state::help_action::{
+    HelpAction, onboarding_actions, session_list_actions, settings_actions, stats_actions,
+};
 use crate::ui::state::palette::PaletteFocus;
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
@@ -78,7 +81,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 Tab::Stats => {}
             }
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('d') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app
                 .selected_session()
                 .map(|session| (session.id.clone(), session.display_title().to_string()));
@@ -91,7 +94,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 };
             }
         }
-        KeyCode::Char('c') => {
+        KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
             if let Some(session_id) = app.selected_session().map(|s| s.id.clone()) {
                 let _ = app.cancel_session(&session_id).await;
             }
@@ -100,10 +103,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             sync_main_branch(app);
         }
         KeyCode::Char('?') => {
-            app.mode = AppMode::Help {
-                context: HelpContext::List,
-                scroll_offset: 0,
-            };
+            open_list_help_overlay(app);
         }
         _ => {}
     }
@@ -144,6 +144,50 @@ fn is_settings_text_key(key: KeyEvent) -> bool {
 /// Starts selected-project branch sync and immediately opens a loading popup.
 fn sync_main_branch(app: &mut App) {
     app.start_sync_main();
+}
+
+/// Opens the help overlay with list-mode action availability projection.
+fn open_list_help_overlay(app: &mut App) {
+    let keybindings = list_keybindings(app);
+
+    app.mode = AppMode::Help {
+        context: HelpContext::List { keybindings },
+        scroll_offset: 0,
+    };
+}
+
+/// Projects current list-mode action availability into keybinding entries.
+fn list_keybindings(app: &App) -> Vec<HelpAction> {
+    if app.should_show_onboarding() {
+        return onboarding_actions();
+    }
+
+    if app.tabs.current() == Tab::Settings {
+        return settings_actions();
+    }
+
+    if app.tabs.current() == Tab::Stats {
+        return stats_actions();
+    }
+
+    let is_sessions_tab = app.tabs.current() == Tab::Sessions;
+    let selected_session = app.selected_session();
+    let can_delete_selected_session = is_sessions_tab && selected_session.is_some();
+    let can_cancel_selected_session =
+        is_sessions_tab && selected_session.is_some_and(|session| session.status == Status::Review);
+    let can_open_selected_session = is_sessions_tab
+        && app
+            .sessions
+            .table_state
+            .selected()
+            .and_then(|selected_index| app.sessions.sessions.get(selected_index))
+            .is_some_and(|session| !matches!(session.status, Status::Canceled));
+
+    session_list_actions(
+        can_cancel_selected_session,
+        can_delete_selected_session,
+        can_open_selected_session,
+    )
 }
 
 /// Creates a new session and switches the UI to prompt mode for it.
@@ -608,9 +652,10 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Help {
-                context: HelpContext::List,
+                context: HelpContext::List { ref keybindings },
                 scroll_offset: 0,
-            }
+            } if keybindings.iter().any(|action| action.key == "q")
+                && keybindings.iter().any(|action| action.key == "?")
         ));
     }
 

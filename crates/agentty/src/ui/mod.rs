@@ -669,7 +669,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
         table_state,
     } = context;
     match context {
-        HelpContext::List => {
+        HelpContext::List { .. } => {
             render_list_background(
                 f,
                 area,
@@ -929,7 +929,11 @@ mod tests {
     fn test_should_render_onboarding_returns_false_for_non_list_mode() {
         // Arrange
         let mode = AppMode::Help {
-            context: HelpContext::List,
+            context: HelpContext::List {
+                keybindings: vec![crate::ui::state::help_action::HelpAction::new(
+                    "quit", "q", "Quit",
+                )],
+            },
             scroll_offset: 0,
         };
         let show_onboarding = true;

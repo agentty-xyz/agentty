@@ -5,9 +5,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::ui::Page;
+use crate::ui::state::help_action;
 
 const DESCRIPTION: &str = "Manage coding agents in your terminal";
-const HELP_HINT: &str = "q: quit";
 const START_BUTTON: &str = "[ Press Enter to Start ]";
 const LOGO_LINES: [&str; 5] = [
     "    _    ____ _____ _   _ _____ _____ __   __",
@@ -148,7 +148,9 @@ impl Page for OnboardingPage {
         let onboarding = Paragraph::new(lines).alignment(Alignment::Center);
         f.render_widget(onboarding, horizontal_chunks[1]);
 
-        let help_message = Paragraph::new(HELP_HINT).style(Style::default().fg(Color::Gray));
+        let help_message =
+            Paragraph::new(help_action::footer_text(&help_action::onboarding_actions()))
+                .style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, help_area);
     }
 }

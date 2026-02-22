@@ -1,0 +1,253 @@
+/// One user-visible shortcut entry that can be rendered in the footer and
+/// in the help popup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HelpAction {
+    pub(crate) footer_label: &'static str,
+    pub(crate) key: &'static str,
+    pub(crate) popup_label: &'static str,
+}
+
+impl HelpAction {
+    /// Creates one help action descriptor.
+    pub(crate) const fn new(
+        footer_label: &'static str,
+        key: &'static str,
+        popup_label: &'static str,
+    ) -> Self {
+        Self {
+            footer_label,
+            key,
+            popup_label,
+        }
+    }
+}
+
+/// Encodes which navigation keys can select a plan follow-up action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlanFollowupNavigation {
+    Horizontal,
+    Vertical,
+}
+
+/// Encodes which shortcut family is available for the viewed session state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewSessionState {
+    Done,
+    InProgress,
+    Interactive,
+}
+
+/// Action availability snapshot for view-mode help projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ViewHelpState {
+    pub(crate) plan_followup_navigation: Option<PlanFollowupNavigation>,
+    pub(crate) session_state: ViewSessionState,
+}
+
+/// Returns help actions for the onboarding page.
+pub(crate) fn onboarding_actions() -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+    actions.push(HelpAction::new("start", "Enter", "Start session"));
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns help actions for the sessions page in list mode.
+pub(crate) fn session_list_actions(
+    can_cancel_selected_session: bool,
+    can_delete_selected_session: bool,
+    can_open_selected_session: bool,
+) -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+
+    if can_delete_selected_session {
+        actions.push(HelpAction::new("delete", "d", "Delete session"));
+    }
+
+    if can_cancel_selected_session {
+        actions.push(HelpAction::new("cancel", "c", "Cancel session"));
+    }
+
+    if can_open_selected_session {
+        actions.push(HelpAction::new("view", "Enter", "Open session"));
+    }
+
+    actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns help actions for the settings page.
+pub(crate) fn settings_actions() -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+    actions.push(HelpAction::new("nav", "j/k", "Navigate settings"));
+    actions.push(HelpAction::new("edit", "Enter", "Edit setting"));
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns help actions for the stats page.
+pub(crate) fn stats_actions() -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Projects currently available view-mode actions into help entries.
+pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
+    let can_open_worktree = state.session_state == ViewSessionState::Interactive;
+    let can_edit_session = state.session_state == ViewSessionState::Interactive;
+
+    let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
+
+    if let Some(plan_followup_navigation) = state.plan_followup_navigation {
+        match plan_followup_navigation {
+            PlanFollowupNavigation::Horizontal => {
+                actions.push(HelpAction::new(
+                    "choose action",
+                    "Left/Right",
+                    "Choose action",
+                ));
+            }
+            PlanFollowupNavigation::Vertical => {
+                actions.push(HelpAction::new("choose action", "Up/Down", "Choose action"));
+            }
+        }
+
+        actions.push(HelpAction::new("confirm", "Enter", "Confirm action"));
+    } else if can_edit_session {
+        actions.push(HelpAction::new("reply", "Enter", "Reply"));
+    }
+
+    if can_open_worktree {
+        actions.push(HelpAction::new("open", "o", "Open worktree"));
+    }
+
+    if can_edit_session {
+        actions.push(HelpAction::new("diff", "d", "Show diff"));
+        actions.push(HelpAction::new("queue merge", "m", "Queue merge"));
+        actions.push(HelpAction::new("rebase", "r", "Rebase"));
+        actions.push(HelpAction::new("mode", "S-Tab", "Toggle permission mode"));
+    }
+
+    if state.session_state == ViewSessionState::InProgress {
+        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop agent"));
+    }
+
+    actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
+    actions.push(HelpAction::new("top", "g", "Scroll to top"));
+    actions.push(HelpAction::new("bottom", "G", "Scroll to bottom"));
+    actions.push(HelpAction::new("half down", "Ctrl+d", "Half page down"));
+    actions.push(HelpAction::new("half up", "Ctrl+u", "Half page up"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns help entries for diff-mode actions.
+pub(crate) fn diff_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("back", "q/Esc", "Back to session"),
+        HelpAction::new("select file", "j/k", "Select file"),
+        HelpAction::new("scroll file", "Up/Down", "Scroll selected file"),
+        HelpAction::new("help", "?", "Help"),
+    ]
+}
+
+/// Renders one-line footer help text from projected actions.
+pub(crate) fn footer_text(actions: &[HelpAction]) -> String {
+    let mut help_text = String::new();
+
+    for (index, action) in actions.iter().enumerate() {
+        if index > 0 {
+            help_text.push_str(" | ");
+        }
+
+        help_text.push_str(action.key);
+        help_text.push_str(": ");
+        help_text.push_str(action.footer_label);
+    }
+
+    help_text
+}
+
+/// Returns list-mode actions that are shared by onboarding, sessions, stats,
+/// and settings pages.
+fn list_base_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("quit", "q", "Quit"),
+        HelpAction::new("command", "/", "Command palette"),
+        HelpAction::new("add", "a", "Add session"),
+        HelpAction::new("sync", "s", "Sync"),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_list_actions_hide_enter_without_openable_session() {
+        // Arrange
+        // Act
+        let actions = session_list_actions(false, false, false);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "j/k"));
+    }
+
+    #[test]
+    fn test_onboarding_actions_include_start_shortcut() {
+        // Arrange
+
+        // Act
+        let actions = onboarding_actions();
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "Tab"));
+        assert!(actions.iter().any(|action| action.key == "?"));
+    }
+
+    #[test]
+    fn test_view_actions_in_progress_shows_stop_and_hides_edit_actions() {
+        // Arrange
+        let state = ViewHelpState {
+            plan_followup_navigation: None,
+            session_state: ViewSessionState::InProgress,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
+        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(!actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "d"));
+    }
+
+    #[test]
+    fn test_footer_text_joins_actions_in_order() {
+        // Arrange
+        let actions = vec![
+            HelpAction::new("quit", "q", "Quit"),
+            HelpAction::new("help", "?", "Help"),
+        ];
+
+        // Act
+        let help_text = footer_text(&actions);
+
+        // Assert
+        assert_eq!(help_text, "q: quit | ?: help");
+    }
+}

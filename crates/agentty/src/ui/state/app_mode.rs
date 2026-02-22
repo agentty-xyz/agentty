@@ -1,3 +1,6 @@
+use super::help_action::{
+    self, HelpAction, PlanFollowupNavigation, ViewHelpState, ViewSessionState,
+};
 use super::palette::{PaletteCommand, PaletteFocus};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
@@ -57,12 +60,12 @@ pub enum AppMode {
 
 /// Captures which page opened the help overlay so it can be restored on close.
 pub enum HelpContext {
-    List,
+    /// Generic list-mode help context with precomputed keybindings.
+    List { keybindings: Vec<HelpAction> },
     View {
-        is_done: bool,
-        /// Whether the originating session was actively running.
-        is_in_progress: bool,
+        plan_followup_navigation: Option<PlanFollowupNavigation>,
         session_id: String,
+        session_state: ViewSessionState,
         scroll_offset: Option<u16>,
     },
     Diff {
@@ -74,65 +77,26 @@ pub enum HelpContext {
 }
 
 impl HelpContext {
-    /// Returns the keybinding pairs `(key, description)` for the originating
-    /// page.
-    pub fn keybindings(&self) -> &[(&str, &str)] {
+    /// Returns projected keybinding entries for the originating page.
+    pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
-            HelpContext::List => &[
-                ("q", "Quit"),
-                ("a", "Add session"),
-                ("d", "Delete session"),
-                ("c", "Cancel session"),
-                ("s", "Sync"),
-                ("o", "Open"),
-                ("Enter", "Open session"),
-                ("Tab", "Switch tab"),
-                ("/", "Command palette"),
-                ("?", "Help"),
-            ],
-            HelpContext::View { is_done: true, .. } => {
-                &[("q", "Quit"), ("j", "Scroll down"), ("k", "Scroll up")]
-            }
             HelpContext::View {
-                is_in_progress: true,
+                plan_followup_navigation,
+                session_state,
                 ..
-            } => &[
-                ("q", "Back to list"),
-                ("j", "Scroll down"),
-                ("k", "Scroll up"),
-                ("g", "Scroll to top"),
-                ("G", "Scroll to bottom"),
-                ("Ctrl+d", "Half page down"),
-                ("Ctrl+u", "Half page up"),
-                ("?", "Help"),
-            ],
-            HelpContext::View { .. } => &[
-                ("q", "Back to list"),
-                ("Enter", "Reply"),
-                ("Ctrl+c", "Stop agent"),
-                ("d", "Show diff"),
-                ("m", "Merge"),
-                ("r", "Rebase"),
-                ("S-Tab", "Toggle permission mode"),
-                ("g", "Scroll to top"),
-                ("G", "Scroll to bottom"),
-                ("Ctrl+d", "Half page down"),
-                ("Ctrl+u", "Half page up"),
-                ("?", "Help"),
-            ],
-            HelpContext::Diff { .. } => &[
-                ("q / Esc", "Back to session"),
-                ("j / k", "Select file"),
-                ("Up / Down", "Scroll selected file"),
-                ("?", "Help"),
-            ],
+            } => help_action::view_actions(ViewHelpState {
+                plan_followup_navigation: *plan_followup_navigation,
+                session_state: *session_state,
+            }),
+            HelpContext::List { keybindings } => keybindings.clone(),
+            HelpContext::Diff { .. } => help_action::diff_actions(),
         }
     }
 
     /// Reconstructs the `AppMode` that was active before help was opened.
     pub fn restore_mode(self) -> AppMode {
         match self {
-            HelpContext::List => AppMode::List,
+            HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
                 session_id,
                 scroll_offset,
@@ -169,9 +133,9 @@ mod tests {
     fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
         // Arrange
         let context = HelpContext::View {
-            is_done: false,
-            is_in_progress: true,
+            plan_followup_navigation: None,
             session_id: "session-id".to_string(),
+            session_state: ViewSessionState::InProgress,
             scroll_offset: Some(2),
         };
 
@@ -179,24 +143,24 @@ mod tests {
         let bindings = context.keybindings();
 
         // Assert
-        assert!(bindings.contains(&("q", "Back to list")));
-        assert!(bindings.contains(&("j", "Scroll down")));
-        assert!(bindings.contains(&("k", "Scroll up")));
-        assert!(bindings.contains(&("?", "Help")));
-        assert!(!bindings.iter().any(|(key, _)| *key == "Enter"));
-        assert!(!bindings.iter().any(|(key, _)| *key == "d"));
-        assert!(!bindings.iter().any(|(key, _)| *key == "m"));
-        assert!(!bindings.iter().any(|(key, _)| *key == "r"));
-        assert!(!bindings.iter().any(|(key, _)| *key == "S-Tab"));
+        assert!(bindings.iter().any(|binding| binding.key == "q"));
+        assert!(bindings.iter().any(|binding| binding.key == "j/k"));
+        assert!(bindings.iter().any(|binding| binding.key == "?"));
+        assert!(bindings.iter().any(|binding| binding.key == "Ctrl+c"));
+        assert!(!bindings.iter().any(|binding| binding.key == "Enter"));
+        assert!(!bindings.iter().any(|binding| binding.key == "d"));
+        assert!(!bindings.iter().any(|binding| binding.key == "m"));
+        assert!(!bindings.iter().any(|binding| binding.key == "r"));
+        assert!(!bindings.iter().any(|binding| binding.key == "S-Tab"));
     }
 
     #[test]
     fn test_help_context_restore_mode_ignores_view_help_flags() {
         // Arrange
         let context = HelpContext::View {
-            is_done: false,
-            is_in_progress: true,
+            plan_followup_navigation: Some(PlanFollowupNavigation::Vertical),
             session_id: "session-id".to_string(),
+            session_state: ViewSessionState::InProgress,
             scroll_offset: Some(4),
         };
 
@@ -211,5 +175,23 @@ mod tests {
                 scroll_offset: Some(4),
             } if session_id == "session-id"
         ));
+    }
+
+    #[test]
+    fn test_help_context_list_keybindings_return_stored_actions() {
+        // Arrange
+        let keybindings = vec![
+            HelpAction::new("quit", "q", "Quit"),
+            HelpAction::new("help", "?", "Help"),
+        ];
+        let context = HelpContext::List { keybindings };
+
+        // Act
+        let bindings = context.keybindings();
+
+        // Assert
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings.iter().any(|binding| binding.key == "q"));
+        assert!(bindings.iter().any(|binding| binding.key == "?"));
     }
 }

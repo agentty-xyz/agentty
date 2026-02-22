@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::domain::session::Session;
 use crate::ui::components::file_explorer::FileExplorer;
+use crate::ui::state::help_action;
 use crate::ui::util::{
     DiffLine, DiffLineKind, max_diff_line_number, parse_diff_lines, wrap_diff_content,
 };
@@ -20,7 +21,6 @@ const MIN_GUTTER_WIDTH: usize = 1;
 const SCROLL_X_OFFSET: u16 = 0;
 const SIGN_COLUMN_WIDTH: usize = 1;
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
-const HELP_HINT: &str = "q: back | j/k: select file | Up/Down: scroll selected file | ?: help";
 
 /// Renders the current session's git diff in a scrollable page.
 pub struct DiffPage<'a> {
@@ -166,7 +166,8 @@ impl Page for DiffPage<'_> {
             .unwrap_or_default();
         self.render_diff_content(f, diff_area, &filtered);
 
-        let help_message = Paragraph::new(HELP_HINT).style(Style::default().fg(Color::Gray));
+        let help_text = help_action::footer_text(&help_action::diff_actions());
+        let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, footer_area);
     }
 }
@@ -232,6 +233,6 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("j/k: select file"));
-        assert!(text.contains("Up/Down: scroll selected file"));
+        assert!(text.contains("Up/Down: scroll file"));
     }
 }

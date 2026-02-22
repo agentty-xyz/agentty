@@ -45,11 +45,15 @@ impl Component for HelpOverlay<'_> {
 
         let bindings = self.context.keybindings();
 
-        let key_width = bindings.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+        let key_width = bindings
+            .iter()
+            .map(|binding| binding.key.len())
+            .max()
+            .unwrap_or(0);
 
         let max_content_width = bindings
             .iter()
-            .map(|(_, description)| 1 + key_width + 2 + description.len())
+            .map(|binding| 1 + key_width + 2 + binding.popup_label.len())
             .max()
             .unwrap_or(0);
 
@@ -60,18 +64,18 @@ impl Component for HelpOverlay<'_> {
 
         let mut lines: Vec<Line<'_>> = Vec::with_capacity(bindings.len());
 
-        for (key, description) in bindings {
+        for binding in bindings {
             lines.push(Line::from(vec![
                 Span::raw(indent.clone()),
                 Span::raw(" "),
                 Span::styled(
-                    format!("{key:>key_width$}"),
+                    format!("{:>key_width$}", binding.key),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(": ", Style::default().fg(Color::White)),
-                Span::styled(*description, Style::default().fg(Color::White)),
+                Span::styled(binding.popup_label, Style::default().fg(Color::White)),
             ]));
         }
 
@@ -170,7 +174,11 @@ mod tests {
     #[test]
     fn test_help_overlay_new_stores_fields() {
         // Arrange
-        let context = HelpContext::List;
+        let context = HelpContext::List {
+            keybindings: vec![crate::ui::state::help_action::HelpAction::new(
+                "quit", "q", "Quit",
+            )],
+        };
 
         // Act
         let overlay = HelpOverlay::new(&context, 5);

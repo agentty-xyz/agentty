@@ -11,6 +11,9 @@ use crate::file_list;
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::components::session_output::SessionOutput;
 use crate::ui::state::app_mode::AppMode;
+use crate::ui::state::help_action::{
+    self, PlanFollowupNavigation, ViewHelpState, ViewSessionState,
+};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::calculate_input_height;
 use crate::ui::{Component, Page};
@@ -280,22 +283,17 @@ impl<'a> SessionChatPage<'a> {
     ///
     /// `InProgress` and `Done` sessions intentionally expose only navigation
     /// and help shortcuts, including hiding the open-worktree shortcut.
-    fn view_help_text(session: &Session, plan_followup: Option<&PlanFollowup>) -> &'static str {
-        if session.status == Status::InProgress {
-            return "q: back | j/k: scroll | ?: help";
-        }
+    fn view_help_text(session: &Session, plan_followup: Option<&PlanFollowup>) -> String {
+        let actions = help_action::view_actions(ViewHelpState {
+            plan_followup_navigation: plan_followup.map(|_| PlanFollowupNavigation::Vertical),
+            session_state: match session.status {
+                Status::Done => ViewSessionState::Done,
+                Status::InProgress => ViewSessionState::InProgress,
+                _ => ViewSessionState::Interactive,
+            },
+        });
 
-        if session.status == Status::Done {
-            return "q: back | j/k: scroll | ?: help";
-        }
-
-        if plan_followup.is_some() {
-            return "q: back | \u{2191}/\u{2193}: choose action | enter: confirm | d: diff | m: \
-                    queue merge | r: rebase | S-Tab: mode | j/k: scroll | ?: help";
-        }
-
-        "q: back | enter: reply | o: open | d: diff | m: queue merge | r: rebase | S-Tab: mode | \
-         j/k: scroll | ?: help"
+        help_action::footer_text(&actions)
     }
 }
 
@@ -626,7 +624,11 @@ mod tests {
         let help_text = SessionChatPage::view_help_text(&session, None);
 
         // Assert
-        assert_eq!(help_text, "q: back | j/k: scroll | ?: help");
+        assert!(help_text.contains("q: back"));
+        assert!(help_text.contains("Ctrl+c: stop"));
+        assert!(help_text.contains("j/k: scroll"));
+        assert!(!help_text.contains("o: open"));
+        assert!(!help_text.contains("Enter: reply"));
     }
 
     #[test]
@@ -666,7 +668,7 @@ mod tests {
         let help_text = SessionChatPage::view_help_text(&session, Some(&followup));
 
         // Assert
-        assert!(help_text.contains("\u{2191}/\u{2193}"));
+        assert!(help_text.contains("Up/Down: choose action"));
     }
 
     #[test]

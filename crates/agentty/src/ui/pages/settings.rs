@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::app::settings::SettingsManager;
 use crate::ui::Page;
+use crate::ui::state::help_action;
 
 /// Renders the settings page table and inline editing hints.
 pub struct SettingsPage<'a> {
@@ -56,8 +57,19 @@ impl Page for SettingsPage<'_> {
 
         f.render_stateful_widget(table, main_area, &mut self.manager.table_state);
 
-        let footer = Paragraph::new(self.manager.footer_hint());
+        let footer = Paragraph::new(settings_footer_text(self.manager));
 
         f.render_widget(footer, chunks[1]);
     }
+}
+
+/// Returns the footer help text for settings mode.
+fn settings_footer_text(manager: &SettingsManager) -> String {
+    if manager.is_editing_text_input() {
+        return manager.footer_hint().to_string();
+    }
+
+    let actions = help_action::settings_actions();
+
+    help_action::footer_text(&actions)
 }
