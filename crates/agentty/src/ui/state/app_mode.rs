@@ -12,7 +12,8 @@ pub enum AppMode {
         session_id: Option<String>,
         selected_confirmation_index: usize,
     },
-    /// Informational popup displayed when sync cannot be started.
+    /// Informational popup displayed for sync outcomes, including success and
+    /// blocked/failed states.
     SyncBlockedPopup {
         message: String,
         title: String,

@@ -4,7 +4,7 @@ use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::state::app_mode::AppMode;
 
-/// Handles key input while sync-blocked informational popup is visible.
+/// Handles key input while the sync informational popup is visible.
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     if !matches!(app.mode, AppMode::SyncBlockedPopup { .. }) {
         return EventResult::Continue;
@@ -17,7 +17,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     EventResult::Continue
 }
 
-/// Returns whether the pressed key should close sync-blocked popup.
+/// Returns whether the pressed key should close the sync informational popup.
 fn should_close_sync_blocked_popup(key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Enter | KeyCode::Esc => true,
