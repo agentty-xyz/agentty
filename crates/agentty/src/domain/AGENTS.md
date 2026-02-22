@@ -7,7 +7,6 @@ Pure business logic and domain entities, decoupled from UI and infrastructure.
 ## Directory Index
 
 - [agent.rs](agent.rs) - Agent backend traits and model definitions.
-- [file_entry.rs](file_entry.rs) - File system entities.
 - [input.rs](input.rs) - Input state management.
 - [mod.rs](mod.rs) - Module definition.
 - [plan.rs](plan.rs) - Plan output parsing utilities.

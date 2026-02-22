@@ -878,8 +878,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::domain::file_entry::FileEntry;
     use crate::infra::db::Database;
+    use crate::infra::file_index::FileEntry;
     use crate::ui::state::prompt::{PromptAtMentionState, PromptHistoryState};
 
     fn setup_test_git_repo(path: &Path) {

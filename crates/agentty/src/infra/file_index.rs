@@ -4,10 +4,17 @@ use std::path::Path;
 
 use ignore::WalkBuilder;
 
-use crate::domain::file_entry::FileEntry;
-
 const MAX_DEPTH: usize = 10;
 const MAX_ENTRIES: usize = 500;
+
+/// A single file or directory entry for the `@` mention dropdown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileEntry {
+    /// Whether this entry is a directory.
+    pub is_dir: bool,
+    /// Relative path from the listing root (e.g., `src/main.rs`).
+    pub path: String,
+}
 
 /// Lists files and directories recursively under `root`, respecting
 /// `.gitignore`.
