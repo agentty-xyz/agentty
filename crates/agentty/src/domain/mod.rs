@@ -1,5 +1,5 @@
 pub mod agent;
-pub mod file;
+pub mod file_entry;
 pub mod input;
 pub mod permission;
 pub mod plan;

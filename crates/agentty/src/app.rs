@@ -29,14 +29,14 @@ pub(crate) mod tab;
 mod task;
 
 // Export state for use by runtime
-pub mod state;
+pub mod session_state;
 use merge_queue::{MergeQueue, MergeQueueProgress};
 pub use project::ProjectManager;
 pub use service::AppServices;
 pub use session::SessionManager;
 pub(crate) use session::SyncSessionStartError;
+pub use session_state::SessionState;
 pub use settings::SettingsManager;
-pub use state::SessionState;
 pub use tab::{Tab, TabManager};
 use task::TaskService;
 
@@ -119,7 +119,7 @@ enum CodexUsageLimitsBatchUpdate {
     Replace(CodexUsageLimits),
 }
 
-// SessionState definition moved to state.rs
+// SessionState definition moved to session_state.rs
 
 /// Stores application state and coordinates session/project workflows.
 pub struct App {

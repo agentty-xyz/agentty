@@ -878,7 +878,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::domain::file::FileEntry;
+    use crate::domain::file_entry::FileEntry;
     use crate::infra::db::Database;
     use crate::ui::state::prompt::{PromptAtMentionState, PromptHistoryState};
 

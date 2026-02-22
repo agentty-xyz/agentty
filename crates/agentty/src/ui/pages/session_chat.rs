@@ -312,7 +312,7 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::file::FileEntry;
+    use crate::domain::file_entry::FileEntry;
     use crate::domain::permission::PermissionMode;
     use crate::domain::session::{SessionSize, SessionStats};
 

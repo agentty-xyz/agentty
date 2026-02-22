@@ -1,8 +1,8 @@
+pub(crate) mod command_palette;
 pub(crate) mod confirmation;
 pub(crate) mod diff;
 pub(crate) mod help;
 pub(crate) mod list;
-pub(crate) mod palette;
 pub(crate) mod prompt;
+pub(crate) mod session_view;
 pub(crate) mod sync_blocked;
-pub(crate) mod view;

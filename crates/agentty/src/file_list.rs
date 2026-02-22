@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ignore::WalkBuilder;
 
-use crate::domain::file::FileEntry;
+use crate::domain::file_entry::FileEntry;
 
 const MAX_DEPTH: usize = 10;
 const MAX_ENTRIES: usize = 500;
