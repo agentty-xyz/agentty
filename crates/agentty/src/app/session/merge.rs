@@ -22,7 +22,7 @@ use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::db::Database;
-use crate::infra::git;
+use crate::infra::git::{self, GitClient};
 
 const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -51,6 +51,7 @@ struct MergeTaskInput {
     base_branch: String,
     db: Database,
     folder: PathBuf,
+    git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
     permission_mode: PermissionMode,
@@ -66,6 +67,7 @@ struct RebaseAssistInput {
     base_branch: String,
     db: Database,
     folder: PathBuf,
+    git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
     permission_mode: PermissionMode,
@@ -77,6 +79,7 @@ struct RebaseTaskInput {
     base_branch: String,
     db: Database,
     folder: PathBuf,
+    git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
     permission_mode: PermissionMode,
@@ -133,6 +136,7 @@ impl SessionManager {
         let permission_mode = session.permission_mode;
         let session_model = session.model;
         let app_event_tx = services.event_sender();
+        let git_client = self.git_client();
 
         let handles = self
             .session_handles_or_err(session_id)
@@ -163,7 +167,7 @@ impl SessionManager {
         };
 
         let working_dir = projects.working_dir().to_path_buf();
-        let Some(repo_root) = git::find_git_repo_root(working_dir).await else {
+        let Some(repo_root) = git_client.find_git_repo_root(working_dir).await else {
             let _ =
                 TaskService::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
@@ -175,6 +179,7 @@ impl SessionManager {
             base_branch,
             db,
             folder,
+            git_client,
             id: id.clone(),
             output,
             permission_mode,
@@ -191,11 +196,29 @@ impl SessionManager {
     }
 
     async fn run_merge_task(input: MergeTaskInput) {
+        let output = Arc::clone(&input.output);
+        let db = input.db.clone();
+        let app_event_tx = input.app_event_tx.clone();
+        let id = input.id.clone();
+        let status = Arc::clone(&input.status);
+
+        let merge_result = Self::execute_merge_workflow(input).await;
+
+        Self::finalize_merge_task(merge_result, &output, &db, &app_event_tx, &id, &status).await;
+    }
+
+    /// Executes the merge workflow for one session branch.
+    ///
+    /// # Errors
+    /// Returns an error when the rebase step fails, squash-merge git commands
+    /// fail, status transitions are invalid, or worktree cleanup fails.
+    async fn execute_merge_workflow(input: MergeTaskInput) -> Result<String, String> {
         let MergeTaskInput {
             app_event_tx,
             base_branch,
             db,
             folder,
+            git_client,
             id,
             output,
             permission_mode,
@@ -205,103 +228,100 @@ impl SessionManager {
             status,
         } = input;
 
-        let merge_result: Result<String, String> = async {
-            // Rebase onto the base branch first to ensure the merge is clean and
-            // includes all recent changes. This also handles auto-commit and
-            // conflict resolution via the agent.
-            let rebase_input = RebaseAssistInput {
-                app_event_tx: app_event_tx.clone(),
-                base_branch: base_branch.clone(),
-                db: db.clone(),
-                folder: folder.clone(),
-                id: id.clone(),
-                output: Arc::clone(&output),
-                permission_mode,
-                session_model,
-            };
-            if let Err(error) = Self::execute_rebase_workflow(rebase_input).await {
-                return Err(format!("Merge failed during rebase step: {error}"));
-            }
+        // Rebase onto the base branch first to ensure the merge is clean and
+        // includes all recent changes. This also handles auto-commit and
+        // conflict resolution via the agent.
+        let rebase_input = RebaseAssistInput {
+            app_event_tx: app_event_tx.clone(),
+            base_branch: base_branch.clone(),
+            db: db.clone(),
+            folder: folder.clone(),
+            git_client: Arc::clone(&git_client),
+            id: id.clone(),
+            output: Arc::clone(&output),
+            permission_mode,
+            session_model,
+        };
+        if let Err(error) = Self::execute_rebase_workflow(rebase_input).await {
+            return Err(format!("Merge failed during rebase step: {error}"));
+        }
 
-            let squash_diff = {
+        let squash_diff = {
+            let repo_root = repo_root.clone();
+            let source_branch = source_branch.clone();
+            let base_branch = base_branch.clone();
+
+            git_client
+                .squash_merge_diff(repo_root, source_branch, base_branch)
+                .await
+                .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
+        };
+
+        let (merge_outcome, commit_message) = if squash_diff.trim().is_empty() {
+            (git::SquashMergeOutcome::AlreadyPresentInTarget, None)
+        } else {
+            let fallback_commit_message =
+                Self::fallback_merge_commit_message(&source_branch, &base_branch);
+            let commit_message = {
+                let folder = folder.clone();
+                let squash_diff = squash_diff.clone();
+                let fallback_commit_message_for_task = fallback_commit_message.clone();
+                let generate_message = tokio::task::spawn_blocking(move || {
+                    Self::generate_merge_commit_message_from_diff(
+                        &folder,
+                        session_model,
+                        &squash_diff,
+                    )
+                    .unwrap_or(fallback_commit_message_for_task)
+                });
+
+                match tokio::time::timeout(MERGE_COMMIT_MESSAGE_TIMEOUT, generate_message).await {
+                    Ok(Ok(message)) => message,
+                    Ok(Err(_)) | Err(_) => fallback_commit_message,
+                }
+            };
+
+            let merge_outcome = {
                 let repo_root = repo_root.clone();
                 let source_branch = source_branch.clone();
                 let base_branch = base_branch.clone();
-
-                git::squash_merge_diff(repo_root, source_branch, base_branch)
-                    .await
-                    .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
+                let commit_message = commit_message.clone();
+                git_client
+                    .squash_merge(repo_root, source_branch, base_branch, commit_message)
+                    .await?
             };
 
-            let (merge_outcome, commit_message) = if squash_diff.trim().is_empty() {
-                (git::SquashMergeOutcome::AlreadyPresentInTarget, None)
-            } else {
-                let fallback_commit_message =
-                    Self::fallback_merge_commit_message(&source_branch, &base_branch);
-                let commit_message = {
-                    let folder = folder.clone();
-                    let squash_diff = squash_diff.clone();
-                    let fallback_commit_message_for_task = fallback_commit_message.clone();
-                    let generate_message = tokio::task::spawn_blocking(move || {
-                        Self::generate_merge_commit_message_from_diff(
-                            &folder,
-                            session_model,
-                            &squash_diff,
-                        )
-                        .unwrap_or(fallback_commit_message_for_task)
-                    });
+            (merge_outcome, Some(commit_message))
+        };
 
-                    match tokio::time::timeout(MERGE_COMMIT_MESSAGE_TIMEOUT, generate_message).await
-                    {
-                        Ok(Ok(message)) => message,
-                        Ok(Err(_)) | Err(_) => fallback_commit_message,
-                    }
-                };
-
-                let merge_outcome = {
-                    let repo_root = repo_root.clone();
-                    let source_branch = source_branch.clone();
-                    let base_branch = base_branch.clone();
-                    let commit_message = commit_message.clone();
-                    git::squash_merge(repo_root, source_branch, base_branch, commit_message).await?
-                };
-
-                (merge_outcome, Some(commit_message))
-            };
-
-            if !TaskService::update_status(&status, &db, &app_event_tx, &id, Status::Done).await {
-                return Err("Invalid status transition to Done".to_string());
-            }
-
-            Self::cleanup_merged_session_worktree(
-                folder.clone(),
-                source_branch.clone(),
-                Some(repo_root),
-            )
-            .await
-            .map_err(|error| {
-                format!("Merged successfully but failed to remove worktree: {error}")
-            })?;
-
-            if let Some(commit_message) = commit_message {
-                Self::update_session_title_and_summary_from_commit_message(
-                    &db,
-                    &id,
-                    &commit_message,
-                    &app_event_tx,
-                )
-                .await;
-            }
-
-            Ok(Self::merge_success_message(
-                &source_branch,
-                &base_branch,
-                merge_outcome,
-            ))
+        if !TaskService::update_status(&status, &db, &app_event_tx, &id, Status::Done).await {
+            return Err("Invalid status transition to Done".to_string());
         }
-        .await;
 
-        Self::finalize_merge_task(merge_result, &output, &db, &app_event_tx, &id, &status).await;
+        Self::cleanup_merged_session_worktree(
+            folder.clone(),
+            Arc::clone(&git_client),
+            source_branch.clone(),
+            Some(repo_root),
+        )
+        .await
+        .map_err(|error| format!("Merged successfully but failed to remove worktree: {error}"))?;
+
+        if let Some(commit_message) = commit_message {
+            Self::update_session_title_and_summary_from_commit_message(
+                &db,
+                &id,
+                &commit_message,
+                &app_event_tx,
+            )
+            .await;
+        }
+
+        Ok(Self::merge_success_message(
+            &source_branch,
+            &base_branch,
+            merge_outcome,
+        ))
     }
 
     async fn finalize_merge_task(
@@ -375,6 +395,7 @@ impl SessionManager {
         let status = Arc::clone(&handles.status);
         let db = services.db().clone();
         let app_event_tx = services.event_sender();
+        let git_client = self.git_client();
 
         if !TaskService::update_status(&status, &db, &app_event_tx, &session.id, Status::Rebasing)
             .await
@@ -391,6 +412,7 @@ impl SessionManager {
             base_branch,
             db,
             folder: session.folder.clone(),
+            git_client,
             id,
             output,
             permission_mode,
@@ -414,18 +436,21 @@ impl SessionManager {
     pub(crate) async fn sync_main_for_project(
         default_branch: Option<String>,
         working_dir: PathBuf,
+        git_client: Arc<dyn GitClient>,
     ) -> Result<(), SyncSessionStartError> {
         let default_branch = default_branch.ok_or_else(|| {
             SyncSessionStartError::Other("Active project has no git branch".to_string())
         })?;
 
-        let _repo_root = git::find_git_repo_root(working_dir.clone())
+        let _repo_root = git_client
+            .find_git_repo_root(working_dir.clone())
             .await
             .ok_or_else(|| {
                 SyncSessionStartError::Other("Failed to find git repository root".to_string())
             })?;
 
-        let is_default_branch_clean = git::is_worktree_clean(working_dir.clone())
+        let is_default_branch_clean = git_client
+            .is_worktree_clean(working_dir.clone())
             .await
             .map_err(SyncSessionStartError::Other)?;
         if !is_default_branch_clean {
@@ -434,7 +459,8 @@ impl SessionManager {
             });
         }
 
-        let pull_result = git::pull_rebase(working_dir.clone())
+        let pull_result = git_client
+            .pull_rebase(working_dir.clone())
             .await
             .map_err(SyncSessionStartError::Other)?;
         if let git::PullRebaseResult::Conflict { detail } = pull_result {
@@ -443,7 +469,8 @@ impl SessionManager {
             )));
         }
 
-        git::push_current_branch(working_dir)
+        git_client
+            .push_current_branch(working_dir)
             .await
             .map_err(SyncSessionStartError::Other)?;
 
@@ -456,6 +483,7 @@ impl SessionManager {
             base_branch,
             db,
             folder,
+            git_client,
             id,
             output,
             permission_mode,
@@ -469,6 +497,7 @@ impl SessionManager {
                 base_branch: base_branch.clone(),
                 db: db.clone(),
                 folder: folder.clone(),
+                git_client: Arc::clone(&git_client),
                 id: id.clone(),
                 output: Arc::clone(&output),
                 permission_mode,
@@ -485,7 +514,9 @@ impl SessionManager {
     async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, String> {
         // Auto-commit any pending changes before rebasing to avoid
         // "cannot rebase: You have unstaged changes".
-        if let Err(error) = Self::commit_changes(&input.folder, true).await
+        if let Err(error) =
+            Self::commit_changes_with_git_client(input.git_client.as_ref(), &input.folder, true)
+                .await
             && !error.contains("Nothing to commit")
         {
             return Err(format!(
@@ -595,7 +626,7 @@ impl SessionManager {
                     }
                     git::RebaseStepResult::Conflict { detail } => {
                         if failure_tracker.observe(&detail) {
-                            Self::abort_rebase_after_assist_failure(&input.folder).await;
+                            Self::abort_rebase_after_assist_failure(&input).await;
 
                             return Err(format!(
                                 "Rebase assistance made no progress: repeated identical conflict \
@@ -604,7 +635,7 @@ impl SessionManager {
                         }
 
                         if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                            Self::abort_rebase_after_assist_failure(&input.folder).await;
+                            Self::abort_rebase_after_assist_failure(&input).await;
 
                             return Err(format!(
                                 "Rebase still has conflicts after assistance: {detail}"
@@ -619,7 +650,7 @@ impl SessionManager {
             let conflict_fingerprint =
                 Self::conflicted_file_fingerprint(&input.folder, &conflicted_files);
             if failure_tracker.observe(&conflict_fingerprint) {
-                Self::abort_rebase_after_assist_failure(&input.folder).await;
+                Self::abort_rebase_after_assist_failure(&input).await;
 
                 return Err(
                     "Rebase assistance made no progress: conflicted files did not change"
@@ -635,7 +666,7 @@ impl SessionManager {
             previous_conflict_files = conflicted_files;
             if still_has_conflicts {
                 if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                    Self::abort_rebase_after_assist_failure(&input.folder).await;
+                    Self::abort_rebase_after_assist_failure(&input).await;
 
                     return Err(
                         "Conflicts remain unresolved after maximum assistance attempts".to_string(),
@@ -652,7 +683,7 @@ impl SessionManager {
                 }
                 git::RebaseStepResult::Conflict { detail } => {
                     if failure_tracker.observe(&detail) {
-                        Self::abort_rebase_after_assist_failure(&input.folder).await;
+                        Self::abort_rebase_after_assist_failure(&input).await;
 
                         return Err(format!(
                             "Rebase assistance made no progress: repeated identical conflict \
@@ -661,7 +692,7 @@ impl SessionManager {
                     }
 
                     if assist_attempt == REBASE_ASSIST_POLICY.max_attempts {
-                        Self::abort_rebase_after_assist_failure(&input.folder).await;
+                        Self::abort_rebase_after_assist_failure(&input).await;
 
                         return Err(format!(
                             "Rebase still has conflicts after assistance: {detail}"
@@ -671,7 +702,7 @@ impl SessionManager {
             }
         }
 
-        Self::abort_rebase_after_assist_failure(&input.folder).await;
+        Self::abort_rebase_after_assist_failure(&input).await;
 
         Err("Failed to complete assisted rebase".to_string())
     }
@@ -682,7 +713,7 @@ impl SessionManager {
     /// Returns an error if git state cannot be queried.
     async fn is_rebase_in_progress(input: &RebaseAssistInput) -> Result<bool, String> {
         let folder = input.folder.clone();
-        let is_rebase_in_progress = git::is_rebase_in_progress(folder).await?;
+        let is_rebase_in_progress = input.git_client.is_rebase_in_progress(folder).await?;
 
         Ok(is_rebase_in_progress)
     }
@@ -695,7 +726,7 @@ impl SessionManager {
     async fn run_rebase_start(input: &RebaseAssistInput) -> Result<git::RebaseStepResult, String> {
         let folder = input.folder.clone();
         let base_branch = input.base_branch.clone();
-        let result = git::rebase_start(folder, base_branch).await?;
+        let result = input.git_client.rebase_start(folder, base_branch).await?;
 
         Ok(result)
     }
@@ -720,11 +751,15 @@ impl SessionManager {
         previous_conflict_files: &[String],
     ) -> Result<Vec<String>, String> {
         let folder = input.folder.clone();
-        let mut conflicted = git::list_conflicted_files(folder.clone()).await?;
+        let mut conflicted = input
+            .git_client
+            .list_conflicted_files(folder.clone())
+            .await?;
 
-        let staged_with_markers =
-            git::list_staged_conflict_marker_files(folder, previous_conflict_files.to_vec())
-                .await?;
+        let staged_with_markers = input
+            .git_client
+            .list_staged_conflict_marker_files(folder, previous_conflict_files.to_vec())
+            .await?;
         for file in staged_with_markers {
             if !conflicted.contains(&file) {
                 conflicted.push(file);
@@ -789,16 +824,18 @@ impl SessionManager {
         conflict_files: &[String],
     ) -> Result<bool, String> {
         let folder = input.folder.clone();
-        git::stage_all(folder).await?;
+        input.git_client.stage_all(folder).await?;
 
         let folder = input.folder.clone();
-        if git::has_unmerged_paths(folder).await? {
+        if input.git_client.has_unmerged_paths(folder).await? {
             return Ok(true);
         }
 
         let folder = input.folder.clone();
-        let staged_with_markers =
-            git::list_staged_conflict_marker_files(folder, conflict_files.to_vec()).await?;
+        let staged_with_markers = input
+            .git_client
+            .list_staged_conflict_marker_files(folder, conflict_files.to_vec())
+            .await?;
 
         Ok(!staged_with_markers.is_empty())
     }
@@ -811,7 +848,7 @@ impl SessionManager {
         input: &RebaseAssistInput,
     ) -> Result<git::RebaseStepResult, String> {
         let folder = input.folder.clone();
-        let result = git::rebase_continue(folder).await?;
+        let result = input.git_client.rebase_continue(folder).await?;
 
         Ok(result)
     }
@@ -864,6 +901,7 @@ impl SessionManager {
             app_event_tx: input.app_event_tx.clone(),
             db: input.db.clone(),
             folder: input.folder.clone(),
+            git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
             output: Arc::clone(&input.output),
             permission_mode: input.permission_mode,
@@ -872,9 +910,9 @@ impl SessionManager {
     }
 
     /// Aborts rebase after assistance fails to keep worktree state clean.
-    async fn abort_rebase_after_assist_failure(session_folder: &Path) {
-        let folder = session_folder.to_path_buf();
-        let _ = git::abort_rebase(folder).await;
+    async fn abort_rebase_after_assist_failure(input: &RebaseAssistInput) {
+        let folder = input.folder.clone();
+        let _ = input.git_client.abort_rebase(folder).await;
     }
 
     fn generate_merge_commit_message_from_diff(
@@ -963,15 +1001,16 @@ impl SessionManager {
     /// Returns an error if worktree or branch cleanup fails.
     pub(crate) async fn cleanup_merged_session_worktree(
         folder: PathBuf,
+        git_client: Arc<dyn GitClient>,
         source_branch: String,
         repo_root: Option<PathBuf>,
     ) -> Result<(), String> {
         let repo_root = repo_root.or_else(|| Self::resolve_repo_root_from_worktree(&folder));
 
-        git::remove_worktree(folder.clone()).await?;
+        git_client.remove_worktree(folder.clone()).await?;
 
         if let Some(repo_root) = repo_root {
-            git::delete_branch(repo_root, source_branch).await?;
+            git_client.delete_branch(repo_root, source_branch).await?;
         }
 
         let _ = tokio::fs::remove_dir_all(&folder).await;
@@ -1012,16 +1051,32 @@ impl SessionManager {
     /// skipped. Use this for defensive commits (e.g., before rebase) where the
     /// session code was already validated by hooks during the normal
     /// auto-commit flow.
+    #[cfg(test)]
     pub(crate) async fn commit_changes(folder: &Path, no_verify: bool) -> Result<String, String> {
-        let folder = folder.to_path_buf();
-        git::commit_all_preserving_single_commit(
-            folder.clone(),
-            COMMIT_MESSAGE.to_string(),
-            no_verify,
-        )
-        .await?;
+        let git_client = git::RealGitClient;
 
-        git::head_short_hash(folder).await
+        Self::commit_changes_with_git_client(&git_client, folder, no_verify).await
+    }
+
+    /// Commits all changes in a session worktree using the provided git client.
+    ///
+    /// This helper exists so high-level merge/rebase tests can mock external
+    /// git command behavior while preserving production commit semantics.
+    async fn commit_changes_with_git_client(
+        git_client: &dyn GitClient,
+        folder: &Path,
+        no_verify: bool,
+    ) -> Result<String, String> {
+        let folder = folder.to_path_buf();
+        git_client
+            .commit_all_preserving_single_commit(
+                folder.clone(),
+                COMMIT_MESSAGE.to_string(),
+                no_verify,
+            )
+            .await?;
+
+        git_client.head_short_hash(folder).await
     }
 }
 
@@ -1120,6 +1175,7 @@ mod tests {
             base_branch: "main".to_string(),
             db,
             folder: PathBuf::from("/tmp/test"),
+            git_client: Arc::new(git::RealGitClient),
             id: "session-123".to_string(),
             output: Arc::new(Mutex::new(String::new())),
             permission_mode: PermissionMode::AutoEdit,

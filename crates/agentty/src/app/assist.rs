@@ -10,6 +10,7 @@ use crate::app::task::{RunAgentAssistTaskInput, TaskService};
 use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
 use crate::infra::db::Database;
+use crate::infra::git::GitClient;
 
 /// Policy knobs controlling one assisted recovery loop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +26,7 @@ pub(super) struct AssistContext {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     pub(super) db: Database,
     pub(super) folder: PathBuf,
+    pub(super) git_client: Arc<dyn GitClient>,
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
     pub(super) permission_mode: PermissionMode,

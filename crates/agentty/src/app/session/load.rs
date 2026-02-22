@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -17,7 +18,7 @@ use crate::domain::session::{
     SessionStats, Status,
 };
 use crate::infra::db::Database;
-use crate::infra::git;
+use crate::infra::git::GitClient;
 
 const RATE_LIMITS_REQUEST_ID: &str = "rate-limits-read";
 const CODEX_APP_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -72,6 +73,7 @@ impl SessionManager {
         db: &Database,
         projects: &[Project],
         handles: &mut HashMap<String, SessionHandles>,
+        git_client: Arc<dyn GitClient>,
     ) -> (Vec<Session>, Vec<DailyActivity>) {
         const SECONDS_PER_DAY: i64 = 86_400;
 
@@ -123,7 +125,9 @@ impl SessionManager {
             let size = if is_terminal_status {
                 persisted_size
             } else {
-                let computed_size = Self::session_size_for_folder(&folder, &row.base_branch).await;
+                let computed_size =
+                    Self::session_size_for_folder(git_client.as_ref(), &folder, &row.base_branch)
+                        .await;
                 let _ = db
                     .update_session_size(&row.id, &computed_size.to_string())
                     .await;
@@ -203,14 +207,19 @@ impl SessionManager {
         parse_codex_usage_limits_response(&stdout)
     }
 
-    async fn session_size_for_folder(folder: &Path, base_branch: &str) -> SessionSize {
+    async fn session_size_for_folder(
+        git_client: &dyn GitClient,
+        folder: &Path,
+        base_branch: &str,
+    ) -> SessionSize {
         if !folder.is_dir() {
             return SessionSize::Xs;
         }
 
         let folder = folder.to_path_buf();
         let base_branch = base_branch.to_string();
-        let diff = git::diff(folder, base_branch)
+        let diff = git_client
+            .diff(folder, base_branch)
             .await
             .ok()
             .unwrap_or_default();

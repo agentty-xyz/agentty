@@ -13,6 +13,7 @@ use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::db::Database;
+use crate::infra::git::GitClient;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
@@ -57,6 +58,7 @@ struct SessionWorkerContext {
     child_pid: Arc<Mutex<Option<u32>>>,
     db: Database,
     folder: PathBuf,
+    git_client: Arc<dyn GitClient>,
     output: Arc<Mutex<String>>,
     session_id: String,
     status: Arc<Mutex<Status>>,
@@ -138,6 +140,7 @@ impl SessionManager {
             child_pid: Arc::clone(&handles.child_pid),
             db: services.db().clone(),
             folder: session.folder.clone(),
+            git_client: services.git_client(),
             output: Arc::clone(&handles.output),
             session_id: session.id.clone(),
             status: Arc::clone(&handles.status),
@@ -181,6 +184,7 @@ impl SessionManager {
                             cmd: command,
                             db: context.db.clone(),
                             folder: context.folder.clone(),
+                            git_client: Arc::clone(&context.git_client),
                             id: context.session_id.clone(),
                             output: Arc::clone(&context.output),
                             permission_mode,
@@ -210,6 +214,7 @@ impl SessionManager {
                             cmd: command,
                             db: context.db.clone(),
                             folder: context.folder.clone(),
+                            git_client: Arc::clone(&context.git_client),
                             id: context.session_id.clone(),
                             output: Arc::clone(&context.output),
                             permission_mode,
@@ -362,6 +367,7 @@ mod tests {
             child_pid: Arc::new(Mutex::new(None)),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
+            git_client: Arc::new(crate::infra::git::RealGitClient),
             output: Arc::new(Mutex::new(String::new())),
             session_id: "sess1".to_string(),
             status: Arc::new(Mutex::new(Status::InProgress)),

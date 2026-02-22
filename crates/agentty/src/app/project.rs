@@ -9,7 +9,7 @@ use crate::app::task::TaskService;
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::project::Project;
 use crate::infra::db::Database;
-use crate::infra::git;
+use crate::infra::git::GitClient;
 
 /// Project domain state and git status tracking.
 pub struct ProjectManager {
@@ -92,6 +92,7 @@ impl ProjectManager {
                 self.working_dir(),
                 new_cancel,
                 services.event_sender(),
+                services.git_client(),
             );
         }
 
@@ -105,7 +106,11 @@ impl ProjectManager {
 
     /// Scans sibling directories for git repositories and stores them as
     /// known projects.
-    pub(super) async fn discover_sibling_projects(working_dir: &Path, db: &Database) {
+    pub(super) async fn discover_sibling_projects(
+        working_dir: &Path,
+        db: &Database,
+        git_client: Arc<dyn GitClient>,
+    ) {
         let Some(parent) = working_dir.parent() else {
             return;
         };
@@ -119,7 +124,7 @@ impl ProjectManager {
                 continue;
             }
             if path.join(".git").exists() {
-                let branch = git::detect_git_info(path.clone()).await;
+                let branch = git_client.detect_git_info(path.clone()).await;
                 let _ = db
                     .upsert_project(&path.to_string_lossy(), branch.as_deref())
                     .await;

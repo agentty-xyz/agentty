@@ -67,6 +67,7 @@ impl SessionManager {
             services.db(),
             projects,
             &mut self.handles,
+            services.git_client(),
         )
         .await;
         let codex_usage_limits = Self::load_codex_usage_limits().await;

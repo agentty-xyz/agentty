@@ -16,7 +16,6 @@ use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::infra::agent::AgentBackend;
-use crate::infra::git;
 use crate::ui::pages::session_list::grouped_session_indexes;
 
 impl SessionManager {
@@ -105,7 +104,9 @@ impl SessionManager {
 
         let worktree_branch = session_branch(&session_id);
         let working_dir = projects.working_dir().to_path_buf();
-        let repo_root = git::find_git_repo_root(working_dir)
+        let git_client = services.git_client();
+        let repo_root = git_client
+            .find_git_repo_root(working_dir)
             .await
             .ok_or_else(|| "Failed to find git repository root".to_string())?;
 
@@ -114,7 +115,8 @@ impl SessionManager {
             let repo_root = repo_root.clone();
             let worktree_branch = worktree_branch.clone();
             let base_branch = base_branch.to_string();
-            git::create_worktree(repo_root, folder, worktree_branch, base_branch)
+            git_client
+                .create_worktree(repo_root, folder, worktree_branch, base_branch)
                 .await
                 .map_err(|error| format!("Failed to create git worktree: {error}"))?;
         }
@@ -485,14 +487,15 @@ impl SessionManager {
         if projects.has_git_branch() {
             let branch_name = session_branch(&session.id);
             let working_dir = projects.working_dir().to_path_buf();
+            let git_client = services.git_client();
 
-            if let Some(repo_root) = git::find_git_repo_root(working_dir).await {
+            if let Some(repo_root) = git_client.find_git_repo_root(working_dir).await {
                 let folder = session.folder.clone();
-                let _ = git::remove_worktree(folder).await;
-                let _ = git::delete_branch(repo_root, branch_name).await;
+                let _ = git_client.remove_worktree(folder).await;
+                let _ = git_client.delete_branch(repo_root, branch_name).await;
             } else {
                 let folder = session.folder.clone();
-                let _ = git::remove_worktree(folder).await;
+                let _ = git_client.remove_worktree(folder).await;
             }
         }
 
@@ -747,11 +750,12 @@ impl SessionManager {
         }
 
         {
+            let git_client = services.git_client();
             let folder = folder.to_path_buf();
             let repo_root = repo_root.to_path_buf();
             let worktree_branch = worktree_branch.to_string();
-            let _ = git::remove_worktree(folder).await;
-            let _ = git::delete_branch(repo_root, worktree_branch).await;
+            let _ = git_client.remove_worktree(folder).await;
+            let _ = git_client.delete_branch(repo_root, worktree_branch).await;
         }
 
         let _ = tokio::fs::remove_dir_all(folder).await;

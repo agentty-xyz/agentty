@@ -16,6 +16,7 @@ use crate::domain::permission::{PermissionMode, PlanFollowup, PlanFollowupOption
 use crate::domain::plan::extract_plan_questions;
 use crate::domain::session::{Session, Status};
 use crate::infra::db::Database;
+use crate::infra::git::{GitClient, RealGitClient};
 use crate::ui::state::app_mode::AppMode;
 
 mod assist;
@@ -139,15 +140,23 @@ impl App {
 
         let _ = db.backfill_session_project(active_project_id).await;
 
-        ProjectManager::discover_sibling_projects(&working_dir, &db).await;
+        let git_client: Arc<dyn GitClient> = Arc::new(RealGitClient);
+
+        ProjectManager::discover_sibling_projects(&working_dir, &db, Arc::clone(&git_client)).await;
         SessionManager::fail_unfinished_operations_from_previous_run(&db).await;
 
         let projects = ProjectManager::load_projects_from_db(&db).await;
 
         let mut table_state = TableState::default();
         let mut handles = HashMap::new();
-        let (sessions, stats_activity) =
-            SessionManager::load_sessions(&base_path, &db, &projects, &mut handles).await;
+        let (sessions, stats_activity) = SessionManager::load_sessions(
+            &base_path,
+            &db,
+            &projects,
+            &mut handles,
+            Arc::clone(&git_client),
+        )
+        .await;
         let codex_usage_limits = SessionManager::load_codex_usage_limits().await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
@@ -162,7 +171,7 @@ impl App {
 
         let git_status_cancel = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let services = AppServices::new(base_path, db.clone(), event_tx.clone());
+        let services = AppServices::new(base_path, db.clone(), event_tx.clone(), git_client);
         let projects = ProjectManager::new(
             active_project_id,
             git_branch,
@@ -180,6 +189,7 @@ impl App {
             codex_usage_limits,
             default_session_model,
             default_session_permission_mode,
+            services.git_client(),
             SessionState::new(
                 handles,
                 sessions,
@@ -196,6 +206,7 @@ impl App {
                 projects.working_dir(),
                 projects.git_status_cancel(),
                 event_tx,
+                services.git_client(),
             );
         }
 
@@ -528,9 +539,12 @@ impl App {
         let app_event_tx = self.services.event_sender();
         let default_branch = self.projects.git_branch().map(str::to_string);
         let working_dir = self.projects.working_dir().to_path_buf();
+        let git_client = self.services.git_client();
 
         tokio::spawn(async move {
-            let result = SessionManager::sync_main_for_project(default_branch, working_dir).await;
+            let result =
+                SessionManager::sync_main_for_project(default_branch, working_dir, git_client)
+                    .await;
             let _ = app_event_tx.send(AppEvent::SyncMainCompleted { result });
         });
     }

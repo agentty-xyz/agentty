@@ -11,16 +11,17 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt as _, AsyncRead};
 use tokio::sync::mpsc;
 
+use crate::app::AppEvent;
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, effective_permission_mode,
     format_detail_lines, run_agent_assist,
 };
-use crate::app::{AppEvent, SessionManager};
+use crate::app::session::COMMIT_MESSAGE;
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::db::Database;
-use crate::infra::git;
+use crate::infra::git::GitClient;
 
 const AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE: &str =
     include_str!("../../resources/auto_commit_assist_prompt.md");
@@ -43,6 +44,7 @@ pub(super) struct RunSessionTaskInput {
     pub(super) cmd: Command,
     pub(super) db: Database,
     pub(super) folder: PathBuf,
+    pub(super) git_client: Arc<dyn GitClient>,
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
     pub(super) permission_mode: PermissionMode,
@@ -96,21 +98,25 @@ impl TaskService {
         working_dir: &Path,
         cancel: Arc<AtomicBool>,
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        git_client: Arc<dyn GitClient>,
     ) {
         let dir = working_dir.to_path_buf();
         tokio::spawn(async move {
-            let repo_root = git::find_git_repo_root(dir.clone()).await.unwrap_or(dir);
+            let repo_root = git_client
+                .find_git_repo_root(dir.clone())
+                .await
+                .unwrap_or(dir);
             loop {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 {
                     let root = repo_root.clone();
-                    let _ = git::fetch_remote(root).await;
+                    let _ = git_client.fetch_remote(root).await;
                 }
                 let status = {
                     let root = repo_root.clone();
-                    git::get_ahead_behind(root).await.ok()
+                    git_client.get_ahead_behind(root).await.ok()
                 };
                 if cancel.load(Ordering::Relaxed) {
                     break;
@@ -175,6 +181,7 @@ impl TaskService {
             cmd,
             db,
             folder,
+            git_client,
             id,
             output,
             permission_mode,
@@ -241,6 +248,7 @@ impl TaskService {
                         app_event_tx: app_event_tx.clone(),
                         db: db.clone(),
                         folder,
+                        git_client: Arc::clone(&git_client),
                         id: id.clone(),
                         output: Arc::clone(&output),
                         permission_mode,
@@ -299,7 +307,7 @@ impl TaskService {
             FailureTracker::new(AUTO_COMMIT_ASSIST_POLICY.max_identical_failure_streak);
 
         for assist_attempt in 1..=AUTO_COMMIT_ASSIST_POLICY.max_attempts + 1 {
-            match SessionManager::commit_changes(&context.folder, false).await {
+            match Self::commit_changes_with_git_client(context).await {
                 Ok(commit_hash) => {
                     return Ok(Some(commit_hash));
                 }
@@ -325,6 +333,20 @@ impl TaskService {
         }
 
         Err("Failed to auto-commit after assistance attempts".to_string())
+    }
+
+    /// Commits all worktree changes and returns the current `HEAD` short hash.
+    ///
+    /// # Errors
+    /// Returns an error if staging/commit fails or `HEAD` cannot be resolved.
+    async fn commit_changes_with_git_client(context: &AssistContext) -> Result<String, String> {
+        let folder = context.folder.clone();
+        context
+            .git_client
+            .commit_all_preserving_single_commit(folder.clone(), COMMIT_MESSAGE.to_string(), false)
+            .await?;
+
+        context.git_client.head_short_hash(folder).await
     }
 
     async fn append_commit_assist_header(
@@ -355,6 +377,7 @@ impl TaskService {
             app_event_tx: context.app_event_tx.clone(),
             db: context.db.clone(),
             folder: context.folder.clone(),
+            git_client: Arc::clone(&context.git_client),
             id: context.id.clone(),
             output: Arc::clone(&context.output),
             permission_mode: effective_permission_mode,

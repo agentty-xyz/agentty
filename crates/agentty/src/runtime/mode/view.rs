@@ -6,7 +6,6 @@ use crate::app::App;
 use crate::domain::input::InputState;
 use crate::domain::permission::{PermissionMode, PlanFollowupOption};
 use crate::domain::session::Status;
-use crate::infra::git;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::pages::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{AppMode, HelpContext};
@@ -393,7 +392,10 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
     let session_folder = session.folder.clone();
     let base_branch = session.base_branch.clone();
 
-    let diff = git::diff(session_folder, base_branch)
+    let diff = app
+        .services
+        .git_client()
+        .diff(session_folder, base_branch)
         .await
         .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
 

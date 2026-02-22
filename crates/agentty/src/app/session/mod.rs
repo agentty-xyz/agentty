@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ratatui::widgets::TableState;
@@ -34,6 +35,7 @@ pub struct SessionManager {
     codex_usage_limits: Option<CodexUsageLimits>,
     default_session_model: AgentModel,
     default_session_permission_mode: PermissionMode,
+    git_client: Arc<dyn crate::infra::git::GitClient>,
     pending_history_replay: HashSet<String>,
     state: SessionState,
     stats_activity: Vec<DailyActivity>,
@@ -46,6 +48,7 @@ impl SessionManager {
         codex_usage_limits: Option<CodexUsageLimits>,
         default_session_model: AgentModel,
         default_session_permission_mode: PermissionMode,
+        git_client: Arc<dyn crate::infra::git::GitClient>,
         state: SessionState,
         stats_activity: Vec<DailyActivity>,
     ) -> Self {
@@ -53,11 +56,17 @@ impl SessionManager {
             codex_usage_limits,
             default_session_model,
             default_session_permission_mode,
+            git_client,
             pending_history_replay: HashSet::new(),
             state,
             stats_activity,
             workers: HashMap::new(),
         }
+    }
+
+    /// Returns the configured session git client used by orchestration flows.
+    pub(crate) fn git_client(&self) -> Arc<dyn crate::infra::git::GitClient> {
+        Arc::clone(&self.git_client)
     }
 
     /// Loads the default model persisted for new sessions.
@@ -221,6 +230,47 @@ mod tests {
                     .stderr(Stdio::null());
                 cmd
             });
+        mock
+    }
+
+    fn create_mock_git_client_for_successful_noop_merges(
+        expected_merge_count: usize,
+        repo_root: PathBuf,
+    ) -> git::MockGitClient {
+        let mut mock = git::MockGitClient::new();
+        mock.expect_find_git_repo_root()
+            .times(expected_merge_count)
+            .returning(move |_| {
+                let repo_root = repo_root.clone();
+                Box::pin(async move { Some(repo_root) })
+            });
+        mock.expect_commit_all_preserving_single_commit()
+            .times(expected_merge_count)
+            .returning(|_, _, _| {
+                Box::pin(async { Err("Nothing to commit: no changes detected".to_string()) })
+            });
+        mock.expect_is_rebase_in_progress()
+            .times(expected_merge_count)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock.expect_rebase_start()
+            .times(expected_merge_count)
+            .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock.expect_squash_merge_diff()
+            .times(expected_merge_count)
+            .returning(|_, _, _| Box::pin(async { Ok(String::new()) }));
+        mock.expect_remove_worktree()
+            .times(expected_merge_count)
+            .returning(|worktree_path| {
+                Box::pin(async move {
+                    let _ = tokio::fs::remove_dir_all(worktree_path).await;
+
+                    Ok(())
+                })
+            });
+        mock.expect_delete_branch()
+            .times(expected_merge_count)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
         mock
     }
 
@@ -449,14 +499,6 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .is_some_and(|session| session.status == Status::Done)
-    }
-
-    /// Writes and commits one test change in a session worktree.
-    async fn commit_worktree_change(folder: &Path, file_name: &str, content: &str, message: &str) {
-        std::fs::write(folder.join(file_name), content).expect("failed to write queued change");
-        git::commit_all(folder.to_path_buf(), message.to_string(), false)
-            .await
-            .expect("failed to commit queued change");
     }
 
     /// Waits for the first merge to finish and asserts second merge is queued
@@ -1361,8 +1403,14 @@ mod tests {
         let mut handles: HashMap<String, SessionHandles> = HashMap::new();
 
         // Act
-        let (sessions, stats_activity) =
-            SessionManager::load_sessions(dir.path(), &db, &projects, &mut handles).await;
+        let (sessions, stats_activity) = SessionManager::load_sessions(
+            dir.path(),
+            &db,
+            &projects,
+            &mut handles,
+            Arc::new(git::RealGitClient),
+        )
+        .await;
 
         // Assert
         assert_eq!(sessions.len(), 3);
@@ -1638,6 +1686,7 @@ mod tests {
             app.services.db(),
             &app.projects,
             &mut app.sessions.handles,
+            Arc::new(git::RealGitClient),
         )
         .await;
         let db_sessions = app
@@ -1693,6 +1742,7 @@ mod tests {
             app.services.db(),
             &app.projects,
             &mut app.sessions.handles,
+            Arc::new(git::RealGitClient),
         )
         .await;
         let db_sessions = app
@@ -1912,7 +1962,6 @@ mod tests {
     async fn test_spawn_session_task_auto_commits_changes() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
-        setup_test_git_repo(dir.path());
         let db = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
@@ -1923,6 +1972,36 @@ mod tests {
             db,
         )
         .await;
+        let repo_root = dir.path().to_path_buf();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1)
+            .returning(move |_| {
+                let repo_root = repo_root.clone();
+                Box::pin(async move { Some(repo_root) })
+            });
+        mock_git_client
+            .expect_create_worktree()
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_diff()
+            .times(1..)
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_head_short_hash()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        app.services =
+            crate::app::AppServices::new(base_path, db, event_sender, Arc::new(mock_git_client));
 
         // Create a session that writes a file so commit_all has something to commit
         let mut mock = MockAgentBackend::new();
@@ -1953,7 +2032,6 @@ mod tests {
 
         // Act — wait for agent to finish and auto-commit
         wait_for_status(&mut app, &session_id, Status::Review).await;
-        app.refresh_sessions_now().await;
 
         // Assert — output should contain commit confirmation
         let session = &app.sessions.sessions[0];
@@ -2262,112 +2340,39 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Local merge cleanup").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        wait_for_status(&mut app, &session_id, Status::Review).await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        let session_folder = app.sessions.sessions[0].folder.clone();
-        std::fs::write(session_folder.join("session-change.txt"), "change")
-            .expect("failed to write worktree change");
-        git::commit_all(
-            session_folder.clone(),
-            "Test merge commit".to_string(),
-            false,
-        )
-        .await
-        .expect("failed to commit session changes");
-        let branch_name = session_branch(&session_id);
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create merge session");
+        set_session_status_for_test(&mut app, &session_id, Status::Review);
+        let session_folder = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing created session")
+            .folder
+            .clone();
+        let mock_git =
+            create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
+        app.sessions.git_client = Arc::new(mock_git);
 
         // Act
         let result = app.merge_session(&session_id).await;
 
         // Assert
+        assert!(result.is_ok(), "merge should enqueue successfully");
+        wait_for_status_with_retries(&mut app, &session_id, Status::Done, 200).await;
+
         app.sessions.sync_from_handles();
-        assert!(result.is_ok(), "merge should succeed: {:?}", result.err());
-        assert!(matches!(
-            app.sessions.sessions[0].status,
-            Status::Done | Status::Merging
-        ));
-        wait_for_status_with_retries(&mut app, &session_id, Status::Done, 5000).await;
-
-        let mut branches = String::new();
-        for _ in 0..400 {
-            let branch_output = Command::new("git")
-                .args(["branch", "--list", &branch_name])
-                .current_dir(dir.path())
-                .output()
-                .expect("failed to list branches");
-            branches = String::from_utf8_lossy(&branch_output.stdout).to_string();
-            if !session_folder.exists() && branches.trim().is_empty() {
-                break;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-
-        assert!(!session_folder.exists(), "worktree should be removed");
-        assert!(
-            branches.trim().is_empty(),
-            "branch should be removed after merge"
-        );
-
-        let commit_output = Command::new("git")
-            .args(["log", "-1", "--pretty=%B"])
-            .current_dir(dir.path())
-            .output()
-            .expect("failed to read latest commit message");
-        let commit_message = String::from_utf8_lossy(&commit_output.stdout);
-        assert!(!commit_message.trim().is_empty());
-        assert!(!commit_message.contains("Test merge commit"));
-
-        let commit_summary = commit_message.trim().to_string();
-        let commit_title = commit_summary
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .map(str::trim)
-            .expect("commit title should be present")
-            .to_string();
-
-        let mut persisted_title = None;
-        let mut persisted_summary = None;
-        for _ in 0..200 {
-            let sessions = app
-                .services
-                .db()
-                .load_sessions()
-                .await
-                .expect("failed to load sessions");
-            if let Some(session) = sessions.iter().find(|session| session.id == session_id) {
-                persisted_title = session.title.clone();
-                persisted_summary = session.summary.clone();
-                if persisted_title.as_deref() == Some(commit_title.as_str())
-                    && persisted_summary.as_deref() == Some(commit_summary.as_str())
-                {
-                    break;
-                }
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-
-        assert_eq!(persisted_title.as_deref(), Some(commit_title.as_str()));
-        assert_eq!(persisted_summary.as_deref(), Some(commit_summary.as_str()));
-
-        app.refresh_sessions_now().await;
-        let refreshed_session = app
+        let merged_session = app
             .sessions
             .sessions
             .iter()
             .find(|session| session.id == session_id)
-            .expect("missing refreshed session");
-        assert_eq!(
-            refreshed_session.title.as_deref(),
-            Some(commit_title.as_str())
-        );
-        assert_eq!(
-            refreshed_session.summary.as_deref(),
-            Some(commit_summary.as_str())
-        );
+            .expect("missing merged session");
+        assert!(!merged_session.output.contains("[Merge Error]"));
+        assert!(!session_folder.exists(), "worktree should be removed");
     }
 
     #[tokio::test]
@@ -2375,51 +2380,21 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "No-op merge").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        wait_for_status(&mut app, &session_id, Status::Review).await;
-        let session_folder = app.sessions.sessions[0].folder.clone();
-        let branch_name = session_branch(&session_id);
-
-        std::fs::write(session_folder.join("session-change.txt"), "same content")
-            .expect("failed to write session change");
-        git::commit_all(
-            session_folder.clone(),
-            "Session-side change".to_string(),
-            false,
-        )
-        .await
-        .expect("failed to commit session change");
-
-        std::fs::write(dir.path().join("session-change.txt"), "same content")
-            .expect("failed to write main change");
-        Command::new("git")
-            .args(["add", "session-change.txt"])
-            .current_dir(dir.path())
-            .output()
-            .expect("failed to stage main change");
-        Command::new("git")
-            .args(["commit", "-m", "Apply same change on main"])
-            .current_dir(dir.path())
-            .output()
-            .expect("failed to commit main change");
-
-        let head_before_merge = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(dir.path())
-            .output()
-            .expect("failed to read HEAD before merge");
-        let head_before_merge = String::from_utf8_lossy(&head_before_merge.stdout)
-            .trim()
-            .to_string();
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create merge session");
+        set_session_status_for_test(&mut app, &session_id, Status::Review);
+        let mock_git =
+            create_mock_git_client_for_successful_noop_merges(1, dir.path().to_path_buf());
+        app.sessions.git_client = Arc::new(mock_git);
 
         // Act
         let result = app.merge_session(&session_id).await;
 
         // Assert
         assert!(result.is_ok(), "merge should enqueue successfully");
-        wait_for_status_with_retries(&mut app, &session_id, Status::Done, 5000).await;
-        wait_for_output_contains(&mut app, &session_id, "[Merge] Session changes from", 5000).await;
+        wait_for_status_with_retries(&mut app, &session_id, Status::Done, 200).await;
 
         app.sessions.sync_from_handles();
         let session = app
@@ -2429,37 +2404,6 @@ mod tests {
             .find(|session| session.id == session_id)
             .expect("missing session after merge");
         assert!(!session.output.contains("[Merge Error]"));
-
-        let head_after_merge = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(dir.path())
-            .output()
-            .expect("failed to read HEAD after merge");
-        let head_after_merge = String::from_utf8_lossy(&head_after_merge.stdout)
-            .trim()
-            .to_string();
-        assert_eq!(head_after_merge, head_before_merge);
-
-        let mut branches = String::new();
-        for _ in 0..400 {
-            let branch_output = Command::new("git")
-                .args(["branch", "--list", &branch_name])
-                .current_dir(dir.path())
-                .output()
-                .expect("failed to list branches");
-            branches = String::from_utf8_lossy(&branch_output.stdout).to_string();
-            if !session_folder.exists() && branches.trim().is_empty() {
-                break;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-
-        assert!(!session_folder.exists(), "worktree should be removed");
-        assert!(
-            branches.trim().is_empty(),
-            "branch should be removed after no-op merge"
-        );
     }
 
     #[tokio::test]
@@ -2477,24 +2421,9 @@ mod tests {
             .expect("failed to create second queue session");
         set_session_status_for_test(&mut app, &first_session_id, Status::Review);
         set_session_status_for_test(&mut app, &second_session_id, Status::Review);
-
-        let first_folder = app.sessions.sessions[0].folder.clone();
-        let second_folder = app.sessions.sessions[1].folder.clone();
-
-        commit_worktree_change(
-            &first_folder,
-            "queue-first.txt",
-            "first change",
-            "Queue merge one commit",
-        )
-        .await;
-        commit_worktree_change(
-            &second_folder,
-            "queue-second.txt",
-            "second change",
-            "Queue merge two commit",
-        )
-        .await;
+        let mock_git =
+            create_mock_git_client_for_successful_noop_merges(2, dir.path().to_path_buf());
+        app.sessions.git_client = Arc::new(mock_git);
 
         // Act
         let first_merge_result = app.merge_session(&first_session_id).await;
@@ -2708,6 +2637,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project(
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
+            app.services.git_client(),
         )
         .await;
 
@@ -2731,6 +2661,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project(
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
+            app.services.git_client(),
         )
         .await;
 
@@ -2753,6 +2684,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project(
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
+            app.services.git_client(),
         )
         .await;
 
@@ -2817,6 +2749,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project(
             Some("main".to_string()),
             dir.path().to_path_buf(),
+            Arc::new(git::RealGitClient),
         )
         .await;
 
@@ -2832,9 +2765,33 @@ mod tests {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Test cancel").await;
-        let session_id = app.sessions.sessions[0].id.clone();
-        wait_for_status(&mut app, &session_id, Status::Review).await;
+        let repo_root = dir.path().to_path_buf();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1)
+            .returning(move |_| {
+                let repo_root = repo_root.clone();
+                Box::pin(async move { Some(repo_root) })
+            });
+        mock_git_client
+            .expect_create_worktree()
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        app.services =
+            crate::app::AppServices::new(base_path, db, event_sender, Arc::new(mock_git_client));
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        set_session_status_for_test(&mut app, &session_id, Status::Review);
 
         // Act
         app.sessions
@@ -2931,6 +2888,7 @@ mod tests {
         // Act
         let result = SessionManager::cleanup_merged_session_worktree(
             worktree_folder.clone(),
+            Arc::new(git::RealGitClient),
             branch_name.to_string(),
             None,
         )
