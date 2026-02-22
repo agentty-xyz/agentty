@@ -436,16 +436,24 @@ impl App {
             .await
     }
 
-    /// Opens the selected session's worktree in a new tmux window.
+    /// Opens the selected session worktree in tmux and optionally starts the
+    /// configured Dev Server command.
     pub async fn open_session_worktree_in_tmux(&self) {
-        if let Some(session) = self.selected_session() {
-            let _ = tokio::process::Command::new("tmux")
-                .arg("new-window")
-                .arg("-c")
-                .arg(&session.folder)
-                .output()
-                .await;
-        }
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+
+        let Some(window_id) = Self::open_tmux_window_for_folder(&session.folder).await else {
+            return;
+        };
+
+        let Some(dev_server_command) =
+            Self::dev_server_command_to_run(self.settings.dev_server.as_str())
+        else {
+            return;
+        };
+
+        Self::run_tmux_command_in_window(&window_id, dev_server_command).await;
     }
 
     /// Appends output text to a session stream and persists it.
@@ -828,6 +836,74 @@ impl App {
                 })
         });
     }
+
+    /// Opens a new tmux window in the provided folder and returns its window
+    /// id.
+    async fn open_tmux_window_for_folder(session_folder: &Path) -> Option<String> {
+        let output = tokio::process::Command::new("tmux")
+            .arg("new-window")
+            .arg("-P")
+            .arg("-F")
+            .arg("#{window_id}")
+            .arg("-c")
+            .arg(session_folder)
+            .output()
+            .await
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        Self::parse_tmux_window_id(&output.stdout)
+    }
+
+    /// Returns the Dev Server command to execute when it is configured.
+    fn dev_server_command_to_run(dev_server: &str) -> Option<&str> {
+        let command = dev_server.trim();
+        if command.is_empty() {
+            return None;
+        }
+
+        Some(command)
+    }
+
+    /// Sends the provided command and Enter key to a tmux window.
+    async fn run_tmux_command_in_window(window_id: &str, command: &str) {
+        let send_literal_output = tokio::process::Command::new("tmux")
+            .arg("send-keys")
+            .arg("-t")
+            .arg(window_id)
+            .arg("-l")
+            .arg(command)
+            .output()
+            .await;
+
+        let Ok(send_literal_output) = send_literal_output else {
+            return;
+        };
+        if !send_literal_output.status.success() {
+            return;
+        }
+
+        let _ = tokio::process::Command::new("tmux")
+            .arg("send-keys")
+            .arg("-t")
+            .arg(window_id)
+            .arg("C-m")
+            .output()
+            .await;
+    }
+
+    /// Parses a tmux window id from command output bytes.
+    fn parse_tmux_window_id(stdout: &[u8]) -> Option<String> {
+        let window_id = std::str::from_utf8(stdout).ok()?.trim();
+        if window_id.is_empty() {
+            return None;
+        }
+
+        Some(window_id.to_string())
+    }
 }
 
 impl AppEventBatch {
@@ -873,5 +949,58 @@ impl AppEventBatch {
                 self.session_ids.insert(session_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_server_command_to_run_returns_none_for_empty_input() {
+        // Arrange
+        let dev_server = "   ";
+
+        // Act
+        let command = App::dev_server_command_to_run(dev_server);
+
+        // Assert
+        assert_eq!(command, None);
+    }
+
+    #[test]
+    fn dev_server_command_to_run_trims_and_returns_command() {
+        // Arrange
+        let dev_server = "  npm run dev -- --port 5173  ";
+
+        // Act
+        let command = App::dev_server_command_to_run(dev_server);
+
+        // Assert
+        assert_eq!(command, Some("npm run dev -- --port 5173"));
+    }
+
+    #[test]
+    fn parse_tmux_window_id_returns_none_for_invalid_utf8() {
+        // Arrange
+        let stdout = [0x80];
+
+        // Act
+        let window_id = App::parse_tmux_window_id(&stdout);
+
+        // Assert
+        assert_eq!(window_id, None);
+    }
+
+    #[test]
+    fn parse_tmux_window_id_trims_newline_and_returns_window_id() {
+        // Arrange
+        let stdout = b"@42\n";
+
+        // Act
+        let window_id = App::parse_tmux_window_id(stdout);
+
+        // Assert
+        assert_eq!(window_id, Some("@42".to_string()));
     }
 }

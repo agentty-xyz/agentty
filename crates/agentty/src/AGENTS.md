@@ -14,7 +14,7 @@
 ## Directory Index
 
 - [app/](app/) - Application state and workflows split by concern (`session`, `project`, `task`).
-- [agent.rs](agent.rs) - Agent backend abstraction and process-backed implementation.
+- [agent.rs](agent.rs) - Agent backend abstraction, CLI command builders for Gemini/Claude/Codex, and process-backed implementation.
 - [domain/](domain/) - Domain layer entities and logic.
 - [infra/](infra/) - Infrastructure layer implementations.
 - [runtime/](runtime/) - Runtime event loop, terminal integration, and mode key handling.
