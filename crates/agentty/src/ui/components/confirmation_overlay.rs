@@ -20,6 +20,8 @@ pub struct ConfirmationOverlay<'a> {
 
 impl<'a> ConfirmationOverlay<'a> {
     /// Creates a confirmation popup with title and body message.
+    ///
+    /// Pass `selected_yes = false` to highlight `No` as the initial selection.
     pub fn new(title: &'a str, message: &'a str, selected_yes: bool) -> Self {
         Self {
             message,
@@ -95,7 +97,7 @@ mod tests {
     fn test_confirmation_overlay_new_stores_fields() {
         // Arrange
         let message = "Delete session?";
-        let selected_yes = true;
+        let selected_yes = false;
         let title = "Confirm";
 
         // Act
@@ -112,7 +114,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let overlay = ConfirmationOverlay::new("Confirm Delete", "Delete session?", true);
+        let overlay = ConfirmationOverlay::new("Confirm Delete", "Delete session?", false);
 
         // Act
         terminal

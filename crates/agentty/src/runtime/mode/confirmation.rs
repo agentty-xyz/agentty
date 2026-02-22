@@ -1,7 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-const YES_OPTION_INDEX: usize = 0;
-const NO_OPTION_INDEX: usize = 1;
+/// Index of the `Yes` action in confirmation option navigation.
+pub(crate) const YES_OPTION_INDEX: usize = 0;
+
+/// Index of the `No` action in confirmation option navigation.
+pub(crate) const NO_OPTION_INDEX: usize = 1;
+
+/// Default selection for newly opened confirmation overlays.
+pub(crate) const DEFAULT_OPTION_INDEX: usize = NO_OPTION_INDEX;
 
 /// Describes how a confirmation selector should react to a pressed key.
 pub(crate) enum ConfirmationDecision {

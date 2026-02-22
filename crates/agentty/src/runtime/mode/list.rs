@@ -6,6 +6,7 @@ use crate::app::{App, Tab};
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
+use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::state::help_action::{
     HelpAction, onboarding_actions, session_list_actions, settings_actions, stats_actions,
@@ -15,7 +16,8 @@ use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
 /// Handles key input while the app is in list mode.
 ///
-/// Pressing `q` opens a confirmation overlay instead of quitting immediately.
+/// Pressing `q` opens a confirmation overlay instead of quitting immediately,
+/// with `No` selected by default.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
         return handle_settings_text_input(app, key).await;
@@ -27,7 +29,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 confirmation_message: "Quit agentty?".to_string(),
                 confirmation_title: "Confirm Quit".to_string(),
                 session_id: None,
-                selected_confirmation_index: 0,
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
             };
 
             return Ok(EventResult::Continue);
@@ -90,7 +92,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                     confirmation_message: format!("Delete session \"{session_title}\"?"),
                     confirmation_title: "Confirm Delete".to_string(),
                     session_id: Some(session_id),
-                    selected_confirmation_index: 0,
+                    selected_confirmation_index: DEFAULT_OPTION_INDEX,
                 };
             }
         }
@@ -337,7 +339,7 @@ mod tests {
                 ref confirmation_message,
                 ref confirmation_title,
                 session_id: None,
-                selected_confirmation_index: 0,
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if confirmation_title == "Confirm Quit" && confirmation_message == "Quit agentty?"
         ));
     }
@@ -603,7 +605,7 @@ mod tests {
                 ref confirmation_message,
                 ref confirmation_title,
                 session_id: Some(ref mode_session_id),
-                selected_confirmation_index: 0,
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if mode_session_id == &expected_session_id
                 && confirmation_title == "Confirm Delete"
                 && confirmation_message == &format!("Delete session \"{expected_session_title}\"?")
