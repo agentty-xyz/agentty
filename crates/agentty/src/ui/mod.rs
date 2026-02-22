@@ -16,7 +16,7 @@ use crate::app::session::session_branch;
 use crate::app::{SettingsManager, Tab};
 use crate::domain::permission::PlanFollowup;
 use crate::domain::project::Project;
-use crate::domain::session::{DailyActivity, Session};
+use crate::domain::session::{CodexUsageLimits, DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::state::palette::{PaletteCommand, PaletteFocus};
 
@@ -33,6 +33,7 @@ pub trait Component {
 /// Immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
     pub active_project_id: i64,
+    pub codex_usage_limits: Option<CodexUsageLimits>,
     pub current_tab: Tab,
     pub git_branch: Option<&'a str>,
     pub git_status: Option<(u32, u32)>,
@@ -58,6 +59,7 @@ struct SessionChatRenderContext<'a> {
 }
 
 struct HelpBackgroundRenderContext<'a> {
+    codex_usage_limits: Option<CodexUsageLimits>,
     context: &'a HelpContext,
     current_tab: Tab,
     plan_followups: &'a HashMap<String, PlanFollowup>,
@@ -69,6 +71,7 @@ struct HelpBackgroundRenderContext<'a> {
 }
 
 struct CommandPaletteRenderContext<'a> {
+    codex_usage_limits: Option<CodexUsageLimits>,
     current_tab: Tab,
     focus: PaletteFocus,
     input: &'a str,
@@ -81,6 +84,7 @@ struct CommandPaletteRenderContext<'a> {
 
 struct CommandOptionRenderContext<'a> {
     active_project_id: i64,
+    codex_usage_limits: Option<CodexUsageLimits>,
     command: PaletteCommand,
     current_tab: Tab,
     projects: &'a [Project],
@@ -91,8 +95,18 @@ struct CommandOptionRenderContext<'a> {
     table_state: &'a mut TableState,
 }
 
+struct ListBackgroundRenderContext<'a> {
+    codex_usage_limits: Option<CodexUsageLimits>,
+    current_tab: Tab,
+    sessions: &'a [Session],
+    settings: &'a mut SettingsManager,
+    stats_activity: &'a [DailyActivity],
+    table_state: &'a mut TableState,
+}
+
 struct ListModeRenderContext<'a> {
     active_project_id: i64,
+    codex_usage_limits: Option<CodexUsageLimits>,
     current_tab: Tab,
     mode: &'a AppMode,
     projects: &'a [Project],
@@ -103,6 +117,7 @@ struct ListModeRenderContext<'a> {
 }
 
 struct SessionModeRenderContext<'a> {
+    codex_usage_limits: Option<CodexUsageLimits>,
     current_tab: Tab,
     mode: &'a AppMode,
     plan_followups: &'a HashMap<String, PlanFollowup>,
@@ -177,6 +192,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
 fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
+        codex_usage_limits,
         current_tab,
         mode,
         plan_followups,
@@ -199,6 +215,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
             area,
             ListModeRenderContext {
                 active_project_id,
+                codex_usage_limits,
                 current_tab,
                 mode,
                 projects,
@@ -215,6 +232,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
             f,
             area,
             SessionModeRenderContext {
+                codex_usage_limits,
                 current_tab,
                 mode,
                 plan_followups,
@@ -232,6 +250,7 @@ fn render_content(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
 fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderContext<'_>) {
     let ListModeRenderContext {
         active_project_id,
+        codex_usage_limits,
         current_tab,
         mode,
         projects,
@@ -246,22 +265,28 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
             render_list_background(
                 f,
                 area,
-                sessions,
-                settings,
-                stats_activity,
-                table_state,
-                current_tab,
+                ListBackgroundRenderContext {
+                    codex_usage_limits,
+                    current_tab,
+                    sessions,
+                    settings,
+                    stats_activity,
+                    table_state,
+                },
             );
         }
         AppMode::Confirmation { .. } => {
             render_list_background(
                 f,
                 area,
-                sessions,
-                settings,
-                stats_activity,
-                table_state,
-                current_tab,
+                ListBackgroundRenderContext {
+                    codex_usage_limits,
+                    current_tab,
+                    sessions,
+                    settings,
+                    stats_activity,
+                    table_state,
+                },
             );
 
             let AppMode::Confirmation {
@@ -290,6 +315,7 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
             area,
             CommandPaletteRenderContext {
                 current_tab,
+                codex_usage_limits,
                 focus: *focus,
                 input,
                 selected_index: *selected_index,
@@ -307,6 +333,7 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
             area,
             CommandOptionRenderContext {
                 active_project_id,
+                codex_usage_limits,
                 command: *command,
                 current_tab,
                 projects,
@@ -336,6 +363,7 @@ fn render_list_mode_content(f: &mut Frame, area: Rect, context: ListModeRenderCo
 
 fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRenderContext<'_>) {
     let SessionModeRenderContext {
+        codex_usage_limits,
         current_tab,
         mode,
         plan_followups,
@@ -400,6 +428,7 @@ fn render_session_mode_content(f: &mut Frame, area: Rect, context: SessionModeRe
             context,
             *scroll_offset,
             HelpBackgroundRenderContext {
+                codex_usage_limits,
                 context,
                 current_tab,
                 plan_followups,
@@ -497,6 +526,7 @@ fn render_session_chat_mode(
 /// Renders the background page behind the help overlay based on `HelpContext`.
 fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRenderContext<'_>) {
     let HelpBackgroundRenderContext {
+        codex_usage_limits,
         context,
         current_tab,
         plan_followups,
@@ -511,11 +541,14 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             render_list_background(
                 f,
                 area,
-                sessions,
-                settings,
-                stats_activity,
-                table_state,
-                current_tab,
+                ListBackgroundRenderContext {
+                    codex_usage_limits,
+                    current_tab,
+                    sessions,
+                    settings,
+                    stats_activity,
+                    table_state,
+                },
             );
         }
         HelpContext::View {
@@ -567,6 +600,7 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
 
 fn render_command_palette(f: &mut Frame, area: Rect, context: CommandPaletteRenderContext<'_>) {
     let CommandPaletteRenderContext {
+        codex_usage_limits,
         current_tab,
         focus,
         input,
@@ -579,11 +613,14 @@ fn render_command_palette(f: &mut Frame, area: Rect, context: CommandPaletteRend
     render_list_background(
         f,
         area,
-        sessions,
-        settings,
-        stats_activity,
-        table_state,
-        current_tab,
+        ListBackgroundRenderContext {
+            codex_usage_limits,
+            current_tab,
+            sessions,
+            settings,
+            stats_activity,
+            table_state,
+        },
     );
     components::command_palette::CommandPaletteInput::new(input, selected_index, focus)
         .render(f, area);
@@ -592,6 +629,7 @@ fn render_command_palette(f: &mut Frame, area: Rect, context: CommandPaletteRend
 fn render_command_options(f: &mut Frame, area: Rect, context: CommandOptionRenderContext<'_>) {
     let CommandOptionRenderContext {
         active_project_id,
+        codex_usage_limits,
         command,
         current_tab,
         projects,
@@ -604,11 +642,14 @@ fn render_command_options(f: &mut Frame, area: Rect, context: CommandOptionRende
     render_list_background(
         f,
         area,
-        sessions,
-        settings,
-        stats_activity,
-        table_state,
-        current_tab,
+        ListBackgroundRenderContext {
+            codex_usage_limits,
+            current_tab,
+            sessions,
+            settings,
+            stats_activity,
+            table_state,
+        },
     );
     components::command_palette::CommandOptionList::new(
         command,
@@ -686,12 +727,17 @@ fn render_footer_bar(
 fn render_list_background(
     f: &mut Frame,
     content_area: Rect,
-    sessions: &[Session],
-    settings: &mut SettingsManager,
-    stats_activity: &[DailyActivity],
-    table_state: &mut TableState,
-    current_tab: Tab,
+    context: ListBackgroundRenderContext<'_>,
 ) {
+    let ListBackgroundRenderContext {
+        codex_usage_limits,
+        current_tab,
+        sessions,
+        settings,
+        stats_activity,
+        table_state,
+    } = context;
+
     let chunks = Layout::default()
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
@@ -703,7 +749,8 @@ fn render_list_background(
             pages::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
         }
         Tab::Stats => {
-            pages::stats::StatsPage::new(sessions, stats_activity).render(f, chunks[1]);
+            pages::stats::StatsPage::new(sessions, stats_activity, codex_usage_limits)
+                .render(f, chunks[1]);
         }
         Tab::Settings => {
             pages::settings::SettingsPage::new(settings).render(f, chunks[1]);

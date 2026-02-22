@@ -182,6 +182,21 @@ pub struct SessionStats {
     pub output_tokens: u64,
 }
 
+/// One Codex usage-limit window (for example, 5-hour or weekly).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CodexUsageLimitWindow {
+    pub resets_at: i64,
+    pub used_percent: u8,
+    pub window_minutes: u32,
+}
+
+/// Snapshot of account-level Codex usage limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CodexUsageLimits {
+    pub primary: CodexUsageLimitWindow,
+    pub secondary: CodexUsageLimitWindow,
+}
+
 /// Aggregated activity count for one UTC day.
 ///
 /// `day_key` is the number of days since Unix epoch (`1970-01-01`) in UTC.

@@ -68,7 +68,9 @@ impl SessionManager {
             &mut self.handles,
         )
         .await;
+        let codex_usage_limits = Self::load_codex_usage_limits().await;
         self.sessions = sessions;
+        self.codex_usage_limits = codex_usage_limits;
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);

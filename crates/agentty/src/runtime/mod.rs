@@ -82,7 +82,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
     let show_onboarding = app.should_show_onboarding();
     let mode = &app.mode;
     let projects = &app.projects;
-    let (sessions, stats_activity, table_state) = app.sessions.render_parts();
+    let (sessions, stats_activity, codex_usage_limits, table_state) = app.sessions.render_parts();
     let settings = &mut app.settings;
 
     terminal.draw(|frame| {
@@ -101,6 +101,7 @@ fn render_frame(app: &mut App, terminal: &mut TuiTerminal) -> io::Result<()> {
                 settings,
                 show_onboarding,
                 stats_activity,
+                codex_usage_limits,
                 sessions,
                 table_state,
                 working_dir: &current_working_dir,

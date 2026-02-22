@@ -13,7 +13,7 @@ use crate::app::settings::SettingName;
 use crate::app::{AppServices, SessionState};
 use crate::domain::agent::AgentModel;
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::{DailyActivity, Session, Status};
+use crate::domain::session::{CodexUsageLimits, DailyActivity, Session, Status};
 
 mod access;
 mod lifecycle;
@@ -31,6 +31,7 @@ pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
 
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
+    codex_usage_limits: Option<CodexUsageLimits>,
     default_session_model: AgentModel,
     default_session_permission_mode: PermissionMode,
     pending_history_replay: HashSet<String>,
@@ -42,12 +43,14 @@ pub struct SessionManager {
 impl SessionManager {
     /// Creates a session manager from persisted snapshot state and defaults.
     pub fn new(
+        codex_usage_limits: Option<CodexUsageLimits>,
         default_session_model: AgentModel,
         default_session_permission_mode: PermissionMode,
         state: SessionState,
         stats_activity: Vec<DailyActivity>,
     ) -> Self {
         Self {
+            codex_usage_limits,
             default_session_model,
             default_session_permission_mode,
             pending_history_replay: HashSet::new(),
@@ -72,11 +75,20 @@ impl SessionManager {
             .unwrap_or(fallback_model)
     }
 
-    /// Returns session snapshots, heatmap activity, and table state for render.
-    pub(crate) fn render_parts(&mut self) -> (&[Session], &[DailyActivity], &mut TableState) {
+    /// Returns session snapshots, heatmap activity, Codex usage limits, and
+    /// table state for render.
+    pub(crate) fn render_parts(
+        &mut self,
+    ) -> (
+        &[Session],
+        &[DailyActivity],
+        Option<CodexUsageLimits>,
+        &mut TableState,
+    ) {
         (
             &self.state.sessions,
             &self.stats_activity,
+            self.codex_usage_limits,
             &mut self.state.table_state,
         )
     }

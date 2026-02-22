@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -6,7 +7,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
-use crate::domain::session::{DailyActivity, Session};
+use crate::domain::session::{CodexUsageLimitWindow, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
 use crate::ui::util::{
@@ -19,6 +20,8 @@ const HEATMAP_CELL_WIDTH: usize = 2;
 const HEATMAP_DAY_LABEL_WIDTH: usize = 4;
 const HEATMAP_SECTION_HEIGHT: u16 = 11;
 const SUMMARY_SECTION_WIDTH: u16 = 44;
+const USAGE_BAR_WIDTH: usize = 20;
+const USAGE_SECTION_HEIGHT: u16 = 5;
 
 /// Token totals and session counts aggregated for a model.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -30,14 +33,20 @@ struct ModelSummary {
 
 /// Stats dashboard showing activity heatmap and per-session token statistics.
 pub struct StatsPage<'a> {
+    codex_usage_limits: Option<CodexUsageLimits>,
     sessions: &'a [Session],
     stats_activity: &'a [DailyActivity],
 }
 
 impl<'a> StatsPage<'a> {
     /// Creates a stats page renderer.
-    pub fn new(sessions: &'a [Session], stats_activity: &'a [DailyActivity]) -> Self {
+    pub fn new(
+        sessions: &'a [Session],
+        stats_activity: &'a [DailyActivity],
+        codex_usage_limits: Option<CodexUsageLimits>,
+    ) -> Self {
         Self {
+            codex_usage_limits,
             sessions,
             stats_activity,
         }
@@ -57,6 +66,7 @@ impl Page for StatsPage<'_> {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(HEATMAP_SECTION_HEIGHT),
+                Constraint::Length(USAGE_SECTION_HEIGHT),
                 Constraint::Min(0),
             ])
             .split(main_area);
@@ -71,7 +81,8 @@ impl Page for StatsPage<'_> {
 
         self.render_heatmap(f, top_chunks[0]);
         self.render_summary(f, top_chunks[1]);
-        self.render_table(f, main_chunks[1]);
+        self.render_usage(f, main_chunks[1]);
+        self.render_table(f, main_chunks[2]);
         self.render_footer(f, footer_area);
     }
 }
@@ -96,6 +107,14 @@ impl StatsPage<'_> {
         );
 
         f.render_widget(summary, area);
+    }
+
+    /// Renders account-level Codex usage windows and reset countdowns.
+    fn render_usage(&self, f: &mut Frame, area: Rect) {
+        let usage = Paragraph::new(self.build_usage_lines())
+            .block(Block::default().borders(Borders::ALL).title("Usage"));
+
+        f.render_widget(usage, area);
     }
 
     fn render_table(&self, f: &mut Frame, area: Rect) {
@@ -171,6 +190,24 @@ impl StatsPage<'_> {
             .style(Style::default().fg(Color::Gray))
             .alignment(Alignment::Right);
         f.render_widget(stats, footer_chunks[1]);
+    }
+
+    /// Builds per-window Codex usage lines for the usage panel.
+    fn build_usage_lines(&self) -> Vec<Line<'static>> {
+        let Some(codex_usage_limits) = self.codex_usage_limits else {
+            return vec![
+                Line::from("Codex usage unavailable."),
+                Line::from(Span::styled(
+                    "Run `codex login` and refresh.",
+                    Style::default().fg(Color::Gray),
+                )),
+            ];
+        };
+        let now = Self::current_unix_timestamp();
+        let primary_line = Self::usage_line(codex_usage_limits.primary, now);
+        let secondary_line = Self::usage_line(codex_usage_limits.secondary, now);
+
+        vec![primary_line, secondary_line]
     }
 
     fn build_heatmap_lines(&self) -> Vec<Line<'static>> {
@@ -324,6 +361,66 @@ impl StatsPage<'_> {
             _ => Color::Rgb(33, 38, 45),
         }
     }
+
+    /// Builds a single usage row with progress bar and reset countdown.
+    fn usage_line(window: CodexUsageLimitWindow, now: i64) -> Line<'static> {
+        let percent_left = 100_u8.saturating_sub(window.used_percent);
+        let label = Self::usage_window_label(window.window_minutes);
+        let progress = Self::usage_progress_bar(percent_left);
+        let reset_display = Self::format_reset_eta(window.resets_at, now);
+
+        Line::from(format!(
+            "{label:<12} {progress} {percent_left:>3}% left ({reset_display})"
+        ))
+    }
+
+    /// Converts a usage window duration to a short label.
+    fn usage_window_label(window_minutes: u32) -> String {
+        match window_minutes {
+            300 => "5h limit".to_string(),
+            10_080 => "Weekly limit".to_string(),
+            _ => format!("{window_minutes}m limit"),
+        }
+    }
+
+    /// Renders a fixed-width ASCII progress bar for percentage-left values.
+    fn usage_progress_bar(percent_left: u8) -> String {
+        let filled_cells = usize::from(percent_left).saturating_mul(USAGE_BAR_WIDTH) / 100;
+        let empty_cells = USAGE_BAR_WIDTH.saturating_sub(filled_cells);
+
+        format!("[{}{}]", "#".repeat(filled_cells), ".".repeat(empty_cells))
+    }
+
+    /// Returns a compact reset countdown for a Unix timestamp.
+    fn format_reset_eta(resets_at: i64, now: i64) -> String {
+        if resets_at <= now {
+            return "resets now".to_string();
+        }
+
+        let remaining_seconds = resets_at.saturating_sub(now);
+        let remaining_days = remaining_seconds / 86_400;
+        let remaining_hours = (remaining_seconds % 86_400) / 3_600;
+        let remaining_minutes = (remaining_seconds % 3_600) / 60;
+
+        if remaining_days > 0 {
+            return format!("resets in {remaining_days}d {remaining_hours}h");
+        }
+
+        if remaining_hours > 0 {
+            return format!("resets in {remaining_hours}h {remaining_minutes}m");
+        }
+
+        format!("resets in {}m", remaining_minutes.max(1))
+    }
+
+    /// Returns the current Unix timestamp in seconds.
+    fn current_unix_timestamp() -> i64 {
+        let now_duration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+
+        i64::try_from(now_duration.as_secs()).unwrap_or(i64::MAX)
+    }
 }
 
 #[cfg(test)]
@@ -394,7 +491,7 @@ mod tests {
             day_key: current_day_key_utc(),
             session_count: 3,
         }];
-        let mut page = StatsPage::new(&sessions, &activity);
+        let mut page = StatsPage::new(&sessions, &activity, None);
         let backend = ratatui::backend::TestBackend::new(160, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -446,7 +543,7 @@ mod tests {
             ),
         ];
         let activity: Vec<DailyActivity> = Vec::new();
-        let mut page = StatsPage::new(&sessions, &activity);
+        let mut page = StatsPage::new(&sessions, &activity, None);
         let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -473,7 +570,19 @@ mod tests {
         // Arrange
         let sessions = vec![session_fixture()];
         let activity: Vec<DailyActivity> = Vec::new();
-        let mut page = StatsPage::new(&sessions, &activity);
+        let usage_limits = Some(CodexUsageLimits {
+            primary: CodexUsageLimitWindow {
+                resets_at: i64::MAX,
+                used_percent: 26,
+                window_minutes: 300,
+            },
+            secondary: CodexUsageLimitWindow {
+                resets_at: i64::MAX,
+                used_percent: 24,
+                window_minutes: 10_080,
+            },
+        });
+        let mut page = StatsPage::new(&sessions, &activity, usage_limits);
         let backend = ratatui::backend::TestBackend::new(160, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -488,6 +597,9 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Token Stats"));
+        assert!(text.contains("Usage"));
+        assert!(text.contains("5h limit"));
+        assert!(text.contains("Weekly limit"));
         assert!(text.contains("Stats Session"));
         assert!(text.contains("Sessions: 1"));
         assert!(text.contains("Input: 1.5k"));

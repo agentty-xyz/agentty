@@ -143,6 +143,7 @@ impl App {
         let mut handles = HashMap::new();
         let (sessions, stats_activity) =
             SessionManager::load_sessions(&base_path, &db, &projects, &mut handles).await;
+        let codex_usage_limits = SessionManager::load_codex_usage_limits().await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
         let default_session_permission_mode = sessions
@@ -171,6 +172,7 @@ impl App {
         )
         .await;
         let sessions = SessionManager::new(
+            codex_usage_limits,
             default_session_model,
             default_session_permission_mode,
             SessionState::new(

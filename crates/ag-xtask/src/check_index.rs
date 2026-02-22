@@ -315,6 +315,11 @@ fn collect_directory_index_destinations(content: &str) -> Option<Vec<String>> {
     Some(indexed_files)
 }
 
+/// Returns whether a heading level starts a new top-level index section.
+fn is_section_terminator(level: HeadingLevel) -> bool {
+    level == HeadingLevel::H1 || level == HeadingLevel::H2
+}
+
 /// Appends heading text events to a single normalized heading buffer.
 fn append_heading_text(current_heading_text: &mut String, event: &Event<'_>) {
     match event {
@@ -322,11 +327,6 @@ fn append_heading_text(current_heading_text: &mut String, event: &Event<'_>) {
         Event::SoftBreak | Event::HardBreak => current_heading_text.push(' '),
         _ => {}
     }
-}
-
-/// Returns whether a heading level starts a new top-level index section.
-fn is_section_terminator(level: HeadingLevel) -> bool {
-    level == HeadingLevel::H1 || level == HeadingLevel::H2
 }
 
 #[cfg(test)]
