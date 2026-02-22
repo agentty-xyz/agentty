@@ -33,6 +33,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
+dead_code = "deny"
 unreachable_pub = "warn"
 
 [workspace.lints.clippy]
