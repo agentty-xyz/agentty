@@ -51,7 +51,9 @@ When working within `crates/agentty/src/ui/`:
 - [icon.rs](icon.rs) - UI icons.
 - [layout.rs](layout.rs) - Input and layout calculation helpers.
 - [markdown.rs](markdown.rs) - Styled markdown renderer for session output.
+- [overlays.rs](overlays.rs) - Overlay renderers and overlay-specific background composition.
 - [README.md](README.md) - Additional documentation.
+- [router.rs](router.rs) - Mode router for content-area rendering.
 - [state/](state/) - UI state definitions.
 - [style.rs](style.rs) - UI styling constants.
 - [text_util.rs](text_util.rs) - Text wrapping and compact formatting helpers.
