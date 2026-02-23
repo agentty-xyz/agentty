@@ -25,6 +25,14 @@ struct BuildSessionCommandInput {
     session_output: Option<String>,
 }
 
+/// Cleanup payload for a deleted session's git and filesystem resources.
+struct DeletedSessionCleanup {
+    branch_name: String,
+    folder: PathBuf,
+    has_git_branch: bool,
+    working_dir: PathBuf,
+}
+
 impl SessionManager {
     /// Moves selection to the next selectable session in grouped list order.
     ///
@@ -435,43 +443,34 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) {
-        let Some(index) = self.table_state.selected() else {
+        let Some(cleanup) = self
+            .remove_selected_session_from_state_and_db(projects, services)
+            .await
+        else {
             return;
         };
-        if index >= self.sessions.len() {
+
+        Self::cleanup_deleted_session_resources(services.git_client(), cleanup).await;
+    }
+
+    /// Deletes the selected session while deferring filesystem cleanup to a
+    /// background task.
+    pub async fn delete_selected_session_deferred_cleanup(
+        &mut self,
+        projects: &ProjectManager,
+        services: &AppServices,
+    ) {
+        let Some(cleanup) = self
+            .remove_selected_session_from_state_and_db(projects, services)
+            .await
+        else {
             return;
-        }
+        };
 
-        let session = self.sessions.remove(index);
-        self.handles.remove(&session.id);
-        self.pending_history_replay.remove(&session.id);
-        self.persist_deleted_session_duration(services, &session)
-            .await;
-
-        let _ = services
-            .db()
-            .request_cancel_for_session_operations(&session.id)
-            .await;
-        self.clear_session_worker(&session.id);
-        let _ = services.db().delete_session(&session.id).await;
-
-        if projects.has_git_branch() {
-            let branch_name = session_branch(&session.id);
-            let working_dir = projects.working_dir().to_path_buf();
-            let git_client = services.git_client();
-
-            if let Some(repo_root) = git_client.find_git_repo_root(working_dir).await {
-                let folder = session.folder.clone();
-                let _ = git_client.remove_worktree(folder).await;
-                let _ = git_client.delete_branch(repo_root, branch_name).await;
-            } else {
-                let folder = session.folder.clone();
-                let _ = git_client.remove_worktree(folder).await;
-            }
-        }
-
-        let _ = tokio::fs::remove_dir_all(&session.folder).await;
-        services.emit_app_event(AppEvent::RefreshSessions);
+        let git_client = services.git_client();
+        tokio::spawn(async move {
+            SessionManager::cleanup_deleted_session_resources(git_client, cleanup).await;
+        });
     }
 
     /// Persists the deleted session duration when it exceeds the current
@@ -499,6 +498,59 @@ impl SessionManager {
         }
 
         self.longest_session_duration_seconds = duration_seconds;
+    }
+
+    /// Removes the selected session from app state and persistence, returning
+    /// deferred cleanup instructions for git and filesystem resources.
+    async fn remove_selected_session_from_state_and_db(
+        &mut self,
+        projects: &ProjectManager,
+        services: &AppServices,
+    ) -> Option<DeletedSessionCleanup> {
+        let selected_index = self.table_state.selected()?;
+        if selected_index >= self.sessions.len() {
+            return None;
+        }
+
+        let session = self.sessions.remove(selected_index);
+        self.handles.remove(&session.id);
+        self.pending_history_replay.remove(&session.id);
+        self.persist_deleted_session_duration(services, &session)
+            .await;
+
+        let _ = services
+            .db()
+            .request_cancel_for_session_operations(&session.id)
+            .await;
+        self.clear_session_worker(&session.id);
+        let _ = services.db().delete_session(&session.id).await;
+        services.emit_app_event(AppEvent::RefreshSessions);
+
+        Some(DeletedSessionCleanup {
+            branch_name: session_branch(&session.id),
+            folder: session.folder,
+            has_git_branch: projects.has_git_branch(),
+            working_dir: projects.working_dir().to_path_buf(),
+        })
+    }
+
+    /// Deletes worktree resources for a previously removed session.
+    async fn cleanup_deleted_session_resources(
+        git_client: Arc<dyn crate::infra::git::GitClient>,
+        cleanup: DeletedSessionCleanup,
+    ) {
+        if cleanup.has_git_branch {
+            if let Some(repo_root) = git_client.find_git_repo_root(cleanup.working_dir).await {
+                let _ = git_client.remove_worktree(cleanup.folder.clone()).await;
+                let _ = git_client
+                    .delete_branch(repo_root, cleanup.branch_name)
+                    .await;
+            } else {
+                let _ = git_client.remove_worktree(cleanup.folder.clone()).await;
+            }
+        }
+
+        let _ = tokio::fs::remove_dir_all(cleanup.folder).await;
     }
 
     /// Queues a prompt using the provided backend for a session.

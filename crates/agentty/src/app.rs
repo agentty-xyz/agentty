@@ -16,6 +16,7 @@ use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{CodexUsageLimits, Session, Status};
 use crate::infra::db::Database;
+use crate::infra::file_index::FileEntry;
 use crate::infra::git::{GitClient, RealGitClient};
 use crate::ui;
 use crate::ui::state::app_mode::AppMode;
@@ -59,6 +60,11 @@ pub fn agentty_home() -> PathBuf {
 /// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
+    /// Indicates background-loaded prompt at-mention entries for one session.
+    AtMentionEntriesLoaded {
+        entries: Vec<FileEntry>,
+        session_id: String,
+    },
     /// Indicates latest ahead/behind information from the git status worker.
     GitStatusUpdated { status: Option<(u32, u32)> },
     /// Indicates latest account-level Codex usage limits from the poller.
@@ -93,6 +99,7 @@ pub(crate) enum AppEvent {
 
 #[derive(Default)]
 struct AppEventBatch {
+    at_mention_entries_updates: HashMap<String, Vec<FileEntry>>,
     codex_usage_limits_update: CodexUsageLimitsBatchUpdate,
     cleared_session_history_ids: HashSet<String>,
     git_status_update: Option<(u32, u32)>,
@@ -441,6 +448,15 @@ impl App {
         self.process_pending_app_events().await;
     }
 
+    /// Deletes the selected session while deferring worktree filesystem cleanup
+    /// to a background task.
+    pub async fn delete_selected_session_deferred_cleanup(&mut self) {
+        self.sessions
+            .delete_selected_session_deferred_cleanup(&self.projects, &self.services)
+            .await;
+        self.process_pending_app_events().await;
+    }
+
     /// Cancels a session in review status.
     ///
     /// # Errors
@@ -658,6 +674,9 @@ impl App {
                 .apply_session_model_updated(&session_id, session_model);
         }
 
+        for (session_id, entries) in event_batch.at_mention_entries_updates {
+            self.apply_prompt_at_mention_entries(&session_id, entries);
+        }
         for (session_id, progress_message) in event_batch.session_progress_updates {
             if let Some(progress_message) = progress_message {
                 self.session_progress_messages
@@ -680,6 +699,31 @@ impl App {
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
             .await;
         self.retain_valid_session_progress_messages();
+    }
+
+    /// Applies loaded at-mention entries to the currently focused prompt
+    /// session, if the mention query is still active.
+    fn apply_prompt_at_mention_entries(&mut self, session_id: &str, entries: Vec<FileEntry>) {
+        if let AppMode::Prompt {
+            at_mention_state,
+            input,
+            session_id: prompt_session_id,
+            ..
+        } = &mut self.mode
+        {
+            if prompt_session_id != session_id || input.at_mention_query().is_none() {
+                return;
+            }
+
+            if let Some(state) = at_mention_state.as_mut() {
+                state.all_entries = entries;
+                state.selected_index = 0;
+
+                return;
+            }
+
+            *at_mention_state = Some(crate::ui::state::prompt::PromptAtMentionState::new(entries));
+        }
     }
 
     /// Validates whether a session is currently eligible for merge queueing.
@@ -963,6 +1007,12 @@ impl App {
 impl AppEventBatch {
     fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id,
+            } => {
+                self.at_mention_entries_updates.insert(session_id, entries);
+            }
             AppEvent::GitStatusUpdated { status } => {
                 self.has_git_status_update = true;
                 self.git_status_update = status;
@@ -1017,6 +1067,7 @@ impl AppEventBatch {
 mod tests {
     use super::*;
     use crate::domain::session::{CodexUsageLimitWindow, CodexUsageLimits};
+    use crate::infra::file_index::FileEntry;
 
     #[test]
     fn dev_server_command_to_run_returns_none_for_empty_input() {
@@ -1146,6 +1197,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn app_event_batch_collect_event_keeps_latest_at_mention_entries_update() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+        let first_entries = vec![FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
+        }];
+        let second_entries = vec![FileEntry {
+            is_dir: true,
+            path: "crates".to_string(),
+        }];
+
+        // Act
+        event_batch.collect_event(AppEvent::AtMentionEntriesLoaded {
+            entries: first_entries,
+            session_id: "session-1".to_string(),
+        });
+        event_batch.collect_event(AppEvent::AtMentionEntriesLoaded {
+            entries: second_entries.clone(),
+            session_id: "session-1".to_string(),
+        });
+
+        // Assert
+        assert_eq!(
+            event_batch
+                .at_mention_entries_updates
+                .get("session-1")
+                .cloned(),
+            Some(second_entries)
+        );
+    }
     /// Builds deterministic Codex usage-limit snapshots for tests.
     fn limits_fixture(primary_used_percent: u8, secondary_used_percent: u8) -> CodexUsageLimits {
         CodexUsageLimits {

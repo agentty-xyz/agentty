@@ -2,7 +2,7 @@ use std::io;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 
-use crate::app::App;
+use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
 use crate::infra::file_index;
@@ -505,7 +505,7 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
     }
 
     if prompt_context.is_new_session {
-        app.delete_selected_session().await;
+        app.delete_selected_session_deferred_cleanup().await;
         app.mode = AppMode::List;
 
         return;
@@ -746,12 +746,13 @@ async fn handle_prompt_char(app: &mut App, character: char, prompt_context: &Pro
     }
 
     if should_activate && !prompt_context.is_slash_command {
-        activate_at_mention(app, prompt_context).await;
+        activate_at_mention(app, prompt_context);
     }
 }
 
-/// Populates the at-mention file list from the session's worktree folder.
-async fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
+/// Starts asynchronous loading of at-mention file entries for the prompt
+/// session.
+fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
     let session_folder = app
         .sessions
         .sessions
@@ -760,16 +761,25 @@ async fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
             || app.working_dir().to_path_buf(),
             |session| session.folder.clone(),
         );
+    let session_id = prompt_context.session_id.clone();
+    let event_tx = app.services.event_sender();
 
-    let entries = tokio::task::spawn_blocking(move || file_index::list_files(&session_folder))
-        .await
-        .unwrap_or_default();
+    tokio::spawn(async move {
+        let entries = tokio::task::spawn_blocking(move || file_index::list_files(&session_folder))
+            .await
+            .unwrap_or_default();
+
+        let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
+            entries,
+            session_id,
+        });
+    });
 
     if let AppMode::Prompt {
         at_mention_state, ..
     } = &mut app.mode
     {
-        *at_mention_state = Some(PromptAtMentionState::new(entries));
+        *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
     }
 }
 
@@ -1450,6 +1460,17 @@ mod tests {
 
         // Act
         handle_prompt_char(&mut app, '@', &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        if let AppMode::Prompt {
+            at_mention_state, ..
+        } = &app.mode
+        {
+            assert!(at_mention_state.is_some());
+        }
+
+        // Act
         handle_prompt_char(&mut app, ' ', &prompt_context).await;
 
         // Assert
