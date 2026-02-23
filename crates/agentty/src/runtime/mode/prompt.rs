@@ -721,7 +721,7 @@ fn handle_prompt_delete(app: &mut App) {
     }
 }
 
-/// Handles character input in prompt mode and updates at-mention activation.
+/// Inserts one typed character into prompt input and updates at-mention state.
 fn handle_prompt_char(app: &mut App, character: char, prompt_context: &PromptContext) {
     let mut should_activate = false;
 

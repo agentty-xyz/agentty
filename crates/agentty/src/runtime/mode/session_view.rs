@@ -35,8 +35,8 @@ struct ViewSessionSnapshot {
     session_status: Status,
 }
 
-/// Processes view-mode key presses and keeps the open-worktree shortcut
-/// disabled while a session is `Status::InProgress` or `Status::Done`.
+/// Processes view-mode key presses and keeps shortcut availability aligned with
+/// session status (`open` disabled only for `Done`, `diff` only for `Review`).
 pub(crate) async fn handle(
     app: &mut App,
     terminal: &mut TuiTerminal,
@@ -104,7 +104,7 @@ pub(crate) async fn handle(
         }
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.is_action_allowed =>
+                && is_view_diff_allowed(view_session_snapshot.session_status) =>
         {
             show_diff_for_view_session(app, &view_context).await;
         }
@@ -178,14 +178,19 @@ fn is_done_output_toggle_key(status: Status, key: KeyEvent) -> bool {
 
 /// Returns whether `o` can open the session worktree in tmux.
 fn is_view_worktree_open_allowed(status: Status) -> bool {
-    status != Status::InProgress
+    status != Status::Done
 }
 
 /// Returns whether non-navigation view shortcuts are available.
 ///
-/// This covers `Enter`, `d`, `m`, `r`, and `S-Tab`.
+/// This covers `Enter`, `m`, `r`, and `S-Tab`.
 fn is_view_action_allowed(status: Status) -> bool {
     !matches!(status, Status::Done | Status::InProgress)
+}
+
+/// Returns whether the `d` shortcut can open the diff view.
+fn is_view_diff_allowed(status: Status) -> bool {
+    status == Status::Review
 }
 
 fn switch_view_to_prompt(
@@ -215,6 +220,7 @@ fn view_session_state(status: Status) -> ViewSessionState {
     match status {
         Status::Done => ViewSessionState::Done,
         Status::InProgress => ViewSessionState::InProgress,
+        Status::Review => ViewSessionState::Review,
         _ => ViewSessionState::Interactive,
     }
 }
@@ -482,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_view_worktree_open_allowed_returns_false_for_in_progress() {
+    fn test_is_view_worktree_open_allowed_returns_true_for_in_progress() {
         // Arrange
         let status = Status::InProgress;
 
@@ -490,7 +496,7 @@ mod tests {
         let can_open = is_view_worktree_open_allowed(status);
 
         // Assert
-        assert!(!can_open);
+        assert!(can_open);
     }
 
     #[test]
@@ -509,6 +515,24 @@ mod tests {
         assert!(review_allowed);
         assert!(!in_progress_allowed);
         assert!(!done_allowed);
+    }
+
+    #[test]
+    fn test_is_view_diff_allowed_only_for_review_status() {
+        // Arrange
+        let review_status = Status::Review;
+        let new_status = Status::New;
+        let in_progress_status = Status::InProgress;
+
+        // Act
+        let review_allowed = is_view_diff_allowed(review_status);
+        let new_allowed = is_view_diff_allowed(new_status);
+        let in_progress_allowed = is_view_diff_allowed(in_progress_status);
+
+        // Assert
+        assert!(review_allowed);
+        assert!(!new_allowed);
+        assert!(!in_progress_allowed);
     }
 
     #[test]

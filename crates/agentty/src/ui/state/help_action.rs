@@ -25,8 +25,17 @@ impl HelpAction {
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
+    /// Session is completed; only read-only view actions and output toggling
+    /// remain available.
     Done,
+    /// Session is currently running; open-worktree and stop are available but
+    /// edit and diff shortcuts are hidden.
     InProgress,
+    /// Session is ready for review; full edit shortcuts, including diff, are
+    /// available.
+    Review,
+    /// Session allows reply/merge/rebase actions but is not in review mode, so
+    /// diff remains hidden.
     Interactive,
 }
 
@@ -95,8 +104,12 @@ pub(crate) fn stats_actions() -> Vec<HelpAction> {
 
 /// Projects currently available view-mode actions into help entries.
 pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
-    let can_open_worktree = state.session_state == ViewSessionState::Interactive;
-    let can_edit_session = state.session_state == ViewSessionState::Interactive;
+    let can_open_worktree = state.session_state != ViewSessionState::Done;
+    let can_edit_session = matches!(
+        state.session_state,
+        ViewSessionState::Interactive | ViewSessionState::Review
+    );
+    let can_show_diff = state.session_state == ViewSessionState::Review;
     let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -109,8 +122,11 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
     }
 
-    if can_edit_session {
+    if can_show_diff {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
+    }
+
+    if can_edit_session {
         actions.push(HelpAction::new("queue merge", "m", "Queue merge"));
         actions.push(HelpAction::new("rebase", "r", "Rebase"));
         actions.push(HelpAction::new("mode", "S-Tab", "Toggle permission mode"));
@@ -201,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_in_progress_shows_stop_and_hides_edit_actions() {
+    fn test_view_actions_in_progress_shows_open_and_stop_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             session_state: ViewSessionState::InProgress,
@@ -213,8 +229,38 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
-        assert!(!actions.iter().any(|action| action.key == "o"));
+        assert!(actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "d"));
+    }
+
+    #[test]
+    fn test_view_actions_review_shows_diff() {
+        // Arrange
+        let state = ViewHelpState {
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "d"));
+        assert!(actions.iter().any(|action| action.key == "Enter"));
+    }
+
+    #[test]
+    fn test_view_actions_interactive_hides_diff() {
+        // Arrange
+        let state = ViewHelpState {
+            session_state: ViewSessionState::Interactive,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "d"));
+        assert!(actions.iter().any(|action| action.key == "Enter"));
     }
 
     #[test]

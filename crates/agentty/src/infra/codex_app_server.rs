@@ -841,7 +841,6 @@ fn camel_to_snake(input: &str) -> String {
 
     result
 }
-
 /// Extracts input/output token usage from `turn.usage` payloads.
 fn extract_turn_usage(response_value: &Value) -> (u64, u64) {
     let Some(turn) = response_value

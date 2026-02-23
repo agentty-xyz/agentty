@@ -295,8 +295,8 @@ impl<'a> SessionChatPage<'a> {
     /// Returns the static help text shown in the bottom panel for a given
     /// session in view mode.
     ///
-    /// `InProgress` and `Done` sessions intentionally expose a reduced
-    /// shortcut set, including hiding the open-worktree shortcut.
+    /// `InProgress` sessions keep worktree access but hide edit and diff
+    /// shortcuts, while `Done` sessions expose only read-only shortcuts.
     fn view_help_text(
         session: &Session,
         done_session_output_mode: DoneSessionOutputMode,
@@ -305,6 +305,7 @@ impl<'a> SessionChatPage<'a> {
             session_state: match session.status {
                 Status::Done => ViewSessionState::Done,
                 Status::InProgress => ViewSessionState::InProgress,
+                Status::Review => ViewSessionState::Review,
                 _ => ViewSessionState::Interactive,
             },
         });
@@ -648,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_in_progress_limits_actions_to_navigation() {
+    fn test_view_help_text_in_progress_shows_open_and_hides_diff() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::InProgress;
@@ -660,7 +661,8 @@ mod tests {
         assert!(help_text.contains("q: back"));
         assert!(help_text.contains("Ctrl+c: stop"));
         assert!(help_text.contains("j/k: scroll"));
-        assert!(!help_text.contains("o: open"));
+        assert!(help_text.contains("o: open"));
+        assert!(!help_text.contains("d: diff"));
         assert!(!help_text.contains("Enter: reply"));
     }
 
@@ -673,8 +675,22 @@ mod tests {
         let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Summary);
 
         // Assert
+        assert!(!help_text.contains("d: diff"));
         assert!(help_text.contains("m: queue merge"));
         assert!(help_text.contains("r: rebase"));
+    }
+
+    #[test]
+    fn test_view_help_text_review_includes_diff_hint() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+
+        // Act
+        let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Summary);
+
+        // Assert
+        assert!(help_text.contains("d: diff"));
     }
 
     #[test]
