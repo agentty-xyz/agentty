@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.1] - 2026-02-22
+
+### Added
+
+- **Session Output:** Add toggle to switch between summary and full output for completed sessions.
+- **Release:** Require explicit confirmation for version bump type in release skill.
+- **Runtime:** Track active turn ID to prevent race conditions during turn completion.
+
+### Changed
+
+- **Architecture:** Refactor UI routing and overlays into dedicated modules and centralize frame drawing.
+- **Session:** Defer session cleanup and load at-mention entries asynchronously for faster startup.
+- **Git:** Retry git commands on index lock contention and simplify session view handling.
+- **Settings:** Only persist default model when the "last-used" option is enabled.
+- **Rebase:** Improve recovery from stale metadata during rebase assist.
+- **Permissions:** Consolidate permission handling into a single "Auto Edit" mode.
+
+### Removed
+
+- **Permissions:** Remove legacy permission mode column from database and UI.
+- **Permissions:** Remove non-auto permission modes and plan follow-up functionality.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.2.0] - 2026-02-22
 
 ### Added
