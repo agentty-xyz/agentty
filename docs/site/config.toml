@@ -1,6 +1,6 @@
 base_url = "https://agentty.xyz"
 title = "Agentty"
-description = "A terminal UI tool for managing coding agents."
+description = "Agentic Development Environment (ADE) in your terminal."
 default_language = "en"
 compile_sass = true
 minify_html = true

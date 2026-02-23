@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use crate::ui::Page;
 use crate::ui::state::help_action;
 
-const DESCRIPTION: &str = "Manage coding agents in your terminal";
+const DESCRIPTION: &str = "Agentic Development Environment (ADE) in your terminal";
 const START_BUTTON: &str = "[ Press Enter to Start ]";
 const LOGO_LINES: [&str; 5] = [
     "    _    ____ _____ _   _ _____ _____ __   __",

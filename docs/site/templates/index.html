@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>{{ config.title }} | Terminal UI for Coding Agents</title>
+        <title>{{ config.title }} | Agentic Development Environment (ADE) in your terminal</title>
         <meta name="description" content="{{ config.description }}">
         <link rel="canonical" href="{{ config.base_url }}">
         <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -91,10 +91,7 @@
   / _ \| |  _|  _| |  \| | | |   | |   \ V /
  / ___ \ |_| | |___| |\  | | |   | |    | |
 /_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
-                <p class="text-muted text-[0.95rem] leading-[1.7] mx-auto mb-8 max-w-[52ch]">
-                    Run coding agents from your terminal with isolated worktrees,
-                    live diffs, and session-level controls.
-                </p>
+                <div class="text-muted text-[0.95rem] leading-[1.7] mx-auto mb-8 max-w-[52ch]">{{ section.content | safe }}</div>
             </section>
             <section class="mb-14">
                 <h2 class="text-base font-semibold text-accent m-0 mb-5 tracking-[0.03em]">// installation</h2>

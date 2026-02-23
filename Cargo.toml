@@ -11,7 +11,7 @@ authors = [
 edition = "2024"
 license = "Apache-2.0"
 readme = "README.md"
-description = "A terminal UI tool for managing agents"
+description = "Agentic Development Environment (ADE) in your terminal"
 repository = "https://github.com/opencloudtool/agentty"
 homepage = "https://github.com/opencloudtool/agentty"
 
