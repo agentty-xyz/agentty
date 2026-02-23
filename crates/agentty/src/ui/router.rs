@@ -204,6 +204,7 @@ fn render_session_or_diff_mode(
         AppMode::View {
             session_id,
             scroll_offset,
+            ..
         } => render_session_chat(
             f,
             area,

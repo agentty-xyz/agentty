@@ -105,6 +105,7 @@ pub(crate) fn stats_actions() -> Vec<HelpAction> {
 pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     let can_open_worktree = state.session_state == ViewSessionState::Interactive;
     let can_edit_session = state.session_state == ViewSessionState::Interactive;
+    let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
@@ -140,6 +141,10 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if state.session_state == ViewSessionState::InProgress {
         actions.push(HelpAction::new("stop", "Ctrl+c", "Stop agent"));
+    }
+
+    if can_toggle_done_output {
+        actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
     }
 
     actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
@@ -234,6 +239,25 @@ mod tests {
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "d"));
+    }
+
+    #[test]
+    fn test_view_actions_done_shows_toggle_and_hides_edit_actions() {
+        // Arrange
+        let state = ViewHelpState {
+            plan_followup_navigation: None,
+            session_state: ViewSessionState::Done,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "t"));
+        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(!actions.iter().any(|action| action.key == "d"));
+        assert!(!actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]

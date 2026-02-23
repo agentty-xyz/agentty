@@ -5,6 +5,25 @@ use super::palette::{PaletteCommand, PaletteFocus};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
 
+/// Selects the visible panel content for `Status::Done` sessions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DoneSessionOutputMode {
+    /// Renders the concise final summary, when available.
+    Summary,
+    /// Renders the full captured session output stream.
+    Output,
+}
+
+impl DoneSessionOutputMode {
+    /// Returns the opposite done-session output mode.
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::Summary => Self::Output,
+            Self::Output => Self::Summary,
+        }
+    }
+}
+
 /// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
@@ -38,6 +57,8 @@ pub enum AppMode {
         scroll_offset: Option<u16>,
     },
     View {
+        /// Selected content view for `Status::Done` sessions.
+        done_session_output_mode: DoneSessionOutputMode,
         session_id: String,
         scroll_offset: Option<u16>,
     },
@@ -67,6 +88,7 @@ pub enum HelpContext {
     /// Generic list-mode help context with precomputed keybindings.
     List { keybindings: Vec<HelpAction> },
     View {
+        done_session_output_mode: DoneSessionOutputMode,
         plan_followup_navigation: Option<PlanFollowupNavigation>,
         session_id: String,
         session_state: ViewSessionState,
@@ -102,10 +124,12 @@ impl HelpContext {
         match self {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
+                done_session_output_mode,
                 session_id,
                 scroll_offset,
                 ..
             } => AppMode::View {
+                done_session_output_mode,
                 session_id,
                 scroll_offset,
             },
@@ -134,9 +158,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_done_session_output_mode_toggle_switches_between_variants() {
+        // Arrange
+        let summary_mode = DoneSessionOutputMode::Summary;
+        let output_mode = DoneSessionOutputMode::Output;
+
+        // Act
+        let toggled_from_summary = summary_mode.toggled();
+        let toggled_from_output = output_mode.toggled();
+
+        // Assert
+        assert_eq!(toggled_from_summary, DoneSessionOutputMode::Output);
+        assert_eq!(toggled_from_output, DoneSessionOutputMode::Summary);
+    }
+
+    #[test]
     fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
         // Arrange
         let context = HelpContext::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             plan_followup_navigation: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
@@ -162,6 +202,7 @@ mod tests {
     fn test_help_context_restore_mode_ignores_view_help_flags() {
         // Arrange
         let context = HelpContext::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             plan_followup_navigation: Some(PlanFollowupNavigation::Vertical),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
@@ -177,6 +218,7 @@ mod tests {
             AppMode::View {
                 ref session_id,
                 scroll_offset: Some(4),
+                ..
             } if session_id == "session-id"
         ));
     }

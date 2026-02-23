@@ -38,7 +38,7 @@ mod tests {
 
     use super::*;
     use crate::infra::db::Database;
-    use crate::ui::state::app_mode::HelpContext;
+    use crate::ui::state::app_mode::{DoneSessionOutputMode, HelpContext};
     use crate::ui::state::help_action::HelpAction;
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
@@ -80,6 +80,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
                 plan_followup_navigation: None,
                 session_id: "s1".to_string(),
                 session_state: crate::ui::state::help_action::ViewSessionState::Interactive,
@@ -101,6 +102,7 @@ mod tests {
             AppMode::View {
                 ref session_id,
                 scroll_offset: Some(5),
+                ..
             } if session_id == "s1"
         ));
     }

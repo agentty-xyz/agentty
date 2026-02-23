@@ -7,7 +7,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::state::help_action::{
     HelpAction, onboarding_actions, session_list_actions, settings_actions, stats_actions,
 };
@@ -72,6 +72,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                         && let Some(session_id) = app.session_id_for_index(session_index)
                     {
                         app.mode = AppMode::View {
+                            done_session_output_mode: DoneSessionOutputMode::Summary,
                             session_id,
                             scroll_offset: None,
                         };
@@ -417,7 +418,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                scroll_offset: None
+                scroll_offset: None,
+                ..
             } if session_id == &expected_session_id
         ));
     }
@@ -446,8 +448,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
                 ref session_id,
-                scroll_offset: None
+                scroll_offset: None,
             } if session_id == &expected_session_id
         ));
     }

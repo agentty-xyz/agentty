@@ -10,7 +10,7 @@ use crate::domain::session::{Session, Status};
 use crate::infra::file_index;
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::components::session_output::SessionOutput;
-use crate::ui::state::app_mode::AppMode;
+use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
 use crate::ui::state::help_action::{
     self, PlanFollowupNavigation, ViewHelpState, ViewSessionState,
 };
@@ -56,10 +56,36 @@ impl<'a> SessionChatPage<'a> {
     pub(crate) fn rendered_output_line_count(
         session: &Session,
         output_width: u16,
+        done_session_output_mode: DoneSessionOutputMode,
         plan_followup: Option<&PlanFollowup>,
         active_progress: Option<&str>,
     ) -> u16 {
-        SessionOutput::rendered_line_count(session, output_width, plan_followup, active_progress)
+        SessionOutput::rendered_line_count(
+            session,
+            output_width,
+            done_session_output_mode,
+            plan_followup,
+            active_progress,
+        )
+    }
+
+    /// Returns the selected `Done`-session output mode for the active page
+    /// mode.
+    fn done_session_output_mode(&self) -> DoneSessionOutputMode {
+        match self.mode {
+            AppMode::View {
+                done_session_output_mode,
+                ..
+            } => *done_session_output_mode,
+            AppMode::List
+            | AppMode::Confirmation { .. }
+            | AppMode::SyncBlockedPopup { .. }
+            | AppMode::Prompt { .. }
+            | AppMode::Diff { .. }
+            | AppMode::CommandPalette { .. }
+            | AppMode::CommandOption { .. }
+            | AppMode::Help { .. } => DoneSessionOutputMode::Summary,
+        }
     }
 
     fn build_slash_menu(
@@ -192,6 +218,7 @@ impl<'a> SessionChatPage<'a> {
         SessionOutput::new(
             session,
             self.scroll_offset,
+            self.done_session_output_mode(),
             self.plan_followup,
             self.active_progress,
         )
@@ -273,7 +300,8 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_text = Self::view_help_text(session, self.plan_followup);
+        let help_text =
+            Self::view_help_text(session, self.plan_followup, self.done_session_output_mode());
         let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, bottom_area);
     }
@@ -281,10 +309,14 @@ impl<'a> SessionChatPage<'a> {
     /// Returns the static help text shown in the bottom panel for a given
     /// session in view mode.
     ///
-    /// `InProgress` and `Done` sessions intentionally expose only navigation
-    /// and help shortcuts, including hiding the open-worktree shortcut.
-    fn view_help_text(session: &Session, plan_followup: Option<&PlanFollowup>) -> String {
-        let actions = help_action::view_actions(ViewHelpState {
+    /// `InProgress` and `Done` sessions intentionally expose a reduced
+    /// shortcut set, including hiding the open-worktree shortcut.
+    fn view_help_text(
+        session: &Session,
+        plan_followup: Option<&PlanFollowup>,
+        done_session_output_mode: DoneSessionOutputMode,
+    ) -> String {
+        let mut actions = help_action::view_actions(ViewHelpState {
             plan_followup_navigation: plan_followup.map(|_| PlanFollowupNavigation::Vertical),
             session_state: match session.status {
                 Status::Done => ViewSessionState::Done,
@@ -293,7 +325,23 @@ impl<'a> SessionChatPage<'a> {
             },
         });
 
+        if session.status == Status::Done {
+            let toggle_action_label = Self::done_toggle_action_label(done_session_output_mode);
+            if let Some(toggle_action_index) = actions.iter().position(|action| action.key == "t") {
+                actions[toggle_action_index] =
+                    help_action::HelpAction::new(toggle_action_label, "t", "Switch summary/output");
+            }
+        }
+
         help_action::footer_text(&actions)
+    }
+
+    /// Returns the `t` footer label for `Status::Done` output mode toggling.
+    fn done_toggle_action_label(done_session_output_mode: DoneSessionOutputMode) -> &'static str {
+        match done_session_output_mode {
+            DoneSessionOutputMode::Summary => "output",
+            DoneSessionOutputMode::Output => "summary",
+        }
     }
 }
 
@@ -607,8 +655,13 @@ mod tests {
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let rendered_line_count =
-            SessionChatPage::rendered_output_line_count(&session, 20, None, None);
+        let rendered_line_count = SessionChatPage::rendered_output_line_count(
+            &session,
+            20,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+        );
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
@@ -621,7 +674,8 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let help_text = SessionChatPage::view_help_text(&session, None);
+        let help_text =
+            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("q: back"));
@@ -637,7 +691,8 @@ mod tests {
         let session = session_fixture();
 
         // Act
-        let help_text = SessionChatPage::view_help_text(&session, None);
+        let help_text =
+            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("m: queue merge"));
@@ -651,7 +706,11 @@ mod tests {
         let followup = PlanFollowup::new(VecDeque::new());
 
         // Act
-        let help_text = SessionChatPage::view_help_text(&session, Some(&followup));
+        let help_text = SessionChatPage::view_help_text(
+            &session,
+            Some(&followup),
+            DoneSessionOutputMode::Summary,
+        );
 
         // Assert
         assert!(help_text.contains("m: queue merge"));
@@ -665,7 +724,11 @@ mod tests {
         let followup = PlanFollowup::new(VecDeque::new());
 
         // Act
-        let help_text = SessionChatPage::view_help_text(&session, Some(&followup));
+        let help_text = SessionChatPage::view_help_text(
+            &session,
+            Some(&followup),
+            DoneSessionOutputMode::Summary,
+        );
 
         // Assert
         assert!(help_text.contains("Up/Down: choose action"));
@@ -678,10 +741,26 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let help_text = SessionChatPage::view_help_text(&session, None);
+        let help_text =
+            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(!help_text.contains("o: open"));
+        assert!(help_text.contains("t: output"));
         assert!(help_text.contains("j/k: scroll"));
+    }
+
+    #[test]
+    fn test_view_help_text_done_output_mode_shows_summary_toggle_hint() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+
+        // Act
+        let help_text =
+            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Output);
+
+        // Assert
+        assert!(help_text.contains("t: summary"));
     }
 }

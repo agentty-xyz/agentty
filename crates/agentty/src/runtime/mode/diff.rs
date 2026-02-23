@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::components::file_explorer::FileExplorer;
-use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::util::parse_diff_lines;
 
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
@@ -42,6 +42,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 app.mode = AppMode::View {
+                    done_session_output_mode: DoneSessionOutputMode::Summary,
                     session_id: session_id.clone(),
                     scroll_offset: None,
                 };
@@ -121,7 +122,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                scroll_offset: None
+                scroll_offset: None,
+                ..
             } if session_id == "session-id"
         ));
     }

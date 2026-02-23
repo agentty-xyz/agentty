@@ -162,6 +162,7 @@ fn render_help_background(
             render_list_background(f, area, list_background);
         }
         HelpContext::View {
+            done_session_output_mode,
             session_id,
             scroll_offset: view_scroll,
             ..
@@ -171,6 +172,7 @@ fn render_help_background(
                 .position(|session| session.id == *session_id)
             {
                 let bg_mode = AppMode::View {
+                    done_session_output_mode: *done_session_output_mode,
                     session_id: session_id.clone(),
                     scroll_offset: *view_scroll,
                 };

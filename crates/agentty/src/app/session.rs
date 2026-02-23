@@ -1718,6 +1718,7 @@ FROM session
         .await;
         let selected_session_id = app.sessions.sessions[1].id.clone();
         app.mode = AppMode::View {
+            done_session_output_mode: crate::ui::state::app_mode::DoneSessionOutputMode::Summary,
             session_id: selected_session_id.clone(),
             scroll_offset: None,
         };

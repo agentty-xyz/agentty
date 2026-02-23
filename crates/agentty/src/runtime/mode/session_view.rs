@@ -8,7 +8,7 @@ use crate::domain::permission::{PermissionMode, PlanFollowupOption};
 use crate::domain::session::Status;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::pages::session_chat::SessionChatPage;
-use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::state::help_action::{PlanFollowupNavigation, ViewSessionState};
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
@@ -19,6 +19,7 @@ const IMPLEMENT_PLAN_CONTEXT_MAX_CHARS: usize = 12_000;
 
 #[derive(Clone)]
 struct ViewContext {
+    done_session_output_mode: DoneSessionOutputMode,
     scroll_offset: Option<u16>,
     session_id: String,
     session_index: usize,
@@ -43,17 +44,22 @@ pub(crate) async fn handle(
 
     let view_metrics = view_metrics(app, terminal, &view_context)?;
     let mut next_scroll_offset = view_context.scroll_offset;
+    let mut next_done_session_output_mode = view_context.done_session_output_mode;
 
-    let Some(session) = app.sessions.sessions.get(view_context.session_index) else {
+    let Some((session_status, session_output)) = app
+        .sessions
+        .sessions
+        .get(view_context.session_index)
+        .map(|session| (session.status, session.output.clone()))
+    else {
         return Ok(EventResult::Continue);
     };
-    let is_in_progress = session.status == Status::InProgress;
-    let is_action_allowed = is_view_action_allowed(session.status);
+    let is_in_progress = session_status == Status::InProgress;
+    let is_action_allowed = is_view_action_allowed(session_status);
     let plan_followup_navigation = view_plan_followup_navigation(app, &view_context.session_id);
-    let session_state = view_session_state(session.status);
+    let session_state = view_session_state(session_status);
     let can_open_worktree =
-        is_view_worktree_open_allowed(session.status) && can_open_session_worktree(session.status);
-    let session_output = session.output.clone();
+        is_view_worktree_open_allowed(session_status) && can_open_session_worktree(session_status);
 
     if handle_plan_followup_action_key(app, key, &view_context).await {
         return Ok(EventResult::Continue);
@@ -121,6 +127,10 @@ pub(crate) async fn handle(
                 .toggle_session_permission_mode(&view_context.session_id)
                 .await;
         }
+        _ if is_done_output_toggle_key(session_status, key) => {
+            next_done_session_output_mode = next_done_session_output_mode.toggled();
+            next_scroll_offset = None;
+        }
         KeyCode::Char('?') => {
             open_view_help_overlay(app, &view_context, plan_followup_navigation, session_state);
 
@@ -129,11 +139,27 @@ pub(crate) async fn handle(
         _ => {}
     }
 
-    if let AppMode::View { scroll_offset, .. } = &mut app.mode {
+    if let AppMode::View {
+        done_session_output_mode,
+        scroll_offset,
+        ..
+    } = &mut app.mode
+    {
+        *done_session_output_mode = next_done_session_output_mode;
         *scroll_offset = next_scroll_offset;
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Returns whether the key event toggles done-session output mode.
+fn is_done_output_toggle_key(status: Status, key: KeyEvent) -> bool {
+    let is_toggle_key = matches!(
+        key.code,
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'t')
+    );
+
+    status == Status::Done && is_toggle_key && !key.modifiers.contains(event::KeyModifiers::CONTROL)
 }
 
 /// Returns whether `o` can open the session worktree in tmux.
@@ -195,6 +221,7 @@ fn open_view_help_overlay(
 ) {
     app.mode = AppMode::Help {
         context: HelpContext::View {
+            done_session_output_mode: view_context.done_session_output_mode,
             plan_followup_navigation,
             session_id: view_context.session_id.clone(),
             session_state,
@@ -377,11 +404,16 @@ fn latest_assistant_response_from_output(output: &str) -> Option<String> {
 }
 
 fn view_context(app: &mut App) -> Option<ViewContext> {
-    let (session_id, scroll_offset) = match &app.mode {
+    let (done_session_output_mode, session_id, scroll_offset) = match &app.mode {
         AppMode::View {
+            done_session_output_mode,
             session_id,
             scroll_offset,
-        } => (session_id.clone(), *scroll_offset),
+        } => (
+            *done_session_output_mode,
+            session_id.clone(),
+            *scroll_offset,
+        ),
         _ => return None,
     };
 
@@ -392,6 +424,7 @@ fn view_context(app: &mut App) -> Option<ViewContext> {
     };
 
     Some(ViewContext {
+        done_session_output_mode,
         scroll_offset,
         session_id,
         session_index,
@@ -410,6 +443,7 @@ fn view_metrics(
         app,
         &view_context.session_id,
         view_context.session_index,
+        view_context.done_session_output_mode,
         output_width,
     );
 
@@ -419,7 +453,13 @@ fn view_metrics(
     })
 }
 
-fn view_total_lines(app: &App, session_id: &str, session_index: usize, output_width: u16) -> u16 {
+fn view_total_lines(
+    app: &App,
+    session_id: &str,
+    session_index: usize,
+    done_session_output_mode: DoneSessionOutputMode,
+    output_width: u16,
+) -> u16 {
     let plan_followup = app.plan_followup(session_id);
     let active_progress = app.session_progress_message(session_id);
 
@@ -430,6 +470,7 @@ fn view_total_lines(app: &App, session_id: &str, session_index: usize, output_wi
             SessionChatPage::rendered_output_line_count(
                 session,
                 output_width,
+                done_session_output_mode,
                 plan_followup,
                 active_progress,
             )
@@ -642,6 +683,45 @@ mod tests {
         assert!(!done_allowed);
     }
 
+    #[test]
+    fn test_is_done_output_toggle_key_accepts_done_status_with_t() {
+        // Arrange
+        let status = Status::Done;
+        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+
+        // Act
+        let is_toggle = is_done_output_toggle_key(status, key);
+
+        // Assert
+        assert!(is_toggle);
+    }
+
+    #[test]
+    fn test_is_done_output_toggle_key_rejects_non_done_status() {
+        // Arrange
+        let status = Status::Review;
+        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+
+        // Act
+        let is_toggle = is_done_output_toggle_key(status, key);
+
+        // Assert
+        assert!(!is_toggle);
+    }
+
+    #[test]
+    fn test_is_done_output_toggle_key_rejects_control_modified_key() {
+        // Arrange
+        let status = Status::Done;
+        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+
+        // Act
+        let is_toggle = is_done_output_toggle_key(status, key);
+
+        // Assert
+        assert!(!is_toggle);
+    }
+
     #[tokio::test]
     async fn test_view_context_returns_none_for_non_view_mode() {
         // Arrange
@@ -661,6 +741,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: "missing-session".to_string(),
             scroll_offset: Some(2),
         };
@@ -678,6 +759,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: session_id.clone(),
             scroll_offset: Some(4),
         };
@@ -688,6 +770,10 @@ mod tests {
         // Assert
         assert!(context.is_some());
         let context = context.expect("expected view context");
+        assert_eq!(
+            context.done_session_output_mode,
+            DoneSessionOutputMode::Summary
+        );
         assert_eq!(context.session_id, session_id);
         assert_eq!(context.scroll_offset, Some(4));
         assert_eq!(context.session_index, 0);
@@ -702,10 +788,29 @@ mod tests {
             u16::try_from(app.sessions.sessions[0].output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let total_lines = view_total_lines(&app, &session_id, 0, 20);
+        let total_lines =
+            view_total_lines(&app, &session_id, 0, DoneSessionOutputMode::Summary, 20);
 
         // Assert
         assert!(total_lines > raw_line_count);
+    }
+
+    #[tokio::test]
+    async fn test_view_total_lines_respects_done_output_mode() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::Done;
+        app.sessions.sessions[0].summary = Some("brief summary".to_string());
+        app.sessions.sessions[0].output = "word ".repeat(120);
+
+        // Act
+        let summary_lines =
+            view_total_lines(&app, &session_id, 0, DoneSessionOutputMode::Summary, 20);
+        let output_lines =
+            view_total_lines(&app, &session_id, 0, DoneSessionOutputMode::Output, 20);
+
+        // Assert
+        assert!(output_lines > summary_lines);
     }
 
     #[test]
@@ -800,7 +905,7 @@ More details
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions[0].output = "word ".repeat(60);
         let metrics = ViewMetrics {
-            total_lines: view_total_lines(&app, &session_id, 0, 20),
+            total_lines: view_total_lines(&app, &session_id, 0, DoneSessionOutputMode::Summary, 20),
             view_height: 5,
         };
 
@@ -846,6 +951,7 @@ More details
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             scroll_offset: Some(0),
             session_id: session_id.clone(),
             session_index: 0,
@@ -929,11 +1035,13 @@ More details
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: session_id.clone(),
             scroll_offset: Some(0),
         };
         app.put_plan_followup(&session_id, PlanFollowup::new(VecDeque::new()));
         let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             scroll_offset: Some(0),
             session_id: session_id.clone(),
             session_index: 0,
@@ -957,12 +1065,14 @@ More details
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: session_id.clone(),
             scroll_offset: Some(4),
         };
         app.put_plan_followup(&session_id, PlanFollowup::new(VecDeque::new()));
         app.select_next_plan_followup_action(&session_id);
         let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             scroll_offset: Some(4),
             session_id: session_id.clone(),
             session_index: 0,
@@ -992,6 +1102,7 @@ More details
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: session_id.clone(),
             scroll_offset: Some(0),
         };
@@ -1007,6 +1118,7 @@ More details
         ]);
         app.put_plan_followup(&session_id, PlanFollowup::new(questions));
         let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             scroll_offset: Some(0),
             session_id: session_id.clone(),
             session_index: 0,
@@ -1036,6 +1148,7 @@ More details
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: session_id.clone(),
             scroll_offset: Some(0),
         };
@@ -1051,6 +1164,7 @@ More details
         ]);
         app.put_plan_followup(&session_id, PlanFollowup::new(questions));
         let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             scroll_offset: Some(0),
             session_id: session_id.clone(),
             session_index: 0,
@@ -1075,6 +1189,7 @@ More details
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let scroll = Some(3);
         app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             session_id: session_id.clone(),
             scroll_offset: scroll,
         };
@@ -1082,6 +1197,7 @@ More details
         // Act — simulate what the `?` arm does
         app.mode = AppMode::Help {
             context: HelpContext::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
                 plan_followup_navigation: None,
                 session_id,
                 session_state: ViewSessionState::Interactive,
@@ -1095,6 +1211,7 @@ More details
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
+                    done_session_output_mode: DoneSessionOutputMode::Summary,
                     plan_followup_navigation: None,
                     ref session_id,
                     session_state: ViewSessionState::Interactive,

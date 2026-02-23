@@ -11,11 +11,14 @@ use crate::domain::session::{Session, Status};
 use crate::icon::Icon;
 use crate::ui::Component;
 use crate::ui::markdown::render_markdown;
+use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::truncate_with_ellipsis;
 
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
     active_progress: Option<&'a str>,
+    /// Selected panel content for completed sessions.
+    done_session_output_mode: DoneSessionOutputMode,
     plan_followup: Option<&'a PlanFollowup>,
     scroll_offset: Option<u16>,
     session: &'a Session,
@@ -26,11 +29,13 @@ impl<'a> SessionOutput<'a> {
     pub fn new(
         session: &'a Session,
         scroll_offset: Option<u16>,
+        done_session_output_mode: DoneSessionOutputMode,
         plan_followup: Option<&'a PlanFollowup>,
         active_progress: Option<&'a str>,
     ) -> Self {
         Self {
             active_progress,
+            done_session_output_mode,
             plan_followup,
             scroll_offset,
             session,
@@ -45,6 +50,7 @@ impl<'a> SessionOutput<'a> {
     pub(crate) fn rendered_line_count(
         session: &Session,
         output_width: u16,
+        done_session_output_mode: DoneSessionOutputMode,
         plan_followup: Option<&PlanFollowup>,
         active_progress: Option<&str>,
     ) -> u16 {
@@ -53,6 +59,7 @@ impl<'a> SessionOutput<'a> {
             session,
             output_area,
             session.status,
+            done_session_output_mode,
             plan_followup,
             active_progress,
         );
@@ -60,14 +67,20 @@ impl<'a> SessionOutput<'a> {
         u16::try_from(lines.len()).unwrap_or(u16::MAX)
     }
 
+    /// Builds rendered markdown lines and contextual status/help rows for the
+    /// current session state.
+    ///
+    /// `Status::Done` includes an inline `t` toggle hint that switches between
+    /// summary and full output views.
     fn output_lines(
         session: &Session,
         output_area: Rect,
         status: Status,
+        done_session_output_mode: DoneSessionOutputMode,
         plan_followup: Option<&PlanFollowup>,
         active_progress: Option<&str>,
     ) -> Vec<Line<'static>> {
-        let output_text = Self::output_text(session, status);
+        let output_text = Self::output_text(session, status, done_session_output_mode);
         let output_text = Self::output_text_with_spaced_user_input(output_text);
         let inner_width = output_area.width.saturating_sub(2) as usize;
         let mut lines = render_markdown(&output_text, inner_width);
@@ -88,6 +101,10 @@ impl<'a> SessionOutput<'a> {
                 format!("{status_icon} {status_message}"),
                 Style::default().fg(status.color()),
             )]));
+        } else if status == Status::Done {
+            lines.push(Line::from(""));
+            lines.push(Self::done_output_toggle_line(done_session_output_mode));
+            lines.push(Line::from(""));
         } else {
             lines.push(Line::from(""));
         }
@@ -100,14 +117,52 @@ impl<'a> SessionOutput<'a> {
         lines
     }
 
-    fn output_text(session: &Session, status: Status) -> &str {
-        if matches!(status, Status::Done | Status::Canceled)
-            && let Some(summary) = session
-                .summary
-                .as_deref()
-                .filter(|summary| !summary.is_empty())
-        {
-            return summary;
+    /// Returns the inline shortcut hint for toggling done-session content.
+    fn done_output_toggle_line(done_session_output_mode: DoneSessionOutputMode) -> Line<'static> {
+        let toggle_target = match done_session_output_mode {
+            DoneSessionOutputMode::Summary => "output",
+            DoneSessionOutputMode::Output => "summary",
+        };
+
+        Line::from(vec![Span::styled(
+            format!("Press t to switch to {toggle_target}."),
+            Style::default().fg(Color::DarkGray),
+        )])
+    }
+
+    /// Returns the source text shown in the output panel for the current
+    /// status and done-session display mode.
+    fn output_text(
+        session: &Session,
+        status: Status,
+        done_session_output_mode: DoneSessionOutputMode,
+    ) -> &str {
+        match status {
+            Status::Done if done_session_output_mode == DoneSessionOutputMode::Summary => {
+                if let Some(summary) = session
+                    .summary
+                    .as_deref()
+                    .filter(|summary| !summary.is_empty())
+                {
+                    return summary;
+                }
+            }
+            Status::Canceled => {
+                if let Some(summary) = session
+                    .summary
+                    .as_deref()
+                    .filter(|summary| !summary.is_empty())
+                {
+                    return summary;
+                }
+            }
+            Status::New
+            | Status::Review
+            | Status::InProgress
+            | Status::Queued
+            | Status::Rebasing
+            | Status::Merging
+            | Status::Done => {}
         }
 
         &session.output
@@ -289,6 +344,7 @@ impl Component for SessionOutput<'_> {
             self.session,
             output_area,
             status,
+            self.done_session_output_mode,
             self.plan_followup,
             self.active_progress,
         );
@@ -345,7 +401,13 @@ mod tests {
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let rendered_line_count = SessionOutput::rendered_line_count(&session, 20, None, None);
+        let rendered_line_count = SessionOutput::rendered_line_count(
+            &session,
+            20,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+        );
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
@@ -364,6 +426,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             session.status,
+            DoneSessionOutputMode::Summary,
             None,
             None,
         );
@@ -379,6 +442,88 @@ mod tests {
     }
 
     #[test]
+    fn test_output_lines_uses_streamed_output_for_done_session_in_output_mode() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "streamed output".to_string();
+        session.summary = Some("terminal summary".to_string());
+        session.status = Status::Done;
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            DoneSessionOutputMode::Output,
+            None,
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(!text.contains("terminal summary"));
+        assert!(text.contains("streamed output"));
+    }
+
+    #[test]
+    fn test_output_lines_done_summary_mode_shows_output_toggle_action() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "streamed output".to_string();
+        session.summary = Some("terminal summary".to_string());
+        session.status = Status::Done;
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Press t to switch to output."));
+    }
+
+    #[test]
+    fn test_output_lines_done_output_mode_shows_summary_toggle_action() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "streamed output".to_string();
+        session.summary = Some("terminal summary".to_string());
+        session.status = Status::Done;
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            DoneSessionOutputMode::Output,
+            None,
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Press t to switch to summary."));
+    }
+
+    #[test]
     fn test_output_lines_uses_summary_for_canceled_session() {
         // Arrange
         let mut session = session_fixture();
@@ -391,6 +536,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             session.status,
+            DoneSessionOutputMode::Summary,
             None,
             None,
         );
@@ -416,6 +562,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             session.status,
+            DoneSessionOutputMode::Summary,
             None,
             None,
         );
@@ -444,6 +591,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             session.status,
+            DoneSessionOutputMode::Summary,
             None,
             None,
         );
@@ -465,6 +613,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             session.status,
+            DoneSessionOutputMode::Summary,
             None,
             None,
         );
@@ -489,8 +638,14 @@ mod tests {
         };
 
         // Act
-        let lines =
-            SessionOutput::output_lines(&session, area, Status::Review, Some(&followup), None);
+        let lines = SessionOutput::output_lines(
+            &session,
+            area,
+            Status::Review,
+            DoneSessionOutputMode::Summary,
+            Some(&followup),
+            None,
+        );
         let rendered = lines
             .iter()
             .map(std::string::ToString::to_string)
