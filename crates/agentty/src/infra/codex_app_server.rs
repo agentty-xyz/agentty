@@ -359,8 +359,8 @@ impl RealCodexAppServerClient {
 
         let mut assistant_messages = Vec::new();
         let mut active_turn_id: Option<String> = None;
-        let mut input_tokens: u64 = 0;
-        let mut output_tokens: u64 = 0;
+        let mut latest_stream_usage: Option<(u64, u64)> = None;
+        let mut completed_turn_usage: Option<(u64, u64)> = None;
 
         tokio::time::timeout(CODEX_APP_SERVER_TURN_TIMEOUT, async {
             loop {
@@ -417,14 +417,19 @@ impl RealCodexAppServerClient {
                         assistant_messages.push(message);
                     }
 
-                    let (turn_input_tokens, turn_output_tokens) =
-                        extract_turn_usage(&response_value);
-                    input_tokens = input_tokens.saturating_add(turn_input_tokens);
-                    output_tokens = output_tokens.saturating_add(turn_output_tokens);
+                    Self::update_turn_usage_from_response(
+                        &response_value,
+                        active_turn_id.as_deref(),
+                        &mut completed_turn_usage,
+                        &mut latest_stream_usage,
+                    );
 
                     if let Some(turn_result) =
                         parse_turn_completed(&response_value, active_turn_id.as_deref())
                     {
+                        let (input_tokens, output_tokens) =
+                            Self::resolve_turn_usage(completed_turn_usage, latest_stream_usage);
+
                         return turn_result.map(|()| {
                             let assistant_message = assistant_messages.join("\n\n");
                             (assistant_message, input_tokens, output_tokens)
@@ -440,6 +445,37 @@ impl RealCodexAppServerClient {
                 CODEX_APP_SERVER_TURN_TIMEOUT.as_secs()
             )
         })?
+    }
+
+    /// Resolves final turn usage by preferring `turn/completed` payload usage
+    /// and falling back to the last seen usage update when completion omits it.
+    fn resolve_turn_usage(
+        completed_turn_usage: Option<(u64, u64)>,
+        latest_stream_usage: Option<(u64, u64)>,
+    ) -> (u64, u64) {
+        completed_turn_usage
+            .or(latest_stream_usage)
+            .unwrap_or((0, 0))
+    }
+
+    /// Updates usage trackers for one app-server response line.
+    ///
+    /// Completion usage is tracked separately so final usage selection can
+    /// prefer the `turn/completed` payload and only fall back to the latest
+    /// non-completion usage update when needed.
+    fn update_turn_usage_from_response(
+        response_value: &Value,
+        expected_turn_id: Option<&str>,
+        completed_turn_usage: &mut Option<(u64, u64)>,
+        latest_stream_usage: &mut Option<(u64, u64)>,
+    ) {
+        if let Some(turn_usage) = extract_turn_usage_for_turn(response_value, expected_turn_id) {
+            if response_value.get("method").and_then(Value::as_str) == Some("turn/completed") {
+                *completed_turn_usage = Some(turn_usage);
+            } else {
+                *latest_stream_usage = Some(turn_usage);
+            }
+        }
     }
 
     /// Returns the turn prompt, replaying session output when context was
@@ -842,17 +878,14 @@ fn camel_to_snake(input: &str) -> String {
     result
 }
 /// Extracts input/output token usage from `turn.usage` payloads.
-fn extract_turn_usage(response_value: &Value) -> (u64, u64) {
-    let Some(turn) = response_value
+///
+/// Returns `None` when no `turn.usage` object exists in the payload.
+fn extract_turn_usage(response_value: &Value) -> Option<(u64, u64)> {
+    let turn = response_value
         .get("params")
-        .and_then(|params| params.get("turn"))
-    else {
-        return (0, 0);
-    };
+        .and_then(|params| params.get("turn"))?;
 
-    let Some(usage) = turn.get("usage") else {
-        return (0, 0);
-    };
+    let usage = turn.get("usage")?;
 
     let input_tokens = usage
         .get("inputTokens")
@@ -865,7 +898,30 @@ fn extract_turn_usage(response_value: &Value) -> (u64, u64) {
         .or_else(|| usage.get("output_tokens").and_then(Value::as_u64))
         .unwrap_or(0);
 
-    (input_tokens, output_tokens)
+    Some((input_tokens, output_tokens))
+}
+
+/// Extracts usage for the active turn, ignoring known delegated-turn payloads.
+///
+/// When `expected_turn_id` is set and the payload declares a different
+/// `turn.id`, this returns `None` so delegated sub-turn events do not affect
+/// the active turn usage totals.
+fn extract_turn_usage_for_turn(
+    response_value: &Value,
+    expected_turn_id: Option<&str>,
+) -> Option<(u64, u64)> {
+    if let Some(expected_turn_id) = expected_turn_id {
+        let turn_id = response_value
+            .get("params")
+            .and_then(|params| params.get("turn"))
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str);
+        if turn_id.is_some_and(|payload_turn_id| payload_turn_id != expected_turn_id) {
+            return None;
+        }
+    }
+
+    extract_turn_usage(response_value)
 }
 
 #[cfg(test)]
@@ -1147,7 +1203,97 @@ mod tests {
         let usage = extract_turn_usage(&response_value);
 
         // Assert
-        assert_eq!(usage, (7, 3));
+        assert_eq!(usage, Some((7, 3)));
+    }
+
+    #[test]
+    fn extract_turn_usage_returns_none_when_usage_is_missing() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "params": {
+                "turn": {
+                    "status": "completed"
+                }
+            }
+        });
+
+        // Act
+        let usage = extract_turn_usage(&response_value);
+
+        // Assert
+        assert_eq!(usage, None);
+    }
+
+    #[test]
+    fn extract_turn_usage_for_turn_ignores_other_turn_ids() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "params": {
+                "turn": {
+                    "id": "delegate-turn",
+                    "usage": {
+                        "inputTokens": 9,
+                        "outputTokens": 4
+                    }
+                }
+            }
+        });
+
+        // Act
+        let usage = extract_turn_usage_for_turn(&response_value, Some("active-turn"));
+
+        // Assert
+        assert_eq!(usage, None);
+    }
+
+    #[test]
+    fn extract_turn_usage_for_turn_reads_matching_turn_id() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "params": {
+                "turn": {
+                    "id": "active-turn",
+                    "usage": {
+                        "inputTokens": 9,
+                        "outputTokens": 4
+                    }
+                }
+            }
+        });
+
+        // Act
+        let usage = extract_turn_usage_for_turn(&response_value, Some("active-turn"));
+
+        // Assert
+        assert_eq!(usage, Some((9, 4)));
+    }
+
+    #[test]
+    fn resolve_turn_usage_prefers_completed_usage_over_stream_usage() {
+        // Arrange
+        let completed_turn_usage = Some((13, 8));
+        let latest_stream_usage = Some((9, 4));
+
+        // Act
+        let usage =
+            RealCodexAppServerClient::resolve_turn_usage(completed_turn_usage, latest_stream_usage);
+
+        // Assert
+        assert_eq!(usage, (13, 8));
+    }
+
+    #[test]
+    fn resolve_turn_usage_falls_back_to_stream_usage_when_completed_usage_is_missing() {
+        // Arrange
+        let completed_turn_usage = None;
+        let latest_stream_usage = Some((9, 4));
+
+        // Act
+        let usage =
+            RealCodexAppServerClient::resolve_turn_usage(completed_turn_usage, latest_stream_usage);
+
+        // Assert
+        assert_eq!(usage, (9, 4));
     }
 
     #[test]
