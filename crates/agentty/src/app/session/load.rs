@@ -148,7 +148,6 @@ impl SessionManager {
                 id: row.id,
                 model: session_model,
                 output: row.output,
-                permission_mode: row.permission_mode.parse().unwrap_or_default(),
                 project_name,
                 prompt: row.prompt,
                 size,

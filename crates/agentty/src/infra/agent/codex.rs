@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, build_resume_prompt};
-use crate::domain::permission::PermissionMode;
 
 /// Uses non-interactive Codex commands so Agentty can capture piped output.
 ///
@@ -16,20 +15,13 @@ impl AgentBackend for CodexBackend {
         // Codex CLI needs no config files
     }
 
-    fn build_start_command(
-        &self,
-        folder: &Path,
-        prompt: &str,
-        model: &str,
-        permission_mode: PermissionMode,
-    ) -> Command {
-        let approval_flag = Self::approval_flag(permission_mode);
+    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
         let mut command = Command::new("codex");
         command
             .arg("exec")
             .arg("--model")
             .arg(model)
-            .arg(approval_flag)
+            .arg("--full-auto")
             .arg("--json")
             .arg(prompt)
             .current_dir(folder)
@@ -44,11 +36,9 @@ impl AgentBackend for CodexBackend {
         folder: &Path,
         prompt: &str,
         model: &str,
-        permission_mode: PermissionMode,
         session_output: Option<String>,
     ) -> Command {
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
-        let approval_flag = Self::approval_flag(permission_mode);
         let mut command = Command::new("codex");
         command
             .arg("exec")
@@ -56,7 +46,7 @@ impl AgentBackend for CodexBackend {
             .arg("--last")
             .arg("--model")
             .arg(model)
-            .arg(approval_flag)
+            .arg("--full-auto")
             .arg("--json")
             .arg(prompt)
             .current_dir(folder)
@@ -67,10 +57,4 @@ impl AgentBackend for CodexBackend {
     }
 }
 
-impl CodexBackend {
-    fn approval_flag(permission_mode: PermissionMode) -> &'static str {
-        match permission_mode {
-            PermissionMode::AutoEdit => "--full-auto",
-        }
-    }
-}
+impl CodexBackend {}

@@ -255,11 +255,7 @@ impl<'a> SessionChatPage<'a> {
             ..
         } = self.mode
         {
-            let title = format!(
-                " [{}] ({}) ",
-                session.model.as_str(),
-                session.permission_mode.label()
-            );
+            let title = format!(" [{}] ", session.model.as_str());
 
             let menu = if input.text().starts_with('/') {
                 Self::build_slash_menu(
@@ -347,7 +343,6 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::permission::PermissionMode;
     use crate::domain::session::{SessionSize, SessionStats};
     use crate::infra::file_index::FileEntry;
 
@@ -359,7 +354,6 @@ mod tests {
             id: "session-id".to_string(),
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
-            permission_mode: PermissionMode::default(),
             project_name: "project".to_string(),
             prompt: String::new(),
             size: SessionSize::Xs,

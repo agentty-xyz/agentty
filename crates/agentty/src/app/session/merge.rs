@@ -15,13 +15,12 @@ use tokio::sync::mpsc;
 use super::access::{SESSION_HANDLES_NOT_FOUND_ERROR, SESSION_NOT_FOUND_ERROR};
 use super::{COMMIT_MESSAGE, session_branch};
 use crate::app::assist::{
-    AssistContext, AssistPolicy, FailureTracker, append_assist_header, effective_permission_mode,
-    format_detail_lines, run_agent_assist,
+    AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
+    run_agent_assist,
 };
 use crate::app::session::SessionTaskService;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::AgentModel;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::db::Database;
 use crate::infra::git::{self, GitClient};
@@ -59,7 +58,6 @@ struct MergeTaskInput {
     git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
-    permission_mode: PermissionMode,
     repo_root: PathBuf,
     session_model: AgentModel,
     source_branch: String,
@@ -75,7 +73,6 @@ struct RebaseAssistInput {
     git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
-    permission_mode: PermissionMode,
     session_model: AgentModel,
 }
 
@@ -87,7 +84,6 @@ struct RebaseTaskInput {
     git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
-    permission_mode: PermissionMode,
     session_model: AgentModel,
     status: Arc<Mutex<Status>>,
 }
@@ -97,7 +93,6 @@ struct SyncRebaseAssistInput {
     base_branch: String,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
-    permission_mode: PermissionMode,
     session_model: AgentModel,
     sync_assist_client: Arc<dyn SyncAssistClient>,
 }
@@ -258,7 +253,6 @@ trait SyncAssistClient: Send + Sync {
         &self,
         folder: PathBuf,
         prompt: String,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
     ) -> SyncAssistFuture<Result<(), String>>;
 }
@@ -275,19 +269,11 @@ impl RealSyncAssistClient {
     async fn run_assist_command(
         folder: PathBuf,
         prompt: String,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
     ) -> Result<(), String> {
-        let permission_mode = effective_permission_mode(permission_mode);
-
         tokio::task::spawn_blocking(move || {
             let backend = crate::infra::agent::create_backend(session_model.kind());
-            let mut command = backend.build_start_command(
-                &folder,
-                &prompt,
-                session_model.as_str(),
-                permission_mode,
-            );
+            let mut command = backend.build_start_command(&folder, &prompt, session_model.as_str());
             command.stdin(Stdio::null());
 
             let output = command
@@ -336,12 +322,9 @@ impl SyncAssistClient for RealSyncAssistClient {
         &self,
         folder: PathBuf,
         prompt: String,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
     ) -> SyncAssistFuture<Result<(), String>> {
-        Box::pin(async move {
-            Self::run_assist_command(folder, prompt, permission_mode, session_model).await
-        })
+        Box::pin(async move { Self::run_assist_command(folder, prompt, session_model).await })
     }
 }
 
@@ -391,7 +374,6 @@ impl SessionManager {
         let db = services.db().clone();
         let folder = session.folder.clone();
         let id = session.id.clone();
-        let permission_mode = session.permission_mode;
         let session_model = session.model;
         let app_event_tx = services.event_sender();
         let git_client = self.git_client();
@@ -453,7 +435,6 @@ impl SessionManager {
             git_client,
             id: id.clone(),
             output,
-            permission_mode,
             repo_root,
             session_model,
             source_branch: session_branch(&id),
@@ -492,7 +473,6 @@ impl SessionManager {
             git_client,
             id,
             output,
-            permission_mode,
             repo_root,
             session_model,
             source_branch,
@@ -510,7 +490,6 @@ impl SessionManager {
             git_client: Arc::clone(&git_client),
             id: id.clone(),
             output: Arc::clone(&output),
-            permission_mode,
             session_model,
         };
         if let Err(error) = Self::execute_rebase_workflow(rebase_input).await {
@@ -695,7 +674,6 @@ impl SessionManager {
         }
 
         let id = session.id.clone();
-        let permission_mode = session.permission_mode;
         let session_model = session.model;
 
         let rebase_task_input = RebaseTaskInput {
@@ -706,7 +684,6 @@ impl SessionManager {
             git_client,
             id,
             output,
-            permission_mode,
             session_model,
             status,
         };
@@ -729,7 +706,6 @@ impl SessionManager {
         default_branch: Option<String>,
         working_dir: PathBuf,
         git_client: Arc<dyn GitClient>,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
     ) -> Result<(), SyncSessionStartError> {
         let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
@@ -738,7 +714,6 @@ impl SessionManager {
             default_branch,
             working_dir,
             git_client,
-            permission_mode,
             session_model,
             sync_assist_client,
         )
@@ -756,7 +731,6 @@ impl SessionManager {
         default_branch: Option<String>,
         working_dir: PathBuf,
         git_client: Arc<dyn GitClient>,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
         sync_assist_client: Arc<dyn SyncAssistClient>,
     ) -> Result<(), SyncSessionStartError> {
@@ -790,7 +764,6 @@ impl SessionManager {
                 base_branch: default_branch.clone(),
                 folder: working_dir.clone(),
                 git_client: Arc::clone(&git_client),
-                permission_mode,
                 session_model,
                 sync_assist_client,
             };
@@ -867,12 +840,7 @@ impl SessionManager {
         let prompt = Self::rebase_assist_prompt(&input.base_branch, conflicted_files);
         input
             .sync_assist_client
-            .resolve_rebase_conflicts(
-                input.folder.clone(),
-                prompt,
-                input.permission_mode,
-                input.session_model,
-            )
+            .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_model)
             .await
             .map_err(|error| format!("Sync rebase assistance failed: {error}"))
     }
@@ -931,7 +899,6 @@ impl SessionManager {
             git_client,
             id,
             output,
-            permission_mode,
             session_model,
             status,
         } = input;
@@ -945,7 +912,6 @@ impl SessionManager {
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
                 output: Arc::clone(&output),
-                permission_mode,
                 session_model,
             };
 
@@ -1319,9 +1285,7 @@ impl SessionManager {
         conflicted_files: &[String],
     ) -> Result<(), String> {
         let prompt = Self::rebase_assist_prompt(&input.base_branch, conflicted_files);
-        let mut assist_context = Self::assist_context(input);
-        assist_context.permission_mode =
-            Self::rebase_assist_permission_mode(assist_context.permission_mode);
+        let assist_context = Self::assist_context(input);
 
         run_agent_assist(&assist_context, &prompt)
             .await
@@ -1384,11 +1348,6 @@ impl SessionManager {
             .replace("{conflicted_files}", &conflicted_files)
     }
 
-    /// Resolves effective permission mode for rebase assistance runs.
-    fn rebase_assist_permission_mode(permission_mode: PermissionMode) -> PermissionMode {
-        effective_permission_mode(permission_mode)
-    }
-
     /// Formats conflicted file paths as a bullet list for prompt rendering.
     fn format_conflicted_file_list(conflicted_files: &[String]) -> String {
         format_detail_lines(&conflicted_files.join("\n"))
@@ -1426,7 +1385,6 @@ impl SessionManager {
             git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
             output: Arc::clone(&input.output),
-            permission_mode: input.permission_mode,
             session_model: input.session_model,
         }
     }
@@ -1464,12 +1422,7 @@ impl SessionManager {
         prompt: &str,
     ) -> Result<String, String> {
         let backend = crate::infra::agent::create_backend(session_model.kind());
-        let mut command = backend.build_start_command(
-            folder,
-            prompt,
-            session_model.as_str(),
-            PermissionMode::AutoEdit,
-        );
+        let mut command = backend.build_start_command(folder, prompt, session_model.as_str());
         command.stdin(Stdio::null());
         let output = command
             .output()
@@ -1623,21 +1576,8 @@ mod tests {
             git_client,
             id: "session-123".to_string(),
             output: Arc::new(Mutex::new(String::new())),
-            permission_mode: PermissionMode::AutoEdit,
             session_model: AgentModel::Gemini3FlashPreview,
         }
-    }
-
-    #[test]
-    fn test_rebase_assist_permission_mode_returns_auto_edit() {
-        // Arrange
-        let permission_mode = PermissionMode::AutoEdit;
-
-        // Act
-        let effective_mode = SessionManager::rebase_assist_permission_mode(permission_mode);
-
-        // Assert
-        assert_eq!(effective_mode, PermissionMode::AutoEdit);
     }
 
     #[test]
@@ -1722,7 +1662,6 @@ mod tests {
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".to_string(),
             output: Arc::new(Mutex::new(String::new())),
-            permission_mode: PermissionMode::AutoEdit,
             session_model: AgentModel::Gemini3FlashPreview,
         };
 
@@ -1734,7 +1673,6 @@ mod tests {
         assert_eq!(input.base_branch, cloned_input.base_branch);
         assert_eq!(input.id, cloned_input.id);
         assert_eq!(input.folder, cloned_input.folder);
-        assert_eq!(input.permission_mode, cloned_input.permission_mode);
         assert_eq!(input.session_model, cloned_input.session_model);
     }
 
@@ -1929,14 +1867,13 @@ mod tests {
         mock_sync_assist_client
             .expect_resolve_rebase_conflicts()
             .times(1)
-            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         // Act
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
             Arc::new(mock_git_client),
-            PermissionMode::AutoEdit,
             AgentModel::Gemini3FlashPreview,
             Arc::new(mock_sync_assist_client),
         )
@@ -1996,14 +1933,13 @@ mod tests {
         mock_sync_assist_client
             .expect_resolve_rebase_conflicts()
             .times(REBASE_ASSIST_POLICY.max_attempts)
-            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         // Act
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
             Arc::new(mock_git_client),
-            PermissionMode::AutoEdit,
             AgentModel::Gemini3FlashPreview,
             Arc::new(mock_sync_assist_client),
         )

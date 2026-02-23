@@ -36,7 +36,6 @@ pub struct SessionRow {
     pub model: String,
     pub output: String,
     pub output_tokens: i64,
-    pub permission_mode: String,
     pub project_id: Option<i64>,
     pub prompt: String,
     pub size: String,
@@ -287,7 +286,7 @@ ON CONFLICT(session_id) DO NOTHING
         let rows = sqlx::query(
             r"
 SELECT id, model, base_branch, status, title, project_id, prompt, output,
-       created_at, updated_at, input_tokens, output_tokens, permission_mode, size, summary
+       created_at, updated_at, input_tokens, output_tokens, size, summary
 FROM session
 ORDER BY updated_at DESC, id
 ",
@@ -306,7 +305,6 @@ ORDER BY updated_at DESC, id
                 model: row.get("model"),
                 output: row.get("output"),
                 output_tokens: row.get("output_tokens"),
-                permission_mode: row.get("permission_mode"),
                 project_id: row.get("project_id"),
                 prompt: row.get("prompt"),
                 size: row.get("size"),
@@ -539,31 +537,6 @@ WHERE id = ?
         .execute(&self.pool)
         .await
         .map_err(|err| format!("Failed to update session model: {err}"))?;
-
-        Ok(())
-    }
-
-    /// Updates the persisted permission mode for a session.
-    ///
-    /// # Errors
-    /// Returns an error if the session row cannot be updated.
-    pub async fn update_session_permission_mode(
-        &self,
-        id: &str,
-        permission_mode: &str,
-    ) -> Result<(), String> {
-        sqlx::query(
-            r"
-UPDATE session
-SET permission_mode = ?
-WHERE id = ?
-",
-        )
-        .bind(permission_mode)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session permission mode: {err}"))?;
 
         Ok(())
     }

@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, build_resume_prompt};
-use crate::domain::permission::PermissionMode;
 
 /// Backend implementation for the Claude CLI.
 pub(super) struct ClaudeBackend;
@@ -12,16 +11,10 @@ impl AgentBackend for ClaudeBackend {
         // Claude Code needs no config files
     }
 
-    fn build_start_command(
-        &self,
-        folder: &Path,
-        prompt: &str,
-        model: &str,
-        permission_mode: PermissionMode,
-    ) -> Command {
+    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
         let mut command = Command::new("claude");
         command.arg("-p").arg(prompt);
-        Self::apply_permission_args(&mut command, permission_mode);
+        command.arg("--allowedTools").arg("Edit");
         command
             .arg("--verbose")
             .arg("--output-format")
@@ -39,13 +32,12 @@ impl AgentBackend for ClaudeBackend {
         folder: &Path,
         prompt: &str,
         model: &str,
-        permission_mode: PermissionMode,
         session_output: Option<String>,
     ) -> Command {
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
         let mut command = Command::new("claude");
         command.arg("-c").arg("-p").arg(prompt);
-        Self::apply_permission_args(&mut command, permission_mode);
+        command.arg("--allowedTools").arg("Edit");
         command
             .arg("--verbose")
             .arg("--output-format")
@@ -59,15 +51,7 @@ impl AgentBackend for ClaudeBackend {
     }
 }
 
-impl ClaudeBackend {
-    fn apply_permission_args(command: &mut Command, permission_mode: PermissionMode) {
-        match permission_mode {
-            PermissionMode::AutoEdit => {
-                command.arg("--allowedTools").arg("Edit");
-            }
-        }
-    }
-}
+impl ClaudeBackend {}
 
 #[cfg(test)]
 mod tests {
@@ -87,7 +71,6 @@ mod tests {
             temp_directory.path(),
             "Plan prompt",
             "claude-sonnet-4-6",
-            PermissionMode::AutoEdit,
         );
         let debug_command = format!("{command:?}");
 

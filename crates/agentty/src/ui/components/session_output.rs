@@ -318,7 +318,6 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::permission::PermissionMode;
     use crate::domain::session::{SessionSize, SessionStats};
 
     fn session_fixture() -> Session {
@@ -329,7 +328,6 @@ mod tests {
             id: "session-id".to_string(),
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
-            permission_mode: PermissionMode::default(),
             project_name: "project".to_string(),
             prompt: String::new(),
             size: SessionSize::Xs,

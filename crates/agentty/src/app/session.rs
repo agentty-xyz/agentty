@@ -13,7 +13,6 @@ use tokio::sync::mpsc;
 use crate::app::settings::SettingName;
 use crate::app::{AppServices, SessionState};
 use crate::domain::agent::AgentModel;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session, Status};
 
 mod access;
@@ -46,7 +45,6 @@ pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
 #[derive(Clone, Copy)]
 pub(crate) struct SessionDefaults {
     pub(crate) model: AgentModel,
-    pub(crate) permission_mode: PermissionMode,
 }
 
 /// Session domain state and worker orchestration state.
@@ -54,7 +52,6 @@ pub struct SessionManager {
     all_time_model_usage: Vec<AllTimeModelUsage>,
     codex_usage_limits: Option<CodexUsageLimits>,
     default_session_model: AgentModel,
-    default_session_permission_mode: PermissionMode,
     git_client: Arc<dyn crate::infra::git::GitClient>,
     longest_session_duration_seconds: u64,
     pending_history_replay: HashSet<String>,
@@ -78,7 +75,6 @@ impl SessionManager {
             all_time_model_usage,
             codex_usage_limits,
             default_session_model: defaults.model,
-            default_session_permission_mode: defaults.permission_mode,
             git_client,
             longest_session_duration_seconds,
             pending_history_replay: HashSet::new(),
@@ -96,12 +92,6 @@ impl SessionManager {
     /// Returns the default model used for session-scoped agent workflows.
     pub(crate) fn default_session_model(&self) -> AgentModel {
         self.default_session_model
-    }
-
-    /// Returns the default permission mode used for session-scoped agent
-    /// workflows.
-    pub(crate) fn default_session_permission_mode(&self) -> PermissionMode {
-        self.default_session_permission_mode
     }
 
     /// Loads the default model persisted for new sessions.
@@ -224,7 +214,6 @@ mod tests {
     use crate::app::settings::SettingName;
     use crate::app::{App, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel};
-    use crate::domain::permission::PermissionMode;
     use crate::domain::project::Project;
     use crate::domain::session::{
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
@@ -236,15 +225,14 @@ mod tests {
 
     fn create_mock_backend() -> MockAgentBackend {
         let mut mock = MockAgentBackend::new();
-        mock.expect_build_start_command()
-            .returning(|folder, _, _, _| {
-                let mut cmd = Command::new("echo");
-                cmd.arg("mock-start")
-                    .current_dir(folder)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null());
-                cmd
-            });
+        mock.expect_build_start_command().returning(|folder, _, _| {
+            let mut cmd = Command::new("echo");
+            cmd.arg("mock-start")
+                .current_dir(folder)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        });
         mock
     }
 
@@ -377,7 +365,6 @@ mod tests {
             id: id.to_string(),
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
-            permission_mode: PermissionMode::default(),
             project_name: String::new(),
             prompt: prompt.to_string(),
             size: SessionSize::Xs,
@@ -836,10 +823,6 @@ mod tests {
             app.sessions.sessions[0].model,
             AgentKind::Gemini.default_model()
         );
-        assert_eq!(
-            app.sessions.sessions[0].permission_mode,
-            PermissionMode::AutoEdit
-        );
 
         // Check filesystem
         let session_dir = &app.sessions.sessions[0].folder;
@@ -865,10 +848,6 @@ mod tests {
         assert_eq!(
             db_sessions[0].model,
             AgentKind::Gemini.default_model().as_str()
-        );
-        assert_eq!(
-            db_sessions[0].permission_mode,
-            PermissionMode::AutoEdit.label()
         );
         assert_eq!(db_sessions[0].status, "New");
         assert_eq!(activity_timestamps.len(), 1);
@@ -907,7 +886,6 @@ mod tests {
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
         assert_eq!(second_session.model, AgentModel::Gpt52Codex);
-        assert_eq!(second_session.permission_mode, PermissionMode::AutoEdit);
         assert_eq!(default_model_setting, None);
 
         let db_sessions = app
@@ -921,10 +899,6 @@ mod tests {
             .find(|session| session.id == second_session_id)
             .expect("missing second session in db");
         assert_eq!(db_second_session.model, "gpt-5.2-codex");
-        assert_eq!(
-            db_second_session.permission_mode,
-            PermissionMode::AutoEdit.label()
-        );
     }
 
     #[tokio::test]
@@ -1288,9 +1262,6 @@ mod tests {
         )
         .await
         .expect("failed to insert beta00002");
-        db.update_session_permission_mode("beta00002", "auto_edit")
-            .await
-            .expect("failed to update beta00002 permission mode");
         db.upsert_setting(
             SettingName::DefaultModel.as_str(),
             AgentModel::ClaudeHaiku4520251001.as_str(),
@@ -1348,7 +1319,6 @@ mod tests {
             .find(|session| session.id == created_session_id)
             .expect("missing created session");
         assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
-        assert_eq!(created_session.permission_mode, PermissionMode::AutoEdit);
     }
 
     #[tokio::test]
@@ -1912,7 +1882,7 @@ FROM session
             .expect("failed to open in-memory db");
         let mut mock = MockAgentBackend::new();
         mock.expect_build_start_command()
-            .returning(|folder, prompt, _, _| {
+            .returning(|folder, prompt, _| {
                 let mut cmd = Command::new("echo");
                 cmd.arg("--prompt")
                     .arg(prompt)
@@ -1960,8 +1930,9 @@ FROM session
 
         // Act — reply (resume command)
         let mut resume_mock = MockAgentBackend::new();
-        resume_mock.expect_build_resume_command().returning(
-            |folder, prompt, _, _, session_output| {
+        resume_mock
+            .expect_build_resume_command()
+            .returning(|folder, prompt, _, session_output| {
                 assert!(session_output.is_none());
 
                 let mut cmd = Command::new("echo");
@@ -1975,8 +1946,7 @@ FROM session
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null());
                 cmd
-            },
-        );
+            });
         let session_id = app.sessions.sessions[0].id.clone();
         app.sessions
             .reply_with_backend(
@@ -2048,7 +2018,7 @@ FROM session
         // Act
         let mut first_resume_mock = MockAgentBackend::new();
         first_resume_mock.expect_build_resume_command().returning(
-            |folder, prompt, _, _, session_output| {
+            |folder, prompt, _, session_output| {
                 let session_output = session_output.expect("expected session output");
                 assert!(session_output.contains("Initial prompt"));
                 assert!(session_output.contains("mock-start"));
@@ -2077,7 +2047,7 @@ FROM session
         // Assert
         let mut second_resume_mock = MockAgentBackend::new();
         second_resume_mock.expect_build_resume_command().returning(
-            |folder, prompt, _, _, session_output| {
+            |folder, prompt, _, session_output| {
                 assert!(session_output.is_none());
 
                 let mut cmd = Command::new("echo");
@@ -2148,16 +2118,15 @@ FROM session
 
         // Create a session that writes a file so commit_all has something to commit
         let mut mock = MockAgentBackend::new();
-        mock.expect_build_start_command()
-            .returning(|folder, _, _, _| {
-                let mut cmd = Command::new("bash");
-                cmd.arg("-c")
-                    .arg("echo auto-content > auto-committed.txt")
-                    .current_dir(folder)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null());
-                cmd
-            });
+        mock.expect_build_start_command().returning(|folder, _, _| {
+            let mut cmd = Command::new("bash");
+            cmd.arg("-c")
+                .arg("echo auto-content > auto-committed.txt")
+                .current_dir(folder)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        });
         let session_id = app
             .create_session()
             .await
@@ -2281,15 +2250,14 @@ FROM session
 
         // Agent that produces no file changes
         let mut mock = MockAgentBackend::new();
-        mock.expect_build_start_command()
-            .returning(|folder, _, _, _| {
-                let mut cmd = Command::new("echo");
-                cmd.arg("no-changes")
-                    .current_dir(folder)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null());
-                cmd
-            });
+        mock.expect_build_start_command().returning(|folder, _, _| {
+            let mut cmd = Command::new("echo");
+            cmd.arg("no-changes")
+                .current_dir(folder)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            cmd
+        });
         let session_id = app
             .create_session()
             .await
@@ -2780,7 +2748,6 @@ FROM session
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
-            PermissionMode::AutoEdit,
             AgentModel::Gemini3FlashPreview,
         )
         .await;
@@ -2806,7 +2773,6 @@ FROM session
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
-            PermissionMode::AutoEdit,
             AgentModel::Gemini3FlashPreview,
         )
         .await;
@@ -2831,7 +2797,6 @@ FROM session
             app.projects.git_branch().map(str::to_string),
             app.projects.working_dir().to_path_buf(),
             app.services.git_client(),
-            PermissionMode::AutoEdit,
             AgentModel::Gemini3FlashPreview,
         )
         .await;
@@ -2898,7 +2863,6 @@ FROM session
             Some("main".to_string()),
             dir.path().to_path_buf(),
             Arc::new(git::RealGitClient),
-            PermissionMode::AutoEdit,
             AgentModel::Gemini3FlashPreview,
         )
         .await;

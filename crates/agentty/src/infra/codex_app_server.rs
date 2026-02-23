@@ -42,7 +42,6 @@ pub type CodexAppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub struct CodexTurnRequest {
     pub folder: PathBuf,
     pub model: String,
-    pub permission_mode: PermissionMode,
     pub prompt: String,
     pub session_output: Option<String>,
     pub session_id: String,
@@ -221,7 +220,6 @@ impl RealCodexAppServerClient {
             child,
             folder: request.folder.clone(),
             model: request.model.clone(),
-            permission_mode: request.permission_mode,
             stdin,
             stdout_lines: BufReader::new(stdout).lines(),
             thread_id: String::new(),
@@ -274,8 +272,8 @@ impl RealCodexAppServerClient {
                 "model": Value::Null,
                 "modelProvider": Value::Null,
                 "cwd": Value::Null,
-                "approvalPolicy": Self::approval_policy(session.permission_mode),
-                "sandbox": Self::thread_sandbox_mode(session.permission_mode),
+                "approvalPolicy": Self::approval_policy(),
+                "sandbox": Self::thread_sandbox_mode(),
                 "config": Value::Null,
                 "baseInstructions": Value::Null,
                 "developerInstructions": Value::Null,
@@ -322,8 +320,8 @@ impl RealCodexAppServerClient {
                     "text_elements": []
                 }],
                 "cwd": Value::Null,
-                "approvalPolicy": Self::approval_policy(session.permission_mode),
-                "sandboxPolicy": Self::turn_sandbox_policy(session.permission_mode),
+                "approvalPolicy": Self::approval_policy(),
+                "sandboxPolicy": Self::turn_sandbox_policy(),
                 "model": Value::Null,
                 "effort": Value::Null,
                 "summary": Value::Null,
@@ -362,10 +360,9 @@ impl RealCodexAppServerClient {
                         ));
                     }
 
-                    if let Some(approval_response) = Self::build_pre_action_approval_response(
-                        session.permission_mode,
-                        &response_value,
-                    ) {
+                    if let Some(approval_response) =
+                        Self::build_pre_action_approval_response(&response_value)
+                    {
                         Self::write_json_line(&mut session.stdin, &approval_response).await?;
 
                         continue;
@@ -413,32 +410,32 @@ impl RealCodexAppServerClient {
     }
 
     /// Returns the app-server approval policy used for one permission mode.
-    fn approval_policy(permission_mode: PermissionMode) -> &'static str {
-        Self::permission_mode_policy(permission_mode).approval_policy
+    fn approval_policy() -> &'static str {
+        Self::permission_mode_policy(PermissionMode::default()).approval_policy
     }
 
     /// Returns the thread-level sandbox mode used for one permission mode.
-    fn thread_sandbox_mode(permission_mode: PermissionMode) -> &'static str {
-        Self::permission_mode_policy(permission_mode).thread_sandbox_mode
+    fn thread_sandbox_mode() -> &'static str {
+        Self::permission_mode_policy(PermissionMode::default()).thread_sandbox_mode
     }
 
     /// Returns the turn-level sandbox policy object for one permission mode.
-    fn turn_sandbox_policy(permission_mode: PermissionMode) -> Value {
+    fn turn_sandbox_policy() -> Value {
         serde_json::json!({
-            "type": Self::permission_mode_policy(permission_mode).turn_sandbox_type
+            "type": Self::permission_mode_policy(PermissionMode::default()).turn_sandbox_type
         })
     }
 
     /// Returns the modern pre-action approval decision for one permission
     /// mode.
-    fn pre_action_approval_decision(permission_mode: PermissionMode) -> &'static str {
-        Self::permission_mode_policy(permission_mode).pre_action_decision
+    fn pre_action_approval_decision() -> &'static str {
+        Self::permission_mode_policy(PermissionMode::default()).pre_action_decision
     }
 
     /// Returns the legacy pre-action approval decision for one permission
     /// mode.
-    fn legacy_pre_action_approval_decision(permission_mode: PermissionMode) -> &'static str {
-        Self::permission_mode_policy(permission_mode).legacy_pre_action_decision
+    fn legacy_pre_action_approval_decision() -> &'static str {
+        Self::permission_mode_policy(PermissionMode::default()).legacy_pre_action_decision
     }
 
     /// Returns the canonical wire-level policy for one permission mode.
@@ -453,18 +450,15 @@ impl RealCodexAppServerClient {
     ///
     /// Returns `None` when the input line is not a supported approval request
     /// or does not include a request id.
-    fn build_pre_action_approval_response(
-        permission_mode: PermissionMode,
-        response_value: &Value,
-    ) -> Option<Value> {
+    fn build_pre_action_approval_response(response_value: &Value) -> Option<Value> {
         let method = response_value.get("method")?.as_str()?;
         let request_id = response_value.get("id")?.clone();
         let decision = match method {
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-                Self::pre_action_approval_decision(permission_mode)
+                Self::pre_action_approval_decision()
             }
             "execCommandApproval" | "applyPatchApproval" => {
-                Self::legacy_pre_action_approval_decision(permission_mode)
+                Self::legacy_pre_action_approval_decision()
             }
             _ => return None,
         };
@@ -585,7 +579,6 @@ struct CodexSessionRuntime {
     child: tokio::process::Child,
     folder: PathBuf,
     model: String,
-    permission_mode: PermissionMode,
     stdin: tokio::process::ChildStdin,
     stdout_lines: Lines<BufReader<tokio::process::ChildStdout>>,
     thread_id: String,
@@ -594,9 +587,7 @@ struct CodexSessionRuntime {
 impl CodexSessionRuntime {
     /// Returns whether the stored runtime configuration matches one request.
     fn matches_request(&self, request: &CodexTurnRequest) -> bool {
-        self.folder == request.folder
-            && self.model == request.model
-            && self.permission_mode == request.permission_mode
+        self.folder == request.folder && self.model == request.model
     }
 }
 
@@ -793,11 +784,8 @@ mod tests {
 
     #[test]
     fn approval_policy_maps_auto_edit_mode() {
-        // Arrange
-        let auto_edit_mode = PermissionMode::AutoEdit;
-
         // Act
-        let auto_edit_policy = RealCodexAppServerClient::approval_policy(auto_edit_mode);
+        let auto_edit_policy = RealCodexAppServerClient::approval_policy();
 
         // Assert
         assert_eq!(auto_edit_policy, "on-request");
@@ -805,11 +793,8 @@ mod tests {
 
     #[test]
     fn thread_sandbox_mode_maps_auto_edit_mode() {
-        // Arrange
-        let auto_edit_mode = PermissionMode::AutoEdit;
-
         // Act
-        let auto_edit_sandbox = RealCodexAppServerClient::thread_sandbox_mode(auto_edit_mode);
+        let auto_edit_sandbox = RealCodexAppServerClient::thread_sandbox_mode();
 
         // Assert
         assert_eq!(auto_edit_sandbox, "workspace-write");
@@ -829,10 +814,8 @@ mod tests {
         });
 
         // Act
-        let response_value = RealCodexAppServerClient::build_pre_action_approval_response(
-            PermissionMode::AutoEdit,
-            &request_value,
-        );
+        let response_value =
+            RealCodexAppServerClient::build_pre_action_approval_response(&request_value);
 
         // Assert
         assert_eq!(
@@ -860,10 +843,8 @@ mod tests {
         });
 
         // Act
-        let response_value = RealCodexAppServerClient::build_pre_action_approval_response(
-            PermissionMode::AutoEdit,
-            &request_value,
-        );
+        let response_value =
+            RealCodexAppServerClient::build_pre_action_approval_response(&request_value);
 
         // Assert
         assert_eq!(
@@ -887,10 +868,8 @@ mod tests {
         });
 
         // Act
-        let decision = RealCodexAppServerClient::build_pre_action_approval_response(
-            PermissionMode::AutoEdit,
-            &response_value,
-        );
+        let decision =
+            RealCodexAppServerClient::build_pre_action_approval_response(&response_value);
 
         // Assert
         assert_eq!(decision, None);

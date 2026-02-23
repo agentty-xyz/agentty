@@ -12,7 +12,6 @@ use super::task::RunSessionTaskInput;
 use crate::app::task::TaskService;
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentModel;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::codex_app_server::CodexAppServerClient;
 use crate::infra::db::Database;
@@ -25,7 +24,6 @@ const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution"
 pub(super) enum SessionCommand {
     ReplyCodexAppServer {
         operation_id: String,
-        permission_mode: PermissionMode,
         prompt: String,
         session_output: Option<String>,
         session_model: AgentModel,
@@ -33,19 +31,16 @@ pub(super) enum SessionCommand {
     Reply {
         command: Command,
         operation_id: String,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
     },
     StartPromptCodexAppServer {
         operation_id: String,
-        permission_mode: PermissionMode,
         prompt: String,
         session_model: AgentModel,
     },
     StartPrompt {
         command: Command,
         operation_id: String,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
     },
 }
@@ -223,28 +218,16 @@ impl SessionManager {
         match command {
             SessionCommand::StartPrompt {
                 command,
-                permission_mode,
                 session_model,
                 ..
-            } => {
-                Self::run_standard_session_command(
-                    context,
-                    command,
-                    permission_mode,
-                    session_model,
-                    false,
-                )
-                .await
-            }
+            } => Self::run_standard_session_command(context, command, session_model, false).await,
             SessionCommand::StartPromptCodexAppServer {
-                permission_mode,
                 prompt,
                 session_model,
                 ..
             } => {
                 Self::run_codex_app_server_session_command(
                     context,
-                    permission_mode,
                     prompt,
                     None,
                     session_model,
@@ -254,21 +237,10 @@ impl SessionManager {
             }
             SessionCommand::Reply {
                 command,
-                permission_mode,
                 session_model,
                 ..
-            } => {
-                Self::run_standard_session_command(
-                    context,
-                    command,
-                    permission_mode,
-                    session_model,
-                    true,
-                )
-                .await
-            }
+            } => Self::run_standard_session_command(context, command, session_model, true).await,
             SessionCommand::ReplyCodexAppServer {
-                permission_mode,
                 prompt,
                 session_output,
                 session_model,
@@ -276,7 +248,6 @@ impl SessionManager {
             } => {
                 Self::run_codex_app_server_session_command(
                     context,
-                    permission_mode,
                     prompt,
                     session_output,
                     session_model,
@@ -291,7 +262,6 @@ impl SessionManager {
     async fn run_standard_session_command(
         context: &SessionWorkerContext,
         command: Command,
-        permission_mode: PermissionMode,
         session_model: AgentModel,
         update_in_progress_status: bool,
     ) -> Result<(), String> {
@@ -315,7 +285,6 @@ impl SessionManager {
             git_client: Arc::clone(&context.git_client),
             id: context.session_id.clone(),
             output: Arc::clone(&context.output),
-            permission_mode,
             session_model,
             status: Arc::clone(&context.status),
         })
@@ -325,7 +294,6 @@ impl SessionManager {
     /// Executes one Codex app-server turn for a queued session command.
     async fn run_codex_app_server_session_command(
         context: &SessionWorkerContext,
-        permission_mode: PermissionMode,
         prompt: String,
         session_output: Option<String>,
         session_model: AgentModel,
@@ -354,7 +322,6 @@ impl SessionManager {
                 git_client: Arc::clone(&context.git_client),
                 id: context.session_id.clone(),
                 output: Arc::clone(&context.output),
-                permission_mode,
                 prompt,
                 session_output,
                 session_model,
@@ -407,7 +374,6 @@ mod tests {
         // Arrange
         let reply_app_server_command = SessionCommand::ReplyCodexAppServer {
             operation_id: "a-app-server".to_string(),
-            permission_mode: PermissionMode::AutoEdit,
             prompt: "prompt".to_string(),
             session_output: None,
             session_model: AgentModel::Gpt53Codex,
@@ -415,19 +381,16 @@ mod tests {
         let reply_command = SessionCommand::Reply {
             command: Command::new("echo"),
             operation_id: "a".to_string(),
-            permission_mode: PermissionMode::AutoEdit,
             session_model: AgentModel::Gemini3FlashPreview,
         };
         let start_prompt_app_server_command = SessionCommand::StartPromptCodexAppServer {
             operation_id: "b-app-server".to_string(),
-            permission_mode: PermissionMode::AutoEdit,
             prompt: "prompt".to_string(),
             session_model: AgentModel::Gpt53Codex,
         };
         let start_prompt_command = SessionCommand::StartPrompt {
             command: Command::new("echo"),
             operation_id: "b".to_string(),
-            permission_mode: PermissionMode::AutoEdit,
             session_model: AgentModel::Gemini3FlashPreview,
         };
 

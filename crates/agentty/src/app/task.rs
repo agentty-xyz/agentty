@@ -10,12 +10,11 @@ use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::app::assist::{
-    AssistContext, AssistPolicy, FailureTracker, append_assist_header, effective_permission_mode,
-    format_detail_lines, run_agent_assist,
+    AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
+    run_agent_assist,
 };
 use crate::app::session::COMMIT_MESSAGE;
 use crate::domain::agent::AgentModel;
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::infra::codex_app_server::{CodexAppServerClient, CodexTurnRequest};
 use crate::infra::db::Database;
@@ -44,7 +43,6 @@ pub(super) struct RunCodexAppServerTaskInput {
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
-    pub(super) permission_mode: PermissionMode,
     pub(super) prompt: String,
     pub(super) session_output: Option<String>,
     pub(super) session_model: AgentModel,
@@ -186,7 +184,6 @@ impl TaskService {
             git_client,
             id,
             output,
-            permission_mode,
             prompt,
             session_output,
             session_model,
@@ -196,7 +193,6 @@ impl TaskService {
         let request = CodexTurnRequest {
             folder: folder.clone(),
             model,
-            permission_mode,
             prompt,
             session_output,
             session_id: id.clone(),
@@ -252,7 +248,6 @@ impl TaskService {
             git_client: Arc::clone(&git_client),
             id: id.clone(),
             output: Arc::clone(&output),
-            permission_mode,
             session_model,
         })
         .await;
@@ -430,8 +425,6 @@ impl TaskService {
         commit_error: &str,
     ) -> Result<(), String> {
         let prompt = Self::auto_commit_assist_prompt(commit_error);
-        let effective_permission_mode =
-            Self::auto_commit_assist_permission_mode(context.permission_mode);
         let assist_context = AssistContext {
             app_event_tx: context.app_event_tx.clone(),
             db: context.db.clone(),
@@ -439,7 +432,6 @@ impl TaskService {
             git_client: Arc::clone(&context.git_client),
             id: context.id.clone(),
             output: Arc::clone(&context.output),
-            permission_mode: effective_permission_mode,
             session_model: context.session_model,
         };
 
@@ -450,10 +442,6 @@ impl TaskService {
 
     fn auto_commit_assist_prompt(commit_error: &str) -> String {
         AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE.replace("{commit_error}", commit_error.trim())
-    }
-
-    fn auto_commit_assist_permission_mode(permission_mode: PermissionMode) -> PermissionMode {
-        effective_permission_mode(permission_mode)
     }
 
     fn format_commit_error_for_display(commit_error: &str) -> String {
@@ -492,7 +480,6 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::permission::PermissionMode;
     use crate::domain::session::Status;
     use crate::infra::codex_app_server::MockCodexAppServerClient;
     use crate::infra::db::Database;
@@ -543,7 +530,6 @@ mod tests {
                 git_client: Arc::new(git::RealGitClient),
                 id: session_id.to_string(),
                 output: Arc::new(Mutex::new(String::new())),
-                permission_mode: PermissionMode::AutoEdit,
                 prompt: "hello".to_string(),
                 session_output: Some("history".to_string()),
                 session_model: AgentModel::Gpt53Codex,
@@ -614,7 +600,6 @@ mod tests {
                 git_client: Arc::new(git::RealGitClient),
                 id: session_id.to_string(),
                 output: Arc::new(Mutex::new(String::new())),
-                permission_mode: PermissionMode::AutoEdit,
                 prompt: "hello".to_string(),
                 session_output: None,
                 session_model: AgentModel::Gpt53Codex,

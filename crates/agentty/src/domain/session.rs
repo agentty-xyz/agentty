@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use ratatui::style::Color;
 
 use super::agent::AgentModel;
-use super::permission::PermissionMode;
 
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
@@ -232,7 +231,6 @@ pub struct Session {
     pub id: String,
     pub model: AgentModel,
     pub output: String,
-    pub permission_mode: PermissionMode,
     pub project_name: String,
     pub prompt: String,
     pub size: SessionSize,

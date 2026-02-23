@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, build_resume_prompt};
-use crate::domain::permission::PermissionMode;
 
 /// Backend implementation for the Gemini CLI.
 pub(super) struct GeminiBackend;
@@ -12,16 +11,7 @@ impl AgentBackend for GeminiBackend {
         // Gemini CLI needs no config files
     }
 
-    fn build_start_command(
-        &self,
-        folder: &Path,
-        prompt: &str,
-        model: &str,
-        permission_mode: PermissionMode,
-    ) -> Command {
-        let approval_mode = match permission_mode {
-            PermissionMode::AutoEdit => "auto_edit",
-        };
+    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
         let mut command = Command::new("gemini");
         command
             .arg("--prompt")
@@ -29,7 +19,7 @@ impl AgentBackend for GeminiBackend {
             .arg("--model")
             .arg(model)
             .arg("--approval-mode")
-            .arg(approval_mode)
+            .arg("auto_edit")
             .arg("--output-format")
             .arg("stream-json")
             .current_dir(folder)
@@ -44,14 +34,13 @@ impl AgentBackend for GeminiBackend {
         folder: &Path,
         prompt: &str,
         model: &str,
-        permission_mode: PermissionMode,
         session_output: Option<String>,
     ) -> Command {
         let has_history_replay = session_output
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
-        let mut command = self.build_start_command(folder, &prompt, model, permission_mode);
+        let mut command = self.build_start_command(folder, &prompt, model);
 
         if !has_history_replay {
             command.arg("--resume").arg("latest");

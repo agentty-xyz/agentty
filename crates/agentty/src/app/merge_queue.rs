@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 
 /// Queue progression outcome after applying a status update batch.
@@ -64,7 +63,7 @@ impl MergeQueue {
         &mut self,
         current_active_status: Option<Status>,
         session_ids: &HashSet<String>,
-        previous_session_states: &HashMap<String, (PermissionMode, Status)>,
+        previous_session_states: &HashMap<String, Status>,
     ) -> MergeQueueProgress {
         let Some(active_session_id) = self.active_session_id.clone() else {
             return MergeQueueProgress::NoAction;
@@ -79,9 +78,7 @@ impl MergeQueue {
             return MergeQueueProgress::NoAction;
         }
 
-        let previous_status = previous_session_states
-            .get(&active_session_id)
-            .map(|(_, previous_status)| *previous_status);
+        let previous_status = previous_session_states.get(&active_session_id).copied();
         if previous_status != Some(Status::Merging) {
             if current_active_status != Some(Status::Merging) {
                 self.active_session_id = None;
@@ -111,11 +108,8 @@ impl MergeQueue {
 mod tests {
     use super::*;
 
-    fn previous_states_for(
-        session_id: &str,
-        status: Status,
-    ) -> HashMap<String, (PermissionMode, Status)> {
-        HashMap::from([(session_id.to_string(), (PermissionMode::AutoEdit, status))])
+    fn previous_states_for(session_id: &str, status: Status) -> HashMap<String, Status> {
+        HashMap::from([(session_id.to_string(), status)])
     }
 
     fn touched_session_ids(session_id: &str) -> HashSet<String> {

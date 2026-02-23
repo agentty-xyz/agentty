@@ -177,9 +177,6 @@ impl App {
             SessionManager::load_longest_session_duration_seconds(&db).await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
-        let default_session_permission_mode = sessions
-            .first()
-            .map_or(PermissionMode::default(), |session| session.permission_mode);
         if sessions.is_empty() {
             table_state.select(None);
         } else {
@@ -207,7 +204,6 @@ impl App {
             codex_usage_limits,
             session::SessionDefaults {
                 model: default_session_model,
-                permission_mode: default_session_permission_mode,
             },
             services.git_client(),
             longest_session_duration_seconds,
@@ -544,7 +540,7 @@ impl App {
         let default_branch = self.projects.git_branch().map(str::to_string);
         let working_dir = self.projects.working_dir().to_path_buf();
         let git_client = self.services.git_client();
-        let permission_mode = self.sessions.default_session_permission_mode();
+        let _permission_mode = PermissionMode::default();
         let session_model = self.sessions.default_session_model();
 
         tokio::spawn(async move {
@@ -552,7 +548,6 @@ impl App {
                 default_branch,
                 working_dir,
                 git_client,
-                permission_mode,
                 session_model,
             )
             .await;
@@ -627,12 +622,7 @@ impl App {
                     .sessions
                     .iter()
                     .find(|session| session.id == *session_id)
-                    .map(|session| {
-                        (
-                            session_id.clone(),
-                            (session.permission_mode, session.status),
-                        )
-                    })
+                    .map(|session| (session_id.clone(), session.status))
             })
             .collect::<HashMap<_, _>>();
 
@@ -805,7 +795,7 @@ impl App {
     async fn handle_merge_queue_progress(
         &mut self,
         session_ids: &HashSet<String>,
-        previous_session_states: &HashMap<String, (PermissionMode, Status)>,
+        previous_session_states: &HashMap<String, Status>,
     ) {
         let current_status = self
             .merge_queue

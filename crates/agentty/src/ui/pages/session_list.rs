@@ -3,7 +3,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::ui::Page;
 use crate::ui::state::help_action;
@@ -42,7 +41,7 @@ impl Page for SessionListPage<'_> {
 
         let selected_style = Style::default().bg(Color::DarkGray);
         let normal_style = Style::default().bg(Color::Gray).fg(Color::Black);
-        let header_cells = ["Session", "Project", "Model", "Mode", "Size", "Status"]
+        let header_cells = ["Session", "Project", "Model", "Size", "Status"]
             .iter()
             .map(|h| Cell::from(*h));
         let header = Row::new(header_cells)
@@ -55,7 +54,6 @@ impl Page for SessionListPage<'_> {
             Constraint::Fill(1),
             project_column_width(self.sessions),
             model_column_width(self.sessions),
-            mode_column_width(),
             size_column_width(),
             status_column_width(),
         ];
@@ -247,7 +245,6 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
-        Cell::from(""),
     ];
 
     Row::new(cells).height(1)
@@ -257,7 +254,6 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
 fn render_empty_group_placeholder_row() -> Row<'static> {
     let cells = vec![
         Cell::from(GROUP_EMPTY_PLACEHOLDER).style(Style::default().fg(Color::DarkGray)),
-        Cell::from(""),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -275,7 +271,6 @@ fn render_session_row(session: &Session, title_column_width: usize) -> Row<'stat
         Cell::from(display_title),
         Cell::from(session.project_name.clone()),
         Cell::from(session.model.as_str()),
-        Cell::from(session.permission_mode.display_label()),
         Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
         Cell::from(format!("{status}")).style(Style::default().fg(status.color())),
     ];
@@ -294,15 +289,6 @@ pub(crate) fn model_column_width(sessions: &[Session]) -> Constraint {
     text_column_width(
         "Model",
         sessions.iter().map(|session| session.model.as_str()),
-    )
-}
-
-fn mode_column_width() -> Constraint {
-    text_column_width(
-        "Mode",
-        [PermissionMode::AutoEdit]
-            .iter()
-            .map(|mode| mode.display_label()),
     )
 }
 
@@ -371,7 +357,6 @@ mod tests {
             id: id.to_string(),
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
-            permission_mode: PermissionMode::AutoEdit,
             project_name: "project".to_string(),
             prompt: String::new(),
             size: SessionSize::Xs,
@@ -546,18 +531,6 @@ mod tests {
 
         // Act
         let width = text_column_width("Model", models.into_iter());
-
-        // Assert
-        assert_eq!(width, Constraint::Length(expected_width));
-    }
-
-    #[test]
-    fn test_mode_column_width_uses_longest_mode_label() {
-        // Arrange
-        let expected_width = u16::try_from("Auto Edit".chars().count()).unwrap_or(u16::MAX);
-
-        // Act
-        let width = mode_column_width();
 
         // Assert
         assert_eq!(width, Constraint::Length(expected_width));

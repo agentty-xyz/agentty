@@ -8,7 +8,6 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::app::session::{RunAgentAssistTaskInput, SessionTaskService};
 use crate::domain::agent::AgentModel;
-use crate::domain::permission::PermissionMode;
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
@@ -29,7 +28,6 @@ pub(super) struct AssistContext {
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) id: String,
     pub(super) output: Arc<Mutex<String>>,
-    pub(super) permission_mode: PermissionMode,
     pub(super) session_model: AgentModel,
 }
 
@@ -83,11 +81,6 @@ pub(super) fn format_detail_lines(detail: &str) -> String {
         .join("\n")
 }
 
-/// Returns the effective permission mode for assist runs.
-pub(super) fn effective_permission_mode(permission_mode: PermissionMode) -> PermissionMode {
-    permission_mode
-}
-
 /// Appends a normalized assist-attempt header to the session output buffer.
 pub(super) async fn append_assist_header(
     context: &AssistContext,
@@ -117,13 +110,11 @@ pub(super) async fn append_assist_header(
 /// Returns an error when the agent process cannot be spawned, fails, or is
 /// interrupted.
 pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> Result<(), String> {
-    let effective_permission_mode = effective_permission_mode(context.permission_mode);
     let backend = crate::infra::agent::create_backend(context.session_model.kind());
     let command = backend.build_resume_command(
         &context.folder,
         prompt,
         context.session_model.as_str(),
-        effective_permission_mode,
         None,
     );
 
@@ -183,17 +174,5 @@ mod tests {
 
         // Assert
         assert_eq!(formatted, "- line one\n- line two");
-    }
-
-    #[test]
-    fn test_effective_permission_mode_returns_auto_edit() {
-        // Arrange
-        let permission_mode = PermissionMode::AutoEdit;
-
-        // Act
-        let effective_mode = effective_permission_mode(permission_mode);
-
-        // Assert
-        assert_eq!(effective_mode, PermissionMode::AutoEdit);
     }
 }

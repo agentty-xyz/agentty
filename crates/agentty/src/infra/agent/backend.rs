@@ -2,7 +2,6 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::domain::agent::AgentKind;
-use crate::domain::permission::PermissionMode;
 
 const RESUME_WITH_SESSION_OUTPUT_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/resume_with_session_output_prompt.md");
@@ -14,13 +13,7 @@ pub trait AgentBackend: Send + Sync {
     fn setup(&self, folder: &Path);
 
     /// Builds a command for an initial task prompt.
-    fn build_start_command(
-        &self,
-        folder: &Path,
-        prompt: &str,
-        model: &str,
-        permission_mode: PermissionMode,
-    ) -> Command;
+    fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command;
 
     /// Builds a command for a resumed task or reply.
     ///
@@ -32,7 +25,6 @@ pub trait AgentBackend: Send + Sync {
         folder: &Path,
         prompt: &str,
         model: &str,
-        permission_mode: PermissionMode,
         session_output: Option<String>,
     ) -> Command;
 }

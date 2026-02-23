@@ -455,7 +455,6 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::permission::PermissionMode;
     use crate::domain::session::{AllTimeModelUsage, SessionSize, SessionStats, Status};
 
     fn session_fixture() -> Session {
@@ -486,7 +485,6 @@ mod tests {
             id: session_id.to_string(),
             model,
             output: String::new(),
-            permission_mode: PermissionMode::default(),
             project_name: "project".to_string(),
             prompt: String::new(),
             size: SessionSize::Xs,

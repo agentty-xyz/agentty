@@ -12,7 +12,6 @@ use crate::app::session::worker::SessionCommand;
 use crate::app::settings::SettingName;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel};
-use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::infra::agent::AgentBackend;
 use crate::ui::pages::session_list::grouped_session_indexes;
@@ -21,7 +20,6 @@ use crate::ui::pages::session_list::grouped_session_indexes;
 struct BuildSessionCommandInput {
     folder: PathBuf,
     is_first_message: bool,
-    permission_mode: PermissionMode,
     prompt: String,
     session_model: AgentModel,
     session_output: Option<String>,
@@ -103,7 +101,6 @@ impl SessionManager {
             .ok_or_else(|| "Git branch is required to create a session".to_string())?;
         let session_model = self.resolve_default_session_model(services).await;
         self.default_session_model = session_model;
-        let session_permission_mode = self.default_session_permission_mode;
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
@@ -171,25 +168,6 @@ impl SessionManager {
             return Err(format!("Failed to save session metadata: {error}"));
         }
 
-        if session_permission_mode != PermissionMode::AutoEdit
-            && let Err(error) = services
-                .db()
-                .update_session_permission_mode(&session_id, session_permission_mode.label())
-                .await
-        {
-            self.rollback_failed_session_creation(
-                services,
-                &folder,
-                &repo_root,
-                &session_id,
-                &worktree_branch,
-                false,
-            )
-            .await;
-
-            return Err(format!("Failed to save session permission mode: {error}"));
-        }
-
         let _ = services
             .db()
             .insert_session_creation_activity_now(&session_id)
@@ -212,7 +190,7 @@ impl SessionManager {
         prompt: String,
     ) -> Result<(), String> {
         let session_index = self.session_index_or_err(session_id)?;
-        let (folder, permission_mode, persisted_session_id, session_model, title) = {
+        let (folder, persisted_session_id, session_model, title) = {
             let session = self
                 .sessions
                 .get_mut(session_index)
@@ -226,7 +204,6 @@ impl SessionManager {
 
             (
                 session.folder.clone(),
-                session.permission_mode,
                 session.id.clone(),
                 session_model,
                 title,
@@ -270,22 +247,15 @@ impl SessionManager {
         let command = if session_model.kind() == AgentKind::Codex {
             SessionCommand::StartPromptCodexAppServer {
                 operation_id,
-                permission_mode,
                 prompt: prompt.clone(),
                 session_model,
             }
         } else {
             let backend = crate::infra::agent::create_backend(session_model.kind());
-            let command = backend.build_start_command(
-                &folder,
-                &prompt,
-                session_model.as_str(),
-                permission_mode,
-            );
+            let command = backend.build_start_command(&folder, &prompt, session_model.as_str());
             SessionCommand::StartPrompt {
                 command,
                 operation_id,
-                permission_mode,
                 session_model,
             }
         };
@@ -517,10 +487,6 @@ impl SessionManager {
         let Ok(session_index) = self.session_index_or_err(session_id) else {
             return;
         };
-        let permission_mode = self
-            .sessions
-            .get(session_index)
-            .map_or(PermissionMode::default(), |session| session.permission_mode);
         let should_replay_history = self.pending_history_replay.contains(session_id);
         let mut blocked_session_id = None;
         let reply_context = {
@@ -606,7 +572,6 @@ impl SessionManager {
             BuildSessionCommandInput {
                 folder,
                 is_first_message,
-                permission_mode,
                 prompt: prompt.to_string(),
                 session_model,
                 session_output,
@@ -673,7 +638,6 @@ impl SessionManager {
         let BuildSessionCommandInput {
             folder,
             is_first_message,
-            permission_mode,
             prompt,
             session_model,
             session_output,
@@ -684,14 +648,12 @@ impl SessionManager {
             if is_first_message {
                 SessionCommand::StartPromptCodexAppServer {
                     operation_id,
-                    permission_mode,
                     prompt,
                     session_model,
                 }
             } else {
                 SessionCommand::ReplyCodexAppServer {
                     operation_id,
-                    permission_mode,
                     prompt,
                     session_output,
                     session_model,
@@ -699,18 +661,12 @@ impl SessionManager {
             }
         } else {
             let command = if is_first_message {
-                backend.build_start_command(
-                    &folder,
-                    &prompt,
-                    session_model.as_str(),
-                    permission_mode,
-                )
+                backend.build_start_command(&folder, &prompt, session_model.as_str())
             } else {
                 backend.build_resume_command(
                     &folder,
                     &prompt,
                     session_model.as_str(),
-                    permission_mode,
                     session_output,
                 )
             };
@@ -719,14 +675,12 @@ impl SessionManager {
                 SessionCommand::StartPrompt {
                     command,
                     operation_id,
-                    permission_mode,
                     session_model,
                 }
             } else {
                 SessionCommand::Reply {
                     command,
                     operation_id,
-                    permission_mode,
                     session_model,
                 }
             }
