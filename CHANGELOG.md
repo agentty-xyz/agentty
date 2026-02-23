@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.0] - 2026-02-22
+
+### Added
+
+- **Plan:** Add iterative plan question flow with per-question answer options.
+- **Sync:** Run branch sync in background with loading popup and outcome display.
+- **Sync:** Add session branch sync action with sync-blocked popup.
+- **Sync:** Add assisted conflict resolution for sync main rebase.
+- **Stats:** Add Codex usage limits to stats dashboard.
+- **Stats:** Persist session-creation activity and render by local day.
+- **Stats:** Persist and display all-time model usage and longest session duration.
+- **Help:** Help system uses state-aware action projection.
+- **Dev Server:** Add editable Dev Server setting and run when opening session tmux window.
+- **UX:** Add `h`/`l` shortcuts for confirmation selection.
+
+### Changed
+
+- **Architecture:** Refactor agent infrastructure into provider modules.
+- **Architecture:** Split git infrastructure and UI utilities into focused modules.
+- **Architecture:** Inject `GitClient` into app workflows and isolate multi-command git tests.
+- **Refactor:** Move file indexing into infra module and parse using `pulldown-cmark`.
+- **Refactor:** Rename state, file, and mode modules for clarity.
+- **Refactor:** Move module roots from `mod.rs` to sibling files.
+- **Sync:** Add project and branch context to sync popups.
+- **Sync:** Sync main branch by pushing after rebase.
+- **Plan:** Improve plan follow-ups and Codex stats limit rendering.
+- **UX:** Use shared confirmation mode for quit and session deletion.
+- **UX:** Confirmation prompts default to "No" selection.
+- **UX:** Hide open-worktree shortcut for done sessions and restrict view actions while running.
+- **Commit:** Preserve a single evolving session commit.
+- **Search:** Prioritize basename matches in file list fuzzy scoring.
+
+### Fixed
+
+- **Codex:** Fix app-server error status recovery and wait for responses before parsing limits.
+- **Stability:** Fix launch and lint regressions after rebase.
+- **UI:** Deduplicate list background rendering and reset grouped session table offset.
+
+### Removed
+
+- **Refactor:** Remove orphaned top-level source files from `src/`.
+- **Refactor:** Remove `pr-testing` directory references.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.1.14] - 2026-02-21
 
 ### Added
