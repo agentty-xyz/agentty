@@ -478,15 +478,7 @@ impl TaskService {
             while let Some(event) = stream_rx.recv().await {
                 match event {
                     CodexStreamEvent::AssistantMessage(message) => {
-                        if let Some(previous_progress) = active_progress.take() {
-                            Self::append_progress_completion(
-                                &output,
-                                &db,
-                                &app_event_tx,
-                                &session_id,
-                                &previous_progress,
-                            )
-                            .await;
+                        if active_progress.take().is_some() {
                             Self::set_session_progress(&app_event_tx, &session_id, None);
                         }
 
@@ -503,73 +495,24 @@ impl TaskService {
                     }
                     CodexStreamEvent::ProgressUpdate(progress) => {
                         if active_progress.as_deref() != Some(&progress) {
-                            if let Some(previous_progress) = active_progress.take() {
-                                Self::append_progress_completion(
-                                    &output,
-                                    &db,
-                                    &app_event_tx,
-                                    &session_id,
-                                    &previous_progress,
-                                )
-                                .await;
-                            }
+                            active_progress = Some(progress.clone());
 
                             Self::set_session_progress(
                                 &app_event_tx,
                                 &session_id,
                                 Some(progress.clone()),
                             );
-                            active_progress = Some(progress);
                         }
                     }
                 }
             }
 
-            if let Some(previous_progress) = active_progress.take() {
-                Self::append_progress_completion(
-                    &output,
-                    &db,
-                    &app_event_tx,
-                    &session_id,
-                    &previous_progress,
-                )
-                .await;
+            if active_progress.take().is_some() {
+                Self::set_session_progress(&app_event_tx, &session_id, None);
             }
 
             streamed_any_content
         })
-    }
-
-    /// Appends a progress completion line to session output when a progress
-    /// phase ends.
-    async fn append_progress_completion(
-        output: &Arc<Mutex<String>>,
-        db: &Database,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        session_id: &str,
-        progress_message: &str,
-    ) {
-        if let Some(completion_text) = Self::progress_completion_message(progress_message) {
-            let formatted = format!("{completion_text}\n");
-            Self::append_session_output(output, db, app_event_tx, session_id, &formatted).await;
-        }
-    }
-
-    /// Maps an active progress message to its completion text.
-    fn progress_completion_message(progress_message: &str) -> Option<String> {
-        let normalized = progress_message.trim().trim_end_matches('.').trim();
-        if normalized.is_empty() {
-            return None;
-        }
-
-        let completion_message = match normalized {
-            "Searching the web" => "Web search completed".to_string(),
-            "Thinking" => "Thinking completed".to_string(),
-            "Running a command" => "Command completed".to_string(),
-            other => format!("{other} completed"),
-        };
-
-        Some(completion_message)
     }
 
     fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
@@ -807,7 +750,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stream_consumer_updates_progress_and_appends_completion() {
+    async fn test_stream_consumer_updates_progress_without_completion_lines() {
         // Arrange
         let output = Arc::new(Mutex::new(String::new()));
         let db = Database::open_in_memory()
@@ -851,8 +794,8 @@ mod tests {
         // Assert
         let buffer = output.lock().expect("lock output").clone();
         assert!(
-            buffer.contains("Command completed"),
-            "output should contain progress completion: {buffer}"
+            !buffer.contains("Command completed"),
+            "output should not contain progress completion lines: {buffer}"
         );
         assert!(
             buffer.contains("Done"),
@@ -973,34 +916,6 @@ mod tests {
 
         // Assert
         assert!(!streamed_any);
-    }
-
-    #[test]
-    fn test_progress_completion_message_maps_known_messages() {
-        // Act / Assert
-        assert_eq!(
-            TaskService::progress_completion_message("Searching the web"),
-            Some("Web search completed".to_string())
-        );
-        assert_eq!(
-            TaskService::progress_completion_message("Thinking"),
-            Some("Thinking completed".to_string())
-        );
-        assert_eq!(
-            TaskService::progress_completion_message("Running a command"),
-            Some("Command completed".to_string())
-        );
-        assert_eq!(
-            TaskService::progress_completion_message("Working: custom"),
-            Some("Working: custom completed".to_string())
-        );
-    }
-
-    #[test]
-    fn test_progress_completion_message_returns_none_for_empty() {
-        // Act / Assert
-        assert_eq!(TaskService::progress_completion_message(""), None);
-        assert_eq!(TaskService::progress_completion_message("  "), None);
     }
 
     #[test]

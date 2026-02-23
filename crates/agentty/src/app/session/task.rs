@@ -81,9 +81,7 @@ struct CapturedOutput {
 
 enum ActiveProgressMessageUpdate {
     NoChange,
-    Updated {
-        previous_progress_message: Option<String>,
-    },
+    Updated,
 }
 
 impl SessionTaskService {
@@ -664,7 +662,8 @@ impl SessionTaskService {
     /// transitions.
     ///
     /// Streamed response entries are separated by a blank line to improve
-    /// readability in chat output.
+    /// readability in chat output. Progress labels are cleared from UI state
+    /// without emitting synthetic completion lines into chat output.
     async fn handle_response_content_line(
         stream_context: &StreamOutputContext,
         stream_text: &str,
@@ -700,16 +699,14 @@ impl SessionTaskService {
             Self::take_active_progress_message(&stream_context.active_progress_message);
 
         if previous_progress_message.is_some() {
-            // Flush any pending session output before adding completion message
+            // Flush pending output before clearing the progress indicator.
             Self::flush_session_output_batch(stream_context, session_output_batch).await;
-            Self::append_progress_completion_if_needed(stream_context, previous_progress_message)
-                .await;
             Self::set_session_progress(&stream_context.app_event_tx, &stream_context.id, None);
         }
     }
 
     /// Handles parsed non-response progress content and publishes progress
-    /// updates.
+    /// updates without appending progress text into chat output.
     async fn handle_progress_content_line(
         stream_context: &StreamOutputContext,
         stream_text: String,
@@ -721,7 +718,7 @@ impl SessionTaskService {
             .non_response_stream_output_seen
             .store(true, Ordering::Relaxed);
 
-        let previous_progress_message = match Self::replace_active_progress_message_if_changed(
+        match Self::replace_active_progress_message_if_changed(
             &stream_context.active_progress_message,
             &stream_text,
         ) {
@@ -736,14 +733,11 @@ impl SessionTaskService {
 
                 return;
             }
-            ActiveProgressMessageUpdate::Updated {
-                previous_progress_message,
-            } => previous_progress_message,
-        };
+            ActiveProgressMessageUpdate::Updated => {}
+        }
 
-        // Flush pending output before handling progress updates
+        // Flush pending output before publishing progress updates.
         Self::flush_session_output_batch(stream_context, session_output_batch).await;
-        Self::append_progress_completion_if_needed(stream_context, previous_progress_message).await;
         Self::set_session_progress(
             &stream_context.app_event_tx,
             &stream_context.id,
@@ -773,30 +767,6 @@ impl SessionTaskService {
         }
     }
 
-    async fn append_progress_completion_if_needed(
-        stream_context: &StreamOutputContext,
-        previous_progress_message: Option<String>,
-    ) {
-        let Some(previous_progress_message) = previous_progress_message else {
-            return;
-        };
-        let Some(completion_message) =
-            Self::progress_completion_message(previous_progress_message.as_str())
-        else {
-            return;
-        };
-        let completion_message = format!("{completion_message}\n");
-
-        Self::append_session_output(
-            &stream_context.output,
-            &stream_context.db,
-            &stream_context.app_event_tx,
-            &stream_context.id,
-            &completion_message,
-        )
-        .await;
-    }
-
     fn take_active_progress_message(
         active_progress_message: &Arc<Mutex<Option<String>>>,
     ) -> Option<String> {
@@ -821,11 +791,9 @@ impl SessionTaskService {
         if active_progress_message.as_deref() == Some(stream_text) {
             return ActiveProgressMessageUpdate::NoChange;
         }
-        let previous_progress_message = active_progress_message.replace(stream_text.to_string());
+        active_progress_message.replace(stream_text.to_string());
 
-        ActiveProgressMessageUpdate::Updated {
-            previous_progress_message,
-        }
+        ActiveProgressMessageUpdate::Updated
     }
 
     fn set_session_progress(
@@ -837,22 +805,6 @@ impl SessionTaskService {
             progress_message,
             session_id: id.to_string(),
         });
-    }
-
-    fn progress_completion_message(progress_message: &str) -> Option<String> {
-        let normalized_progress_message = progress_message.trim().trim_end_matches('.').trim();
-        if normalized_progress_message.is_empty() {
-            return None;
-        }
-
-        let completion_message = match normalized_progress_message {
-            "Searching the web" => "Web search completed".to_string(),
-            "Thinking" => "Thinking completed".to_string(),
-            "Running a command" => "Command completed".to_string(),
-            other => format!("{other} completed"),
-        };
-
-        Some(completion_message)
     }
 
     fn status_requires_full_refresh(status: Status) -> bool {
@@ -912,45 +864,6 @@ mod tests {
 
         // Assert
         assert_eq!(formatted, "- line one\n- line two");
-    }
-
-    #[test]
-    fn test_progress_completion_message_returns_web_search_completion() {
-        // Arrange
-        let progress_message = "Searching the web";
-
-        // Act
-        let completion_message = SessionTaskService::progress_completion_message(progress_message);
-
-        // Assert
-        assert_eq!(completion_message, Some("Web search completed".to_string()));
-    }
-
-    #[test]
-    fn test_progress_completion_message_returns_command_completion() {
-        // Arrange
-        let progress_message = "Running a command";
-
-        // Act
-        let completion_message = SessionTaskService::progress_completion_message(progress_message);
-
-        // Assert
-        assert_eq!(completion_message, Some("Command completed".to_string()));
-    }
-
-    #[test]
-    fn test_progress_completion_message_returns_generic_completion() {
-        // Arrange
-        let progress_message = "Working: tool use";
-
-        // Act
-        let completion_message = SessionTaskService::progress_completion_message(progress_message);
-
-        // Assert
-        assert_eq!(
-            completion_message,
-            Some("Working: tool use completed".to_string())
-        );
     }
 
     #[tokio::test]
@@ -1035,6 +948,8 @@ mod tests {
                 "printf '%s\\n' \
                  '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}' \
                  '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
+                 Command completed\"}}' \
+                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
                  Final answer\"}}' \
                  '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
                  7}}'",
@@ -1061,6 +976,7 @@ mod tests {
             result.err()
         );
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
+        assert!(!output_text.contains("Command completed"));
         assert!(!output_text.contains("Running a command"));
         assert!(!output_text.contains("command_execution"));
         assert_eq!(output_text.matches("Final answer").count(), 1);
@@ -1350,9 +1266,9 @@ mod tests {
         );
         assert_eq!(progress_updates.last(), Some(&None));
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(output_text.contains("Web search completed"));
-        assert!(output_text.contains("Thinking completed"));
-        assert!(output_text.contains("Command completed"));
+        assert!(!output_text.contains("Web search completed"));
+        assert!(!output_text.contains("Thinking completed"));
+        assert!(!output_text.contains("Command completed"));
         assert!(!output_text.contains("Searching the web"));
         assert!(!output_text.contains("Running a command"));
     }

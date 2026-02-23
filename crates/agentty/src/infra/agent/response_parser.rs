@@ -296,6 +296,9 @@ fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(String, bool)> {
     }
 
     let text = item.text?;
+    if is_codex_completion_status_message(&text) {
+        return None;
+    }
 
     Some((text, true))
 }
@@ -473,6 +476,24 @@ pub(crate) fn compact_codex_progress_message(item_type: &str) -> Option<String> 
     }
 }
 
+/// Returns whether a Codex `agent_message` is a synthetic completion status.
+///
+/// These short status lines are emitted for internal tool/reasoning steps and
+/// should not be rendered as chat content.
+pub(crate) fn is_codex_completion_status_message(message: &str) -> bool {
+    let normalized_message = message.trim().trim_end_matches('.').to_ascii_lowercase();
+
+    matches!(
+        normalized_message.as_str(),
+        "command completed"
+            | "command execution completed"
+            | "thinking completed"
+            | "reasoning completed"
+            | "search completed"
+            | "web search completed"
+    )
+}
+
 fn extract_gemini_stats(stats: Option<GeminiStats>) -> SessionStats {
     let Some(models) = stats.and_then(|stat| stat.models) else {
         return SessionStats::default();
@@ -520,5 +541,34 @@ mod tests {
         assert_eq!(parsed.content, "Planned response");
         assert_eq!(parsed.stats.input_tokens, 11);
         assert_eq!(parsed.stats.output_tokens, 7);
+    }
+
+    #[test]
+    fn test_parse_stream_output_line_codex_ignores_completion_status_messages() {
+        // Arrange
+        let completion_status_lines = [
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Command completed"}}"#,
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Thinking completed"}}"#,
+        ];
+
+        // Act & Assert
+        for completion_status_line in completion_status_lines {
+            let parsed_line = parse_stream_output_line(AgentKind::Codex, completion_status_line);
+
+            assert_eq!(parsed_line, None);
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_output_line_codex_keeps_assistant_message_content() {
+        // Arrange
+        let assistant_line =
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Final answer"}}"#;
+
+        // Act
+        let parsed_line = parse_stream_output_line(AgentKind::Codex, assistant_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("Final answer".to_string(), true)));
     }
 }

@@ -696,6 +696,9 @@ fn extract_turn_id_from_turn_started_notification(response_value: &Value) -> Opt
 }
 
 /// Extracts completed assistant message text from an `item/completed` line.
+///
+/// Synthetic completion status lines (for example `Command completed`) are
+/// ignored so only real assistant messages are streamed to chat output.
 fn extract_agent_message(response_value: &Value) -> Option<String> {
     if response_value.get("method").and_then(Value::as_str) != Some("item/completed") {
         return None;
@@ -708,6 +711,10 @@ fn extract_agent_message(response_value: &Value) -> Option<String> {
     }
 
     if let Some(item_text) = item.get("text").and_then(Value::as_str) {
+        if crate::infra::agent::is_codex_completion_status_message(item_text) {
+            return None;
+        }
+
         return Some(item_text.to_string());
     }
 
@@ -724,7 +731,12 @@ fn extract_agent_message(response_value: &Value) -> Option<String> {
         return None;
     }
 
-    Some(parts.join("\n\n"))
+    let message = parts.join("\n\n");
+    if crate::infra::agent::is_codex_completion_status_message(&message) {
+        return None;
+    }
+
+    Some(message)
 }
 
 /// Parses `turn/completed` notifications and maps failures to user errors.
@@ -867,6 +879,26 @@ mod tests {
 
         // Assert
         assert_eq!(message, Some("Line 1\n\nLine 2".to_string()));
+    }
+
+    #[test]
+    fn extract_agent_message_ignores_completion_status_lines() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "agentMessage",
+                    "text": "Command completed"
+                }
+            }
+        });
+
+        // Act
+        let message = extract_agent_message(&response_value);
+
+        // Assert
+        assert_eq!(message, None);
     }
 
     #[test]
