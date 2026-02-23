@@ -81,7 +81,6 @@ mod tests {
         app.mode = AppMode::Help {
             context: HelpContext::View {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                plan_followup_navigation: None,
                 session_id: "s1".to_string(),
                 session_state: crate::ui::state::help_action::ViewSessionState::Interactive,
                 scroll_offset: Some(5),

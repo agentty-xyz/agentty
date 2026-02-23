@@ -181,25 +181,6 @@ impl SessionManager {
 
         self.default_session_model = session_model;
     }
-
-    /// Applies reducer updates after session permission mode changes are
-    /// persisted.
-    pub(crate) fn apply_session_permission_mode_updated(
-        &mut self,
-        session_id: &str,
-        permission_mode: PermissionMode,
-    ) {
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.permission_mode = permission_mode;
-        }
-
-        self.default_session_permission_mode = permission_mode;
-    }
 }
 
 impl Deref for SessionManager {
@@ -256,7 +237,7 @@ mod tests {
     fn create_mock_backend() -> MockAgentBackend {
         let mut mock = MockAgentBackend::new();
         mock.expect_build_start_command()
-            .returning(|folder, _, _, _, _| {
+            .returning(|folder, _, _, _| {
                 let mut cmd = Command::new("echo");
                 cmd.arg("mock-start")
                     .current_dir(folder)
@@ -905,9 +886,6 @@ mod tests {
         app.set_session_model(&first_session_id, AgentModel::Gpt52Codex)
             .await
             .expect("failed to set session model");
-        app.toggle_session_permission_mode(&first_session_id)
-            .await
-            .expect("failed to toggle permission mode");
         let default_model_setting = app
             .services
             .db()
@@ -1934,7 +1912,7 @@ FROM session
             .expect("failed to open in-memory db");
         let mut mock = MockAgentBackend::new();
         mock.expect_build_start_command()
-            .returning(|folder, prompt, _, _, _| {
+            .returning(|folder, prompt, _, _| {
                 let mut cmd = Command::new("echo");
                 cmd.arg("--prompt")
                     .arg(prompt)
@@ -1983,7 +1961,7 @@ FROM session
         // Act — reply (resume command)
         let mut resume_mock = MockAgentBackend::new();
         resume_mock.expect_build_resume_command().returning(
-            |folder, prompt, _, _, _, session_output| {
+            |folder, prompt, _, _, session_output| {
                 assert!(session_output.is_none());
 
                 let mut cmd = Command::new("echo");
@@ -2070,7 +2048,7 @@ FROM session
         // Act
         let mut first_resume_mock = MockAgentBackend::new();
         first_resume_mock.expect_build_resume_command().returning(
-            |folder, prompt, _, _, _, session_output| {
+            |folder, prompt, _, _, session_output| {
                 let session_output = session_output.expect("expected session output");
                 assert!(session_output.contains("Initial prompt"));
                 assert!(session_output.contains("mock-start"));
@@ -2099,7 +2077,7 @@ FROM session
         // Assert
         let mut second_resume_mock = MockAgentBackend::new();
         second_resume_mock.expect_build_resume_command().returning(
-            |folder, prompt, _, _, _, session_output| {
+            |folder, prompt, _, _, session_output| {
                 assert!(session_output.is_none());
 
                 let mut cmd = Command::new("echo");
@@ -2171,7 +2149,7 @@ FROM session
         // Create a session that writes a file so commit_all has something to commit
         let mut mock = MockAgentBackend::new();
         mock.expect_build_start_command()
-            .returning(|folder, _, _, _, _| {
+            .returning(|folder, _, _, _| {
                 let mut cmd = Command::new("bash");
                 cmd.arg("-c")
                     .arg("echo auto-content > auto-committed.txt")
@@ -2304,7 +2282,7 @@ FROM session
         // Agent that produces no file changes
         let mut mock = MockAgentBackend::new();
         mock.expect_build_start_command()
-            .returning(|folder, _, _, _, _| {
+            .returning(|folder, _, _, _| {
                 let mut cmd = Command::new("echo");
                 cmd.arg("no-changes")
                     .current_dir(folder)

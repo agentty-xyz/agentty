@@ -287,7 +287,6 @@ impl RealSyncAssistClient {
                 &prompt,
                 session_model.as_str(),
                 permission_mode,
-                false,
             );
             command.stdin(Stdio::null());
 
@@ -1470,7 +1469,6 @@ impl SessionManager {
             prompt,
             session_model.as_str(),
             PermissionMode::AutoEdit,
-            false,
         );
         command.stdin(Stdio::null());
         let output = command

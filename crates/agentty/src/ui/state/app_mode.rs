@@ -1,6 +1,4 @@
-use super::help_action::{
-    self, HelpAction, PlanFollowupNavigation, ViewHelpState, ViewSessionState,
-};
+use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
 use super::palette::{PaletteCommand, PaletteFocus};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
@@ -16,6 +14,7 @@ pub enum DoneSessionOutputMode {
 
 impl DoneSessionOutputMode {
     /// Returns the opposite done-session output mode.
+    #[must_use]
     pub const fn toggled(self) -> Self {
         match self {
             Self::Summary => Self::Output,
@@ -89,7 +88,6 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         done_session_output_mode: DoneSessionOutputMode,
-        plan_followup_navigation: Option<PlanFollowupNavigation>,
         session_id: String,
         session_state: ViewSessionState,
         scroll_offset: Option<u16>,
@@ -106,12 +104,7 @@ impl HelpContext {
     /// Returns projected keybinding entries for the originating page.
     pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
-            HelpContext::View {
-                plan_followup_navigation,
-                session_state,
-                ..
-            } => help_action::view_actions(ViewHelpState {
-                plan_followup_navigation: *plan_followup_navigation,
+            HelpContext::View { session_state, .. } => help_action::view_actions(ViewHelpState {
                 session_state: *session_state,
             }),
             HelpContext::List { keybindings } => keybindings.clone(),
@@ -177,7 +170,6 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            plan_followup_navigation: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(2),
@@ -203,7 +195,6 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            plan_followup_navigation: Some(PlanFollowupNavigation::Vertical),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(4),

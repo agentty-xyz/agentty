@@ -5,7 +5,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::{SettingsManager, Tab};
-use crate::domain::permission::PlanFollowup;
 use crate::domain::project::Project;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::overlays::SyncBlockedPopupRenderContext;
@@ -57,7 +56,6 @@ impl RouteSharedContext<'_> {
 #[derive(Clone, Copy)]
 struct SessionChatRenderContext<'a> {
     mode: &'a AppMode,
-    plan_followups: Option<&'a HashMap<String, PlanFollowup>>,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<String, String>,
     sessions: &'a [Session],
@@ -68,7 +66,6 @@ struct SessionChatRenderContext<'a> {
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
     active_project_id: i64,
-    plan_followups: &'a HashMap<String, PlanFollowup>,
     projects: &'a [Project],
     session_progress_messages: &'a HashMap<String, String>,
 }
@@ -82,7 +79,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         current_tab,
         longest_session_duration_seconds,
         mode,
-        plan_followups,
         projects,
         session_progress_messages,
         settings,
@@ -105,7 +101,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let aux = RouteAuxContext {
         active_project_id,
-        plan_followups,
         projects,
         session_progress_messages,
     };
@@ -181,7 +176,6 @@ fn render_list_or_overlay_mode(
             help_context,
             *scroll_offset,
             shared.list_background(),
-            aux.plan_followups,
             aux.session_progress_messages,
         ),
         AppMode::View { .. } | AppMode::Prompt { .. } | AppMode::Diff { .. } => {
@@ -205,19 +199,8 @@ fn render_session_or_diff_mode(
             session_id,
             scroll_offset,
             ..
-        } => render_session_chat(
-            f,
-            area,
-            SessionChatRenderContext {
-                mode,
-                plan_followups: Some(aux.plan_followups),
-                session_id,
-                session_progress_messages: aux.session_progress_messages,
-                sessions,
-                scroll_offset: *scroll_offset,
-            },
-        ),
-        AppMode::Prompt {
+        }
+        | AppMode::Prompt {
             session_id,
             scroll_offset,
             ..
@@ -226,7 +209,6 @@ fn render_session_or_diff_mode(
             area,
             SessionChatRenderContext {
                 mode,
-                plan_followups: None,
                 session_id,
                 session_progress_messages: aux.session_progress_messages,
                 sessions,
@@ -260,7 +242,6 @@ fn render_session_or_diff_mode(
 fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
         mode,
-        plan_followups,
         session_id,
         session_progress_messages,
         sessions,
@@ -271,7 +252,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         return;
     };
 
-    let plan_followup = plan_followups.and_then(|followups| followups.get(session_id));
     let active_progress = session_progress_messages
         .get(session_id)
         .map(std::string::String::as_str);
@@ -281,7 +261,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_index,
         scroll_offset,
         mode,
-        plan_followup,
         active_progress,
     )
     .render(f, area);

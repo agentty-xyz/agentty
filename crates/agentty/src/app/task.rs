@@ -43,7 +43,6 @@ pub(super) struct RunCodexAppServerTaskInput {
     pub(super) folder: PathBuf,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) id: String,
-    pub(super) is_initial_plan_prompt: bool,
     pub(super) output: Arc<Mutex<String>>,
     pub(super) permission_mode: PermissionMode,
     pub(super) prompt: String,
@@ -186,7 +185,6 @@ impl TaskService {
             folder,
             git_client,
             id,
-            is_initial_plan_prompt,
             output,
             permission_mode,
             prompt,
@@ -194,13 +192,12 @@ impl TaskService {
             session_model,
             status,
         } = input;
-        let prompt = permission_mode.apply_to_prompt(&prompt, is_initial_plan_prompt);
         let model = session_model.as_str().to_string();
         let request = CodexTurnRequest {
             folder: folder.clone(),
             model,
             permission_mode,
-            prompt: prompt.into_owned(),
+            prompt,
             session_output,
             session_id: id.clone(),
         };
@@ -545,7 +542,6 @@ mod tests {
                 folder: dir.path().to_path_buf(),
                 git_client: Arc::new(git::RealGitClient),
                 id: session_id.to_string(),
-                is_initial_plan_prompt: false,
                 output: Arc::new(Mutex::new(String::new())),
                 permission_mode: PermissionMode::AutoEdit,
                 prompt: "hello".to_string(),
@@ -617,7 +613,6 @@ mod tests {
                 folder: dir.path().to_path_buf(),
                 git_client: Arc::new(git::RealGitClient),
                 id: session_id.to_string(),
-                is_initial_plan_prompt: false,
                 output: Arc::new(Mutex::new(String::new())),
                 permission_mode: PermissionMode::AutoEdit,
                 prompt: "hello".to_string(),

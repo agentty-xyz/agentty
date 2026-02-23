@@ -344,7 +344,6 @@ impl SessionManager {
 
         // Start commands keep `Status::InProgress` set by the caller, while
         // reply commands re-enter `InProgress` here.
-        let is_initial_plan_prompt = !update_in_progress_status;
         TaskService::run_codex_app_server_task(
             context.codex_app_server_client.clone(),
             crate::app::task::RunCodexAppServerTaskInput {
@@ -354,7 +353,6 @@ impl SessionManager {
                 folder: context.folder.clone(),
                 git_client: Arc::clone(&context.git_client),
                 id: context.session_id.clone(),
-                is_initial_plan_prompt,
                 output: Arc::clone(&context.output),
                 permission_mode,
                 prompt,

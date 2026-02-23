@@ -20,7 +20,6 @@ pub trait AgentBackend: Send + Sync {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
     ) -> Command;
 
     /// Builds a command for a resumed task or reply.
@@ -34,7 +33,6 @@ pub trait AgentBackend: Send + Sync {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
         session_output: Option<String>,
     ) -> Command;
 }

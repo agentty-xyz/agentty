@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::domain::permission::PlanFollowup;
 use crate::domain::project::Project;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
@@ -131,7 +130,6 @@ pub(crate) fn render_help(
     help_context: &HelpContext,
     scroll_offset: u16,
     list_background: ListBackgroundRenderContext<'_>,
-    plan_followups: &HashMap<String, PlanFollowup>,
     session_progress_messages: &HashMap<String, String>,
 ) {
     render_help_background(
@@ -139,7 +137,6 @@ pub(crate) fn render_help(
         area,
         help_context,
         list_background,
-        plan_followups,
         session_progress_messages,
     );
 
@@ -152,7 +149,6 @@ fn render_help_background(
     area: Rect,
     help_context: &HelpContext,
     list_background: ListBackgroundRenderContext<'_>,
-    plan_followups: &HashMap<String, PlanFollowup>,
     session_progress_messages: &HashMap<String, String>,
 ) {
     let sessions = list_background.sessions;
@@ -176,7 +172,6 @@ fn render_help_background(
                     session_id: session_id.clone(),
                     scroll_offset: *view_scroll,
                 };
-                let plan_followup = plan_followups.get(session_id);
                 let active_progress = session_progress_messages
                     .get(session_id)
                     .map(std::string::String::as_str);
@@ -185,7 +180,6 @@ fn render_help_background(
                     session_index,
                     *view_scroll,
                     &bg_mode,
-                    plan_followup,
                     active_progress,
                 )
                 .render(f, area);

@@ -13,8 +13,7 @@ use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
 use crate::domain::agent::{AgentKind, AgentModel};
-use crate::domain::permission::{PermissionMode, PlanFollowup};
-use crate::domain::plan::extract_plan_questions;
+use crate::domain::permission::PermissionMode;
 use crate::domain::session::{CodexUsageLimits, Session, Status};
 use crate::infra::db::Database;
 use crate::infra::git::{GitClient, RealGitClient};
@@ -77,11 +76,6 @@ pub(crate) enum AppEvent {
         session_id: String,
         session_model: AgentModel,
     },
-    /// Indicates a session permission mode selection has been persisted.
-    SessionPermissionModeUpdated {
-        permission_mode: PermissionMode,
-        session_id: String,
-    },
     /// Requests a full session list refresh.
     RefreshSessions,
     /// Indicates compact live progress text for an in-progress session.
@@ -108,7 +102,6 @@ struct AppEventBatch {
     session_model_updates: HashMap<String, AgentModel>,
     session_progress_updates: HashMap<String, Option<String>>,
     session_ids: HashSet<String>,
-    session_permission_mode_updates: HashSet<(String, PermissionMode)>,
     should_force_reload: bool,
     sync_main_result: Option<Result<(), SyncSessionStartError>>,
 }
@@ -142,7 +135,6 @@ pub struct App {
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
     latest_available_version: Option<String>,
     merge_queue: MergeQueue,
-    plan_followups: HashMap<String, PlanFollowup>,
     session_progress_messages: HashMap<String, String>,
 }
 
@@ -250,7 +242,6 @@ impl App {
             event_rx,
             latest_available_version: None,
             merge_queue: MergeQueue::default(),
-            plan_followups: HashMap::new(),
             session_progress_messages: HashMap::new(),
         }
     }
@@ -294,7 +285,6 @@ impl App {
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
         let active_project_id = self.projects.active_project_id();
-        let plan_followups = self.plan_followups.clone();
         let session_progress_messages = self.session_progress_messages.clone();
         let show_onboarding = self.sessions.sessions.is_empty();
         let mode = &self.mode;
@@ -321,7 +311,6 @@ impl App {
                 latest_available_version: latest_available_version.as_deref(),
                 longest_session_duration_seconds,
                 mode,
-                plan_followups: &plan_followups,
                 projects,
                 session_progress_messages: &session_progress_messages,
                 settings,
@@ -408,36 +397,6 @@ impl App {
         Ok(())
     }
 
-    /// Toggles and persists a session permission mode.
-    ///
-    /// # Errors
-    /// Returns an error if persistence fails.
-    pub async fn toggle_session_permission_mode(&mut self, session_id: &str) -> Result<(), String> {
-        self.sessions
-            .toggle_session_permission_mode(&self.services, session_id)
-            .await?;
-        self.process_pending_app_events().await;
-
-        Ok(())
-    }
-
-    /// Sets and persists a session permission mode.
-    ///
-    /// # Errors
-    /// Returns an error if persistence fails.
-    pub async fn set_session_permission_mode(
-        &mut self,
-        session_id: &str,
-        permission_mode: PermissionMode,
-    ) -> Result<(), String> {
-        self.sessions
-            .set_session_permission_mode(&self.services, session_id, permission_mode)
-            .await?;
-        self.process_pending_app_events().await;
-
-        Ok(())
-    }
-
     /// Clears persisted and in-memory history for a session.
     ///
     /// # Errors
@@ -466,16 +425,6 @@ impl App {
         self.sessions.session_index_for_id(session_id)
     }
 
-    /// Returns post-plan follow-up state for a session.
-    pub fn plan_followup(&self, session_id: &str) -> Option<&PlanFollowup> {
-        self.plan_followups.get(session_id)
-    }
-
-    /// Returns a snapshot of pending post-plan follow-ups by session id.
-    pub fn plan_followup_snapshot(&self) -> HashMap<String, PlanFollowup> {
-        self.plan_followups.clone()
-    }
-
     /// Returns compact live progress text for a session, if available.
     pub fn session_progress_message(&self, session_id: &str) -> Option<&str> {
         self.session_progress_messages
@@ -486,35 +435,6 @@ impl App {
     /// Returns a snapshot of compact live progress text by session id.
     pub fn session_progress_snapshot(&self) -> HashMap<String, String> {
         self.session_progress_messages.clone()
-    }
-
-    /// Returns whether a session has pending post-plan actions.
-    pub fn has_plan_followup_action(&self, session_id: &str) -> bool {
-        self.plan_followups.contains_key(session_id)
-    }
-
-    /// Selects the previous post-plan action for a session.
-    pub fn select_previous_plan_followup_action(&mut self, session_id: &str) {
-        if let Some(followup) = self.plan_followups.get_mut(session_id) {
-            followup.select_previous();
-        }
-    }
-
-    /// Selects the next post-plan action for a session.
-    pub fn select_next_plan_followup_action(&mut self, session_id: &str) {
-        if let Some(followup) = self.plan_followups.get_mut(session_id) {
-            followup.select_next();
-        }
-    }
-
-    /// Removes and returns the full plan followup state for a session.
-    pub fn take_plan_followup(&mut self, session_id: &str) -> Option<PlanFollowup> {
-        self.plan_followups.remove(session_id)
-    }
-
-    /// Re-inserts an updated plan followup state for a session.
-    pub fn put_plan_followup(&mut self, session_id: &str, followup: PlanFollowup) {
-        self.plan_followups.insert(session_id.to_string(), followup);
     }
 
     /// Deletes the selected session and schedules list refresh.
@@ -748,11 +668,6 @@ impl App {
                 .apply_session_model_updated(&session_id, session_model);
         }
 
-        for (session_id, permission_mode) in event_batch.session_permission_mode_updates {
-            self.sessions
-                .apply_session_permission_mode_updated(&session_id, permission_mode);
-        }
-
         for (session_id, progress_message) in event_batch.session_progress_updates {
             if let Some(progress_message) = progress_message {
                 self.session_progress_messages
@@ -774,8 +689,6 @@ impl App {
 
         self.handle_merge_queue_progress(&event_batch.session_ids, &previous_session_states)
             .await;
-        self.mark_plan_followup_actions(&event_batch.session_ids, &previous_session_states);
-        self.retain_valid_plan_followup_actions();
         self.retain_valid_session_progress_messages();
     }
 
@@ -912,72 +825,6 @@ impl App {
         if progress == MergeQueueProgress::StartNext {
             let _ = self.start_next_merge_from_queue(false).await;
         }
-    }
-
-    fn mark_plan_followup_actions(
-        &mut self,
-        session_ids: &HashSet<String>,
-        previous_session_states: &HashMap<String, (PermissionMode, Status)>,
-    ) {
-        for session_id in session_ids {
-            let Some(session) = self
-                .sessions
-                .sessions
-                .iter()
-                .find(|session| session.id == *session_id)
-            else {
-                self.plan_followups.remove(session_id);
-
-                continue;
-            };
-
-            if session.status != Status::Review {
-                self.plan_followups.remove(session_id);
-
-                continue;
-            }
-
-            let Some((_, previous_status)) = previous_session_states.get(session_id) else {
-                continue;
-            };
-
-            let has_existing_followup = self.plan_followups.contains_key(session_id);
-            if Self::should_refresh_plan_followup(*previous_status, has_existing_followup) {
-                let questions = extract_plan_questions(&session.output);
-                if questions.is_empty() {
-                    self.plan_followups.remove(session_id);
-
-                    continue;
-                }
-
-                self.plan_followups
-                    .insert(session_id.clone(), PlanFollowup::new(questions));
-            }
-        }
-    }
-
-    /// Returns whether plan follow-up actions should be rebuilt for one
-    /// refreshed session snapshot.
-    ///
-    /// Follow-up actions are refreshed after the usual `InProgress -> Review`
-    /// transition and also when a follow-up is unexpectedly missing (for
-    /// example due to batched fast replies where only final `Review` is
-    /// observed by the reducer).
-    fn should_refresh_plan_followup(previous_status: Status, has_existing_followup: bool) -> bool {
-        previous_status == Status::InProgress || !has_existing_followup
-    }
-
-    fn retain_valid_plan_followup_actions(&mut self) {
-        self.plan_followups.retain(|session_id, _| {
-            self.sessions
-                .sessions
-                .iter()
-                .find(|session| session.id == *session_id)
-                .is_some_and(|session| {
-                    session.status == Status::Review
-                        && !extract_plan_questions(&session.output).is_empty()
-                })
-        });
     }
 
     fn retain_valid_session_progress_messages(&mut self) {
@@ -1156,13 +1003,6 @@ impl AppEventBatch {
             } => {
                 self.session_model_updates.insert(session_id, session_model);
             }
-            AppEvent::SessionPermissionModeUpdated {
-                permission_mode,
-                session_id,
-            } => {
-                self.session_permission_mode_updates
-                    .insert((session_id, permission_mode));
-            }
             AppEvent::RefreshSessions => {
                 self.should_force_reload = true;
             }
@@ -1314,45 +1154,6 @@ mod tests {
             event_batch.codex_usage_limits_update,
             CodexUsageLimitsBatchUpdate::Replace(initial_limits)
         );
-    }
-
-    #[test]
-    fn should_refresh_plan_followup_returns_true_for_in_progress_transition() {
-        // Arrange
-        let previous_status = Status::InProgress;
-
-        // Act
-        let should_refresh_without_existing =
-            App::should_refresh_plan_followup(previous_status, false);
-        let should_refresh_with_existing = App::should_refresh_plan_followup(previous_status, true);
-
-        // Assert
-        assert!(should_refresh_without_existing);
-        assert!(should_refresh_with_existing);
-    }
-
-    #[test]
-    fn should_refresh_plan_followup_returns_true_when_followup_is_missing() {
-        // Arrange
-        let previous_status = Status::Review;
-
-        // Act
-        let should_refresh = App::should_refresh_plan_followup(previous_status, false);
-
-        // Assert
-        assert!(should_refresh);
-    }
-
-    #[test]
-    fn should_refresh_plan_followup_returns_false_when_existing_followup_is_still_valid() {
-        // Arrange
-        let previous_status = Status::Review;
-
-        // Act
-        let should_refresh = App::should_refresh_plan_followup(previous_status, true);
-
-        // Assert
-        assert!(!should_refresh);
     }
 
     /// Builds deterministic Codex usage-limit snapshots for tests.

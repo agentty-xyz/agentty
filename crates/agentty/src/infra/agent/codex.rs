@@ -22,9 +22,7 @@ impl AgentBackend for CodexBackend {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
     ) -> Command {
-        let prompt = permission_mode.apply_to_prompt(prompt, is_initial_plan_prompt);
         let approval_flag = Self::approval_flag(permission_mode);
         let mut command = Command::new("codex");
         command
@@ -33,7 +31,7 @@ impl AgentBackend for CodexBackend {
             .arg(model)
             .arg(approval_flag)
             .arg("--json")
-            .arg(prompt.as_ref())
+            .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -47,11 +45,9 @@ impl AgentBackend for CodexBackend {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
         session_output: Option<String>,
     ) -> Command {
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
-        let prompt = permission_mode.apply_to_prompt(&prompt, is_initial_plan_prompt);
         let approval_flag = Self::approval_flag(permission_mode);
         let mut command = Command::new("codex");
         command
@@ -62,7 +58,7 @@ impl AgentBackend for CodexBackend {
             .arg(model)
             .arg(approval_flag)
             .arg("--json")
-            .arg(prompt.as_ref())
+            .arg(prompt)
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

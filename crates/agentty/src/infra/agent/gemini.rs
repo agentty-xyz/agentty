@@ -18,16 +18,14 @@ impl AgentBackend for GeminiBackend {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
     ) -> Command {
-        let prompt = permission_mode.apply_to_prompt(prompt, is_initial_plan_prompt);
         let approval_mode = match permission_mode {
             PermissionMode::AutoEdit => "auto_edit",
         };
         let mut command = Command::new("gemini");
         command
             .arg("--prompt")
-            .arg(prompt.as_ref())
+            .arg(prompt)
             .arg("--model")
             .arg(model)
             .arg("--approval-mode")
@@ -47,20 +45,13 @@ impl AgentBackend for GeminiBackend {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
         session_output: Option<String>,
     ) -> Command {
         let has_history_replay = session_output
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
-        let mut command = self.build_start_command(
-            folder,
-            &prompt,
-            model,
-            permission_mode,
-            is_initial_plan_prompt,
-        );
+        let mut command = self.build_start_command(folder, &prompt, model, permission_mode);
 
         if !has_history_replay {
             command.arg("--resume").arg("latest");

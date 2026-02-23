@@ -20,7 +20,6 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::{SettingsManager, Tab};
-use crate::domain::permission::PlanFollowup;
 use crate::domain::project::Project;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
@@ -46,7 +45,6 @@ pub struct RenderContext<'a> {
     pub latest_available_version: Option<&'a str>,
     pub longest_session_duration_seconds: u64,
     pub mode: &'a AppMode,
-    pub plan_followups: &'a HashMap<String, PlanFollowup>,
     pub projects: &'a [Project],
     pub session_progress_messages: &'a HashMap<String, String>,
     pub settings: &'a mut SettingsManager,

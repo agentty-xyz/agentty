@@ -18,11 +18,9 @@ impl AgentBackend for ClaudeBackend {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
     ) -> Command {
-        let prompt = permission_mode.apply_to_prompt(prompt, is_initial_plan_prompt);
         let mut command = Command::new("claude");
-        command.arg("-p").arg(prompt.as_ref());
+        command.arg("-p").arg(prompt);
         Self::apply_permission_args(&mut command, permission_mode);
         command
             .arg("--verbose")
@@ -42,13 +40,11 @@ impl AgentBackend for ClaudeBackend {
         prompt: &str,
         model: &str,
         permission_mode: PermissionMode,
-        is_initial_plan_prompt: bool,
         session_output: Option<String>,
     ) -> Command {
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
-        let prompt = permission_mode.apply_to_prompt(&prompt, is_initial_plan_prompt);
         let mut command = Command::new("claude");
-        command.arg("-c").arg("-p").arg(prompt.as_ref());
+        command.arg("-c").arg("-p").arg(prompt);
         Self::apply_permission_args(&mut command, permission_mode);
         command
             .arg("--verbose")
@@ -92,7 +88,6 @@ mod tests {
             "Plan prompt",
             "claude-sonnet-4-6",
             PermissionMode::AutoEdit,
-            true,
         );
         let debug_command = format!("{command:?}");
 

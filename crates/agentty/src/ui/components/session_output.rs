@@ -2,11 +2,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::domain::permission::PlanFollowup;
 use crate::domain::session::{Session, Status};
 use crate::icon::Icon;
 use crate::ui::Component;
@@ -19,7 +18,6 @@ pub struct SessionOutput<'a> {
     active_progress: Option<&'a str>,
     /// Selected panel content for completed sessions.
     done_session_output_mode: DoneSessionOutputMode,
-    plan_followup: Option<&'a PlanFollowup>,
     scroll_offset: Option<u16>,
     session: &'a Session,
 }
@@ -30,13 +28,11 @@ impl<'a> SessionOutput<'a> {
         session: &'a Session,
         scroll_offset: Option<u16>,
         done_session_output_mode: DoneSessionOutputMode,
-        plan_followup: Option<&'a PlanFollowup>,
         active_progress: Option<&'a str>,
     ) -> Self {
         Self {
             active_progress,
             done_session_output_mode,
-            plan_followup,
             scroll_offset,
             session,
         }
@@ -51,7 +47,6 @@ impl<'a> SessionOutput<'a> {
         session: &Session,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
-        plan_followup: Option<&PlanFollowup>,
         active_progress: Option<&str>,
     ) -> u16 {
         let output_area = Rect::new(0, 0, output_width, 0);
@@ -60,7 +55,6 @@ impl<'a> SessionOutput<'a> {
             output_area,
             session.status,
             done_session_output_mode,
-            plan_followup,
             active_progress,
         );
 
@@ -77,7 +71,6 @@ impl<'a> SessionOutput<'a> {
         output_area: Rect,
         status: Status,
         done_session_output_mode: DoneSessionOutputMode,
-        plan_followup: Option<&PlanFollowup>,
         active_progress: Option<&str>,
     ) -> Vec<Line<'static>> {
         let output_text = Self::output_text(session, status, done_session_output_mode);
@@ -107,11 +100,6 @@ impl<'a> SessionOutput<'a> {
             lines.push(Line::from(""));
         } else {
             lines.push(Line::from(""));
-        }
-
-        if let Some(plan_followup) = plan_followup {
-            lines.push(Line::from(""));
-            lines.extend(Self::plan_followup_lines(plan_followup));
         }
 
         lines
@@ -278,46 +266,6 @@ impl<'a> SessionOutput<'a> {
         }
     }
 
-    /// Renders plan followup options as a vertical list with optional
-    /// question text header.
-    fn plan_followup_lines(plan_followup: &PlanFollowup) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-
-        if let Some(question_text) = plan_followup.current_question_text() {
-            lines.push(Line::from(vec![Span::styled(
-                question_text.to_string(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )]));
-            lines.push(Line::from(""));
-        }
-
-        for (option_index, option) in plan_followup.options.iter().enumerate() {
-            let is_selected = plan_followup.selected_index() == option_index;
-            let option_style = if is_selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            let option_label = option.label();
-
-            lines.push(Line::from(vec![Span::styled(
-                format!("[ {option_label} ]"),
-                option_style,
-            )]));
-        }
-
-        lines.push(Line::from(vec![Span::styled(
-            "Use \u{2191}/\u{2193} to select and Enter to confirm.",
-            Style::default().fg(Color::DarkGray),
-        )]));
-
-        lines
-    }
-
     fn final_scroll_offset(&self, output_area: Rect, line_count: usize) -> u16 {
         if let Some(scroll_offset) = self.scroll_offset {
             return scroll_offset;
@@ -345,7 +293,6 @@ impl Component for SessionOutput<'_> {
             output_area,
             status,
             self.done_session_output_mode,
-            self.plan_followup,
             self.active_progress,
         );
         let final_scroll = self.final_scroll_offset(output_area, lines.len());
@@ -365,12 +312,13 @@ impl Component for SessionOutput<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::path::PathBuf;
+
+    use ratatui::style::Modifier;
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::permission::{PermissionMode, PlanFollowup};
+    use crate::domain::permission::PermissionMode;
     use crate::domain::session::{SessionSize, SessionStats};
 
     fn session_fixture() -> Session {
@@ -401,13 +349,8 @@ mod tests {
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let rendered_line_count = SessionOutput::rendered_line_count(
-            &session,
-            20,
-            DoneSessionOutputMode::Summary,
-            None,
-            None,
-        );
+        let rendered_line_count =
+            SessionOutput::rendered_line_count(&session, 20, DoneSessionOutputMode::Summary, None);
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
@@ -427,7 +370,6 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Summary,
-            None,
             None,
         );
         let text = lines
@@ -456,7 +398,6 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Output,
             None,
-            None,
         );
         let text = lines
             .iter()
@@ -484,7 +425,6 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
-            None,
         );
         let text = lines
             .iter()
@@ -510,7 +450,6 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Output,
-            None,
             None,
         );
         let text = lines
@@ -538,7 +477,6 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
-            None,
         );
         let text = lines
             .iter()
@@ -563,7 +501,6 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Summary,
-            None,
             None,
         );
 
@@ -593,7 +530,6 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
-            None,
         );
 
         // Assert
@@ -615,7 +551,6 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
-            None,
         );
 
         // Assert
@@ -623,39 +558,6 @@ mod tests {
         let len = lines.len();
         assert!(lines[len - 2].to_string().is_empty());
         assert!(lines[len - 1].to_string().contains("Thinking..."));
-    }
-
-    #[test]
-    fn test_output_lines_include_plan_followup_actions_when_present() {
-        // Arrange
-        let session = session_fixture();
-        let followup = PlanFollowup::new(VecDeque::new());
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 20,
-        };
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            area,
-            Status::Review,
-            DoneSessionOutputMode::Summary,
-            Some(&followup),
-            None,
-        );
-        let rendered = lines
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(rendered.contains("Implement the plan"));
-        assert!(rendered.contains("Type feedback"));
-        assert!(rendered.contains("Use"));
     }
 
     #[test]
@@ -698,49 +600,6 @@ mod tests {
             spaced,
             "assistant output\n\n › first line\nsecond line\n\nagent response"
         );
-    }
-
-    #[test]
-    fn test_plan_followup_lines_always_uses_vertical_layout() {
-        // Arrange
-        let followup = PlanFollowup::new(VecDeque::new());
-
-        // Act
-        let lines = SessionOutput::plan_followup_lines(&followup);
-        let rendered = lines
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(rendered.contains("Implement the plan"));
-        assert!(rendered.contains("Type feedback"));
-        assert!(rendered.contains("\u{2191}/\u{2193}"));
-    }
-
-    #[test]
-    fn test_plan_followup_lines_shows_question_text_above_answers() {
-        // Arrange
-        use crate::domain::plan::PlanQuestion;
-        let followup = PlanFollowup::new(VecDeque::from(vec![PlanQuestion {
-            answers: vec!["30 seconds".to_string(), "60 seconds".to_string()],
-            text: "What interval?".to_string(),
-        }]));
-
-        // Act
-        let lines = SessionOutput::plan_followup_lines(&followup);
-        let rendered = lines
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(rendered.contains("What interval?"));
-        assert!(rendered.contains("30 seconds"));
-        assert!(rendered.contains("60 seconds"));
-        assert!(rendered.contains("Type feedback"));
     }
 
     #[test]

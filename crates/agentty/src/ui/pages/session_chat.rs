@@ -5,15 +5,12 @@ use ratatui::widgets::Paragraph;
 
 use crate::domain::agent::{AgentKind, AgentSelectionMetadata};
 use crate::domain::input::extract_at_mention_query;
-use crate::domain::permission::PlanFollowup;
 use crate::domain::session::{Session, Status};
 use crate::infra::file_index;
 use crate::ui::components::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::components::session_output::SessionOutput;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
-use crate::ui::state::help_action::{
-    self, PlanFollowupNavigation, ViewHelpState, ViewSessionState,
-};
+use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::calculate_input_height;
 use crate::ui::{Component, Page};
@@ -22,7 +19,6 @@ use crate::ui::{Component, Page};
 pub struct SessionChatPage<'a> {
     pub active_progress: Option<&'a str>,
     pub mode: &'a AppMode,
-    pub plan_followup: Option<&'a PlanFollowup>,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
     pub sessions: &'a [Session],
@@ -35,13 +31,11 @@ impl<'a> SessionChatPage<'a> {
         session_index: usize,
         scroll_offset: Option<u16>,
         mode: &'a AppMode,
-        plan_followup: Option<&'a PlanFollowup>,
         active_progress: Option<&'a str>,
     ) -> Self {
         Self {
             active_progress,
             mode,
-            plan_followup,
             scroll_offset,
             session_index,
             sessions,
@@ -57,14 +51,12 @@ impl<'a> SessionChatPage<'a> {
         session: &Session,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
-        plan_followup: Option<&PlanFollowup>,
         active_progress: Option<&str>,
     ) -> u16 {
         SessionOutput::rendered_line_count(
             session,
             output_width,
             done_session_output_mode,
-            plan_followup,
             active_progress,
         )
     }
@@ -219,7 +211,6 @@ impl<'a> SessionChatPage<'a> {
             session,
             self.scroll_offset,
             self.done_session_output_mode(),
-            self.plan_followup,
             self.active_progress,
         )
         .render(f, chunks[0]);
@@ -300,8 +291,7 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_text =
-            Self::view_help_text(session, self.plan_followup, self.done_session_output_mode());
+        let help_text = Self::view_help_text(session, self.done_session_output_mode());
         let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
         f.render_widget(help_message, bottom_area);
     }
@@ -313,11 +303,9 @@ impl<'a> SessionChatPage<'a> {
     /// shortcut set, including hiding the open-worktree shortcut.
     fn view_help_text(
         session: &Session,
-        plan_followup: Option<&PlanFollowup>,
         done_session_output_mode: DoneSessionOutputMode,
     ) -> String {
         let mut actions = help_action::view_actions(ViewHelpState {
-            plan_followup_navigation: plan_followup.map(|_| PlanFollowupNavigation::Vertical),
             session_state: match session.status {
                 Status::Done => ViewSessionState::Done,
                 Status::InProgress => ViewSessionState::InProgress,
@@ -355,7 +343,6 @@ impl Page for SessionChatPage<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::path::PathBuf;
 
     use super::*;
@@ -660,7 +647,6 @@ mod tests {
             20,
             DoneSessionOutputMode::Summary,
             None,
-            None,
         );
 
         // Assert
@@ -674,8 +660,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let help_text =
-            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Summary);
+        let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("q: back"));
@@ -691,47 +676,11 @@ mod tests {
         let session = session_fixture();
 
         // Act
-        let help_text =
-            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Summary);
+        let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("m: queue merge"));
         assert!(help_text.contains("r: rebase"));
-    }
-
-    #[test]
-    fn test_view_help_text_plan_followup_includes_git_actions() {
-        // Arrange
-        let session = session_fixture();
-        let followup = PlanFollowup::new(VecDeque::new());
-
-        // Act
-        let help_text = SessionChatPage::view_help_text(
-            &session,
-            Some(&followup),
-            DoneSessionOutputMode::Summary,
-        );
-
-        // Assert
-        assert!(help_text.contains("m: queue merge"));
-        assert!(help_text.contains("r: rebase"));
-    }
-
-    #[test]
-    fn test_view_help_text_plan_followup_always_uses_up_down_hints() {
-        // Arrange
-        let session = session_fixture();
-        let followup = PlanFollowup::new(VecDeque::new());
-
-        // Act
-        let help_text = SessionChatPage::view_help_text(
-            &session,
-            Some(&followup),
-            DoneSessionOutputMode::Summary,
-        );
-
-        // Assert
-        assert!(help_text.contains("Up/Down: choose action"));
     }
 
     #[test]
@@ -741,8 +690,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let help_text =
-            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Summary);
+        let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(!help_text.contains("o: open"));
@@ -757,8 +705,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let help_text =
-            SessionChatPage::view_help_text(&session, None, DoneSessionOutputMode::Output);
+        let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Output);
 
         // Assert
         assert!(help_text.contains("t: summary"));

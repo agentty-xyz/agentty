@@ -124,7 +124,6 @@ pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> R
         prompt,
         context.session_model.as_str(),
         effective_permission_mode,
-        false,
         None,
     );
 

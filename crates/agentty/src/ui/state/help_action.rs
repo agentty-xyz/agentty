@@ -22,13 +22,6 @@ impl HelpAction {
     }
 }
 
-/// Encodes which navigation keys can select a plan follow-up action.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PlanFollowupNavigation {
-    Horizontal,
-    Vertical,
-}
-
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
@@ -40,7 +33,6 @@ pub enum ViewSessionState {
 /// Action availability snapshot for view-mode help projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ViewHelpState {
-    pub(crate) plan_followup_navigation: Option<PlanFollowupNavigation>,
     pub(crate) session_state: ViewSessionState,
 }
 
@@ -109,22 +101,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
-    if let Some(plan_followup_navigation) = state.plan_followup_navigation {
-        match plan_followup_navigation {
-            PlanFollowupNavigation::Horizontal => {
-                actions.push(HelpAction::new(
-                    "choose action",
-                    "Left/Right",
-                    "Choose action",
-                ));
-            }
-            PlanFollowupNavigation::Vertical => {
-                actions.push(HelpAction::new("choose action", "Up/Down", "Choose action"));
-            }
-        }
-
-        actions.push(HelpAction::new("confirm", "Enter", "Confirm action"));
-    } else if can_edit_session {
+    if can_edit_session {
         actions.push(HelpAction::new("reply", "Enter", "Reply"));
     }
 
@@ -227,7 +204,6 @@ mod tests {
     fn test_view_actions_in_progress_shows_stop_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
-            plan_followup_navigation: None,
             session_state: ViewSessionState::InProgress,
         };
 
@@ -245,7 +221,6 @@ mod tests {
     fn test_view_actions_done_shows_toggle_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
-            plan_followup_navigation: None,
             session_state: ViewSessionState::Done,
         };
 

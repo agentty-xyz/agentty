@@ -101,11 +101,6 @@ pub(crate) async fn handle(
         KeyCode::Delete => {
             handle_prompt_delete(app);
         }
-        KeyCode::BackTab => {
-            let _ = app
-                .toggle_session_permission_mode(&prompt_context.session_id)
-                .await;
-        }
         KeyCode::Char(character) if is_control_newline_key(key, character) => {
             reset_prompt_history_navigation(app);
 
