@@ -332,6 +332,7 @@ impl RealCodexAppServerClient {
         Self::write_json_line(&mut session.stdin, &turn_start_payload).await?;
 
         let mut assistant_messages = Vec::new();
+        let mut active_turn_id: Option<String> = None;
         let mut input_tokens: u64 = 0;
         let mut output_tokens: u64 = 0;
 
@@ -352,12 +353,20 @@ impl RealCodexAppServerClient {
                 }
 
                 if let Ok(response_value) = serde_json::from_str::<Value>(&stdout_line) {
-                    if response_id_matches(&response_value, &turn_start_id)
-                        && response_value.get("error").is_some()
-                    {
-                        return Err(extract_json_error_message(&response_value).unwrap_or_else(
-                            || "Codex app-server returned an error for `turn/start`".to_string(),
-                        ));
+                    if response_id_matches(&response_value, &turn_start_id) {
+                        if response_value.get("error").is_some() {
+                            return Err(extract_json_error_message(&response_value)
+                                .unwrap_or_else(|| {
+                                    "Codex app-server returned an error for `turn/start`"
+                                        .to_string()
+                                }));
+                        }
+                        if active_turn_id.is_none() {
+                            active_turn_id =
+                                extract_turn_id_from_turn_start_response(&response_value);
+                        }
+
+                        continue;
                     }
 
                     if let Some(approval_response) =
@@ -366,6 +375,11 @@ impl RealCodexAppServerClient {
                         Self::write_json_line(&mut session.stdin, &approval_response).await?;
 
                         continue;
+                    }
+
+                    if active_turn_id.is_none() {
+                        active_turn_id =
+                            extract_turn_id_from_turn_started_notification(&response_value);
                     }
 
                     if let Some(message) = extract_agent_message(&response_value) {
@@ -377,7 +391,9 @@ impl RealCodexAppServerClient {
                     input_tokens = input_tokens.saturating_add(turn_input_tokens);
                     output_tokens = output_tokens.saturating_add(turn_output_tokens);
 
-                    if let Some(turn_result) = parse_turn_completed(&response_value) {
+                    if let Some(turn_result) =
+                        parse_turn_completed(&response_value, active_turn_id.as_deref())
+                    {
                         return turn_result.map(|()| {
                             let assistant_message = assistant_messages.join("\n\n");
                             (assistant_message, input_tokens, output_tokens)
@@ -608,6 +624,43 @@ fn extract_json_error_message(response_value: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Extracts the turn id from a successful `turn/start` response payload.
+fn extract_turn_id_from_turn_start_response(response_value: &Value) -> Option<String> {
+    let result = response_value.get("result")?;
+
+    result
+        .get("turn")
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| {
+            result
+                .get("turnId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            result
+                .get("turn_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+}
+
+/// Extracts the active turn id from one `turn/started` notification payload.
+fn extract_turn_id_from_turn_started_notification(response_value: &Value) -> Option<String> {
+    if response_value.get("method").and_then(Value::as_str) != Some("turn/started") {
+        return None;
+    }
+
+    response_value
+        .get("params")
+        .and_then(|params| params.get("turn"))
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
 /// Extracts completed assistant message text from an `item/completed` line.
 fn extract_agent_message(response_value: &Value) -> Option<String> {
     if response_value.get("method").and_then(Value::as_str) != Some("item/completed") {
@@ -641,9 +694,26 @@ fn extract_agent_message(response_value: &Value) -> Option<String> {
 }
 
 /// Parses `turn/completed` notifications and maps failures to user errors.
-fn parse_turn_completed(response_value: &Value) -> Option<Result<(), String>> {
+///
+/// When `expected_turn_id` is present, completion notifications for other
+/// turns are ignored so delegated sub-turns do not end the active user turn
+/// prematurely.
+fn parse_turn_completed(
+    response_value: &Value,
+    expected_turn_id: Option<&str>,
+) -> Option<Result<(), String>> {
     if response_value.get("method").and_then(Value::as_str) != Some("turn/completed") {
         return None;
+    }
+    if let Some(expected_turn_id) = expected_turn_id {
+        let turn_id = response_value
+            .get("params")
+            .and_then(|params| params.get("turn"))
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str);
+        if turn_id.is_some_and(|completed_turn_id| completed_turn_id != expected_turn_id) {
+            return None;
+        }
     }
 
     let status = response_value
@@ -736,7 +806,7 @@ mod tests {
         });
 
         // Act
-        let turn_result = parse_turn_completed(&response_value);
+        let turn_result = parse_turn_completed(&response_value, None);
 
         // Assert
         assert_eq!(turn_result, Some(Err("boom".to_string())));
@@ -755,10 +825,132 @@ mod tests {
         });
 
         // Act
-        let turn_result = parse_turn_completed(&response_value);
+        let turn_result = parse_turn_completed(&response_value, None);
 
         // Assert
         assert_eq!(turn_result, Some(Ok(())));
+    }
+
+    #[test]
+    fn parse_turn_completed_ignores_other_turn_ids() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "id": "delegate-turn",
+                    "status": "completed"
+                }
+            }
+        });
+
+        // Act
+        let turn_result = parse_turn_completed(&response_value, Some("active-turn"));
+
+        // Assert
+        assert_eq!(turn_result, None);
+    }
+
+    #[test]
+    fn parse_turn_completed_accepts_matching_turn_id() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "id": "active-turn",
+                    "status": "completed"
+                }
+            }
+        });
+
+        // Act
+        let turn_result = parse_turn_completed(&response_value, Some("active-turn"));
+
+        // Assert
+        assert_eq!(turn_result, Some(Ok(())));
+    }
+
+    #[test]
+    fn parse_turn_completed_accepts_missing_turn_id_for_expected_turn_id() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "status": "completed"
+                }
+            }
+        });
+
+        // Act
+        let turn_result = parse_turn_completed(&response_value, Some("active-turn"));
+
+        // Assert
+        assert_eq!(turn_result, Some(Ok(())));
+    }
+
+    #[test]
+    fn extract_turn_id_from_turn_start_response_returns_turn_id() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "turn-start-123",
+            "result": {
+                "turn": {
+                    "id": "turn-456"
+                }
+            }
+        });
+
+        // Act
+        let turn_id = extract_turn_id_from_turn_start_response(&response_value);
+
+        // Assert
+        assert_eq!(turn_id.as_deref(), Some("turn-456"));
+    }
+
+    #[test]
+    fn extract_turn_id_from_turn_start_response_supports_flat_fields() {
+        // Arrange
+        let camel_case_response = serde_json::json!({
+            "id": "turn-start-123",
+            "result": {
+                "turnId": "turn-camel"
+            }
+        });
+        let snake_case_response = serde_json::json!({
+            "id": "turn-start-123",
+            "result": {
+                "turn_id": "turn-snake"
+            }
+        });
+
+        // Act
+        let camel_case_turn_id = extract_turn_id_from_turn_start_response(&camel_case_response);
+        let snake_case_turn_id = extract_turn_id_from_turn_start_response(&snake_case_response);
+
+        // Assert
+        assert_eq!(camel_case_turn_id.as_deref(), Some("turn-camel"));
+        assert_eq!(snake_case_turn_id.as_deref(), Some("turn-snake"));
+    }
+
+    #[test]
+    fn extract_turn_id_from_turn_started_notification_returns_turn_id() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/started",
+            "params": {
+                "turn": {
+                    "id": "turn-789"
+                }
+            }
+        });
+
+        // Act
+        let turn_id = extract_turn_id_from_turn_started_notification(&response_value);
+
+        // Assert
+        assert_eq!(turn_id.as_deref(), Some("turn-789"));
     }
 
     #[test]
