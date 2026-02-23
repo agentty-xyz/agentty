@@ -158,7 +158,9 @@ impl Page for DiffPage<'_> {
         let parsed = parse_diff_lines(&self.diff);
         let tree_items = FileExplorer::file_tree_items(&parsed);
 
-        FileExplorer::new(&parsed, self.file_explorer_selected_index).render(f, file_list_area);
+        FileExplorer::new(&parsed)
+            .selected_index(self.file_explorer_selected_index)
+            .render(f, file_list_area);
 
         let filtered = tree_items
             .get(self.file_explorer_selected_index)

@@ -22,16 +22,18 @@ pub struct InfoOverlay<'a> {
 impl<'a> InfoOverlay<'a> {
     /// Creates an informational popup with title and body message.
     pub fn new(title: &'a str, message: &'a str) -> Self {
-        Self::with_loading_state(title, message, false)
-    }
-
-    /// Creates an informational popup with optional loading-state rendering.
-    pub fn with_loading_state(title: &'a str, message: &'a str, is_loading: bool) -> Self {
         Self {
-            is_loading,
+            is_loading: false,
             message,
             title,
         }
+    }
+
+    /// Sets whether the overlay should display a loading indicator.
+    #[must_use]
+    pub fn is_loading(mut self, loading: bool) -> Self {
+        self.is_loading = loading;
+        self
     }
 }
 
@@ -139,8 +141,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let overlay =
-            InfoOverlay::with_loading_state("Sync in progress", "Synchronizing branch", true);
+        let overlay = InfoOverlay::new("Sync in progress", "Synchronizing branch").is_loading(true);
 
         // Act
         terminal

@@ -95,13 +95,20 @@ impl FileTreeNode {
 
 impl FileExplorer {
     /// Creates a new file explorer component from parsed diff lines.
-    pub fn new(parsed_lines: &[DiffLine<'_>], selected_index: usize) -> Self {
+    pub fn new(parsed_lines: &[DiffLine<'_>]) -> Self {
         let (file_list_lines, _) = Self::build_tree(parsed_lines);
 
         Self {
             file_list_lines,
-            selected_index,
+            selected_index: 0,
         }
+    }
+
+    /// Sets the selected item index in the file tree.
+    #[must_use]
+    pub fn selected_index(mut self, index: usize) -> Self {
+        self.selected_index = index;
+        self
     }
 
     /// Returns the number of items (files and folders) in the explorer list.

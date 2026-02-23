@@ -24,18 +24,34 @@ pub struct SessionOutput<'a> {
 
 impl<'a> SessionOutput<'a> {
     /// Creates a new session output component.
-    pub fn new(
-        session: &'a Session,
-        scroll_offset: Option<u16>,
-        done_session_output_mode: DoneSessionOutputMode,
-        active_progress: Option<&'a str>,
-    ) -> Self {
+    pub fn new(session: &'a Session) -> Self {
         Self {
-            active_progress,
-            done_session_output_mode,
-            scroll_offset,
+            active_progress: None,
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            scroll_offset: None,
             session,
         }
+    }
+
+    /// Sets the active progress message.
+    #[must_use]
+    pub fn active_progress(mut self, active_progress: &'a str) -> Self {
+        self.active_progress = Some(active_progress);
+        self
+    }
+
+    /// Sets the output display mode for completed sessions.
+    #[must_use]
+    pub fn done_session_output_mode(mut self, mode: DoneSessionOutputMode) -> Self {
+        self.done_session_output_mode = mode;
+        self
+    }
+
+    /// Sets the vertical scroll offset.
+    #[must_use]
+    pub fn scroll_offset(mut self, offset: u16) -> Self {
+        self.scroll_offset = Some(offset);
+        self
     }
 
     /// Returns the rendered output line count for chat content at a given
@@ -627,5 +643,26 @@ mod tests {
         // Assert
         assert!(message.starts_with("Searching the web"));
         assert!(matches!(suffix, "" | "." | ".." | "..."));
+    }
+
+    #[test]
+    fn test_builder_methods() {
+        // Arrange
+        let session = session_fixture();
+        let progress = "Scanning...";
+
+        // Act
+        let output = SessionOutput::new(&session)
+            .active_progress(progress)
+            .done_session_output_mode(DoneSessionOutputMode::Output)
+            .scroll_offset(10);
+
+        // Assert
+        assert_eq!(output.active_progress, Some(progress));
+        assert_eq!(
+            output.done_session_output_mode,
+            DoneSessionOutputMode::Output
+        );
+        assert_eq!(output.scroll_offset, Some(10));
     }
 }

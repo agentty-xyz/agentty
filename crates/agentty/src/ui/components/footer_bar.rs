@@ -14,16 +14,26 @@ pub struct FooterBar {
 }
 
 impl FooterBar {
-    pub fn new(
-        working_dir: String,
-        git_branch: Option<String>,
-        git_status: Option<(u32, u32)>,
-    ) -> Self {
+    pub fn new(working_dir: String) -> Self {
         Self {
-            git_branch,
-            git_status,
+            git_branch: None,
+            git_status: None,
             working_dir,
         }
+    }
+
+    /// Sets the active git branch name.
+    #[must_use]
+    pub fn git_branch(mut self, branch: Option<String>) -> Self {
+        self.git_branch = branch;
+        self
+    }
+
+    /// Sets the git status (ahead, behind) counts.
+    #[must_use]
+    pub fn git_status(mut self, status: Option<(u32, u32)>) -> Self {
+        self.git_status = status;
+        self
     }
 }
 
@@ -92,7 +102,7 @@ mod tests {
         let branch = Some("main".to_string());
 
         // Act
-        let footer = FooterBar::new(path.clone(), branch.clone(), None);
+        let footer = FooterBar::new(path.clone()).git_branch(branch.clone());
 
         // Assert
         assert_eq!(footer.working_dir, path);
@@ -106,7 +116,7 @@ mod tests {
         let path = "/home/user/project".to_string();
 
         // Act
-        let footer = FooterBar::new(path.clone(), None, None);
+        let footer = FooterBar::new(path.clone());
 
         // Assert
         assert_eq!(footer.working_dir, path);
@@ -124,7 +134,7 @@ mod tests {
         } else {
             "/tmp/project".to_string()
         };
-        let footer = FooterBar::new(path, Some("main".to_string()), None);
+        let footer = FooterBar::new(path).git_branch(Some("main".to_string()));
 
         // Act
         terminal
@@ -153,7 +163,9 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let path = "/tmp/project".to_string();
         // 1 ahead, 2 behind
-        let footer = FooterBar::new(path, Some("main".to_string()), Some((1, 2)));
+        let footer = FooterBar::new(path)
+            .git_branch(Some("main".to_string()))
+            .git_status(Some((1, 2)));
 
         // Act
         terminal
@@ -177,7 +189,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 3);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let path = "/tmp/other-project".to_string();
-        let footer = FooterBar::new(path, None, None);
+        let footer = FooterBar::new(path);
 
         // Act
         terminal

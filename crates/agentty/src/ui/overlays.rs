@@ -41,8 +41,8 @@ pub(crate) fn render_confirmation_overlay(
     components::confirmation_overlay::ConfirmationOverlay::new(
         confirmation_title,
         confirmation_message,
-        *selected_confirmation_index == 0,
     )
+    .selected_yes(*selected_confirmation_index == 0)
     .render(f, area);
 }
 
@@ -65,7 +65,8 @@ pub(crate) fn render_sync_blocked_popup(
 
     let popup_message = sync_popup_message(default_branch, message, project_name);
 
-    components::info_overlay::InfoOverlay::with_loading_state(title, &popup_message, is_loading)
+    components::info_overlay::InfoOverlay::new(title, &popup_message)
+        .is_loading(is_loading)
         .render(f, area);
 }
 
@@ -98,7 +99,9 @@ pub(crate) fn render_command_palette(
 ) {
     render_list_background(f, area, list_background);
 
-    components::command_palette::CommandPaletteInput::new(input, selected_index, focus)
+    components::command_palette::CommandPaletteInput::new(input)
+        .selected_index(selected_index)
+        .focus(focus)
         .render(f, area);
 }
 
@@ -114,13 +117,10 @@ pub(crate) fn render_command_options(
 ) {
     render_list_background(f, area, list_background);
 
-    components::command_palette::CommandOptionList::new(
-        command,
-        selected_index,
-        projects,
-        active_project_id,
-    )
-    .render(f, area);
+    components::command_palette::CommandOptionList::new(command, projects)
+        .selected_index(selected_index)
+        .active_project_id(active_project_id)
+        .render(f, area);
 }
 
 /// Renders help overlay above the context-specific background page.
@@ -140,7 +140,9 @@ pub(crate) fn render_help(
         session_progress_messages,
     );
 
-    components::help_overlay::HelpOverlay::new(help_context, scroll_offset).render(f, area);
+    components::help_overlay::HelpOverlay::new(help_context)
+        .scroll_offset(scroll_offset)
+        .render(f, area);
 }
 
 /// Renders background content behind help based on the source `HelpContext`.

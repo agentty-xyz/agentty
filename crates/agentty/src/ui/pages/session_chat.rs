@@ -207,13 +207,15 @@ impl<'a> SessionChatPage<'a> {
             .margin(1)
             .split(area);
 
-        SessionOutput::new(
-            session,
-            self.scroll_offset,
-            self.done_session_output_mode(),
-            self.active_progress,
-        )
-        .render(f, chunks[0]);
+        let mut output =
+            SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
+        if let Some(scroll_offset) = self.scroll_offset {
+            output = output.scroll_offset(scroll_offset);
+        }
+        if let Some(active_progress) = self.active_progress {
+            output = output.active_progress(active_progress);
+        }
+        output.render(f, chunks[0]);
         self.render_bottom_panel(f, chunks[1], session);
     }
 
@@ -275,14 +277,14 @@ impl<'a> SessionChatPage<'a> {
                 None
             };
 
-            ChatInput::new(
-                &title,
-                input.text(),
-                input.cursor,
-                "Type your message",
-                menu,
-            )
-            .render(f, bottom_area);
+            let mut chat_input =
+                ChatInput::new(&title, input.text(), input.cursor).placeholder("Type your message");
+
+            if let Some(menu) = menu {
+                chat_input = chat_input.slash_menu(menu);
+            }
+
+            chat_input.render(f, bottom_area);
 
             return;
         }

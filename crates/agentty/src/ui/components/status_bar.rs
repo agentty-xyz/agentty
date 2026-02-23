@@ -13,12 +13,19 @@ pub struct StatusBar {
 }
 
 impl StatusBar {
-    /// Creates a status bar from the current and latest available versions.
-    pub fn new(current_version: String, latest_available_version: Option<String>) -> Self {
+    /// Creates a status bar with the current version.
+    pub fn new(current_version: String) -> Self {
         Self {
             current_version,
-            latest_available_version,
+            latest_available_version: None,
         }
+    }
+
+    /// Sets the latest available version for update notification.
+    #[must_use]
+    pub fn latest_available_version(mut self, version: Option<String>) -> Self {
+        self.latest_available_version = version;
+        self
     }
 }
 
@@ -60,7 +67,8 @@ mod tests {
         let latest_available_version = Some("v0.1.13".to_string());
 
         // Act
-        let status_bar = StatusBar::new(current_version.clone(), latest_available_version.clone());
+        let status_bar = StatusBar::new(current_version.clone())
+            .latest_available_version(latest_available_version.clone());
 
         // Assert
         assert_eq!(status_bar.current_version, current_version);
@@ -75,7 +83,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(80, 1);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let status_bar = StatusBar::new("v0.1.12".to_string(), None);
+        let status_bar = StatusBar::new("v0.1.12".to_string());
 
         // Act
         terminal
@@ -102,7 +110,8 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 1);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let status_bar = StatusBar::new("v0.1.12".to_string(), Some("v0.1.13".to_string()));
+        let status_bar = StatusBar::new("v0.1.12".to_string())
+            .latest_available_version(Some("v0.1.13".to_string()));
 
         // Act
         terminal

@@ -25,13 +25,19 @@ pub struct HelpOverlay<'a> {
 }
 
 impl<'a> HelpOverlay<'a> {
-    /// Creates a help overlay for the given context and scroll position.
-    pub fn new(context: &'a HelpContext, scroll_offset: u16) -> Self {
+    /// Creates a help overlay for the given context.
+    pub fn new(context: &'a HelpContext) -> Self {
         Self {
             context,
-
-            scroll_offset,
+            scroll_offset: 0,
         }
+    }
+
+    /// Sets the vertical scroll offset.
+    #[must_use]
+    pub fn scroll_offset(mut self, offset: u16) -> Self {
+        self.scroll_offset = offset;
+        self
     }
 }
 
@@ -181,7 +187,7 @@ mod tests {
         };
 
         // Act
-        let overlay = HelpOverlay::new(&context, 5);
+        let overlay = HelpOverlay::new(&context).scroll_offset(5);
 
         // Assert
         assert_eq!(overlay.scroll_offset, 5);

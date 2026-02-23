@@ -95,13 +95,13 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     let content_area = outer_chunks[1];
     let footer_bar_area = outer_chunks[2];
 
-    components::status_bar::StatusBar::new(
-        current_version_display_text(),
-        context
-            .latest_available_version
-            .map(std::string::ToString::to_string),
-    )
-    .render(f, status_bar_area);
+    components::status_bar::StatusBar::new(current_version_display_text())
+        .latest_available_version(
+            context
+                .latest_available_version
+                .map(std::string::ToString::to_string),
+        )
+        .render(f, status_bar_area);
     render_footer_bar(
         f,
         footer_bar_area,
@@ -168,7 +168,9 @@ fn render_footer_bar(
         ),
     };
 
-    components::footer_bar::FooterBar::new(footer_dir, footer_branch, footer_status)
+    components::footer_bar::FooterBar::new(footer_dir)
+        .git_branch(footer_branch)
+        .git_status(footer_status)
         .render(f, footer_bar_area);
 }
 

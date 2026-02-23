@@ -31,20 +31,28 @@ pub struct ChatInput<'a> {
 
 impl<'a> ChatInput<'a> {
     /// Creates a new prompt input component.
-    pub fn new(
-        title: &'a str,
-        input: &'a str,
-        cursor: usize,
-        placeholder: &'a str,
-        slash_menu: Option<SlashMenu<'a>>,
-    ) -> Self {
+    pub fn new(title: &'a str, input: &'a str, cursor: usize) -> Self {
         Self {
-            placeholder,
+            placeholder: "",
             cursor,
             input,
-            slash_menu,
+            slash_menu: None,
             title,
         }
+    }
+
+    /// Sets the input placeholder text.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
+        self.placeholder = placeholder;
+        self
+    }
+
+    /// Sets the slash command menu.
+    #[must_use]
+    pub fn slash_menu(mut self, slash_menu: SlashMenu<'a>) -> Self {
+        self.slash_menu = Some(slash_menu);
+        self
     }
 
     fn render_slash_dropdown(f: &mut Frame, area: Rect, slash_menu: &SlashMenu<'_>) {
@@ -147,5 +155,43 @@ impl Component for ChatInput<'_> {
         }
 
         self.render_input(f, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_builder_methods() {
+        // Arrange
+        let title = "Chat";
+        let input = "Hello";
+        let cursor = 5;
+        let placeholder = "Start typing...";
+        let slash_menu = SlashMenu {
+            options: vec![],
+            selected_index: 0,
+            title: "Menu",
+        };
+
+        // Act
+        let chat_input = ChatInput::new(title, input, cursor)
+            .placeholder(placeholder)
+            .slash_menu(slash_menu);
+
+        // Assert
+        assert_eq!(chat_input.title, title);
+        assert_eq!(chat_input.input, input);
+        assert_eq!(chat_input.cursor, cursor);
+        assert_eq!(chat_input.placeholder, placeholder);
+        assert!(chat_input.slash_menu.is_some());
+        assert_eq!(
+            chat_input
+                .slash_menu
+                .expect("slash menu should be set")
+                .title,
+            "Menu"
+        );
     }
 }

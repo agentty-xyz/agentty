@@ -15,12 +15,26 @@ pub struct CommandPaletteInput<'a> {
 }
 
 impl<'a> CommandPaletteInput<'a> {
-    pub fn new(input: &'a str, selected_index: usize, focus: PaletteFocus) -> Self {
+    pub fn new(input: &'a str) -> Self {
         Self {
-            focus,
+            focus: PaletteFocus::Input,
             input,
-            selected_index,
+            selected_index: 0,
         }
+    }
+
+    /// Sets the focus of the command palette.
+    #[must_use]
+    pub fn focus(mut self, focus: PaletteFocus) -> Self {
+        self.focus = focus;
+        self
+    }
+
+    /// Sets the selected index in the dropdown.
+    #[must_use]
+    pub fn selected_index(mut self, index: usize) -> Self {
+        self.selected_index = index;
+        self
     }
 }
 
@@ -100,18 +114,27 @@ pub struct CommandOptionList<'a> {
 }
 
 impl<'a> CommandOptionList<'a> {
-    pub fn new(
-        command: PaletteCommand,
-        selected_index: usize,
-        projects: &'a [Project],
-        active_project_id: i64,
-    ) -> Self {
+    pub fn new(command: PaletteCommand, projects: &'a [Project]) -> Self {
         Self {
-            active_project_id,
+            active_project_id: 0,
             command,
             projects,
-            selected_index,
+            selected_index: 0,
         }
+    }
+
+    /// Sets the active project ID for highlighting.
+    #[must_use]
+    pub fn active_project_id(mut self, id: i64) -> Self {
+        self.active_project_id = id;
+        self
+    }
+
+    /// Sets the selected index in the option list.
+    #[must_use]
+    pub fn selected_index(mut self, index: usize) -> Self {
+        self.selected_index = index;
+        self
     }
 
     fn options(&self) -> Vec<String> {

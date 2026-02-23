@@ -20,14 +20,19 @@ pub struct ConfirmationOverlay<'a> {
 
 impl<'a> ConfirmationOverlay<'a> {
     /// Creates a confirmation popup with title and body message.
-    ///
-    /// Pass `selected_yes = false` to highlight `No` as the initial selection.
-    pub fn new(title: &'a str, message: &'a str, selected_yes: bool) -> Self {
+    pub fn new(title: &'a str, message: &'a str) -> Self {
         Self {
             message,
-            selected_yes,
+            selected_yes: false,
             title,
         }
+    }
+
+    /// Sets whether the "Yes" option is currently selected.
+    #[must_use]
+    pub fn selected_yes(mut self, yes: bool) -> Self {
+        self.selected_yes = yes;
+        self
     }
 }
 
@@ -101,7 +106,7 @@ mod tests {
         let title = "Confirm";
 
         // Act
-        let overlay = ConfirmationOverlay::new(title, message, selected_yes);
+        let overlay = ConfirmationOverlay::new(title, message).selected_yes(selected_yes);
 
         // Assert
         assert_eq!(overlay.message, message);
@@ -114,7 +119,8 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(100, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let overlay = ConfirmationOverlay::new("Confirm Delete", "Delete session?", false);
+        let overlay =
+            ConfirmationOverlay::new("Confirm Delete", "Delete session?").selected_yes(false);
 
         // Act
         terminal
