@@ -53,14 +53,11 @@ selection becomes the default for newly created sessions.
   - choose agent (`gemini`, `codex`, `claude`)
   - choose model from that agent's curated model list
 - In prompt mode, press `Up` / `Down` to iterate previously sent messages for the active session and quickly resend/edit them.
-- Press `Shift+Tab` in chat view or prompt mode to toggle permission mode for the current session.
 - Permission modes:
   - `auto_edit` (default): runs with standard edit permissions.
-  - `autonomous`: runs with elevated autonomy (backend-specific flags such as `--yolo` or skipping permission prompts).
-  - `plan`: asks the agent for a detailed plan instead of implementation.
 - After a plan response in chat view, an inline action bar appears:
   - `Implement the plan`: switches that session to `auto_edit` and sends an implementation prompt.
-  - `Type feedback`: opens prompt input so you can send feedback while keeping `plan` mode.
+  - `Type feedback`: opens prompt input so you can send feedback without changing permission mode.
   - Use `Up` / `Down` arrows to choose and `Enter` to confirm.
 - The active mode is shown in the session chat title.
 - Changes are persisted for that session and used as defaults for future sessions.
@@ -72,9 +69,7 @@ selection becomes the default for newly created sessions.
 - If the app-server connection fails, Agentty retries by restarting Codex app-server with a new thread.
 - When a Codex thread is reset, Agentty replays the session transcript in the next turn prompt so implementation can continue with prior context.
 - Codex session modes map to app-server permissions:
-  - `plan`: `approvalPolicy=on-request` and read-only sandbox. Pre-action file/command requests are declined.
   - `auto_edit`: `approvalPolicy=on-request` and workspace-write sandbox. Pre-action file/command requests are accepted.
-  - `autonomous`: `approvalPolicy=never` and danger-full-access sandbox. If a pre-action request still appears, it is accepted for the session.
 
 ## Features
 

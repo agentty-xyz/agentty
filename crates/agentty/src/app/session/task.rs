@@ -902,9 +902,9 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_commit_assist_permission_mode_plan_uses_auto_edit() {
+    fn test_auto_commit_assist_permission_mode_returns_auto_edit() {
         // Arrange
-        let permission_mode = PermissionMode::Plan;
+        let permission_mode = PermissionMode::AutoEdit;
 
         // Act
         let effective_mode =

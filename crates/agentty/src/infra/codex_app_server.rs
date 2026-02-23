@@ -34,22 +34,6 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     turn_sandbox_type: "workspaceWrite",
 };
 
-const AUTONOMOUS_POLICY: PermissionModePolicy = PermissionModePolicy {
-    approval_policy: "never",
-    legacy_pre_action_decision: "approved_for_session",
-    pre_action_decision: "acceptForSession",
-    thread_sandbox_mode: "danger-full-access",
-    turn_sandbox_type: "dangerFullAccess",
-};
-
-const PLAN_POLICY: PermissionModePolicy = PermissionModePolicy {
-    approval_policy: "on-request",
-    legacy_pre_action_decision: "denied",
-    pre_action_decision: "decline",
-    thread_sandbox_mode: "read-only",
-    turn_sandbox_type: "readOnly",
-};
-
 /// Boxed async result used by [`CodexAppServerClient`] trait methods.
 pub type CodexAppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -461,8 +445,6 @@ impl RealCodexAppServerClient {
     fn permission_mode_policy(permission_mode: PermissionMode) -> &'static PermissionModePolicy {
         match permission_mode {
             PermissionMode::AutoEdit => &AUTO_EDIT_POLICY,
-            PermissionMode::Autonomous => &AUTONOMOUS_POLICY,
-            PermissionMode::Plan => &PLAN_POLICY,
         }
     }
 
@@ -810,39 +792,27 @@ mod tests {
     }
 
     #[test]
-    fn approval_policy_maps_permission_modes() {
+    fn approval_policy_maps_auto_edit_mode() {
         // Arrange
         let auto_edit_mode = PermissionMode::AutoEdit;
-        let autonomous_mode = PermissionMode::Autonomous;
-        let plan_mode = PermissionMode::Plan;
 
         // Act
         let auto_edit_policy = RealCodexAppServerClient::approval_policy(auto_edit_mode);
-        let autonomous_policy = RealCodexAppServerClient::approval_policy(autonomous_mode);
-        let plan_policy = RealCodexAppServerClient::approval_policy(plan_mode);
 
         // Assert
         assert_eq!(auto_edit_policy, "on-request");
-        assert_eq!(autonomous_policy, "never");
-        assert_eq!(plan_policy, "on-request");
     }
 
     #[test]
-    fn thread_sandbox_mode_maps_permission_modes() {
+    fn thread_sandbox_mode_maps_auto_edit_mode() {
         // Arrange
         let auto_edit_mode = PermissionMode::AutoEdit;
-        let autonomous_mode = PermissionMode::Autonomous;
-        let plan_mode = PermissionMode::Plan;
 
         // Act
         let auto_edit_sandbox = RealCodexAppServerClient::thread_sandbox_mode(auto_edit_mode);
-        let autonomous_sandbox = RealCodexAppServerClient::thread_sandbox_mode(autonomous_mode);
-        let plan_sandbox = RealCodexAppServerClient::thread_sandbox_mode(plan_mode);
 
         // Assert
         assert_eq!(auto_edit_sandbox, "workspace-write");
-        assert_eq!(autonomous_sandbox, "danger-full-access");
-        assert_eq!(plan_sandbox, "read-only");
     }
 
     #[test]
@@ -860,7 +830,7 @@ mod tests {
 
         // Act
         let response_value = RealCodexAppServerClient::build_pre_action_approval_response(
-            PermissionMode::Plan,
+            PermissionMode::AutoEdit,
             &request_value,
         );
 
@@ -870,7 +840,7 @@ mod tests {
             Some(serde_json::json!({
                 "id": "approval-1",
                 "result": {
-                    "decision": "decline"
+                    "decision": "accept"
                 }
             }))
         );
@@ -891,7 +861,7 @@ mod tests {
 
         // Act
         let response_value = RealCodexAppServerClient::build_pre_action_approval_response(
-            PermissionMode::Autonomous,
+            PermissionMode::AutoEdit,
             &request_value,
         );
 
@@ -901,7 +871,7 @@ mod tests {
             Some(serde_json::json!({
                 "id": "approval-2",
                 "result": {
-                    "decision": "approved_for_session"
+                    "decision": "approved"
                 }
             }))
         );

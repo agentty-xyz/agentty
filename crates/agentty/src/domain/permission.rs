@@ -6,65 +6,32 @@ use std::str::FromStr;
 
 use crate::domain::plan::PlanQuestion;
 
-pub const PLAN_MODE_INSTRUCTIONS: &str = include_str!("../../resources/plan_mode.md");
-const PLAN_MODE_PROMPT_TEMPLATE: &str = include_str!("../../resources/plan_mode_prompt.md");
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum PermissionMode {
     #[default]
     AutoEdit,
-    Autonomous,
-    Plan,
 }
 
 impl PermissionMode {
     /// Returns the wire label used for persistence and display.
     pub fn label(self) -> &'static str {
-        match self {
-            PermissionMode::AutoEdit => "auto_edit",
-            PermissionMode::Autonomous => "autonomous",
-            PermissionMode::Plan => "plan",
-        }
+        "auto_edit"
     }
 
     /// Returns the user-facing label shown in the UI.
     pub fn display_label(self) -> &'static str {
-        match self {
-            PermissionMode::AutoEdit => "Auto Edit",
-            PermissionMode::Autonomous => "Autonomous",
-            PermissionMode::Plan => "Plan",
-        }
+        "Auto Edit"
     }
 
-    /// Cycles to the next permission mode.
+    /// Returns the only supported permission mode.
     #[must_use]
     pub fn toggle(self) -> Self {
-        match self {
-            PermissionMode::AutoEdit => PermissionMode::Autonomous,
-            PermissionMode::Autonomous => PermissionMode::Plan,
-            PermissionMode::Plan => PermissionMode::AutoEdit,
-        }
+        self
     }
 
-    /// Transforms a prompt for the active permission mode.
-    ///
-    /// In `Plan` mode a concise instruction prefix and a labeled prompt
-    /// delimiter are added for both initial and follow-up prompts so
-    /// replies continue producing plan output instead of implementation.
-    /// Other modes return the prompt unchanged.
+    /// Returns the prompt unchanged for `AutoEdit` mode.
     pub fn apply_to_prompt(self, prompt: &str, _is_initial_plan_prompt: bool) -> Cow<'_, str> {
-        if self == PermissionMode::Plan {
-            return Cow::Owned(Self::plan_mode_prompt(prompt));
-        }
-
         Cow::Borrowed(prompt)
-    }
-
-    fn plan_mode_prompt(prompt: &str) -> String {
-        PLAN_MODE_PROMPT_TEMPLATE
-            .trim_end()
-            .replace("{plan_mode_instructions}", PLAN_MODE_INSTRUCTIONS)
-            .replace("{prompt}", prompt)
     }
 }
 
@@ -80,8 +47,6 @@ impl FromStr for PermissionMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "auto_edit" => Ok(PermissionMode::AutoEdit),
-            "autonomous" => Ok(PermissionMode::Autonomous),
-            "plan" => Ok(PermissionMode::Plan),
             _ => Err(format!("Unknown permission mode: {s}")),
         }
     }
@@ -279,16 +244,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_from_str_accepts_auto_edit() {
+        // Arrange
+        let permission_mode = "auto_edit";
+
+        // Act
+        let parsed_permission_mode = PermissionMode::from_str(permission_mode);
+
+        // Assert
+        assert_eq!(parsed_permission_mode, Ok(PermissionMode::AutoEdit));
+    }
+
+    #[test]
+    fn test_from_str_rejects_removed_permission_modes() {
+        // Arrange
+        let removed_mode = "autonomous";
+
+        // Act
+        let parsed_permission_mode = PermissionMode::from_str(removed_mode);
+
+        // Assert
+        assert_eq!(
+            parsed_permission_mode,
+            Err("Unknown permission mode: autonomous".to_string())
+        );
+    }
+
+    #[test]
     fn test_apply_to_prompt_wraps_initial_plan_prompt() {
         // Arrange
         let prompt = "Create a migration";
 
         // Act
-        let transformed = PermissionMode::Plan.apply_to_prompt(prompt, true);
+        let transformed = PermissionMode::AutoEdit.apply_to_prompt(prompt, true);
 
         // Assert
-        assert!(transformed.contains("[PLAN MODE]"));
-        assert!(transformed.contains(prompt));
+        assert_eq!(transformed, prompt);
     }
 
     #[test]
@@ -297,11 +288,10 @@ mod tests {
         let prompt = "Refine section 3";
 
         // Act
-        let transformed = PermissionMode::Plan.apply_to_prompt(prompt, false);
+        let transformed = PermissionMode::AutoEdit.apply_to_prompt(prompt, false);
 
         // Assert
-        assert!(transformed.contains("[PLAN MODE]"));
-        assert!(transformed.contains(prompt));
+        assert_eq!(transformed, prompt);
     }
 
     #[test]

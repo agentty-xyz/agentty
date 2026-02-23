@@ -276,7 +276,7 @@ impl SessionManager {
             }
         } else {
             let backend = crate::infra::agent::create_backend(session_model.kind());
-            let is_initial_plan_prompt = permission_mode == PermissionMode::Plan;
+            let is_initial_plan_prompt = false;
             let command = backend.build_start_command(
                 &folder,
                 &prompt,
@@ -727,7 +727,7 @@ impl SessionManager {
             session_output,
         } = input;
         let operation_id = Uuid::new_v4().to_string();
-        let is_initial_plan_prompt = is_first_message && permission_mode == PermissionMode::Plan;
+        let is_initial_plan_prompt = false;
 
         if session_model.kind() == AgentKind::Codex {
             if is_first_message {

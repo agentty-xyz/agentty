@@ -300,13 +300,9 @@ pub(crate) fn model_column_width(sessions: &[Session]) -> Constraint {
 fn mode_column_width() -> Constraint {
     text_column_width(
         "Mode",
-        [
-            PermissionMode::AutoEdit,
-            PermissionMode::Autonomous,
-            PermissionMode::Plan,
-        ]
-        .iter()
-        .map(|mode| mode.display_label()),
+        [PermissionMode::AutoEdit]
+            .iter()
+            .map(|mode| mode.display_label()),
     )
 }
 
@@ -558,7 +554,7 @@ mod tests {
     #[test]
     fn test_mode_column_width_uses_longest_mode_label() {
         // Arrange
-        let expected_width = u16::try_from("Autonomous".chars().count()).unwrap_or(u16::MAX);
+        let expected_width = u16::try_from("Auto Edit".chars().count()).unwrap_or(u16::MAX);
 
         // Act
         let width = mode_column_width();

@@ -108,7 +108,7 @@ struct AppEventBatch {
     session_model_updates: HashMap<String, AgentModel>,
     session_progress_updates: HashMap<String, Option<String>>,
     session_ids: HashSet<String>,
-    session_permission_mode_updates: HashMap<String, PermissionMode>,
+    session_permission_mode_updates: HashSet<(String, PermissionMode)>,
     should_force_reload: bool,
     sync_main_result: Option<Result<(), SyncSessionStartError>>,
 }
@@ -931,7 +931,7 @@ impl App {
                 continue;
             };
 
-            if session.permission_mode != PermissionMode::Plan || session.status != Status::Review {
+            if session.status != Status::Review {
                 self.plan_followups.remove(session_id);
 
                 continue;
@@ -944,6 +944,12 @@ impl App {
             let has_existing_followup = self.plan_followups.contains_key(session_id);
             if Self::should_refresh_plan_followup(*previous_status, has_existing_followup) {
                 let questions = extract_plan_questions(&session.output);
+                if questions.is_empty() {
+                    self.plan_followups.remove(session_id);
+
+                    continue;
+                }
+
                 self.plan_followups
                     .insert(session_id.clone(), PlanFollowup::new(questions));
             }
@@ -968,8 +974,8 @@ impl App {
                 .iter()
                 .find(|session| session.id == *session_id)
                 .is_some_and(|session| {
-                    session.permission_mode == PermissionMode::Plan
-                        && session.status == Status::Review
+                    session.status == Status::Review
+                        && !extract_plan_questions(&session.output).is_empty()
                 })
         });
     }
@@ -1155,7 +1161,7 @@ impl AppEventBatch {
                 session_id,
             } => {
                 self.session_permission_mode_updates
-                    .insert(session_id, permission_mode);
+                    .insert((session_id, permission_mode));
             }
             AppEvent::RefreshSessions => {
                 self.should_force_reload = true;

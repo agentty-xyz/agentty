@@ -66,11 +66,8 @@ impl AgentBackend for ClaudeBackend {
 impl ClaudeBackend {
     fn apply_permission_args(command: &mut Command, permission_mode: PermissionMode) {
         match permission_mode {
-            PermissionMode::AutoEdit | PermissionMode::Plan => {
+            PermissionMode::AutoEdit => {
                 command.arg("--allowedTools").arg("Edit");
-            }
-            PermissionMode::Autonomous => {
-                command.arg("--dangerously-skip-permissions");
             }
         }
     }
@@ -83,7 +80,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_claude_plan_mode_uses_allowed_tools_edit() {
+    fn test_claude_auto_edit_mode_uses_allowed_tools_edit() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = ClaudeBackend;
@@ -94,7 +91,7 @@ mod tests {
             temp_directory.path(),
             "Plan prompt",
             "claude-sonnet-4-6",
-            PermissionMode::Plan,
+            PermissionMode::AutoEdit,
             true,
         );
         let debug_command = format!("{command:?}");

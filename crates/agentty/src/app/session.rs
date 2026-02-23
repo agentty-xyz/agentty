@@ -929,7 +929,7 @@ mod tests {
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
         assert_eq!(second_session.model, AgentModel::Gpt52Codex);
-        assert_eq!(second_session.permission_mode, PermissionMode::Autonomous);
+        assert_eq!(second_session.permission_mode, PermissionMode::AutoEdit);
         assert_eq!(default_model_setting, None);
 
         let db_sessions = app
@@ -945,7 +945,7 @@ mod tests {
         assert_eq!(db_second_session.model, "gpt-5.2-codex");
         assert_eq!(
             db_second_session.permission_mode,
-            PermissionMode::Autonomous.label()
+            PermissionMode::AutoEdit.label()
         );
     }
 
@@ -1310,7 +1310,7 @@ mod tests {
         )
         .await
         .expect("failed to insert beta00002");
-        db.update_session_permission_mode("beta00002", PermissionMode::Autonomous.label())
+        db.update_session_permission_mode("beta00002", "auto_edit")
             .await
             .expect("failed to update beta00002 permission mode");
         db.upsert_setting(
@@ -1370,7 +1370,7 @@ mod tests {
             .find(|session| session.id == created_session_id)
             .expect("missing created session");
         assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
-        assert_eq!(created_session.permission_mode, PermissionMode::Autonomous);
+        assert_eq!(created_session.permission_mode, PermissionMode::AutoEdit);
     }
 
     #[tokio::test]

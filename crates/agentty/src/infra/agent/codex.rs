@@ -74,8 +74,7 @@ impl AgentBackend for CodexBackend {
 impl CodexBackend {
     fn approval_flag(permission_mode: PermissionMode) -> &'static str {
         match permission_mode {
-            PermissionMode::AutoEdit | PermissionMode::Plan => "--full-auto",
-            PermissionMode::Autonomous => "--yolo",
+            PermissionMode::AutoEdit => "--full-auto",
         }
     }
 }

@@ -83,12 +83,8 @@ pub(super) fn format_detail_lines(detail: &str) -> String {
         .join("\n")
 }
 
-/// Converts Plan-mode permission into edit-capable mode for assist runs.
+/// Returns the effective permission mode for assist runs.
 pub(super) fn effective_permission_mode(permission_mode: PermissionMode) -> PermissionMode {
-    if permission_mode == PermissionMode::Plan {
-        return PermissionMode::AutoEdit;
-    }
-
     permission_mode
 }
 
@@ -191,9 +187,9 @@ mod tests {
     }
 
     #[test]
-    fn test_effective_permission_mode_plan_uses_auto_edit() {
+    fn test_effective_permission_mode_returns_auto_edit() {
         // Arrange
-        let permission_mode = PermissionMode::Plan;
+        let permission_mode = PermissionMode::AutoEdit;
 
         // Act
         let effective_mode = effective_permission_mode(permission_mode);

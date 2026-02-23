@@ -535,9 +535,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::app::AppEvent;
     use crate::db::Database;
-    use crate::domain::permission::{PermissionMode, PlanFollowup, PlanFollowupOption};
+    use crate::domain::permission::{PlanFollowup, PlanFollowupOption};
     use crate::domain::plan::PlanQuestion;
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
@@ -933,17 +932,7 @@ More details
             session_id: session_id.clone(),
             scroll_offset: Some(0),
         };
-        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
-        app.sessions.sessions[0].status = Status::InProgress;
-        if let Some(handles) = app.sessions.handles.get(&session_id)
-            && let Ok(mut status) = handles.status.lock()
-        {
-            *status = Status::Review;
-        }
-        app.apply_app_events(AppEvent::SessionUpdated {
-            session_id: session_id.clone(),
-        })
-        .await;
+        app.put_plan_followup(&session_id, PlanFollowup::new(VecDeque::new()));
         let context = ViewContext {
             scroll_offset: Some(0),
             session_id: session_id.clone(),
@@ -971,17 +960,7 @@ More details
             session_id: session_id.clone(),
             scroll_offset: Some(4),
         };
-        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
-        app.sessions.sessions[0].status = Status::InProgress;
-        if let Some(handles) = app.sessions.handles.get(&session_id)
-            && let Ok(mut status) = handles.status.lock()
-        {
-            *status = Status::Review;
-        }
-        app.apply_app_events(AppEvent::SessionUpdated {
-            session_id: session_id.clone(),
-        })
-        .await;
+        app.put_plan_followup(&session_id, PlanFollowup::new(VecDeque::new()));
         app.select_next_plan_followup_action(&session_id);
         let context = ViewContext {
             scroll_offset: Some(4),
@@ -1016,26 +995,17 @@ More details
             session_id: session_id.clone(),
             scroll_offset: Some(0),
         };
-        let plan_output = "### Questions\n1. Keep sqlite?\n   1. Yes\n   2. No\n2. Add \
-                           telemetry?\n   1. Yes\n   2. No\n"
-            .to_string();
-        app.sessions.sessions[0].permission_mode = PermissionMode::Plan;
-        app.sessions.sessions[0].output = plan_output.clone();
-        app.sessions.sessions[0].status = Status::InProgress;
-        if let Some(handles) = app.sessions.handles.get(&session_id)
-            && let Ok(mut output) = handles.output.lock()
-        {
-            *output = plan_output;
-        }
-        if let Some(handles) = app.sessions.handles.get(&session_id)
-            && let Ok(mut status) = handles.status.lock()
-        {
-            *status = Status::Review;
-        }
-        app.apply_app_events(AppEvent::SessionUpdated {
-            session_id: session_id.clone(),
-        })
-        .await;
+        let questions = VecDeque::from(vec![
+            PlanQuestion {
+                answers: vec!["Yes".to_string(), "No".to_string()],
+                text: "Keep sqlite?".to_string(),
+            },
+            PlanQuestion {
+                answers: vec!["Yes".to_string(), "No".to_string()],
+                text: "Add telemetry?".to_string(),
+            },
+        ]);
+        app.put_plan_followup(&session_id, PlanFollowup::new(questions));
         let context = ViewContext {
             scroll_offset: Some(0),
             session_id: session_id.clone(),

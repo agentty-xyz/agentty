@@ -22,8 +22,7 @@ impl AgentBackend for GeminiBackend {
     ) -> Command {
         let prompt = permission_mode.apply_to_prompt(prompt, is_initial_plan_prompt);
         let approval_mode = match permission_mode {
-            PermissionMode::AutoEdit | PermissionMode::Plan => "auto_edit",
-            PermissionMode::Autonomous => "yolo",
+            PermissionMode::AutoEdit => "auto_edit",
         };
         let mut command = Command::new("gemini");
         command
