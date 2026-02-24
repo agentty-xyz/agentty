@@ -1,0 +1,184 @@
+{% macro render_docs_nav(section_path, current_permalink, nested=false) %}
+    {% set docs_nav_section = get_section(path=section_path) %}
+    {% if nested %}
+        <h3 class="m-0 mt-4 mb-2 text-[0.78rem] uppercase tracking-[0.05em] text-dim">{{ docs_nav_section.title }}</h3>
+    {% endif %}
+    {% if docs_nav_section.pages | length > 0 %}
+        {% if nested %}
+            <ul class="m-0 ml-3 p-0 list-none space-y-2 border-l border-border pl-3">
+            {% else %}
+                <ul class="m-0 p-0 list-none space-y-2">
+                {% endif %}
+                {% for docs_page in docs_nav_section.pages %}
+                    <li>
+                        <a class="no-underline {% if docs_page.permalink == current_permalink %}text-accent{% else %}text-muted hover:text-accent{% endif %}"
+                           href="{{ docs_page.permalink }}">{{ docs_page.title }}</a>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% for subsection_path in docs_nav_section.subsections %}
+            {{ self::render_docs_nav(section_path=subsection_path, current_permalink=current_permalink, nested=true) }}
+        {% endfor %}
+    {% endmacro render_docs_nav %}
+    <!DOCTYPE html>
+    <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>{{ page.title }} | {{ config.title }} Docs</title>
+            <meta name="description" content="{{ config.description }}">
+            <link rel="canonical" href="{{ page.permalink }}">
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
+                  rel="stylesheet">
+            <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+            <style type="text/tailwindcss">
+            @theme {
+                --color-bg: #080c08;
+                --color-surface: #0d160d;
+                --color-accent: #3ddd6a;
+                --color-muted: #507a5c;
+                --color-dim: #2a5935;
+                --color-border: #1b3d20;
+                --font-mono: "Share Tech Mono", "Courier New", monospace;
+            }
+
+            :root.theme-dark {
+                --color-accent: #e0e0e0;
+                --color-muted: #909090;
+                --color-dim: #585858;
+                --color-bg: #080808;
+                --color-surface: #111111;
+                --color-border: #2a2a2a;
+            }
+            </style>
+            <style>
+            /* Keep inline and fenced markdown code visually distinct from body copy. */
+            .docs-content :not(pre) > code {
+                display: inline-block;
+                border: 1px solid var(--color-border);
+                border-radius: 0.3rem;
+                background-color: var(--color-surface);
+                color: var(--color-accent);
+                padding: 0 0.35rem;
+                line-height: 1.4;
+                font-size: 0.92em;
+            }
+
+            .docs-content pre {
+                margin: 1rem 0;
+                border: 1px solid var(--color-border);
+                border-radius: 0.5rem;
+                background-color: var(--color-surface);
+                padding: 0.85rem 1rem;
+                overflow-x: auto;
+            }
+
+            .docs-content pre code {
+                display: inline;
+                border: 0;
+                border-radius: 0;
+                background: transparent;
+                color: inherit;
+                padding: 0;
+                font-size: 0.92rem;
+                line-height: 1.6;
+            }
+
+            /*
+             * Zola's syntax-highlighting docs require these classes for class-based
+             * output and line numbers.
+             */
+            .docs-content .giallo-l {
+                display: inline-block;
+                min-height: 1lh;
+                width: 100%;
+            }
+
+            .docs-content .giallo-ln {
+                display: inline-block;
+                user-select: none;
+                margin-right: 0.4em;
+                padding: 0.4em;
+                min-width: 3ch;
+                text-align: right;
+                opacity: 0.8;
+            }
+
+            /* Restore clear heading hierarchy inside rendered markdown content. */
+            .docs-content h2,
+            .docs-content h3,
+            .docs-content h4 {
+                color: var(--color-accent);
+                font-weight: 600;
+                line-height: 1.35;
+                margin-bottom: 0.45rem;
+            }
+
+            .docs-content h2 {
+                font-size: 1.18rem;
+                margin-top: 1.7rem;
+            }
+
+            .docs-content h3 {
+                font-size: 1.04rem;
+                margin-top: 1.45rem;
+            }
+
+            .docs-content h4 {
+                font-size: 0.98rem;
+                margin-top: 1.2rem;
+            }
+
+            .docs-content p,
+            .docs-content ul,
+            .docs-content ol {
+                margin: 0.5rem 0 0.9rem;
+            }
+
+            .docs-content li + li {
+                margin-top: 0.28rem;
+            }
+
+            .docs-content .zola-anchor {
+                font-size: 0.72em;
+                margin-left: 0.45rem;
+                opacity: 0.72;
+                text-decoration: none;
+                vertical-align: middle;
+            }
+            </style>
+            <script>
+            (function () {
+                var theme = localStorage.getItem('agentty-theme') || 'hacker';
+                if (theme === 'dark') document.documentElement.classList.add('theme-dark');
+            })();
+            </script>
+        </head>
+        <body class="font-mono bg-bg text-accent min-h-screen">
+            {% set docs_section = get_section(path="docs/_index.md", metadata_only=true) %}
+            <nav class="border-b border-border">
+                <div class="flex items-center justify-between max-w-[1080px] mx-auto px-6 py-3">
+                    <a class="text-base font-semibold text-accent tracking-[0.02em] no-underline"
+                       href="{{ config.base_url }}">&gt; agentty</a>
+                    <div class="flex items-center gap-5 text-[0.85rem]">
+                        <a class="text-accent no-underline opacity-85 hover:opacity-100"
+                           href="{{ config.base_url }}/">home</a>
+                        <a class="text-accent no-underline" href="{{ docs_section.permalink }}">docs</a>
+                    </div>
+                </div>
+            </nav>
+            <main class="mx-auto max-w-[1080px] px-6 pt-12 pb-16 grid gap-8 md:grid-cols-[230px_minmax(0,1fr)]">
+                <aside class="bg-surface border border-border rounded-[10px] p-4 h-fit">
+                    <h2 class="m-0 mb-3 text-[0.85rem] tracking-[0.02em] text-muted">Guides</h2>
+                    {{ self::render_docs_nav(section_path="docs/_index.md", current_permalink=page.permalink) }}
+                </aside>
+                <article class="min-w-0">
+                    <h1 class="text-[1.35rem] m-0">{{ page.title }}</h1>
+                    <div class="docs-content mt-5 leading-[1.75] text-[0.95rem] text-muted">{{ page.content | safe }}</div>
+                </article>
+            </main>
+        </body>
+    </html>

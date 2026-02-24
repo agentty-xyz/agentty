@@ -1,0 +1,14 @@
++++
+title = "Documentation"
+description = "Technical guides for installing, configuring, and operating Agentty."
+template = "docs.html"
+page_template = "docs-page.html"
+sort_by = "weight"
+insert_anchor_links = "right"
+in_search_index = true
+render = true
+transparent = false
+aliases = ["/documentation/"]
++++
+
+Browse setup and workflow guides for `agentty`.

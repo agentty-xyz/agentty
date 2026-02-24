@@ -1,0 +1,89 @@
+{% macro render_section_listing(section_path, show_heading=false) %}
+    {% set docs_listing_section = get_section(path=section_path) %}
+    {% if show_heading %}
+        <h2 class="text-[1rem] m-0 mb-4 mt-8 text-muted tracking-[0.02em]">{{ docs_listing_section.title }}</h2>
+    {% endif %}
+    {% if docs_listing_section.pages | length > 0 %}
+        <section class="grid gap-4">
+            {% for docs_page in docs_listing_section.pages %}
+                <article class="bg-surface border border-border rounded-[10px] p-5">
+                    <h3 class="m-0 text-[1rem]">
+                        <a class="text-accent no-underline hover:underline"
+                           href="{{ docs_page.permalink }}">{{ docs_page.title }}</a>
+                    </h3>
+                    {% if docs_page.summary %}
+                        <p class="m-0 mt-2 text-muted leading-[1.6]">{{ docs_page.summary | safe }}</p>
+                    {% elif docs_page.description %}
+                        <p class="m-0 mt-2 text-muted leading-[1.6]">{{ docs_page.description }}</p>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </section>
+    {% endif %}
+    {% for subsection_path in docs_listing_section.subsections %}
+        {{ self::render_section_listing(section_path=subsection_path, show_heading=true) }}
+    {% endfor %}
+{% endmacro render_section_listing %}
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{{ section.title }} | {{ config.title }}</title>
+        <meta name="description" content="{{ config.description }}">
+        <link rel="canonical" href="{{ section.permalink }}">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
+              rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+        <style type="text/tailwindcss">
+            @theme {
+                --color-bg: #080c08;
+                --color-surface: #0d160d;
+                --color-accent: #3ddd6a;
+                --color-muted: #507a5c;
+                --color-dim: #2a5935;
+                --color-border: #1b3d20;
+                --font-mono: "Share Tech Mono", "Courier New", monospace;
+            }
+
+            :root.theme-dark {
+                --color-accent: #e0e0e0;
+                --color-muted: #909090;
+                --color-dim: #585858;
+                --color-bg: #080808;
+                --color-surface: #111111;
+                --color-border: #2a2a2a;
+            }
+        </style>
+        <script>
+            (function () {
+                var theme = localStorage.getItem('agentty-theme') || 'hacker';
+                if (theme === 'dark') document.documentElement.classList.add('theme-dark');
+            })();
+        </script>
+    </head>
+    <body class="font-mono bg-bg text-accent min-h-screen">
+        {% set docs_root_section = get_section(path="docs/_index.md", metadata_only=true) %}
+        <nav class="border-b border-border">
+            <div class="flex items-center justify-between max-w-[960px] mx-auto px-6 py-3">
+                <a class="text-base font-semibold text-accent tracking-[0.02em] no-underline"
+                   href="{{ config.base_url }}">&gt; agentty</a>
+                <div class="flex items-center gap-5 text-[0.85rem]">
+                    <a class="text-accent no-underline opacity-85 hover:opacity-100"
+                       href="{{ config.base_url }}/">home</a>
+                    <a class="text-accent no-underline"
+                       href="{{ docs_root_section.permalink }}">docs</a>
+                </div>
+            </div>
+        </nav>
+        <main class="mx-auto max-w-[960px] px-6 pt-12 pb-16">
+            <header class="mb-8">
+                <h1 class="text-[1.35rem] m-0">{{ section.title }}</h1>
+                <p class="m-0 mt-3 text-muted leading-[1.65]">{{ section.content | safe }}</p>
+            </header>
+            {{ self::render_section_listing(section_path="docs/_index.md") }}
+        </main>
+    </body>
+</html>

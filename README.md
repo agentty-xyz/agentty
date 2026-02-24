@@ -32,6 +32,10 @@ Run without installing:
 npx agentty
 ```
 
+## Documentation
+
+Documentation for installation and workflows is available at [agentty.xyz/docs](https://agentty.xyz/docs/).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and contribution guidance.
