@@ -14,7 +14,7 @@ impl AgentBackend for ClaudeBackend {
     fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
         let mut command = Command::new("claude");
         command.arg("-p").arg(prompt);
-        command.arg("--allowedTools").arg("Edit");
+        command.arg("--allowedTools").arg("Edit,Bash");
         command
             .arg("--verbose")
             .arg("--output-format")
@@ -37,7 +37,7 @@ impl AgentBackend for ClaudeBackend {
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
         let mut command = Command::new("claude");
         command.arg("-c").arg("-p").arg(prompt);
-        command.arg("--allowedTools").arg("Edit");
+        command.arg("--allowedTools").arg("Edit,Bash");
         command
             .arg("--verbose")
             .arg("--output-format")
@@ -76,7 +76,7 @@ mod tests {
 
         // Assert
         assert!(debug_command.contains("--allowedTools"));
-        assert!(debug_command.contains("Edit"));
+        assert!(debug_command.contains("Edit,Bash"));
         assert!(!debug_command.contains("--permission-mode"));
     }
 }
