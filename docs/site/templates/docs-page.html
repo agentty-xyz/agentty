@@ -46,7 +46,30 @@
         border-radius: 0.5rem;
         background-color: var(--color-surface);
         padding: 0.85rem 1rem;
-        overflow-x: auto;
+        padding-right: 4.5rem;
+        overflow-x: hidden;
+        white-space: pre-wrap;
+        position: relative;
+        }
+        .docs-copy-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        background: transparent;
+        border: 1px solid var(--color-border);
+        border-radius: 0.25rem;
+        padding: 0.15rem 0.45rem;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--color-muted);
+        cursor: pointer;
+        transition: color 120ms, border-color 120ms;
+        line-height: 1.5;
+        }
+        .docs-copy-btn:hover {
+        color: var(--color-accent);
+        border-color: var(--color-accent);
         }
         .docs-content pre code {
         display: inline;
@@ -57,6 +80,7 @@
         padding: 0;
         font-size: 0.92rem;
         line-height: 1.6;
+        word-break: break-word;
         }
         /*
         * Zola's syntax-highlighting docs require these classes for class-based
@@ -122,6 +146,31 @@
     {% block main_extra_classes %}
         grid gap-8 md:grid-cols-[230px_minmax(0,1fr)]
     {% endblock main_extra_classes %}
+    {% block extra_scripts %}
+        <script>
+(function () {
+  /** Attach a copy button to every fenced code block in .docs-content. */
+  document.querySelectorAll('.docs-content pre').forEach(function (pre) {
+    var btn = document.createElement('button');
+    btn.className = 'docs-copy-btn';
+    btn.textContent = 'copy';
+    btn.title = 'Copy to clipboard';
+    btn.setAttribute('aria-label', 'Copy code');
+
+    btn.addEventListener('click', function () {
+      var code = pre.querySelector('code');
+      var text = code ? code.innerText : pre.innerText;
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'copied!';
+        setTimeout(function () { btn.textContent = 'copy'; }, 2000);
+      });
+    });
+
+    pre.appendChild(btn);
+  });
+})();
+        </script>
+    {% endblock extra_scripts %}
     {% block content %}
         <aside class="bg-surface border border-border rounded-[10px] p-4 h-fit">
             <h2 class="m-0 mb-4 text-[1.15rem] font-bold tracking-[0.02em] text-accent">Guides</h2>

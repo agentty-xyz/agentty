@@ -18,8 +18,8 @@ repos:
         files: \.(md|markdown)$
       - id: djlint-reformat
         name: djlint reformat
-        description: Format HTML files.
-        entry: djlint --reformat
+        description: Format HTML files and embedded CSS blocks.
+        entry: djlint --reformat --format-css
         language: python
         additional_dependencies: [djlint==1.36.4]
         files: \.html?$
