@@ -253,6 +253,10 @@ pub async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, String> {
 
 /// Runs `git pull --rebase` and returns conflict outcome when applicable.
 ///
+/// When an upstream branch can be resolved, this uses an explicit
+/// `git pull --rebase <remote> <branch>` target to avoid ambiguous rebase
+/// failures caused by multiple configured merge branches.
+///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 ///
@@ -264,9 +268,12 @@ pub async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, String> {
 /// Returns an error for non-conflict pull/rebase failures.
 pub async fn pull_rebase(repo_path: PathBuf) -> Result<PullRebaseResult, String> {
     spawn_blocking(move || {
+        let pull_arguments = pull_rebase_arguments(&repo_path)
+            .unwrap_or_else(|_| vec!["pull".to_string(), "--rebase".to_string()]);
+        let pull_argument_refs: Vec<&str> = pull_arguments.iter().map(String::as_str).collect();
         let output = run_git_command_with_index_lock_retry(
             &repo_path,
-            &["pull", "--rebase"],
+            &pull_argument_refs,
             &[("GIT_EDITOR", ":"), ("GIT_SEQUENCE_EDITOR", ":")],
         )?;
 
@@ -283,6 +290,129 @@ pub async fn pull_rebase(repo_path: PathBuf) -> Result<PullRebaseResult, String>
     })
     .await
     .map_err(|error| format!("Join error: {error}"))?
+}
+
+/// Builds pull arguments that target a single upstream branch when available.
+///
+/// Resolves an explicit `<remote> <branch>` pull target for both remote and
+/// local upstreams so git does not need to infer one from branch config.
+fn pull_rebase_arguments(repo_path: &Path) -> Result<Vec<String>, String> {
+    let upstream_reference = primary_upstream_reference(repo_path)?;
+
+    if let Some((remote_name, branch_name)) = upstream_reference.split_once('/') {
+        return Ok(vec![
+            "pull".to_string(),
+            "--rebase".to_string(),
+            remote_name.to_string(),
+            branch_name.to_string(),
+        ]);
+    }
+
+    let remote_name = current_branch_remote_name(repo_path)?;
+
+    Ok(vec![
+        "pull".to_string(),
+        "--rebase".to_string(),
+        remote_name,
+        upstream_reference,
+    ])
+}
+
+/// Returns the first upstream reference reported for `HEAD`.
+///
+/// Git can return multiple lines when multiple merge targets are configured.
+/// Pulling with rebase needs one concrete target, so this selects the first
+/// non-empty line.
+fn primary_upstream_reference(repo_path: &Path) -> Result<String, String> {
+    let upstream_reference = upstream_reference_name(repo_path)?;
+    let Some(primary_reference) = upstream_reference
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+    else {
+        return Err("Failed to resolve upstream branch: empty output".to_string());
+    };
+
+    Ok(primary_reference.to_string())
+}
+
+/// Returns the full upstream reference for `HEAD` (for example, `origin/main`).
+fn upstream_reference_name(repo_path: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(format!("Failed to resolve upstream branch: {detail}"));
+    }
+
+    let upstream_reference = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if upstream_reference.is_empty() {
+        return Err("Failed to resolve upstream branch: empty output".to_string());
+    }
+
+    Ok(upstream_reference)
+}
+
+/// Returns the configured remote name for the current local branch.
+///
+/// This is used when the upstream short name omits a remote prefix (for
+/// example, `main` with `branch.<name>.remote=.`).
+fn current_branch_remote_name(repo_path: &Path) -> Result<String, String> {
+    let current_branch_name = current_branch_name(repo_path)?;
+    let remote_config_key = format!("branch.{current_branch_name}.remote");
+    let output = Command::new("git")
+        .args(["config", "--get", &remote_config_key])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(format!(
+            "Failed to resolve current branch remote `{remote_config_key}`: {detail}"
+        ));
+    }
+
+    let remote_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if remote_name.is_empty() {
+        return Err(format!(
+            "Failed to resolve current branch remote `{remote_config_key}`: empty output"
+        ));
+    }
+
+    Ok(remote_name)
+}
+
+/// Returns the current local branch name for `HEAD`.
+fn current_branch_name(repo_path: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| format!("Failed to execute git: {error}"))?;
+
+    if !output.status.success() {
+        let detail = command_output_detail(&output.stdout, &output.stderr);
+
+        return Err(format!("Failed to resolve current branch name: {detail}"));
+    }
+
+    let branch_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch_name.is_empty() {
+        return Err("Failed to resolve current branch name: empty output".to_string());
+    }
+
+    if branch_name == "HEAD" {
+        return Err("Failed to resolve current branch name: detached HEAD".to_string());
+    }
+
+    Ok(branch_name)
 }
 
 /// Pushes the current branch to its upstream remote.

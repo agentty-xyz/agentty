@@ -577,6 +577,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pull_rebase_targets_single_upstream_when_merge_targets_are_ambiguous() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(dir.path(), &["remote", "add", "origin", &remote_path]);
+        run_git_command(dir.path(), &["push", "-u", "origin", "main"]);
+
+        run_git_command(dir.path(), &["checkout", "-b", "feature"]);
+        fs::write(dir.path().join("feature.txt"), "feature change").expect("failed to write file");
+        run_git_command(dir.path(), &["add", "feature.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Add feature branch"]);
+        run_git_command(dir.path(), &["push", "-u", "origin", "feature"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+
+        run_git_command(
+            dir.path(),
+            &["config", "--add", "branch.main.merge", "refs/heads/feature"],
+        );
+
+        let pull_without_explicit_target = Command::new("git")
+            .args(["pull", "--rebase"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to run pull --rebase");
+
+        assert!(
+            !pull_without_explicit_target.status.success(),
+            "expected plain pull --rebase to fail in ambiguous merge-target setup"
+        );
+        assert!(
+            String::from_utf8_lossy(&pull_without_explicit_target.stderr)
+                .contains("Cannot rebase onto multiple branches"),
+            "expected ambiguous merge-target failure"
+        );
+
+        // Act
+        let result = pull_rebase(dir.path().to_path_buf()).await;
+
+        // Assert
+        assert_eq!(result, Ok(PullRebaseResult::Completed));
+    }
+
+    #[tokio::test]
+    async fn test_pull_rebase_targets_local_upstream_when_upstream_name_has_no_remote_prefix() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+
+        run_git_command(dir.path(), &["checkout", "-b", "feature"]);
+        fs::write(dir.path().join("feature.txt"), "feature change").expect("failed to write file");
+        run_git_command(dir.path(), &["add", "feature.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Add feature branch"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+
+        run_git_command(dir.path(), &["config", "branch.main.remote", "."]);
+        run_git_command(
+            dir.path(),
+            &[
+                "config",
+                "--replace-all",
+                "branch.main.merge",
+                "refs/heads/main",
+            ],
+        );
+        run_git_command(
+            dir.path(),
+            &["config", "--add", "branch.main.merge", "refs/heads/feature"],
+        );
+
+        let pull_without_explicit_target = Command::new("git")
+            .args(["pull", "--rebase"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to run pull --rebase");
+
+        assert!(
+            !pull_without_explicit_target.status.success(),
+            "expected plain pull --rebase to fail in ambiguous merge-target setup"
+        );
+        assert!(
+            String::from_utf8_lossy(&pull_without_explicit_target.stderr)
+                .contains("Cannot rebase onto multiple branches"),
+            "expected ambiguous merge-target failure"
+        );
+
+        // Act
+        let result = pull_rebase(dir.path().to_path_buf()).await;
+
+        // Assert
+        assert_eq!(result, Ok(PullRebaseResult::Completed));
+    }
+
+    #[tokio::test]
     async fn test_push_current_branch_returns_error_without_remote() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
