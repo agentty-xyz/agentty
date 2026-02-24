@@ -233,7 +233,7 @@ impl TaskService {
         }
 
         if response.context_reset {
-            let context_reset_message = "\n[Codex app-server] Reconnected with a new thread; \
+            let context_reset_message = "\n[App-server] Reconnected with a new session context; \
                                          previous model context was reset.\n";
             Self::append_session_output(&output, &db, &app_event_tx, &id, context_reset_message)
                 .await;

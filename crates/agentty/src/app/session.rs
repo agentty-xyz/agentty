@@ -1929,7 +1929,7 @@ FROM session
                 cmd.arg("--prompt")
                     .arg(prompt)
                     .arg("--model")
-                    .arg("gemini-3-flash-preview")
+                    .arg("claude-sonnet-4-6")
                     .current_dir(folder)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null());
@@ -1954,7 +1954,7 @@ FROM session
                 &session_id,
                 "SpawnInit",
                 &mock,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::ClaudeSonnet46,
             )
             .await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -1981,7 +1981,7 @@ FROM session
                 cmd.arg("--prompt")
                     .arg(prompt)
                     .arg("--model")
-                    .arg("gemini-3-flash-preview")
+                    .arg("claude-sonnet-4-6")
                     .arg("--resume")
                     .arg("latest")
                     .current_dir(folder)
@@ -1996,7 +1996,7 @@ FROM session
                 &session_id,
                 "SpawnReply",
                 &resume_mock,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::ClaudeSonnet46,
             )
             .await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -2179,7 +2179,7 @@ FROM session
                 &session_id,
                 "AutoCommit",
                 &mock,
-                AgentModel::Gemini3FlashPreview,
+                AgentModel::ClaudeSonnet46,
             )
             .await;
 

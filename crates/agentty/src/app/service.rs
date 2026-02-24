@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::db::Database;
 use crate::infra::app_server::AppServerClient;
-use crate::infra::codex_app_server::RealCodexAppServerClient;
+use crate::infra::app_server_router::RoutingAppServerClient;
 use crate::infra::git::GitClient;
 
 /// Shared app dependencies used by managers and background workflows.
@@ -33,7 +33,7 @@ impl AppServices {
             db,
             event_tx,
             git_client,
-            Arc::new(RealCodexAppServerClient::new()),
+            Arc::new(RoutingAppServerClient::new()),
         )
     }
 

@@ -113,7 +113,7 @@ impl AgentKind {
 
     /// Returns whether this agent kind uses the app-server transport path.
     pub fn supports_app_server(self) -> bool {
-        matches!(self, Self::Codex)
+        matches!(self, Self::Codex | Self::Gemini)
     }
 
     /// Returns the model string when it belongs to this agent kind.
@@ -198,29 +198,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_supports_app_server_returns_true_for_codex() {
+    fn test_supports_app_server_returns_true_for_supported_agents() {
         // Arrange
-        let kind = AgentKind::Codex;
+        let codex_kind = AgentKind::Codex;
+        let gemini_kind = AgentKind::Gemini;
 
         // Act
-        let supports_app_server = kind.supports_app_server();
+        let codex_supports_app_server = codex_kind.supports_app_server();
+        let gemini_supports_app_server = gemini_kind.supports_app_server();
 
         // Assert
-        assert!(supports_app_server);
+        assert!(codex_supports_app_server);
+        assert!(gemini_supports_app_server);
     }
 
     #[test]
-    fn test_supports_app_server_returns_false_for_non_codex_agents() {
+    fn test_supports_app_server_returns_false_for_unsupported_agents() {
         // Arrange
-        let gemini_kind = AgentKind::Gemini;
         let claude_kind = AgentKind::Claude;
 
         // Act
-        let gemini_supports_app_server = gemini_kind.supports_app_server();
         let claude_supports_app_server = claude_kind.supports_app_server();
 
         // Assert
-        assert!(!gemini_supports_app_server);
         assert!(!claude_supports_app_server);
     }
 }
