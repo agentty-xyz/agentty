@@ -17,5 +17,5 @@ style = "inline"
 theme = "gruvbox-dark-medium"
 
 [extra]
-github_repo = "https://github.com/opencloudtool/agentty"
+github_repo = "https://github.com/agentty-xyz/agentty"
 npm_package = "https://www.npmjs.com/package/agentty"

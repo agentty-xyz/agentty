@@ -3258,7 +3258,7 @@ FROM session
         assert!(prompt.contains("Do not use Conventional Commit prefixes like `feat:` or `fix:`."));
         assert!(prompt.contains("use `-` bullets when listing multiple points."));
         assert!(prompt.contains(
-            "Include `Co-Authored-By: [Agentty](https://github.com/opencloudtool/agentty)` at the \
+            "Include `Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)` at the \
              end of the final message."
         ));
         assert!(

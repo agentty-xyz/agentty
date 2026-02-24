@@ -8,7 +8,7 @@ Rules:
 - Do not use Conventional Commit prefixes like `feat:` or `fix:`.
 - `description` is commit body text and may be an empty string when no body is needed.
 - If `description` is not empty, write in present simple tense and use `-` bullets when listing multiple points.
-- Include `Co-Authored-By: [Agentty](https://github.com/opencloudtool/agentty)` at the end of the final message.
+- Include `Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)` at the end of the final message.
 - Use only the diff content.
 - Do not wrap the JSON in markdown fences.
 

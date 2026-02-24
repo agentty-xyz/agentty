@@ -12,8 +12,8 @@ edition = "2024"
 license = "Apache-2.0"
 readme = "README.md"
 description = "Agentic Development Environment (ADE) in your terminal"
-repository = "https://github.com/opencloudtool/agentty"
-homepage = "https://github.com/opencloudtool/agentty"
+repository = "https://github.com/agentty-xyz/agentty"
+homepage = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
 clap = { version = "4", features = ["derive"] }

@@ -9,7 +9,7 @@ An **Agentic Development Environment (ADE) in your terminal**, built with Rust a
 ### Shell
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/opencloudtool/agentty/releases/latest/download/agentty-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
 ```
 
 ### Cargo
