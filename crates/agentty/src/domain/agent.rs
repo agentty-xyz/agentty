@@ -111,6 +111,11 @@ impl AgentKind {
         }
     }
 
+    /// Returns whether this agent kind uses the app-server transport path.
+    pub fn supports_app_server(self) -> bool {
+        matches!(self, Self::Codex)
+    }
+
     /// Returns the model string when it belongs to this agent kind.
     pub fn model_str(self, model: AgentModel) -> Option<&'static str> {
         if model.kind() != self {
@@ -185,5 +190,37 @@ impl FromStr for AgentKind {
             "codex" => Ok(Self::Codex),
             other => Err(format!("unknown agent kind: {other}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_supports_app_server_returns_true_for_codex() {
+        // Arrange
+        let kind = AgentKind::Codex;
+
+        // Act
+        let supports_app_server = kind.supports_app_server();
+
+        // Assert
+        assert!(supports_app_server);
+    }
+
+    #[test]
+    fn test_supports_app_server_returns_false_for_non_codex_agents() {
+        // Arrange
+        let gemini_kind = AgentKind::Gemini;
+        let claude_kind = AgentKind::Claude;
+
+        // Act
+        let gemini_supports_app_server = gemini_kind.supports_app_server();
+        let claude_supports_app_server = claude_kind.supports_app_server();
+
+        // Assert
+        assert!(!gemini_supports_app_server);
+        assert!(!claude_supports_app_server);
     }
 }

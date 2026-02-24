@@ -13,7 +13,7 @@ use crate::app::task::TaskService;
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::Status;
-use crate::infra::codex_app_server::CodexAppServerClient;
+use crate::infra::app_server::AppServerClient;
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
@@ -22,7 +22,7 @@ const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution"
 
 /// Command variants serialized per session worker.
 pub(super) enum SessionCommand {
-    ReplyCodexAppServer {
+    ReplyAppServer {
         operation_id: String,
         prompt: String,
         session_output: Option<String>,
@@ -33,7 +33,7 @@ pub(super) enum SessionCommand {
         operation_id: String,
         session_model: AgentModel,
     },
-    StartPromptCodexAppServer {
+    StartPromptAppServer {
         operation_id: String,
         prompt: String,
         session_model: AgentModel,
@@ -50,17 +50,17 @@ impl SessionCommand {
     fn operation_id(&self) -> &str {
         match self {
             Self::Reply { operation_id, .. }
-            | Self::ReplyCodexAppServer { operation_id, .. }
+            | Self::ReplyAppServer { operation_id, .. }
             | Self::StartPrompt { operation_id, .. }
-            | Self::StartPromptCodexAppServer { operation_id, .. } => operation_id,
+            | Self::StartPromptAppServer { operation_id, .. } => operation_id,
         }
     }
 
     /// Returns the operation kind persisted in the operations table.
     fn kind(&self) -> &'static str {
         match self {
-            Self::Reply { .. } | Self::ReplyCodexAppServer { .. } => "reply",
-            Self::StartPrompt { .. } | Self::StartPromptCodexAppServer { .. } => "start_prompt",
+            Self::Reply { .. } | Self::ReplyAppServer { .. } => "reply",
+            Self::StartPrompt { .. } | Self::StartPromptAppServer { .. } => "start_prompt",
         }
     }
 }
@@ -68,7 +68,7 @@ impl SessionCommand {
 struct SessionWorkerContext {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     child_pid: Arc<Mutex<Option<u32>>>,
-    codex_app_server_client: Arc<dyn CodexAppServerClient>,
+    app_server_client: Arc<dyn AppServerClient>,
     db: Database,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
@@ -151,7 +151,7 @@ impl SessionManager {
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
             child_pid: Arc::clone(&handles.child_pid),
-            codex_app_server_client: services.codex_app_server_client(),
+            app_server_client: services.app_server_client(),
             db: services.db().clone(),
             folder: session.folder.clone(),
             git_client: services.git_client(),
@@ -201,7 +201,7 @@ impl SessionManager {
             }
 
             context
-                .codex_app_server_client
+                .app_server_client
                 .shutdown_session(context.session_id.clone())
                 .await;
             if let Ok(mut guard) = context.child_pid.lock() {
@@ -221,32 +221,26 @@ impl SessionManager {
                 session_model,
                 ..
             } => Self::run_standard_session_command(context, command, session_model, false).await,
-            SessionCommand::StartPromptCodexAppServer {
+            SessionCommand::StartPromptAppServer {
                 prompt,
                 session_model,
                 ..
             } => {
-                Self::run_codex_app_server_session_command(
-                    context,
-                    prompt,
-                    None,
-                    session_model,
-                    false,
-                )
-                .await
+                Self::run_app_server_session_command(context, prompt, None, session_model, false)
+                    .await
             }
             SessionCommand::Reply {
                 command,
                 session_model,
                 ..
             } => Self::run_standard_session_command(context, command, session_model, true).await,
-            SessionCommand::ReplyCodexAppServer {
+            SessionCommand::ReplyAppServer {
                 prompt,
                 session_output,
                 session_model,
                 ..
             } => {
-                Self::run_codex_app_server_session_command(
+                Self::run_app_server_session_command(
                     context,
                     prompt,
                     session_output,
@@ -258,7 +252,7 @@ impl SessionManager {
         }
     }
 
-    /// Executes one non-Codex-app-server command using the existing CLI path.
+    /// Executes one non-app-server command using the existing CLI path.
     async fn run_standard_session_command(
         context: &SessionWorkerContext,
         command: Command,
@@ -291,8 +285,8 @@ impl SessionManager {
         .await
     }
 
-    /// Executes one Codex app-server turn for a queued session command.
-    async fn run_codex_app_server_session_command(
+    /// Executes one app-server turn for a queued session command.
+    async fn run_app_server_session_command(
         context: &SessionWorkerContext,
         prompt: String,
         session_output: Option<String>,
@@ -312,9 +306,9 @@ impl SessionManager {
 
         // Start commands keep `Status::InProgress` set by the caller, while
         // reply commands re-enter `InProgress` here.
-        TaskService::run_codex_app_server_task(
-            context.codex_app_server_client.clone(),
-            crate::app::task::RunCodexAppServerTaskInput {
+        TaskService::run_app_server_task(
+            context.app_server_client.clone(),
+            crate::app::task::RunAppServerTaskInput {
                 app_event_tx: context.app_event_tx.clone(),
                 child_pid: Arc::clone(&context.child_pid),
                 db: context.db.clone(),
@@ -372,7 +366,7 @@ mod tests {
     #[test]
     fn test_session_command_kind_values() {
         // Arrange
-        let reply_app_server_command = SessionCommand::ReplyCodexAppServer {
+        let reply_app_server_command = SessionCommand::ReplyAppServer {
             operation_id: "a-app-server".to_string(),
             prompt: "prompt".to_string(),
             session_output: None,
@@ -383,7 +377,7 @@ mod tests {
             operation_id: "a".to_string(),
             session_model: AgentModel::Gemini3FlashPreview,
         };
-        let start_prompt_app_server_command = SessionCommand::StartPromptCodexAppServer {
+        let start_prompt_app_server_command = SessionCommand::StartPromptAppServer {
             operation_id: "b-app-server".to_string(),
             prompt: "prompt".to_string(),
             session_model: AgentModel::Gpt53Codex,
@@ -469,7 +463,7 @@ mod tests {
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             child_pid: Arc::new(Mutex::new(None)),
-            codex_app_server_client: Arc::new(
+            app_server_client: Arc::new(
                 crate::infra::codex_app_server::RealCodexAppServerClient::new(),
             ),
             db: db.clone(),

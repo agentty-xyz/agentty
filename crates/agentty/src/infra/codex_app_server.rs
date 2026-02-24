@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::sync::mpsc;
 
 use crate::domain::permission::PermissionMode;
+use crate::infra::app_server::{
+    self, AppServerClient, AppServerFuture, AppServerSessionRegistry, AppServerStreamEvent,
+    AppServerTurnRequest, AppServerTurnResponse,
+};
 use crate::infra::app_server_transport::{
     self, extract_json_error_message, response_id_matches, write_json_line,
 };
@@ -34,186 +34,50 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     turn_sandbox_type: "workspaceWrite",
 };
 
-/// Boxed async result used by [`CodexAppServerClient`] trait methods.
-pub type CodexAppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-
-/// Incremental event emitted during a Codex app-server turn.
-///
-/// The caller receives these events through an [`mpsc::UnboundedSender`]
-/// channel while the turn is in progress, enabling real-time streaming of
-/// agent output and progress updates to the UI.
-#[derive(Clone, Debug, PartialEq)]
-pub enum CodexStreamEvent {
-    /// An `item/completed` agent message was received.
-    AssistantMessage(String),
-    /// An `item/started` event produced a progress description.
-    ProgressUpdate(String),
-}
-
-/// Input payload for one Codex app-server turn execution.
-#[derive(Clone)]
-pub struct CodexTurnRequest {
-    pub folder: PathBuf,
-    pub model: String,
-    pub prompt: String,
-    pub session_output: Option<String>,
-    pub session_id: String,
-}
-
-/// Normalized result for one Codex app-server turn.
-pub struct CodexTurnResponse {
-    pub assistant_message: String,
-    pub context_reset: bool,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub pid: Option<u32>,
-}
-
-/// Persistent Codex app-server session boundary used by session workers.
-#[cfg_attr(test, mockall::automock)]
-pub trait CodexAppServerClient: Send + Sync {
-    /// Executes one prompt turn for a session and returns normalized output.
-    ///
-    /// Intermediate events (agent messages, progress updates) are sent through
-    /// `stream_tx` as they arrive, enabling the caller to display streaming
-    /// output before the turn completes.
-    fn run_turn(
-        &self,
-        request: CodexTurnRequest,
-        stream_tx: mpsc::UnboundedSender<CodexStreamEvent>,
-    ) -> CodexAppServerFuture<Result<CodexTurnResponse, String>>;
-
-    /// Stops and forgets a session runtime, if one exists.
-    fn shutdown_session(&self, session_id: String) -> CodexAppServerFuture<()>;
-}
-
-/// Production [`CodexAppServerClient`] backed by `codex app-server` process
+/// Production [`AppServerClient`] backed by `codex app-server` process
 /// instances.
 pub struct RealCodexAppServerClient {
-    sessions: Arc<Mutex<HashMap<String, CodexSessionRuntime>>>,
+    sessions: AppServerSessionRegistry<CodexSessionRuntime>,
 }
 
 impl RealCodexAppServerClient {
     /// Creates an empty app-server runtime registry.
     pub fn new() -> Self {
         Self {
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions: AppServerSessionRegistry::new("Codex"),
         }
     }
 
     /// Runs one turn with automatic restart-and-retry on runtime failures.
     async fn run_turn_internal(
-        sessions: &Mutex<HashMap<String, CodexSessionRuntime>>,
-        request: CodexTurnRequest,
-        stream_tx: &mpsc::UnboundedSender<CodexStreamEvent>,
-    ) -> Result<CodexTurnResponse, String> {
-        let mut context_reset = false;
-        let mut session_runtime = Self::take_session(sessions, &request.session_id)?;
+        sessions: &AppServerSessionRegistry<CodexSessionRuntime>,
+        request: AppServerTurnRequest,
+        stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> Result<AppServerTurnResponse, String> {
+        let stream_tx = stream_tx.clone();
 
-        if session_runtime
-            .as_ref()
-            .is_some_and(|runtime| !runtime.matches_request(&request))
-        {
-            if let Some(runtime) = session_runtime.as_mut() {
-                Self::shutdown_runtime(runtime).await;
-            }
+        app_server::run_turn_with_restart_retry(
+            sessions,
+            request,
+            CodexSessionRuntime::matches_request,
+            |runtime| runtime.child.id(),
+            |request| {
+                let request = request.clone();
 
-            session_runtime = None;
-            context_reset = true;
-        }
+                Box::pin(async move { Self::start_runtime(&request).await })
+            },
+            move |runtime, prompt| {
+                let stream_tx = stream_tx.clone();
 
-        let mut session_runtime = match session_runtime {
-            Some(existing_runtime) => existing_runtime,
-            None => Self::start_runtime(&request).await?,
-        };
-        let first_attempt_prompt = Self::turn_prompt_for_runtime(
-            request.prompt.as_str(),
-            request.session_output.as_deref(),
-            context_reset,
-        );
-
-        let first_attempt =
-            Self::run_turn_with_runtime(&mut session_runtime, &first_attempt_prompt, stream_tx)
-                .await;
-        if let Ok((assistant_message, input_tokens, output_tokens)) = first_attempt {
-            let pid = session_runtime.child.id();
-            Self::store_session(sessions, request.session_id, session_runtime)?;
-
-            return Ok(CodexTurnResponse {
-                assistant_message,
-                context_reset,
-                input_tokens,
-                output_tokens,
-                pid,
-            });
-        }
-
-        let first_error = first_attempt
-            .err()
-            .unwrap_or_else(|| "Codex app-server turn failed".to_string());
-        Self::shutdown_runtime(&mut session_runtime).await;
-
-        let mut restarted_runtime = Self::start_runtime(&request).await?;
-        let retry_attempt_prompt = Self::turn_prompt_for_runtime(
-            request.prompt.as_str(),
-            request.session_output.as_deref(),
-            true,
-        );
-        let retry_attempt =
-            Self::run_turn_with_runtime(&mut restarted_runtime, &retry_attempt_prompt, stream_tx)
-                .await;
-        match retry_attempt {
-            Ok((assistant_message, input_tokens, output_tokens)) => {
-                let pid = restarted_runtime.child.id();
-                Self::store_session(sessions, request.session_id, restarted_runtime)?;
-
-                Ok(CodexTurnResponse {
-                    assistant_message,
-                    context_reset: true,
-                    input_tokens,
-                    output_tokens,
-                    pid,
-                })
-            }
-            Err(retry_error) => {
-                Self::shutdown_runtime(&mut restarted_runtime).await;
-
-                Err(format!(
-                    "Codex app-server failed, then retry failed after restart: first error: \
-                     {first_error}; retry error: {retry_error}"
-                ))
-            }
-        }
-    }
-
-    /// Removes and returns a stored runtime for `session_id`.
-    fn take_session(
-        sessions: &Mutex<HashMap<String, CodexSessionRuntime>>,
-        session_id: &str,
-    ) -> Result<Option<CodexSessionRuntime>, String> {
-        let mut sessions = sessions
-            .lock()
-            .map_err(|_| "Failed to lock Codex app-server session map".to_string())?;
-
-        Ok(sessions.remove(session_id))
-    }
-
-    /// Stores or replaces the runtime for `session_id`.
-    fn store_session(
-        sessions: &Mutex<HashMap<String, CodexSessionRuntime>>,
-        session_id: String,
-        session: CodexSessionRuntime,
-    ) -> Result<(), String> {
-        let mut sessions = sessions
-            .lock()
-            .map_err(|_| "Failed to lock Codex app-server session map".to_string())?;
-        sessions.insert(session_id, session);
-
-        Ok(())
+                Box::pin(Self::run_turn_with_runtime(runtime, prompt, stream_tx))
+            },
+            |runtime| Box::pin(Self::shutdown_runtime(runtime)),
+        )
+        .await
     }
 
     /// Starts `codex app-server`, initializes it, and creates a thread.
-    async fn start_runtime(request: &CodexTurnRequest) -> Result<CodexSessionRuntime, String> {
+    async fn start_runtime(request: &AppServerTurnRequest) -> Result<CodexSessionRuntime, String> {
         let mut command = tokio::process::Command::new("codex");
         command.arg("--model").arg(&request.model);
 
@@ -335,29 +199,11 @@ impl RealCodexAppServerClient {
     async fn run_turn_with_runtime(
         session: &mut CodexSessionRuntime,
         prompt: &str,
-        stream_tx: &mpsc::UnboundedSender<CodexStreamEvent>,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> Result<(String, u64, u64), String> {
         let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
-        let turn_start_payload = serde_json::json!({
-            "method": "turn/start",
-            "id": turn_start_id,
-            "params": {
-                "threadId": session.thread_id,
-                "input": [{
-                    "type": "text",
-                    "text": prompt,
-                    "text_elements": []
-                }],
-                "cwd": Value::Null,
-                "approvalPolicy": Self::approval_policy(),
-                "sandboxPolicy": Self::turn_sandbox_policy(),
-                "model": Value::Null,
-                "effort": Value::Null,
-                "summary": Value::Null,
-                "personality": Value::Null,
-                "outputSchema": Value::Null
-            }
-        });
+        let turn_start_payload =
+            Self::build_turn_start_payload(&session.thread_id, prompt, &turn_start_id);
         write_json_line(&mut session.stdin, &turn_start_payload).await?;
 
         let mut assistant_messages = Vec::new();
@@ -394,7 +240,6 @@ impl RealCodexAppServerClient {
                             active_turn_id =
                                 extract_turn_id_from_turn_start_response(&response_value);
                         }
-
                         continue;
                     }
 
@@ -412,11 +257,12 @@ impl RealCodexAppServerClient {
                     }
 
                     if let Some(progress) = extract_item_started_progress(&response_value) {
-                        let _ = stream_tx.send(CodexStreamEvent::ProgressUpdate(progress));
+                        let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
                     }
 
                     if let Some(message) = extract_agent_message(&response_value) {
-                        let _ = stream_tx.send(CodexStreamEvent::AssistantMessage(message.clone()));
+                        let _ =
+                            stream_tx.send(AppServerStreamEvent::AssistantMessage(message.clone()));
                         assistant_messages.push(message);
                     }
 
@@ -442,12 +288,39 @@ impl RealCodexAppServerClient {
             }
         })
         .await
-        .map_err(|_| {
-            format!(
-                "Timed out waiting for Codex app-server `turn/completed` after {} seconds",
-                app_server_transport::TURN_TIMEOUT.as_secs()
-            )
-        })?
+        .map_err(|_| Self::turn_completed_timeout_error())?
+    }
+
+    /// Builds one `turn/start` request payload for the active thread.
+    fn build_turn_start_payload(thread_id: &str, prompt: &str, turn_start_id: &str) -> Value {
+        serde_json::json!({
+            "method": "turn/start",
+            "id": turn_start_id,
+            "params": {
+                "threadId": thread_id,
+                "input": [{
+                    "type": "text",
+                    "text": prompt,
+                    "text_elements": []
+                }],
+                "cwd": Value::Null,
+                "approvalPolicy": Self::approval_policy(),
+                "sandboxPolicy": Self::turn_sandbox_policy(),
+                "model": Value::Null,
+                "effort": Value::Null,
+                "summary": Value::Null,
+                "personality": Value::Null,
+                "outputSchema": Value::Null
+            }
+        })
+    }
+
+    /// Builds a stable timeout error string for turn completion waits.
+    fn turn_completed_timeout_error() -> String {
+        format!(
+            "Timed out waiting for Codex app-server `turn/completed` after {} seconds",
+            app_server_transport::TURN_TIMEOUT.as_secs()
+        )
     }
 
     /// Resolves final turn usage by preferring `turn/completed` payload usage
@@ -479,20 +352,6 @@ impl RealCodexAppServerClient {
                 *latest_stream_usage = Some(turn_usage);
             }
         }
-    }
-
-    /// Returns the turn prompt, replaying session output when context was
-    /// reset and previous transcript is available.
-    fn turn_prompt_for_runtime(
-        prompt: &str,
-        session_output: Option<&str>,
-        context_reset: bool,
-    ) -> String {
-        if !context_reset {
-            return prompt.to_string();
-        }
-
-        crate::infra::agent::build_resume_prompt(prompt, session_output)
     }
 
     /// Returns the app-server approval policy used for one permission mode.
@@ -569,34 +428,26 @@ impl Default for RealCodexAppServerClient {
     }
 }
 
-impl CodexAppServerClient for RealCodexAppServerClient {
+impl AppServerClient for RealCodexAppServerClient {
     fn run_turn(
         &self,
-        request: CodexTurnRequest,
-        stream_tx: mpsc::UnboundedSender<CodexStreamEvent>,
-    ) -> CodexAppServerFuture<Result<CodexTurnResponse, String>> {
-        let sessions = Arc::clone(&self.sessions);
+        request: AppServerTurnRequest,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> AppServerFuture<Result<AppServerTurnResponse, String>> {
+        let sessions = self.sessions.clone();
 
-        Box::pin(
-            async move { Self::run_turn_internal(sessions.as_ref(), request, &stream_tx).await },
-        )
+        Box::pin(async move { Self::run_turn_internal(&sessions, request, &stream_tx).await })
     }
 
-    fn shutdown_session(&self, session_id: String) -> CodexAppServerFuture<()> {
-        let sessions = Arc::clone(&self.sessions);
+    fn shutdown_session(&self, session_id: String) -> AppServerFuture<()> {
+        let sessions = self.sessions.clone();
 
         Box::pin(async move {
-            let mut session = {
-                let Ok(mut sessions) = sessions.lock() else {
-                    return;
-                };
-
-                sessions.remove(&session_id)
+            let Ok(Some(mut session_runtime)) = sessions.take_session(&session_id) else {
+                return;
             };
 
-            if let Some(session) = session.as_mut() {
-                RealCodexAppServerClient::shutdown_runtime(session).await;
-            }
+            RealCodexAppServerClient::shutdown_runtime(&mut session_runtime).await;
         })
     }
 }
@@ -612,7 +463,7 @@ struct CodexSessionRuntime {
 
 impl CodexSessionRuntime {
     /// Returns whether the stored runtime configuration matches one request.
-    fn matches_request(&self, request: &CodexTurnRequest) -> bool {
+    fn matches_request(&self, request: &AppServerTurnRequest) -> bool {
         self.folder == request.folder && self.model == request.model
     }
 }
@@ -1319,8 +1170,7 @@ mod tests {
         let session_output = Some("prior context");
 
         // Act
-        let turn_prompt =
-            RealCodexAppServerClient::turn_prompt_for_runtime(prompt, session_output, false);
+        let turn_prompt = app_server::turn_prompt_for_runtime(prompt, session_output, false);
 
         // Assert
         assert_eq!(turn_prompt, prompt);
@@ -1333,8 +1183,7 @@ mod tests {
         let session_output = Some("assistant: proposed plan");
 
         // Act
-        let turn_prompt =
-            RealCodexAppServerClient::turn_prompt_for_runtime(prompt, session_output, true);
+        let turn_prompt = app_server::turn_prompt_for_runtime(prompt, session_output, true);
 
         // Assert
         assert!(turn_prompt.contains("Continue this session using the full transcript below."));

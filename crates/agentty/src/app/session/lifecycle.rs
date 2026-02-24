@@ -11,7 +11,7 @@ use super::{SessionTaskService, session_branch, session_folder};
 use crate::app::session::worker::SessionCommand;
 use crate::app::settings::SettingName;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
-use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::AgentModel;
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::infra::agent::AgentBackend;
 use crate::ui::pages::session_list::grouped_session_indexes;
@@ -252,8 +252,8 @@ impl SessionManager {
         .await;
 
         let operation_id = Uuid::new_v4().to_string();
-        let command = if session_model.kind() == AgentKind::Codex {
-            SessionCommand::StartPromptCodexAppServer {
+        let command = if session_model.kind().supports_app_server() {
+            SessionCommand::StartPromptAppServer {
                 operation_id,
                 prompt: prompt.clone(),
                 session_model,
@@ -562,7 +562,7 @@ impl SessionManager {
                 Some((
                     session.folder.clone(),
                     if !is_first_message
-                        && (should_replay_history || session_model.kind() == AgentKind::Codex)
+                        && (should_replay_history || session_model.kind().supports_app_server())
                     {
                         Some(session.output.clone())
                     } else {
@@ -697,15 +697,15 @@ impl SessionManager {
         } = input;
         let operation_id = Uuid::new_v4().to_string();
 
-        if session_model.kind() == AgentKind::Codex {
+        if session_model.kind().supports_app_server() {
             if is_first_message {
-                SessionCommand::StartPromptCodexAppServer {
+                SessionCommand::StartPromptAppServer {
                     operation_id,
                     prompt,
                     session_model,
                 }
             } else {
-                SessionCommand::ReplyCodexAppServer {
+                SessionCommand::ReplyAppServer {
                     operation_id,
                     prompt,
                     session_output,

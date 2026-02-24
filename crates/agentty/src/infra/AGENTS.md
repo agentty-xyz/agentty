@@ -8,6 +8,7 @@ Implementations of external interfaces (Database, Git, System).
 
 - [agent/](agent/) - Provider-specific backend builders and response parsing modules.
 - [agent.rs](agent.rs) - Agent module root that wires provider modules under `agent/`.
+- [app_server.rs](app_server.rs) - Shared app-server trait and turn request/response event types.
 - [app_server_transport.rs](app_server_transport.rs) - Shared stdio JSON-RPC transport utilities for app-server protocols.
 - [codex_app_server.rs](codex_app_server.rs) - Persistent Codex app-server client and per-session turn execution.
 - [db.rs](db.rs) - SQLite database implementation.

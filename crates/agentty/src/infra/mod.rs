@@ -1,4 +1,6 @@
 pub mod agent;
+/// Shared app-server types and runtime trait boundaries.
+pub mod app_server;
 /// Shared stdio JSON-RPC transport for app-server protocols.
 pub mod app_server_transport;
 pub mod codex_app_server;

@@ -7,13 +7,14 @@ use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::db::Database;
-use crate::infra::codex_app_server::{CodexAppServerClient, RealCodexAppServerClient};
+use crate::infra::app_server::AppServerClient;
+use crate::infra::codex_app_server::RealCodexAppServerClient;
 use crate::infra::git::GitClient;
 
 /// Shared app dependencies used by managers and background workflows.
 pub struct AppServices {
     base_path: PathBuf,
-    codex_app_server_client: Arc<dyn CodexAppServerClient>,
+    app_server_client: Arc<dyn AppServerClient>,
     db: Database,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     git_client: Arc<dyn GitClient>,
@@ -43,11 +44,11 @@ impl AppServices {
         db: Database,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         git_client: Arc<dyn GitClient>,
-        codex_app_server_client: Arc<dyn CodexAppServerClient>,
+        app_server_client: Arc<dyn AppServerClient>,
     ) -> Self {
         Self {
             base_path,
-            codex_app_server_client,
+            app_server_client,
             db,
             event_tx,
             git_client,
@@ -79,8 +80,8 @@ impl AppServices {
         Arc::clone(&self.git_client)
     }
 
-    /// Returns the shared Codex app-server client used by session workers.
-    pub(crate) fn codex_app_server_client(&self) -> Arc<dyn CodexAppServerClient> {
-        Arc::clone(&self.codex_app_server_client)
+    /// Returns the shared app-server client used by session workers.
+    pub(crate) fn app_server_client(&self) -> Arc<dyn AppServerClient> {
+        Arc::clone(&self.app_server_client)
     }
 }

@@ -1,5 +1,5 @@
 //! App-wide background task helpers for status polling, version checks, and
-//! Codex app-server turns.
+//! app-server turns.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +16,7 @@ use crate::app::assist::{
 use crate::app::session::COMMIT_MESSAGE;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::Status;
-use crate::infra::codex_app_server::{CodexAppServerClient, CodexStreamEvent, CodexTurnRequest};
+use crate::infra::app_server::{AppServerClient, AppServerStreamEvent, AppServerTurnRequest};
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
@@ -30,12 +30,12 @@ const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
 #[cfg(not(test))]
 const CODEX_USAGE_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Stateless helpers for app-scoped background pollers and Codex app-server
+/// Stateless helpers for app-scoped background pollers and app-server
 /// session execution.
 pub(super) struct TaskService;
 
-/// Inputs needed to execute one Codex app-server turn.
-pub(super) struct RunCodexAppServerTaskInput {
+/// Inputs needed to execute one app-server turn.
+pub(super) struct RunAppServerTaskInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     pub(super) db: Database,
@@ -164,7 +164,7 @@ impl TaskService {
         });
     }
 
-    /// Executes one Codex app-server turn for a session.
+    /// Executes one app-server turn for a session.
     ///
     /// On failure, this clears runtime process tracking, transitions the
     /// session back to `Review`, and then returns the original error so session
@@ -172,11 +172,11 @@ impl TaskService {
     ///
     /// # Errors
     /// Returns an error when app-server turn execution fails.
-    pub(super) async fn run_codex_app_server_task(
-        codex_app_server_client: Arc<dyn CodexAppServerClient>,
-        input: RunCodexAppServerTaskInput,
+    pub(super) async fn run_app_server_task(
+        app_server_client: Arc<dyn AppServerClient>,
+        input: RunAppServerTaskInput,
     ) -> Result<(), String> {
-        let RunCodexAppServerTaskInput {
+        let RunAppServerTaskInput {
             app_event_tx,
             child_pid,
             db,
@@ -190,7 +190,7 @@ impl TaskService {
             status,
         } = input;
         let model = session_model.as_str().to_string();
-        let request = CodexTurnRequest {
+        let request = AppServerTurnRequest {
             folder: folder.clone(),
             model,
             prompt,
@@ -198,7 +198,7 @@ impl TaskService {
             session_id: id.clone(),
         };
 
-        let (stream_tx, stream_rx) = mpsc::unbounded_channel::<CodexStreamEvent>();
+        let (stream_tx, stream_rx) = mpsc::unbounded_channel::<AppServerStreamEvent>();
         let consumer_handle = Self::spawn_stream_consumer(
             stream_rx,
             Arc::clone(&output),
@@ -209,7 +209,7 @@ impl TaskService {
 
         Self::set_session_progress(&app_event_tx, &id, Some("Thinking".to_string()));
 
-        let turn_result = codex_app_server_client.run_turn(request, stream_tx).await;
+        let turn_result = app_server_client.run_turn(request, stream_tx).await;
 
         let streamed_any_content = consumer_handle.await.unwrap_or(false);
         Self::clear_session_progress(&app_event_tx, &id);
@@ -217,7 +217,7 @@ impl TaskService {
         let response = match turn_result {
             Ok(response) => response,
             Err(error) => {
-                let () = codex_app_server_client.shutdown_session(id.clone()).await;
+                let () = app_server_client.shutdown_session(id.clone()).await;
                 if let Ok(mut guard) = child_pid.lock() {
                     *guard = None;
                 }
@@ -459,13 +459,13 @@ impl TaskService {
         format_detail_lines(commit_error)
     }
 
-    /// Spawns a background task that consumes [`CodexStreamEvent`]s and
+    /// Spawns a background task that consumes [`AppServerStreamEvent`]s and
     /// forwards them to the session output buffer and progress indicator.
     ///
     /// Returns a join handle that resolves to `true` when at least one
     /// assistant message was streamed, or `false` otherwise.
     fn spawn_stream_consumer(
-        mut stream_rx: mpsc::UnboundedReceiver<CodexStreamEvent>,
+        mut stream_rx: mpsc::UnboundedReceiver<AppServerStreamEvent>,
         output: Arc<Mutex<String>>,
         db: Database,
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -477,7 +477,7 @@ impl TaskService {
 
             while let Some(event) = stream_rx.recv().await {
                 match event {
-                    CodexStreamEvent::AssistantMessage(message) => {
+                    AppServerStreamEvent::AssistantMessage(message) => {
                         if active_progress.take().is_some() {
                             Self::set_session_progress(&app_event_tx, &session_id, None);
                         }
@@ -493,7 +493,7 @@ impl TaskService {
                         .await;
                         streamed_any_content = true;
                     }
-                    CodexStreamEvent::ProgressUpdate(progress) => {
+                    AppServerStreamEvent::ProgressUpdate(progress) => {
                         if active_progress.as_deref() != Some(&progress) {
                             active_progress = Some(progress.clone());
 
@@ -548,12 +548,12 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::Status;
-    use crate::infra::codex_app_server::MockCodexAppServerClient;
+    use crate::infra::app_server::MockAppServerClient;
     use crate::infra::db::Database;
     use crate::infra::git;
 
     #[tokio::test]
-    async fn test_run_codex_app_server_task_error_restores_review_status() {
+    async fn test_run_app_server_task_error_restores_review_status() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let db = Database::open_in_memory()
@@ -573,12 +573,12 @@ mod tests {
         )
         .await
         .expect("failed to insert session");
-        let mut mock_codex_client = MockCodexAppServerClient::new();
-        mock_codex_client
+        let mut mock_app_server_client = MockAppServerClient::new();
+        mock_app_server_client
             .expect_run_turn()
             .times(1)
             .returning(|_, _| Box::pin(async { Err("turn failed".to_string()) }));
-        mock_codex_client
+        mock_app_server_client
             .expect_shutdown_session()
             .times(1)
             .returning(|_| Box::pin(async {}));
@@ -587,9 +587,9 @@ mod tests {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
 
         // Act
-        let result = TaskService::run_codex_app_server_task(
-            Arc::new(mock_codex_client),
-            RunCodexAppServerTaskInput {
+        let result = TaskService::run_app_server_task(
+            Arc::new(mock_app_server_client),
+            RunAppServerTaskInput {
                 app_event_tx,
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
@@ -623,7 +623,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_codex_app_server_task_error_keeps_review_status() {
+    async fn test_run_app_server_task_error_keeps_review_status() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let db = Database::open_in_memory()
@@ -643,12 +643,12 @@ mod tests {
         )
         .await
         .expect("failed to insert session");
-        let mut mock_codex_client = MockCodexAppServerClient::new();
-        mock_codex_client
+        let mut mock_app_server_client = MockAppServerClient::new();
+        mock_app_server_client
             .expect_run_turn()
             .times(1)
             .returning(|_, _| Box::pin(async { Err("turn failed".to_string()) }));
-        mock_codex_client
+        mock_app_server_client
             .expect_shutdown_session()
             .times(1)
             .returning(|_| Box::pin(async {}));
@@ -657,9 +657,9 @@ mod tests {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
 
         // Act
-        let result = TaskService::run_codex_app_server_task(
-            Arc::new(mock_codex_client),
-            RunCodexAppServerTaskInput {
+        let result = TaskService::run_app_server_task(
+            Arc::new(mock_app_server_client),
+            RunAppServerTaskInput {
                 app_event_tx,
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
@@ -724,12 +724,12 @@ mod tests {
             "stream-test".to_string(),
         );
         stream_tx
-            .send(CodexStreamEvent::AssistantMessage(
+            .send(AppServerStreamEvent::AssistantMessage(
                 "Hello world".to_string(),
             ))
             .expect("send should succeed");
         stream_tx
-            .send(CodexStreamEvent::AssistantMessage(
+            .send(AppServerStreamEvent::AssistantMessage(
                 "Second message".to_string(),
             ))
             .expect("send should succeed");
@@ -781,12 +781,12 @@ mod tests {
             "progress-test".to_string(),
         );
         stream_tx
-            .send(CodexStreamEvent::ProgressUpdate(
+            .send(AppServerStreamEvent::ProgressUpdate(
                 "Running a command".to_string(),
             ))
             .expect("send should succeed");
         stream_tx
-            .send(CodexStreamEvent::AssistantMessage("Done".to_string()))
+            .send(AppServerStreamEvent::AssistantMessage("Done".to_string()))
             .expect("send should succeed");
         drop(stream_tx);
         handle.await.expect("consumer task should complete");
@@ -852,13 +852,13 @@ mod tests {
             "dedup-test".to_string(),
         );
         stream_tx
-            .send(CodexStreamEvent::ProgressUpdate("Thinking".to_string()))
+            .send(AppServerStreamEvent::ProgressUpdate("Thinking".to_string()))
             .expect("send should succeed");
         stream_tx
-            .send(CodexStreamEvent::ProgressUpdate("Thinking".to_string()))
+            .send(AppServerStreamEvent::ProgressUpdate("Thinking".to_string()))
             .expect("send should succeed");
         stream_tx
-            .send(CodexStreamEvent::ProgressUpdate("Thinking".to_string()))
+            .send(AppServerStreamEvent::ProgressUpdate("Thinking".to_string()))
             .expect("send should succeed");
         drop(stream_tx);
         handle.await.expect("consumer task should complete");
