@@ -562,29 +562,6 @@ WHERE id = ?
         Ok(())
     }
 
-    /// Clears a session's chat history, resetting it to a fresh state.
-    ///
-    /// Resets output, prompt, title, and status while preserving the session
-    /// identity, worktree, agent, model, and accumulated token statistics.
-    ///
-    /// # Errors
-    /// Returns an error if the session row cannot be updated.
-    pub async fn clear_session_history(&self, id: &str) -> Result<(), String> {
-        sqlx::query(
-            r"
-UPDATE session
-SET output = '', prompt = '', title = NULL, summary = NULL, status = 'New'
-WHERE id = ?
-",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to clear session history: {err}"))?;
-
-        Ok(())
-    }
-
     /// Sets `project_id` for sessions that do not yet reference a project.
     ///
     /// # Errors

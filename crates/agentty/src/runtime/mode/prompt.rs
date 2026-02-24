@@ -424,16 +424,6 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             let selected_command = commands.get(selected_index).copied().unwrap_or(commands[0]);
 
             match selected_command {
-                "/clear" => {
-                    if let AppMode::Prompt {
-                        input, slash_state, ..
-                    } = &mut app.mode
-                    {
-                        input.take_text();
-                        slash_state.reset();
-                    }
-                    let _ = app.clear_session_history(&prompt_context.session_id).await;
-                }
                 "/stats" => {
                     if let AppMode::Prompt {
                         input, slash_state, ..
@@ -653,7 +643,7 @@ fn format_duration(total_seconds: i64) -> String {
 
 fn prompt_slash_commands(input: &str) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/clear", "/model", "/stats"];
+    let mut commands = vec!["/model", "/stats"];
     commands.retain(|command| command.starts_with(&lowered));
 
     commands
@@ -1229,21 +1219,12 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_slash_commands_match_clear() {
-        // Arrange & Act
-        let commands = prompt_slash_commands("/c");
-
-        // Assert
-        assert_eq!(commands, vec!["/clear"]);
-    }
-
-    #[test]
     fn test_prompt_slash_commands_lists_all_commands() {
         // Arrange & Act
         let commands = prompt_slash_commands("/");
 
         // Assert
-        assert_eq!(commands, vec!["/clear", "/model", "/stats"]);
+        assert_eq!(commands, vec!["/model", "/stats"]);
     }
 
     #[test]

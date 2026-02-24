@@ -387,31 +387,6 @@ impl SessionManager {
         Ok(should_persist)
     }
 
-    /// Clears a session's chat history and resets it to a fresh state.
-    ///
-    /// Preserves the session identity, worktree, agent, model, and accumulated
-    /// token statistics. Resets output, prompt, title, and status so the next
-    /// prompt starts the agent without `--resume`.
-    ///
-    /// # Errors
-    /// Returns an error if the session is not found or the database update
-    /// fails.
-    pub async fn clear_session_history(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-    ) -> Result<(), String> {
-        let _ = self.session_index_or_err(session_id)?;
-
-        services.db().clear_session_history(session_id).await?;
-        services.emit_app_event(AppEvent::SessionHistoryCleared {
-            session_id: session_id.to_string(),
-        });
-        self.update_sessions_metadata_cache(services).await;
-
-        Ok(())
-    }
-
     /// Returns the currently selected session, if any.
     pub fn selected_session(&self) -> Option<&Session> {
         self.table_state

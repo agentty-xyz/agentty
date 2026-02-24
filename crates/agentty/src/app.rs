@@ -75,8 +75,6 @@ pub(crate) enum AppEvent {
     VersionAvailabilityUpdated {
         latest_available_version: Option<String>,
     },
-    /// Indicates a session history reset has been persisted.
-    SessionHistoryCleared { session_id: String },
     /// Indicates a session model selection has been persisted.
     SessionModelUpdated {
         session_id: String,
@@ -101,7 +99,6 @@ pub(crate) enum AppEvent {
 struct AppEventBatch {
     at_mention_entries_updates: HashMap<String, Vec<FileEntry>>,
     codex_usage_limits_update: CodexUsageLimitsBatchUpdate,
-    cleared_session_history_ids: HashSet<String>,
     git_status_update: Option<(u32, u32)>,
     has_git_status_update: bool,
     has_latest_available_version_update: bool,
@@ -400,19 +397,6 @@ impl App {
         Ok(())
     }
 
-    /// Clears persisted and in-memory history for a session.
-    ///
-    /// # Errors
-    /// Returns an error if persistence fails.
-    pub async fn clear_session_history(&mut self, session_id: &str) -> Result<(), String> {
-        self.sessions
-            .clear_session_history(&self.services, session_id)
-            .await?;
-        self.process_pending_app_events().await;
-
-        Ok(())
-    }
-
     /// Returns the currently selected session, if any.
     pub fn selected_session(&self) -> Option<&Session> {
         self.sessions.selected_session()
@@ -663,10 +647,6 @@ impl App {
                 self.sessions
                     .apply_codex_usage_limits_update(Some(codex_usage_limits));
             }
-        }
-
-        for session_id in &event_batch.cleared_session_history_ids {
-            self.sessions.apply_session_history_cleared(session_id);
         }
 
         for (session_id, session_model) in event_batch.session_model_updates {
@@ -1033,9 +1013,6 @@ impl AppEventBatch {
             } => {
                 self.has_latest_available_version_update = true;
                 self.latest_available_version_update = latest_available_version;
-            }
-            AppEvent::SessionHistoryCleared { session_id } => {
-                self.cleared_session_history_ids.insert(session_id);
             }
             AppEvent::SessionModelUpdated {
                 session_id,
