@@ -1,3 +1,4 @@
+{% extends "base.html" %}
 {% macro render_section_listing(section_path, show_heading=false) %}
     {% set docs_listing_section = get_section(path=section_path) %}
     {% if show_heading %}
@@ -24,103 +25,22 @@
         {{ self::render_section_listing(section_path=subsection_path, show_heading=true) }}
     {% endfor %}
 {% endmacro render_section_listing %}
-<!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>{{ section.title }} | {{ config.title }}</title>
-        <meta name="description" content="{{ config.description }}">
-        <link rel="canonical" href="{{ section.permalink }}">
-        <link rel="icon" href="{{ config.base_url }}/favicon.ico">
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
-              rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-        <style type="text/tailwindcss">
-            @theme {
-                --color-bg: #080c08;
-                --color-surface: #0d160d;
-                --color-accent: #3ddd6a;
-                --color-muted: #507a5c;
-                --color-dim: #2a5935;
-                --color-border: #1b3d20;
-                --font-mono: "Share Tech Mono", "Courier New", monospace;
-            }
-
-            :root.theme-dark {
-                --color-accent: #e0e0e0;
-                --color-muted: #909090;
-                --color-dim: #585858;
-                --color-bg: #080808;
-                --color-surface: #111111;
-                --color-border: #2a2a2a;
-            }
-        </style>
-        <script>
-            (function () {
-                var theme = localStorage.getItem('agentty-theme') || 'hacker';
-                if (theme === 'dark') document.documentElement.classList.add('theme-dark');
-            })();
-        </script>
-    </head>
-    <body class="font-mono bg-bg text-accent min-h-screen">
-        {% set docs_root_section = get_section(path="docs/_index.md", metadata_only=true) %}
-        <nav class="border-b border-border">
-            <div class="flex items-center justify-between max-w-[960px] mx-auto px-6 py-3">
-                <a class="text-base font-semibold text-accent tracking-[0.02em] no-underline"
-                   href="{{ config.base_url }}">&gt; agentty</a>
-                <div class="flex items-center gap-5 text-[0.85rem]">
-                    <a class="text-accent no-underline opacity-85 hover:opacity-100"
-                       href="{{ config.base_url }}/">home</a>
-                    <a class="text-accent no-underline"
-                       href="{{ docs_root_section.permalink }}">docs</a>
-                    <div class="flex items-center gap-[0.3rem] font-mono select-none"
-                         aria-label="Color theme">
-                        <button class="theme-btn bg-transparent border-0 p-0 font-mono text-[0.75rem] text-accent cursor-pointer transition-colors duration-[120ms] hover:text-accent"
-                                data-theme="hacker"
-                                aria-pressed="true">hacker</button>
-                        <span class="text-[0.7rem] text-dim">/</span>
-                        <button class="theme-btn bg-transparent border-0 p-0 font-mono text-[0.75rem] text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
-                                data-theme="dark"
-                                aria-pressed="false">dark</button>
-                    </div>
-                </div>
-            </div>
-        </nav>
-        <main class="mx-auto max-w-[960px] px-6 pt-12 pb-16">
-            <header class="mb-8">
-                <h1 class="text-[1.35rem] m-0">{{ section.title }}</h1>
-                <p class="m-0 mt-3 text-muted leading-[1.65]">{{ section.content | safe }}</p>
-            </header>
-            {{ self::render_section_listing(section_path="docs/_index.md") }}
-        </main>
-        <script>
-    (function () {
-      var STORAGE_KEY = 'agentty-theme';
-      var root = document.documentElement;
-      var themeBtns = document.querySelectorAll('.theme-btn');
-
-      /** Apply a theme by name ('hacker' or 'dark'), update button states, and persist. */
-      function applyTheme(theme) {
-        root.classList.toggle('theme-dark', theme === 'dark');
-        themeBtns.forEach(function (btn) {
-          var active = btn.dataset.theme === theme;
-          btn.classList.toggle('text-accent', active);
-          btn.classList.toggle('text-muted', !active);
-          btn.setAttribute('aria-pressed', String(active));
-        });
-        localStorage.setItem(STORAGE_KEY, theme);
-      }
-
-      // Sync button states with the theme already applied by the <head> script.
-      applyTheme(localStorage.getItem(STORAGE_KEY) || 'hacker');
-
-      themeBtns.forEach(function (btn) {
-        btn.addEventListener('click', function () { applyTheme(btn.dataset.theme); });
-      });
-    })();
-        </script>
-    </body>
-</html>
+{% block title %}
+    {{ section.title }} | {{ config.title }}
+{% endblock title %}
+{% block canonical %}
+    {{ section.permalink }}
+{% endblock canonical %}
+{% block page_width_class %}
+    max-w-[960px]
+{% endblock page_width_class %}
+{% block main_width_class %}
+    max-w-[960px]
+{% endblock main_width_class %}
+{% block content %}
+    <header class="mb-8">
+        <h1 class="text-[1.35rem] m-0">{{ section.title }}</h1>
+        <p class="m-0 mt-3 text-muted leading-[1.65]">{{ section.content | safe }}</p>
+    </header>
+    {{ self::render_section_listing(section_path="docs/_index.md") }}
+{% endblock content %}
