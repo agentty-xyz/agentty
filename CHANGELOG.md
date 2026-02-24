@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] - 2026-02-23
+
+### Added
+
+- **Docs:** Add copy button to code blocks.
+- **Docs:** Add theme selector and favicon to site.
+- **Docs:** Add contributing guide and templates.
+- **Claude:** Enable Bash tool for Claude agent.
+- **Output:** Stream Codex turn events to session output.
+
+### Changed
+
+- **Sync:** Fix pull rebase to target explicit upstream.
+- **UI:** Cap chat input panel height and scroll prompt viewport.
+- **Architecture:** Generalize app-server session handling.
+- **Architecture:** Refactor site templates to use base layout.
+- **UI:** Update docs sidebar styling.
+- **Project:** Update repository URLs to new organization.
+- **Architecture:** Move UI rendering into a dedicated render module.
+- **Architecture:** Extract shared stdio JSON-RPC transport utilities.
+- **UI:** Adopt Builder Lite pattern for UI components.
+- **Project:** Update description to "Agentic Development Environment (ADE)".
+- **Runtime:** Track active turn usage from completion and stream events.
+- **UX:** Align view mode shortcuts with session state rules.
+- **Runtime:** Require strict turn ID matching and make prompt char handling sync.
+- **Output:** Filter synthetic completion status lines from chat output.
+- **Deps:** Bump pulldown-cmark from 0.13.0 to 0.13.1.
+
+### Removed
+
+- **Command Palette:** Remove command palette and multi-project switching.
+- **Docs:** Remove documentation sections and demo assets from README.
+- **Slash Commands:** Remove `/clear` slash command and session history clearing logic.
+
+### Contributors
+
+- @andagaev
+- @dependabot[bot]
+- @minev-dev
+
 ## [v0.2.2] - 2026-02-22
 
 ### Added
