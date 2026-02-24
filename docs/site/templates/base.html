@@ -50,13 +50,8 @@
                 text-shadow: 0 0 12px rgba(224, 224, 224, 0.2);
             }
 
-                {
-                % block extra_css %
-            }
-
-                {
-                % endblock extra_css %
-            }
+            {% block extra_css %}
+            {% endblock extra_css %}
         </style>
         <!-- Apply saved theme before paint to avoid flash of unstyled content -->
         <script>
