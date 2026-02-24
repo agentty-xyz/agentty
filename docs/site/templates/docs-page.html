@@ -168,6 +168,16 @@
                         <a class="text-accent no-underline opacity-85 hover:opacity-100"
                            href="{{ config.base_url }}/">home</a>
                         <a class="text-accent no-underline" href="{{ docs_section.permalink }}">docs</a>
+                        <div class="flex items-center gap-[0.3rem] font-mono select-none"
+                             aria-label="Color theme">
+                            <button class="theme-btn bg-transparent border-0 p-0 font-mono text-[0.75rem] text-accent cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                                    data-theme="hacker"
+                                    aria-pressed="true">hacker</button>
+                            <span class="text-[0.7rem] text-dim">/</span>
+                            <button class="theme-btn bg-transparent border-0 p-0 font-mono text-[0.75rem] text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                                    data-theme="dark"
+                                    aria-pressed="false">dark</button>
+                        </div>
                     </div>
                 </div>
             </nav>
@@ -181,5 +191,31 @@
                     <div class="docs-content mt-5 leading-[1.75] text-[0.95rem] text-muted">{{ page.content | safe }}</div>
                 </article>
             </main>
+            <script>
+    (function () {
+      var STORAGE_KEY = 'agentty-theme';
+      var root = document.documentElement;
+      var themeBtns = document.querySelectorAll('.theme-btn');
+
+      /** Apply a theme by name ('hacker' or 'dark'), update button states, and persist. */
+      function applyTheme(theme) {
+        root.classList.toggle('theme-dark', theme === 'dark');
+        themeBtns.forEach(function (btn) {
+          var active = btn.dataset.theme === theme;
+          btn.classList.toggle('text-accent', active);
+          btn.classList.toggle('text-muted', !active);
+          btn.setAttribute('aria-pressed', String(active));
+        });
+        localStorage.setItem(STORAGE_KEY, theme);
+      }
+
+      // Sync button states with the theme already applied by the <head> script.
+      applyTheme(localStorage.getItem(STORAGE_KEY) || 'hacker');
+
+      themeBtns.forEach(function (btn) {
+        btn.addEventListener('click', function () { applyTheme(btn.dataset.theme); });
+      });
+    })();
+            </script>
         </body>
     </html>
