@@ -14,7 +14,6 @@ use super::session_folder;
 use crate::app::SessionManager;
 use crate::app::settings::SettingName;
 use crate::domain::agent::{AgentKind, AgentModel};
-use crate::domain::project::Project;
 use crate::domain::session::{
     AllTimeModelUsage, CodexUsageLimitWindow, CodexUsageLimits, DailyActivity, Session,
     SessionHandles, SessionSize, SessionStats, Status,
@@ -76,17 +75,16 @@ impl SessionManager {
     pub(crate) async fn load_sessions(
         base: &Path,
         db: &Database,
-        projects: &[Project],
+        active_project_id: i64,
+        working_dir: &Path,
         handles: &mut HashMap<String, SessionHandles>,
         git_client: Arc<dyn GitClient>,
     ) -> (Vec<Session>, Vec<DailyActivity>) {
-        let project_names: HashMap<i64, String> = projects
-            .iter()
-            .filter_map(|project| {
-                let name = project.path.file_name()?.to_string_lossy().to_string();
-                Some((project.id, name))
-            })
-            .collect();
+        let project_name = working_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
 
         let db_rows = db.load_sessions().await.unwrap_or_default();
         let activity_timestamps = db
@@ -103,16 +101,14 @@ impl SessionManager {
             if !folder.is_dir() && !is_terminal_status {
                 continue;
             }
+            if row.project_id != Some(active_project_id) {
+                continue;
+            }
 
             let session_model = row
                 .model
                 .parse::<AgentModel>()
                 .unwrap_or_else(|_| AgentKind::Gemini.default_model());
-            let project_name = row
-                .project_id
-                .and_then(|id| project_names.get(&id))
-                .cloned()
-                .unwrap_or_default();
 
             if let Some(existing) = handles.get(&row.id) {
                 if let Ok(mut output_buffer) = existing.output.lock() {
@@ -148,7 +144,7 @@ impl SessionManager {
                 id: row.id,
                 model: session_model,
                 output: row.output,
-                project_name,
+                project_name: project_name.clone(),
                 prompt: row.prompt,
                 size,
                 stats: SessionStats {

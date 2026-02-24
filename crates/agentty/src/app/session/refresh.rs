@@ -78,7 +78,8 @@ impl SessionManager {
         let (sessions, stats_activity) = Self::load_sessions(
             services.base_path(),
             services.db(),
-            projects,
+            projects.active_project_id(),
+            projects.working_dir(),
             &mut self.handles,
             services.git_client(),
         )

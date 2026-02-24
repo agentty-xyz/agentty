@@ -3,10 +3,8 @@ use std::collections::HashMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::domain::project::Project;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
-use crate::ui::state::palette::{PaletteCommand, PaletteFocus};
 use crate::ui::{Component, Page, components, pages};
 
 /// Borrowed parameters for rendering the sync-blocked popup overlay.
@@ -86,41 +84,6 @@ pub(crate) fn sync_popup_message(
         }
         (None, None) => detail_message.to_string(),
     }
-}
-
-/// Renders the command palette overlay on top of list background content.
-pub(crate) fn render_command_palette(
-    f: &mut Frame,
-    area: Rect,
-    list_background: ListBackgroundRenderContext<'_>,
-    focus: PaletteFocus,
-    input: &str,
-    selected_index: usize,
-) {
-    render_list_background(f, area, list_background);
-
-    components::command_palette::CommandPaletteInput::new(input)
-        .selected_index(selected_index)
-        .focus(focus)
-        .render(f, area);
-}
-
-/// Renders command options overlay on top of list background content.
-pub(crate) fn render_command_options(
-    f: &mut Frame,
-    area: Rect,
-    list_background: ListBackgroundRenderContext<'_>,
-    command: PaletteCommand,
-    selected_index: usize,
-    projects: &[Project],
-    active_project_id: i64,
-) {
-    render_list_background(f, area, list_background);
-
-    components::command_palette::CommandOptionList::new(command, projects)
-        .selected_index(selected_index)
-        .active_project_id(active_project_id)
-        .render(f, area);
 }
 
 /// Renders help overlay above the context-specific background page.

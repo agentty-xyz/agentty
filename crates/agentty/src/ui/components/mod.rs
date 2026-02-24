@@ -1,5 +1,4 @@
 pub mod chat_input;
-pub mod command_palette;
 pub mod confirmation_overlay;
 pub mod file_explorer;
 pub mod footer_bar;

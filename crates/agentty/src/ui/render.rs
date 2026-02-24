@@ -7,7 +7,6 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::{SettingsManager, Tab};
-use crate::domain::project::Project;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::{components, pages, router};
@@ -26,7 +25,6 @@ pub trait Component {
 
 /// Immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
-    pub active_project_id: i64,
     pub all_time_model_usage: &'a [AllTimeModelUsage],
     pub codex_usage_limits: Option<CodexUsageLimits>,
     pub current_tab: Tab,
@@ -35,7 +33,6 @@ pub struct RenderContext<'a> {
     pub latest_available_version: Option<&'a str>,
     pub longest_session_duration_seconds: u64,
     pub mode: &'a AppMode,
-    pub projects: &'a [Project],
     pub session_progress_messages: &'a HashMap<String, String>,
     pub settings: &'a mut SettingsManager,
     pub show_onboarding: bool,

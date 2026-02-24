@@ -5,7 +5,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::{SettingsManager, Tab};
-use crate::domain::project::Project;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::overlays::SyncBlockedPopupRenderContext;
 use crate::ui::state::app_mode::AppMode;
@@ -65,21 +64,17 @@ struct SessionChatRenderContext<'a> {
 /// Shared immutable routing inputs that are not part of list-background state.
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
-    active_project_id: i64,
-    projects: &'a [Project],
     session_progress_messages: &'a HashMap<String, String>,
 }
 
 /// Routes the content-area render path by active `AppMode`.
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
-        active_project_id,
         all_time_model_usage,
         codex_usage_limits,
         current_tab,
         longest_session_duration_seconds,
         mode,
-        projects,
         session_progress_messages,
         settings,
         stats_activity,
@@ -100,8 +95,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     };
 
     let aux = RouteAuxContext {
-        active_project_id,
-        projects,
         session_progress_messages,
     };
 
@@ -125,30 +118,7 @@ fn render_list_or_overlay_mode(
         AppMode::Confirmation { .. } => {
             overlays::render_confirmation_overlay(f, area, mode, shared.list_background());
         }
-        AppMode::CommandPalette {
-            input,
-            selected_index,
-            focus,
-        } => overlays::render_command_palette(
-            f,
-            area,
-            shared.list_background(),
-            *focus,
-            input,
-            *selected_index,
-        ),
-        AppMode::CommandOption {
-            command,
-            selected_index,
-        } => overlays::render_command_options(
-            f,
-            area,
-            shared.list_background(),
-            *command,
-            *selected_index,
-            aux.projects,
-            aux.active_project_id,
-        ),
+
         AppMode::SyncBlockedPopup {
             default_branch,
             is_loading,
@@ -231,8 +201,6 @@ fn render_session_or_diff_mode(
         ),
         AppMode::List
         | AppMode::Confirmation { .. }
-        | AppMode::CommandPalette { .. }
-        | AppMode::CommandOption { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Help { .. } => {}
     }

@@ -1,4 +1,3 @@
-pub(crate) mod command_palette;
 pub(crate) mod confirmation;
 pub(crate) mod diff;
 pub(crate) mod help;

@@ -182,7 +182,6 @@ pub(crate) fn footer_text(actions: &[HelpAction]) -> String {
 fn list_base_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("command", "/", "Command palette"),
         HelpAction::new("add", "a", "Add session"),
         HelpAction::new("sync", "s", "Sync"),
     ]

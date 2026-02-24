@@ -160,17 +160,15 @@ impl App {
 
         let git_client: Arc<dyn GitClient> = Arc::new(RealGitClient);
 
-        ProjectManager::discover_sibling_projects(&working_dir, &db, Arc::clone(&git_client)).await;
         SessionManager::fail_unfinished_operations_from_previous_run(&db).await;
-
-        let projects = ProjectManager::load_projects_from_db(&db).await;
 
         let mut table_state = TableState::default();
         let mut handles = HashMap::new();
         let (sessions, stats_activity) = SessionManager::load_sessions(
             &base_path,
             &db,
-            &projects,
+            active_project_id,
+            &working_dir,
             &mut handles,
             Arc::clone(&git_client),
         )
@@ -194,7 +192,6 @@ impl App {
             active_project_id,
             git_branch,
             Arc::clone(&git_status_cancel),
-            projects,
             working_dir,
         );
         let settings = SettingsManager::new(&services).await;
@@ -284,11 +281,9 @@ impl App {
         let git_branch = self.projects.git_branch().map(str::to_string);
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
-        let active_project_id = self.projects.active_project_id();
         let session_progress_messages = self.session_progress_messages.clone();
         let show_onboarding = self.sessions.sessions.is_empty();
         let mode = &self.mode;
-        let projects = &self.projects;
         let (
             sessions,
             stats_activity,
@@ -302,7 +297,6 @@ impl App {
         ui::render(
             frame,
             ui::RenderContext {
-                active_project_id,
                 all_time_model_usage,
                 codex_usage_limits,
                 current_tab,
@@ -311,7 +305,6 @@ impl App {
                 latest_available_version: latest_available_version.as_deref(),
                 longest_session_duration_seconds,
                 mode,
-                projects,
                 session_progress_messages: &session_progress_messages,
                 settings,
                 show_onboarding,
@@ -476,19 +469,6 @@ impl App {
         self.sessions
             .append_output_for_session(&self.services, session_id, output)
             .await;
-    }
-
-    /// Switches active project and refreshes session snapshot state.
-    ///
-    /// # Errors
-    /// Returns an error if the project id does not exist.
-    pub async fn switch_project(&mut self, project_id: i64) -> Result<(), String> {
-        self.projects
-            .switch_project(project_id, &self.services, &mut self.sessions)
-            .await?;
-        self.process_pending_app_events().await;
-
-        Ok(())
     }
 
     /// Starts squash-merge workflow for a review-ready session.
@@ -962,15 +942,7 @@ impl App {
             .projects
             .git_branch()
             .map_or_else(|| "not detected".to_string(), str::to_string);
-        let project_name = self
-            .projects
-            .working_dir()
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map_or_else(
-                || self.projects.working_dir().display().to_string(),
-                str::to_string,
-            );
+        let project_name = self.projects.project_name();
 
         SyncPopupContext {
             default_branch,

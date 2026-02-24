@@ -5,7 +5,6 @@ Reusable UI widgets implementing the `Component` trait.
 ## Directory Index
 
 - [chat_input.rs](chat_input.rs) - Chat input component.
-- [command_palette.rs](command_palette.rs) - Command palette and option list components.
 - [confirmation_overlay.rs](confirmation_overlay.rs) - Confirmation dialog overlay component.
 - [file_explorer.rs](file_explorer.rs) - Diff file explorer component.
 - [footer_bar.rs](footer_bar.rs) - Footer bar component.

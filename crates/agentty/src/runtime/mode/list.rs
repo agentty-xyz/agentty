@@ -11,7 +11,6 @@ use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::state::help_action::{
     HelpAction, onboarding_actions, session_list_actions, settings_actions, stats_actions,
 };
-use crate::ui::state::palette::PaletteFocus;
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
 /// Handles key input while the app is in list mode.
@@ -36,13 +35,6 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         }
         KeyCode::Tab => {
             app.tabs.next();
-        }
-        KeyCode::Char('/') => {
-            app.mode = AppMode::CommandPalette {
-                input: String::new(),
-                selected_index: 0,
-                focus: PaletteFocus::Dropdown,
-            };
         }
         KeyCode::Char('a') => {
             open_new_session_prompt(app).await?;
@@ -342,31 +334,6 @@ mod tests {
                 session_id: None,
                 selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if confirmation_title == "Confirm Quit" && confirmation_message == "Quit agentty?"
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_handle_slash_key_opens_command_palette_mode() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app().await;
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(
-            app.mode,
-            AppMode::CommandPalette {
-                ref input,
-                selected_index: 0,
-                focus: PaletteFocus::Dropdown
-            } if input.is_empty()
         ));
     }
 

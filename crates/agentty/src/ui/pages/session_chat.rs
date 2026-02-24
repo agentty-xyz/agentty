@@ -74,8 +74,6 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Prompt { .. }
             | AppMode::Diff { .. }
-            | AppMode::CommandPalette { .. }
-            | AppMode::CommandOption { .. }
             | AppMode::Help { .. } => DoneSessionOutputMode::Summary,
         }
     }

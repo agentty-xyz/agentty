@@ -1,5 +1,4 @@
 use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
-use super::palette::{PaletteCommand, PaletteFocus};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
 
@@ -67,15 +66,7 @@ pub enum AppMode {
         scroll_offset: u16,
         file_explorer_selected_index: usize,
     },
-    CommandPalette {
-        input: String,
-        selected_index: usize,
-        focus: PaletteFocus,
-    },
-    CommandOption {
-        command: PaletteCommand,
-        selected_index: usize,
-    },
+
     Help {
         context: HelpContext,
         scroll_offset: u16,

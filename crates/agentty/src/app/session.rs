@@ -188,7 +188,6 @@ mod tests {
     use crate::app::settings::SettingName;
     use crate::app::{App, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel};
-    use crate::domain::project::Project;
     use crate::domain::session::{
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
@@ -1490,7 +1489,7 @@ FROM session
         .execute(db.pool())
         .await
         .expect("failed to backfill session activity from session rows");
-        let projects: Vec<Project> = Vec::new();
+        let working_dir = PathBuf::from("/tmp/test");
         let mut handles: HashMap<String, SessionHandles> = HashMap::new();
         let mut expected_activity_by_day: BTreeMap<i64, u32> = BTreeMap::new();
         for timestamp_seconds in [
@@ -1514,7 +1513,8 @@ FROM session
         let (sessions, stats_activity) = SessionManager::load_sessions(
             dir.path(),
             &db,
-            &projects,
+            project_id,
+            &working_dir,
             &mut handles,
             Arc::new(git::RealGitClient),
         )
@@ -1551,14 +1551,15 @@ FROM session
         db.delete_session("alpha000")
             .await
             .expect("failed to delete alpha000");
-        let projects: Vec<Project> = Vec::new();
+        let working_dir = PathBuf::from("/tmp/test");
         let mut handles: HashMap<String, SessionHandles> = HashMap::new();
 
         // Act
         let (sessions, stats_activity) = SessionManager::load_sessions(
             dir.path(),
             &db,
-            &projects,
+            project_id,
+            &working_dir,
             &mut handles,
             Arc::new(git::RealGitClient),
         )
@@ -1829,7 +1830,8 @@ FROM session
         let (reloaded_sessions, _) = SessionManager::load_sessions(
             app.services.base_path(),
             app.services.db(),
-            &app.projects,
+            app.projects.active_project_id(),
+            app.projects.working_dir(),
             &mut app.sessions.handles,
             Arc::new(git::RealGitClient),
         )
@@ -1885,7 +1887,8 @@ FROM session
         let (reloaded_sessions, _) = SessionManager::load_sessions(
             app.services.base_path(),
             app.services.db(),
-            &app.projects,
+            app.projects.active_project_id(),
+            app.projects.working_dir(),
             &mut app.sessions.handles,
             Arc::new(git::RealGitClient),
         )
@@ -3077,84 +3080,6 @@ FROM session
     }
 
     #[tokio::test]
-    async fn test_projects_auto_registered() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let app = new_test_app(dir.path().to_path_buf()).await;
-
-        // Act & Assert — cwd auto-registered as a project
-        assert!(
-            app.projects
-                .iter()
-                .any(|project| project.path == Path::new("/tmp/test"))
-        );
-    }
-
-    #[tokio::test]
-    async fn test_switch_project() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf()).await;
-        let other_id = app
-            .services
-            .db()
-            .upsert_project("/tmp/other", Some("develop"))
-            .await
-            .expect("failed to upsert");
-
-        // Act
-        app.switch_project(other_id)
-            .await
-            .expect("failed to switch");
-
-        // Assert
-        assert_eq!(app.active_project_id(), other_id);
-        assert_eq!(app.working_dir(), Path::new("/tmp/other"));
-        assert_eq!(app.git_branch(), Some("develop"));
-        assert!(app.sessions.sessions.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_switch_project_not_found() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app(dir.path().to_path_buf()).await;
-
-        // Act
-        let result = app.switch_project(999).await;
-
-        // Assert
-        assert!(result.is_err());
-        let error = result.expect_err("expected missing project error");
-        assert!(error.contains("Project not found"));
-    }
-
-    #[tokio::test]
-    async fn test_switch_project_shows_all_sessions() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app_with_git(dir.path()).await;
-        create_and_start_session(&mut app, "Session A").await;
-        assert_eq!(app.sessions.sessions.len(), 1);
-
-        let other_id = app
-            .services
-            .db()
-            .upsert_project("/tmp/other", None)
-            .await
-            .expect("failed to upsert");
-
-        // Act — switch to other project
-        app.switch_project(other_id)
-            .await
-            .expect("failed to switch");
-
-        // Assert — all sessions still visible after switching projects
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(app.active_project_id(), other_id);
-    }
-
-    #[tokio::test]
     async fn test_create_session_scoped_to_project() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -3175,38 +3100,6 @@ FROM session
             .expect("failed to load");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].project_id, Some(project_id));
-    }
-
-    #[tokio::test]
-    async fn test_discover_sibling_projects() {
-        // Arrange — create a parent dir with two git repo subdirectories
-        let parent = tempdir().expect("failed to create temp dir");
-        let repo_a = parent.path().join("repo_a");
-        let repo_b = parent.path().join("repo_b");
-        let not_repo = parent.path().join("plain_dir");
-        std::fs::create_dir(&repo_a).expect("failed to create repo_a");
-        std::fs::create_dir(&repo_b).expect("failed to create repo_b");
-        std::fs::create_dir(&not_repo).expect("failed to create plain_dir");
-        setup_test_git_repo(&repo_a);
-        setup_test_git_repo(&repo_b);
-
-        // Act — launch app from repo_a
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let app = App::new(
-            parent.path().to_path_buf(),
-            repo_a.clone(),
-            Some("main".to_string()),
-            db,
-        )
-        .await;
-
-        // Assert — repo_a (cwd) and repo_b (sibling) are discovered, plain_dir is not
-        assert_eq!(app.projects.len(), 2);
-        let paths: Vec<&Path> = app.projects.iter().map(|p| p.path.as_path()).collect();
-        assert!(paths.contains(&repo_a.as_path()));
-        assert!(paths.contains(&repo_b.as_path()));
     }
 
     #[test]

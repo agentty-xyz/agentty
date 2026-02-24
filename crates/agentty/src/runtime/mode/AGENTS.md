@@ -9,7 +9,6 @@ Key handling logic split by `AppMode`.
 - [help.rs](help.rs) - Help overlay mode key handling.
 - [list.rs](list.rs) - Session list mode key handling.
 - [mod.rs](mod.rs) - Mode module exports.
-- [command_palette.rs](command_palette.rs) - Command palette and option mode handlers.
 - [prompt.rs](prompt.rs) - Prompt mode editing and submit handling.
 - [sync_blocked.rs](sync_blocked.rs) - Sync-blocked popup key handling.
 - [session_view.rs](session_view.rs) - Session view mode navigation and actions.
