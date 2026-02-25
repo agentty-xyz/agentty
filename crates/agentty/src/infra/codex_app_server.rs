@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -152,13 +151,8 @@ impl RealCodexAppServerClient {
     /// Starts one Codex thread and returns its identifier.
     async fn start_thread(session: &mut CodexSessionRuntime) -> Result<String, String> {
         let thread_start_id = format!("thread-start-{}", uuid::Uuid::new_v4());
-        let instructions = load_root_instructions(&session.folder);
-        let thread_start_payload = Self::build_thread_start_payload(
-            &session.folder,
-            &session.model,
-            &thread_start_id,
-            &instructions,
-        );
+        let thread_start_payload =
+            Self::build_thread_start_payload(&session.folder, &session.model, &thread_start_id);
 
         write_json_line(&mut session.stdin, &thread_start_payload).await?;
         let response_line = app_server_transport::wait_for_response_line(
@@ -181,12 +175,10 @@ impl RealCodexAppServerClient {
     }
 
     /// Builds one `thread/start` request payload for a runtime folder.
-    fn build_thread_start_payload(
-        folder: &Path,
-        model: &str,
-        thread_start_id: &str,
-        instructions: &Value,
-    ) -> Value {
+    ///
+    /// Root `AGENTS.md` content is intentionally not forwarded through
+    /// app-server instruction fields.
+    fn build_thread_start_payload(folder: &Path, model: &str, thread_start_id: &str) -> Value {
         serde_json::json!({
             "method": "thread/start",
             "id": thread_start_id,
@@ -197,8 +189,8 @@ impl RealCodexAppServerClient {
                 "approvalPolicy": Self::approval_policy(),
                 "sandbox": Self::thread_sandbox_mode(),
                 "config": Value::Null,
-                "baseInstructions": instructions.clone(),
-                "developerInstructions": instructions.clone(),
+                "baseInstructions": Value::Null,
+                "developerInstructions": Value::Null,
                 "personality": Value::Null,
                 "ephemeral": Value::Null,
                 "dynamicTools": Value::Null,
@@ -577,25 +569,6 @@ fn extract_agent_message(response_value: &Value) -> Option<String> {
     Some(message)
 }
 
-fn load_root_instructions(folder: &Path) -> Value {
-    read_root_agents_instructions(folder).map_or(Value::Null, |instructions| {
-        Value::String(format!(
-            "Project instructions from AGENTS.md:\n\n{instructions}"
-        ))
-    })
-}
-
-fn read_root_agents_instructions(folder: &Path) -> Option<String> {
-    let agents_markdown = folder.join("AGENTS.md");
-
-    fs::read_to_string(agents_markdown)
-        .ok()
-        .as_deref()
-        .map(str::trim)
-        .filter(|instructions| !instructions.is_empty())
-        .map(ToString::to_string)
-}
-
 /// Parses `turn/completed` notifications and maps failures to user errors.
 ///
 /// Completion notifications are only considered when `expected_turn_id` is
@@ -929,8 +902,6 @@ mod tests {
     fn build_thread_start_payload_uses_thread_folder_as_cwd() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
-        let instructions =
-            Value::String("Project instructions from AGENTS.md\n\nRules".to_string());
         let thread_start_id = "thread-start-1";
 
         // Act
@@ -938,7 +909,6 @@ mod tests {
             temp_directory.path(),
             "gpt-5.3-codex",
             thread_start_id,
-            &instructions,
         );
         let payload_cwd = payload
             .get("params")
@@ -1417,22 +1387,30 @@ mod tests {
     }
 
     #[test]
-    fn load_root_instructions_returns_instructions_from_agents_markdown() {
+    fn build_thread_start_payload_does_not_set_root_instruction_fields() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
-        let instructions = "Project rules are strict";
-        std::fs::write(temp_directory.path().join("AGENTS.md"), instructions)
-            .expect("failed to write AGENTS file");
+        let thread_start_id = "thread-start-1";
 
         // Act
-        let loaded = load_root_instructions(temp_directory.path());
+        let payload = RealCodexAppServerClient::build_thread_start_payload(
+            temp_directory.path(),
+            "gpt-5.3-codex",
+            thread_start_id,
+        );
 
         // Assert
         assert_eq!(
-            loaded,
-            Value::String(format!(
-                "Project instructions from AGENTS.md:\n\n{instructions}"
-            ))
+            payload
+                .get("params")
+                .and_then(|params| params.get("baseInstructions")),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            payload
+                .get("params")
+                .and_then(|params| params.get("developerInstructions")),
+            Some(&Value::Null)
         );
     }
 }

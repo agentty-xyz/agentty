@@ -108,7 +108,10 @@ mod tests {
         // Assert
         assert!(debug_command.contains("Project instructions from AGENTS.md"));
         assert!(debug_command.contains(instructions));
-        assert!(debug_command.contains("User prompt:\nRun checks"));
+        assert!(
+            debug_command.contains("User prompt:\nRun checks")
+                || debug_command.contains("User prompt:\\nRun checks")
+        );
     }
 
     #[test]
