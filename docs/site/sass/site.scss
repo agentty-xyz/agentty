@@ -421,10 +421,17 @@ svg {
     gap: 0.5rem;
 }
 
+.docs-nav-heading {
+    margin: 0.35rem 0 0.45rem;
+    font-size: 1.1rem;
+    line-height: 1.25;
+}
+
 .docs-nav-list--nested {
-    margin-left: 0.75rem;
-    padding-left: 0.75rem;
-    border-left: 1px solid var(--color-border);
+    margin-left: 0;
+    padding-left: 0;
+    margin-bottom: 0.6rem;
+    border-left: none;
 }
 
 .docs-nav-link {

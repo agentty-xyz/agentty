@@ -1,5 +1,5 @@
 +++
-title = "Getting Started"
+title = "Installation"
 description = "Install Agentty, launch your first session, and review generated changes."
 weight = 1
 +++

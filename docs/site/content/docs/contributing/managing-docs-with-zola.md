@@ -1,7 +1,7 @@
 +++
 title = "Managing Docs with Zola"
 description = "Recommended structure and front-matter conventions for maintaining docs in Zola."
-weight = 2
+weight = 1
 +++
 
 Use these conventions to keep Agentty documentation maintainable as it grows.
