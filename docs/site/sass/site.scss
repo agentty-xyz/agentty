@@ -60,6 +60,20 @@ svg {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 1rem;
+}
+
+.site-nav-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.site-nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
 }
 
 .site-container {

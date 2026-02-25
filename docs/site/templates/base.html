@@ -31,12 +31,18 @@
         {% set docs_section = get_section(path="docs/_index.md") %}
         <nav class="site-nav">
             <div class="site-nav-inner {% block page_width_class %}site-container{% endblock page_width_class %}">
-                <a class="site-brand" href="{{ config.base_url }}">&gt; agentty</a>
-                <div class="site-nav-links">
-                    {% block nav_links %}
-                        <a class="site-nav-link" href="{{ config.base_url }}/">home</a>
-                        <a class="site-nav-link" href="{{ docs_section.permalink }}">docs</a>
-                    {% endblock nav_links %}
+                <div class="site-nav-left">
+                    <a class="site-brand" href="{{ config.base_url }}">&gt; agentty</a>
+                    <div class="site-nav-links">
+                        {% block nav_links %}
+                            <a class="site-nav-link" href="{{ config.base_url }}/">home</a>
+                            <a class="site-nav-link" href="{{ docs_section.permalink }}">docs</a>
+                        {% endblock nav_links %}
+                    </div>
+                </div>
+                <div class="site-nav-actions">
+                    {% block extra_nav %}
+                    {% endblock extra_nav %}
                     <div class="site-theme-switch" aria-label="Color theme">
                         <button class="theme-btn site-theme-btn"
                                 data-theme="hacker"
@@ -46,8 +52,6 @@
                                 data-theme="dark"
                                 aria-pressed="false">dark</button>
                     </div>
-                    {% block extra_nav %}
-                    {% endblock extra_nav %}
                 </div>
             </div>
         </nav>
