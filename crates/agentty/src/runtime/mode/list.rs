@@ -60,9 +60,6 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Enter => return handle_enter_key(app).await,
-        KeyCode::Char('f') if app.tabs.current() == Tab::Projects => {
-            app.toggle_selected_project_favorite().await;
-        }
         KeyCode::Char('b') if app.tabs.current() == Tab::Projects => {
             let _ = app.switch_to_previous_project().await;
         }

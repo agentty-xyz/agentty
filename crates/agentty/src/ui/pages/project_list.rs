@@ -37,7 +37,7 @@ impl Page for ProjectListPage<'_> {
         let footer_area = chunks[1];
 
         let selected_style = Style::default().bg(Color::DarkGray);
-        let header = Row::new(["Project", "Branch", "Sessions", "★", "Last Opened", "Path"])
+        let header = Row::new(["Project", "Branch", "Sessions", "Last Opened", "Path"])
             .style(Style::default().bg(Color::Gray).fg(Color::Black))
             .height(1)
             .bottom_margin(1);
@@ -48,7 +48,6 @@ impl Page for ProjectListPage<'_> {
                 Constraint::Length(20),
                 Constraint::Length(12),
                 Constraint::Length(8),
-                Constraint::Length(3),
                 Constraint::Length(12),
                 Constraint::Fill(1),
             ],
@@ -69,25 +68,20 @@ impl Page for ProjectListPage<'_> {
 
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem) -> Row<'static> {
-    let (title, branch, session_count, favorite, last_opened, path) =
-        project_row_values(project_item);
+    let (title, branch, session_count, last_opened, path) = project_row_values(project_item);
 
     Row::new(vec![
         Cell::from(title),
         Cell::from(branch),
         Cell::from(session_count),
-        Cell::from(favorite).style(Style::default().fg(Color::Yellow)),
         Cell::from(last_opened),
         Cell::from(path),
     ])
 }
 
 /// Returns all project row display values for reuse and testing.
-fn project_row_values(
-    project_item: &ProjectListItem,
-) -> (String, String, String, String, String, String) {
+fn project_row_values(project_item: &ProjectListItem) -> (String, String, String, String, String) {
     let project = &project_item.project;
-    let favorite = if project.is_favorite { "★" } else { "" };
     let branch = project.git_branch.as_deref().unwrap_or("-");
     let session_count = project_item.session_count.to_string();
     let last_opened = format_last_opened(project.last_opened_at);
@@ -97,7 +91,6 @@ fn project_row_values(
         project.display_label(),
         branch.to_string(),
         session_count,
-        favorite.to_string(),
         last_opened,
         path,
     )
@@ -139,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn test_project_row_values_show_favorite_and_session_count() {
+    fn test_project_row_values_show_session_count() {
         // Arrange
         let project_item = ProjectListItem {
             last_session_updated_at: Some(20),
@@ -162,6 +155,6 @@ mod tests {
         // Assert
         assert_eq!(values.0, "agentty");
         assert_eq!(values.2, "3");
-        assert_eq!(values.3, "★");
+        assert_eq!(values.3, "2023-11-14");
     }
 }

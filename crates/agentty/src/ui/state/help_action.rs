@@ -101,7 +101,6 @@ pub(crate) fn session_list_actions(
 pub(crate) fn project_list_actions() -> Vec<HelpAction> {
     let mut actions = list_base_actions();
     actions.push(HelpAction::new("switch", "Enter", "Switch active project"));
-    actions.push(HelpAction::new("favorite", "f", "Toggle favorite"));
     actions.push(HelpAction::new(
         "previous",
         "b",
@@ -119,7 +118,6 @@ pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("switch", "Enter", "Switch active project"),
-        HelpAction::new("favorite", "f", "Toggle favorite"),
         HelpAction::new("previous", "b", "Switch to previous project"),
         HelpAction::new("quick switch", "p", "Open switcher"),
         HelpAction::new("nav", "j/k", "Navigate projects"),

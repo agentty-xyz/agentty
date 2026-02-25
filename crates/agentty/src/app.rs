@@ -394,29 +394,6 @@ impl App {
             .collect()
     }
 
-    /// Toggles the favorite flag for the selected project and reloads the list.
-    pub async fn toggle_selected_project_favorite(&mut self) {
-        let Some(selected_project_id) = self.projects.selected_project_id() else {
-            return;
-        };
-        let Some(selected_project) = self
-            .projects
-            .project_items()
-            .iter()
-            .find(|project_item| project_item.project.id == selected_project_id)
-        else {
-            return;
-        };
-        let target_favorite_state = !selected_project.project.is_favorite;
-
-        let _ = self
-            .services
-            .db()
-            .set_project_favorite(selected_project_id, target_favorite_state)
-            .await;
-        self.reload_projects().await;
-    }
-
     /// Switches to the currently selected project in the projects list.
     ///
     /// # Errors
