@@ -145,8 +145,8 @@ impl Database {
     ) -> Result<i64, String> {
         sqlx::query(
             r"
-INSERT INTO project (path, git_branch)
-VALUES (?, ?)
+INSERT INTO project (path, git_branch, created_at, updated_at)
+VALUES (?, ?, unixepoch(), unixepoch())
 ON CONFLICT(path) DO UPDATE
 SET git_branch = excluded.git_branch,
     updated_at = unixepoch()

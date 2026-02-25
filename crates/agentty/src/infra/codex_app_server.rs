@@ -295,7 +295,7 @@ impl RealCodexAppServerClient {
 
                         return Self::finalize_turn_completion(
                             turn_result,
-                            assistant_messages,
+                            &assistant_messages,
                             &stream_tx,
                             input_tokens,
                             output_tokens,
@@ -365,7 +365,7 @@ impl RealCodexAppServerClient {
     /// session never lands in `Review` silently.
     fn finalize_turn_completion(
         turn_result: Result<(), String>,
-        assistant_messages: Vec<String>,
+        assistant_messages: &[String],
         stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
         input_tokens: u64,
         output_tokens: u64,
@@ -637,18 +637,15 @@ fn parse_turn_completed(
 
     match status {
         "completed" => Some(Ok(())),
-        "failed" => Some(Err(
-            extract_turn_completed_error_message(response_value)
-                .unwrap_or_else(|| "Codex app-server turn failed".to_string()),
-        )),
-        "" => Some(Err(
-            "Codex app-server `turn/completed` response is missing `turn.status`".to_string(),
-        )),
-        other => Some(Err(
-            extract_turn_completed_error_message(response_value).unwrap_or_else(|| {
+        "failed" => Some(Err(extract_turn_completed_error_message(response_value)
+            .unwrap_or_else(|| "Codex app-server turn failed".to_string()))),
+        "" => Some(Err("Codex app-server `turn/completed` response is \
+                        missing `turn.status`"
+            .to_string())),
+        other => Some(Err(extract_turn_completed_error_message(response_value)
+            .unwrap_or_else(|| {
                 format!("Codex app-server turn ended with non-completed status `{other}`")
-            }),
-        )),
+            }))),
     }
 }
 
@@ -877,9 +874,9 @@ mod tests {
         // Assert
         assert_eq!(
             turn_result,
-            Some(Err(
-                "Codex app-server turn ended with non-completed status `unfinished`".to_string()
-            ))
+            Some(Err("Codex app-server turn ended with non-completed \
+                      status `unfinished`"
+                .to_string()))
         );
     }
 
@@ -901,9 +898,9 @@ mod tests {
         // Assert
         assert_eq!(
             turn_result,
-            Some(Err(
-                "Codex app-server `turn/completed` response is missing `turn.status`".to_string()
-            ))
+            Some(Err("Codex app-server `turn/completed` response is \
+                      missing `turn.status`"
+                .to_string()))
         );
     }
 
@@ -937,7 +934,7 @@ mod tests {
         // Act
         let result = RealCodexAppServerClient::finalize_turn_completion(
             turn_result,
-            assistant_messages,
+            &assistant_messages,
             &stream_tx,
             7,
             3,
@@ -955,13 +952,8 @@ mod tests {
         let turn_result = Err("turn interrupted".to_string());
 
         // Act
-        let result = RealCodexAppServerClient::finalize_turn_completion(
-            turn_result,
-            vec![],
-            &stream_tx,
-            0,
-            0,
-        );
+        let result =
+            RealCodexAppServerClient::finalize_turn_completion(turn_result, &[], &stream_tx, 0, 0);
 
         // Assert
         assert_eq!(result, Err("turn interrupted".to_string()));
