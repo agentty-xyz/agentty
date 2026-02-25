@@ -7,8 +7,7 @@
 {% endblock canonical %}
 {% block nav_links %}
     {% set docs_section = get_section(path="docs/_index.md") %}
-    <a class="site-nav-link"
-       href="{{ docs_section.permalink }}">docs</a>
+    <a class="site-nav-link" href="{{ docs_section.permalink }}">docs</a>
 {% endblock nav_links %}
 {% block extra_nav %}
     <a class="github-link"
@@ -45,19 +44,14 @@
                         data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh">
                     sh
                 </button>
-                <button class="install-tab"
-                        data-cmd="cargo install agentty">cargo</button>
-                <button class="install-tab"
-                        data-cmd="npm install -g agentty">npm</button>
-                <button class="install-tab"
-                        data-cmd="npx agentty">npx</button>
+                <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
+                <button class="install-tab" data-cmd="npm install -g agentty">npm</button>
+                <button class="install-tab" data-cmd="npx agentty">npx</button>
             </div>
             <div class="install-command">
                 <span class="install-prompt">$</span>
                 <code class="install-cmd-text">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh</code>
-                <button class="copy-btn"
-                        title="Copy to clipboard"
-                        aria-label="Copy command">copy</button>
+                <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
             </div>
         </div>
         <script>
@@ -109,9 +103,7 @@
                     </svg>
                 </div>
                 <h3 class="feature-title">Isolated By Default</h3>
-                <p class="feature-text">
-                    Each session runs in its own worktree and branch, so experiments stay contained.
-                </p>
+                <p class="feature-text">Each session runs in its own worktree and branch, so experiments stay contained.</p>
             </article>
             <article class="feature-card">
                 <div class="feature-icon">
@@ -129,9 +121,7 @@
                     </svg>
                 </div>
                 <h3 class="feature-title">Built For Flow</h3>
-                <p class="feature-text">
-                    Review diffs, switch models, and iterate without leaving the TUI.
-                </p>
+                <p class="feature-text">Review diffs, switch models, and iterate without leaving the TUI.</p>
             </article>
             <article class="feature-card">
                 <div class="feature-icon">
@@ -149,9 +139,7 @@
                     </svg>
                 </div>
                 <h3 class="feature-title">Fast Setup</h3>
-                <p class="feature-text">
-                    Install with npm, cargo, or shell script and start an agent session in minutes.
-                </p>
+                <p class="feature-text">Install with npm, cargo, or shell script and start an agent session in minutes.</p>
             </article>
         </div>
     </section>

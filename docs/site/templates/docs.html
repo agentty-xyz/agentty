@@ -1,16 +1,13 @@
 {% extends "base.html" %}
 {% macro render_section_listing(section_path, show_heading=false) %}
     {% set docs_listing_section = get_section(path=section_path) %}
-    {% if show_heading %}
-        <h2 class="docs-section-title">{{ docs_listing_section.title }}</h2>
-    {% endif %}
+    {% if show_heading %}<h2 class="docs-section-title">{{ docs_listing_section.title }}</h2>{% endif %}
     {% if docs_listing_section.pages | length > 0 %}
         <section class="docs-cards">
             {% for docs_page in docs_listing_section.pages %}
                 <article class="docs-card">
                     <h3 class="docs-card-title">
-                        <a class="docs-card-link"
-                           href="{{ docs_page.permalink }}">{{ docs_page.title }}</a>
+                        <a class="docs-card-link" href="{{ docs_page.permalink }}">{{ docs_page.title }}</a>
                     </h3>
                     {% if docs_page.summary %}
                         <p class="docs-card-description">{{ docs_page.summary | safe }}</p>

@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% macro render_docs_nav(section_path, current_permalink, nested=false) %}
     {% set docs_nav_section = get_section(path=section_path) %}
-    {% if nested %}
-        <h3 class="docs-nav-heading">{{ docs_nav_section.title }}</h3>
-    {% endif %}
+    {% if nested %}<h3 class="docs-nav-heading">{{ docs_nav_section.title }}</h3>{% endif %}
     {% if docs_nav_section.pages | length > 0 %}
         {% if nested %}
             <ul class="docs-nav-list docs-nav-list--nested">
@@ -63,7 +61,7 @@
         </script>
     {% endblock extra_scripts %}
     {% block content %}
-    <aside class="docs-sidebar">
+        <aside class="docs-sidebar">
             {{ self::render_docs_nav(section_path="docs/_index.md", current_permalink=page.permalink) }}
         </aside>
         <article class="docs-content-wrapper">
