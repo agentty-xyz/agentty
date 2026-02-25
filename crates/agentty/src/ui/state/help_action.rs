@@ -95,6 +95,39 @@ pub(crate) fn session_list_actions(
     actions
 }
 
+/// Returns help actions for the projects page.
+/// These entries are used by the help overlay and include all available
+/// actions.
+pub(crate) fn project_list_actions() -> Vec<HelpAction> {
+    let mut actions = list_base_actions();
+    actions.push(HelpAction::new("switch", "Enter", "Switch active project"));
+    actions.push(HelpAction::new("favorite", "f", "Toggle favorite"));
+    actions.push(HelpAction::new(
+        "previous",
+        "b",
+        "Switch to previous project",
+    ));
+    actions.push(HelpAction::new("nav", "j/k", "Navigate projects"));
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
+/// Returns compact projects footer actions for the page-level hint line.
+pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
+    vec![
+        HelpAction::new("quit", "q", "Quit"),
+        HelpAction::new("switch", "Enter", "Switch active project"),
+        HelpAction::new("favorite", "f", "Toggle favorite"),
+        HelpAction::new("previous", "b", "Switch to previous project"),
+        HelpAction::new("quick switch", "p", "Open switcher"),
+        HelpAction::new("nav", "j/k", "Navigate projects"),
+        HelpAction::new("next tab", "Tab", "Switch tab"),
+        HelpAction::new("help", "?", "Help"),
+    ]
+}
+
 /// Returns compact session list footer actions for the page-level hint line.
 pub(crate) fn session_list_footer_actions(can_open_selected_session: bool) -> Vec<HelpAction> {
     let mut actions = list_base_actions();
@@ -288,6 +321,7 @@ fn list_base_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("start new session", "a", "Start new session"),
+        HelpAction::new("quick switch", "p", "Open project switcher"),
         HelpAction::new("sync", "s", "Sync"),
     ]
 }

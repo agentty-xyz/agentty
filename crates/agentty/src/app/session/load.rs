@@ -86,7 +86,10 @@ impl SessionManager {
             .unwrap_or_default()
             .to_string();
 
-        let db_rows = db.load_sessions().await.unwrap_or_default();
+        let db_rows = db
+            .load_sessions_for_project(active_project_id)
+            .await
+            .unwrap_or_default();
         let activity_timestamps = db
             .load_session_activity_timestamps()
             .await
@@ -101,10 +104,6 @@ impl SessionManager {
             if !folder.is_dir() && !is_terminal_status {
                 continue;
             }
-            if row.project_id != Some(active_project_id) {
-                continue;
-            }
-
             let session_model = row
                 .model
                 .parse::<AgentModel>()

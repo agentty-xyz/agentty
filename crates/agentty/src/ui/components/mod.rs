@@ -4,6 +4,7 @@ pub mod file_explorer;
 pub mod footer_bar;
 pub mod help_overlay;
 pub mod info_overlay;
+pub mod project_switcher_overlay;
 pub mod session_output;
 pub mod status_bar;
 pub mod tab;

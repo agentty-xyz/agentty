@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::permission::PermissionMode;
+use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::session::{CodexUsageLimits, Session, Status};
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
@@ -125,6 +126,18 @@ struct SyncPopupContext {
     project_name: String,
 }
 
+/// Immutable projection used by the quick project switcher overlay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectSwitcherItem {
+    pub(crate) git_branch: Option<String>,
+    pub(crate) id: i64,
+    pub(crate) is_favorite: bool,
+    pub(crate) last_opened_at: Option<i64>,
+    pub(crate) path: PathBuf,
+    pub(crate) session_count: u32,
+    pub(crate) title: String,
+}
+
 // SessionState definition moved to session_state.rs
 
 /// Stores application state and coordinates session/project workflows.
@@ -151,14 +164,28 @@ impl App {
         git_branch: Option<String>,
         db: Database,
     ) -> Self {
-        let active_project_id = db
+        let current_project_id = db
             .upsert_project(&working_dir.to_string_lossy(), git_branch.as_deref())
             .await
             .unwrap_or(0);
 
-        let _ = db.backfill_session_project(active_project_id).await;
+        let _ = db.backfill_session_project(current_project_id).await;
 
         let git_client: Arc<dyn GitClient> = Arc::new(RealGitClient);
+        let (
+            active_project_id,
+            startup_working_dir,
+            startup_git_branch,
+            project_items,
+            active_project_name,
+        ) = Self::load_startup_project_context(
+            &db,
+            &git_client,
+            working_dir.as_path(),
+            git_branch,
+            current_project_id,
+        )
+        .await;
 
         SessionManager::fail_unfinished_operations_from_previous_run(&db).await;
 
@@ -168,7 +195,7 @@ impl App {
             &base_path,
             &db,
             active_project_id,
-            &working_dir,
+            startup_working_dir.as_path(),
             &mut handles,
             Arc::clone(&git_client),
         )
@@ -179,20 +206,18 @@ impl App {
             SessionManager::load_longest_session_duration_seconds(&db).await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
-        if sessions.is_empty() {
-            table_state.select(None);
-        } else {
-            table_state.select(Some(0));
-        }
+        table_state.select((!sessions.is_empty()).then_some(0));
 
         let git_status_cancel = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(base_path, db.clone(), event_tx.clone(), git_client);
         let projects = ProjectManager::new(
             active_project_id,
-            git_branch,
+            active_project_name,
+            startup_git_branch,
             Arc::clone(&git_status_cancel),
-            working_dir,
+            project_items,
+            startup_working_dir,
         );
         let settings = SettingsManager::new(&services).await;
         let default_session_model = SessionManager::load_default_session_model(
@@ -281,9 +306,15 @@ impl App {
         let git_branch = self.projects.git_branch().map(str::to_string);
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
+        let projects = self.projects.project_items().to_vec();
         let session_progress_messages = self.session_progress_messages.clone();
         let show_onboarding = self.sessions.sessions.is_empty();
         let mode = &self.mode;
+        let project_switcher_items = match mode {
+            AppMode::ProjectSwitcher { query, .. } => self.project_switcher_items(query),
+            _ => Vec::new(),
+        };
+        let project_table_state = self.projects.project_table_state_mut();
         let (
             sessions,
             stats_activity,
@@ -305,6 +336,9 @@ impl App {
                 latest_available_version: latest_available_version.as_deref(),
                 longest_session_duration_seconds,
                 mode,
+                project_table_state,
+                project_switcher_items: &project_switcher_items,
+                projects: &projects,
                 session_progress_messages: &session_progress_messages,
                 settings,
                 show_onboarding,
@@ -326,6 +360,134 @@ impl App {
         self.sessions.previous();
     }
 
+    /// Moves selection to the next project in the projects list.
+    pub fn next_project(&mut self) {
+        self.projects.next_project();
+    }
+
+    /// Moves selection to the previous project in the projects list.
+    pub fn previous_project(&mut self) {
+        self.projects.previous_project();
+    }
+
+    /// Returns quick-switch candidates for the provided query text.
+    pub fn project_switcher_items(&self, query: &str) -> Vec<ProjectSwitcherItem> {
+        let filtered_ids = self.projects.filtered_project_ids(query);
+
+        filtered_ids
+            .into_iter()
+            .filter_map(|project_id| {
+                self.projects
+                    .project_items()
+                    .iter()
+                    .find(|project_item| project_item.project.id == project_id)
+            })
+            .map(|project_item| ProjectSwitcherItem {
+                git_branch: project_item.project.git_branch.clone(),
+                id: project_item.project.id,
+                is_favorite: project_item.project.is_favorite,
+                last_opened_at: project_item.project.last_opened_at,
+                path: project_item.project.path.clone(),
+                session_count: project_item.session_count,
+                title: project_item.project.display_label(),
+            })
+            .collect()
+    }
+
+    /// Toggles the favorite flag for the selected project and reloads the list.
+    pub async fn toggle_selected_project_favorite(&mut self) {
+        let Some(selected_project_id) = self.projects.selected_project_id() else {
+            return;
+        };
+        let Some(selected_project) = self
+            .projects
+            .project_items()
+            .iter()
+            .find(|project_item| project_item.project.id == selected_project_id)
+        else {
+            return;
+        };
+        let target_favorite_state = !selected_project.project.is_favorite;
+
+        let _ = self
+            .services
+            .db()
+            .set_project_favorite(selected_project_id, target_favorite_state)
+            .await;
+        self.reload_projects().await;
+    }
+
+    /// Switches to the currently selected project in the projects list.
+    ///
+    /// # Errors
+    /// Returns an error if there is no selected project or project switching
+    /// fails.
+    pub async fn switch_selected_project(&mut self) -> Result<(), String> {
+        let selected_project_id = self
+            .projects
+            .selected_project_id()
+            .ok_or_else(|| "No project selected".to_string())?;
+
+        self.switch_project(selected_project_id).await
+    }
+
+    /// Switches to the previously active project when available.
+    ///
+    /// # Errors
+    /// Returns an error if there is no previous project or project switching
+    /// fails.
+    pub async fn switch_to_previous_project(&mut self) -> Result<(), String> {
+        let previous_project_id = self
+            .projects
+            .previous_project_id()
+            .ok_or_else(|| "No previous project available".to_string())?;
+
+        self.switch_project(previous_project_id).await
+    }
+
+    /// Switches app context to one persisted project id.
+    ///
+    /// # Errors
+    /// Returns an error if the project does not exist or session refresh fails.
+    pub async fn switch_project(&mut self, project_id: i64) -> Result<(), String> {
+        let project = self
+            .services
+            .db()
+            .get_project(project_id)
+            .await?
+            .map(Self::project_from_row)
+            .ok_or_else(|| format!("Project with id `{project_id}` was not found"))?;
+        let git_branch = self
+            .services
+            .git_client()
+            .detect_git_info(project.path.clone())
+            .await;
+        let _ = self
+            .services
+            .db()
+            .upsert_project(&project.path.to_string_lossy(), git_branch.as_deref())
+            .await;
+        let _ = self.services.db().set_active_project_id(project.id).await;
+        let _ = self
+            .services
+            .db()
+            .touch_project_last_opened(project.id)
+            .await;
+
+        self.projects.replace_git_status_cancel();
+        self.projects.update_active_project_context(
+            project.id,
+            project.display_label(),
+            git_branch,
+            project.path,
+        );
+        self.restart_git_status_task();
+        self.reload_projects().await;
+        self.refresh_sessions_now().await;
+
+        Ok(())
+    }
+
     /// Creates a blank session and schedules list refresh through events.
     ///
     /// # Errors
@@ -336,6 +498,7 @@ impl App {
             .create_session(&self.projects, &self.services)
             .await?;
         self.process_pending_app_events().await;
+        self.reload_projects().await;
 
         let index = self
             .sessions
@@ -423,6 +586,7 @@ impl App {
             .delete_selected_session(&self.projects, &self.services)
             .await;
         self.process_pending_app_events().await;
+        self.reload_projects().await;
     }
 
     /// Deletes the selected session while deferring worktree filesystem cleanup
@@ -432,6 +596,7 @@ impl App {
             .delete_selected_session_deferred_cleanup(&self.projects, &self.services)
             .await;
         self.process_pending_app_events().await;
+        self.reload_projects().await;
     }
 
     /// Cancels a session in review status.
@@ -547,6 +712,26 @@ impl App {
         self.sessions
             .refresh_sessions_now(&mut self.mode, &self.projects, &self.services)
             .await;
+    }
+
+    /// Reloads project list snapshots from persistence.
+    async fn reload_projects(&mut self) {
+        let project_items = Self::load_project_items(self.services.db()).await;
+        self.projects.replace_project_items(project_items);
+    }
+
+    /// Restarts git status polling for the currently active project context.
+    fn restart_git_status_task(&self) {
+        if !self.projects.has_git_branch() {
+            return;
+        }
+
+        task::TaskService::spawn_git_status_task(
+            self.projects.working_dir(),
+            self.projects.git_status_cancel(),
+            self.services.event_sender(),
+            self.services.git_client(),
+        );
     }
 
     /// Applies one or more queued app events through a single reducer path.
@@ -942,12 +1127,162 @@ impl App {
             .projects
             .git_branch()
             .map_or_else(|| "not detected".to_string(), str::to_string);
-        let project_name = self.projects.project_name();
+        let project_name = self.projects.project_name().to_string();
 
         SyncPopupContext {
             default_branch,
             project_name,
         }
+    }
+
+    /// Resolves startup project state and persists the active project metadata.
+    async fn load_startup_project_context(
+        db: &Database,
+        git_client: &Arc<dyn GitClient>,
+        working_dir: &Path,
+        git_branch: Option<String>,
+        current_project_id: i64,
+    ) -> (i64, PathBuf, Option<String>, Vec<ProjectListItem>, String) {
+        let startup_active_project_id =
+            Self::resolve_startup_active_project_id(db, current_project_id).await;
+        let startup_active_project = Self::load_project(
+            db,
+            startup_active_project_id,
+            working_dir,
+            git_branch.as_deref(),
+        )
+        .await;
+        let startup_working_dir = startup_active_project.path.clone();
+        let startup_git_branch = if startup_working_dir.as_path() == working_dir {
+            git_branch
+        } else {
+            git_client
+                .detect_git_info(startup_working_dir.clone())
+                .await
+        };
+        let active_project_id = db
+            .upsert_project(
+                &startup_working_dir.to_string_lossy(),
+                startup_git_branch.as_deref(),
+            )
+            .await
+            .unwrap_or(startup_active_project.id);
+        let _ = db.set_active_project_id(active_project_id).await;
+        let _ = db.touch_project_last_opened(active_project_id).await;
+        let project_items = Self::load_project_items(db).await;
+        let active_project_name =
+            Self::project_title_for_id(&project_items, active_project_id, &startup_working_dir);
+
+        (
+            active_project_id,
+            startup_working_dir,
+            startup_git_branch,
+            project_items,
+            active_project_name,
+        )
+    }
+
+    /// Resolves startup active project id from settings fallbacking to current.
+    async fn resolve_startup_active_project_id(db: &Database, current_project_id: i64) -> i64 {
+        let Some(stored_project_id) = db.load_active_project_id().await.ok().flatten() else {
+            return current_project_id;
+        };
+        let project_exists = db
+            .get_project(stored_project_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        if !project_exists {
+            return current_project_id;
+        }
+
+        stored_project_id
+    }
+
+    /// Loads one project and falls back to current working directory snapshot.
+    async fn load_project(
+        db: &Database,
+        project_id: i64,
+        fallback_working_dir: &Path,
+        fallback_git_branch: Option<&str>,
+    ) -> Project {
+        if let Some(project_row) = db.get_project(project_id).await.ok().flatten() {
+            return Self::project_from_row(project_row);
+        }
+
+        Project {
+            created_at: 0,
+            display_name: None,
+            git_branch: fallback_git_branch.map(str::to_string),
+            id: project_id,
+            is_favorite: false,
+            last_opened_at: None,
+            path: fallback_working_dir.to_path_buf(),
+            updated_at: 0,
+        }
+    }
+
+    /// Loads project list entries for projects tab and project switcher.
+    async fn load_project_items(db: &Database) -> Vec<ProjectListItem> {
+        db.load_projects_with_stats()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(Self::project_list_item_from_row)
+            .collect()
+    }
+
+    /// Converts a project row into domain project model.
+    fn project_from_row(project_row: crate::infra::db::ProjectRow) -> Project {
+        Project {
+            created_at: project_row.created_at,
+            display_name: project_row.display_name,
+            git_branch: project_row.git_branch,
+            id: project_row.id,
+            is_favorite: project_row.is_favorite,
+            last_opened_at: project_row.last_opened_at,
+            path: PathBuf::from(project_row.path),
+            updated_at: project_row.updated_at,
+        }
+    }
+
+    /// Converts an aggregated project row into list-friendly project metadata.
+    fn project_list_item_from_row(
+        project_row: crate::infra::db::ProjectListRow,
+    ) -> ProjectListItem {
+        let project = Project {
+            created_at: project_row.created_at,
+            display_name: project_row.display_name,
+            git_branch: project_row.git_branch,
+            id: project_row.id,
+            is_favorite: project_row.is_favorite,
+            last_opened_at: project_row.last_opened_at,
+            path: PathBuf::from(project_row.path),
+            updated_at: project_row.updated_at,
+        };
+
+        ProjectListItem {
+            last_session_updated_at: project_row.last_session_updated_at,
+            project,
+            session_count: u32::try_from(project_row.session_count).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Resolves active project title for startup rendering.
+    fn project_title_for_id(
+        project_items: &[ProjectListItem],
+        project_id: i64,
+        fallback_path: &Path,
+    ) -> String {
+        if let Some(project_item) = project_items
+            .iter()
+            .find(|project_item| project_item.project.id == project_id)
+        {
+            return project_item.project.display_label();
+        }
+
+        project_name_from_path(fallback_path)
     }
 
     /// Returns loading-state popup copy for sync-main operation.

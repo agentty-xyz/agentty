@@ -34,6 +34,7 @@ pub(crate) async fn handle_key_event(
         AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
         AppMode::Diff { .. } => Ok(mode::diff::handle(app, key)),
         AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
+        AppMode::ProjectSwitcher { .. } => mode::project_switcher::handle(app, key).await,
     }
 }
 

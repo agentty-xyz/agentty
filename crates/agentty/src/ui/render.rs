@@ -6,7 +6,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
-use crate::app::{SettingsManager, Tab};
+use crate::app::{ProjectSwitcherItem, SettingsManager, Tab};
+use crate::domain::project::ProjectListItem;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::{components, pages, router};
@@ -33,6 +34,9 @@ pub struct RenderContext<'a> {
     pub latest_available_version: Option<&'a str>,
     pub longest_session_duration_seconds: u64,
     pub mode: &'a AppMode,
+    pub project_table_state: &'a mut TableState,
+    pub project_switcher_items: &'a [ProjectSwitcherItem],
+    pub projects: &'a [ProjectListItem],
     pub session_progress_messages: &'a HashMap<String, String>,
     pub settings: &'a mut SettingsManager,
     pub show_onboarding: bool,
@@ -45,7 +49,7 @@ pub struct RenderContext<'a> {
 /// Renders a complete frame including status bar, content area, and footer.
 pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     let area = f.area();
-    if should_render_onboarding(context.mode, context.show_onboarding) {
+    if should_render_onboarding(context.current_tab, context.mode, context.show_onboarding) {
         let onboarding_chunks = Layout::default()
             .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(area);
@@ -103,8 +107,8 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
 }
 
 /// Returns `true` when the onboarding page should replace the normal UI.
-fn should_render_onboarding(mode: &AppMode, show_onboarding: bool) -> bool {
-    matches!(mode, AppMode::List) && show_onboarding
+fn should_render_onboarding(current_tab: Tab, mode: &AppMode, show_onboarding: bool) -> bool {
+    matches!(mode, AppMode::List) && current_tab == Tab::Sessions && show_onboarding
 }
 
 /// Returns the current app version as displayed in the status bar.
@@ -168,11 +172,12 @@ mod tests {
     #[test]
     fn test_should_render_onboarding_returns_true_for_list_mode() {
         // Arrange
+        let current_tab = Tab::Sessions;
         let mode = AppMode::List;
         let show_onboarding = true;
 
         // Act
-        let should_render = should_render_onboarding(&mode, show_onboarding);
+        let should_render = should_render_onboarding(current_tab, &mode, show_onboarding);
 
         // Assert
         assert!(should_render);
@@ -181,6 +186,7 @@ mod tests {
     #[test]
     fn test_should_render_onboarding_returns_false_for_non_list_mode() {
         // Arrange
+        let current_tab = Tab::Sessions;
         let mode = AppMode::Help {
             context: HelpContext::List {
                 keybindings: vec![crate::ui::state::help_action::HelpAction::new(
@@ -192,7 +198,7 @@ mod tests {
         let show_onboarding = true;
 
         // Act
-        let should_render = should_render_onboarding(&mode, show_onboarding);
+        let should_render = should_render_onboarding(current_tab, &mode, show_onboarding);
 
         // Assert
         assert!(!should_render);
@@ -201,11 +207,26 @@ mod tests {
     #[test]
     fn test_should_render_onboarding_returns_false_when_disabled() {
         // Arrange
+        let current_tab = Tab::Sessions;
         let mode = AppMode::List;
         let show_onboarding = false;
 
         // Act
-        let should_render = should_render_onboarding(&mode, show_onboarding);
+        let should_render = should_render_onboarding(current_tab, &mode, show_onboarding);
+
+        // Assert
+        assert!(!should_render);
+    }
+
+    #[test]
+    fn test_should_render_onboarding_returns_false_on_projects_tab() {
+        // Arrange
+        let current_tab = Tab::Projects;
+        let mode = AppMode::List;
+        let show_onboarding = true;
+
+        // Act
+        let should_render = should_render_onboarding(current_tab, &mode, show_onboarding);
 
         // Assert
         assert!(!should_render);

@@ -22,9 +22,28 @@ pub struct Database {
 
 /// Row returned when loading a project from the `project` table.
 pub struct ProjectRow {
+    pub created_at: i64,
+    pub display_name: Option<String>,
     pub git_branch: Option<String>,
     pub id: i64,
+    pub is_favorite: bool,
+    pub last_opened_at: Option<i64>,
     pub path: String,
+    pub updated_at: i64,
+}
+
+/// Row returned when loading one project with aggregated session statistics.
+pub struct ProjectListRow {
+    pub created_at: i64,
+    pub display_name: Option<String>,
+    pub git_branch: Option<String>,
+    pub id: i64,
+    pub is_favorite: bool,
+    pub last_opened_at: Option<i64>,
+    pub last_session_updated_at: Option<i64>,
+    pub path: String,
+    pub session_count: i64,
+    pub updated_at: i64,
 }
 
 /// Row returned when loading a session from the `session` table.
@@ -129,7 +148,8 @@ impl Database {
 INSERT INTO project (path, git_branch)
 VALUES (?, ?)
 ON CONFLICT(path) DO UPDATE
-SET git_branch = excluded.git_branch
+SET git_branch = excluded.git_branch,
+    updated_at = unixepoch()
 ",
         )
         .bind(path)
@@ -160,7 +180,14 @@ WHERE path = ?
     pub async fn get_project(&self, id: i64) -> Result<Option<ProjectRow>, String> {
         let row = sqlx::query(
             r"
-SELECT id, path, git_branch
+SELECT created_at,
+       display_name,
+       git_branch,
+       id,
+       is_favorite,
+       last_opened_at,
+       path,
+       updated_at
 FROM project
 WHERE id = ?
 ",
@@ -171,22 +198,47 @@ WHERE id = ?
         .map_err(|err| format!("Failed to get project: {err}"))?;
 
         Ok(row.map(|row| ProjectRow {
+            created_at: row.get("created_at"),
+            display_name: row.get("display_name"),
             git_branch: row.get("git_branch"),
             id: row.get("id"),
+            is_favorite: row.get::<i64, _>("is_favorite") != 0,
+            last_opened_at: row.get("last_opened_at"),
             path: row.get("path"),
+            updated_at: row.get("updated_at"),
         }))
     }
 
-    /// Loads all configured projects ordered by path.
+    /// Loads all configured projects with aggregated session stats.
     ///
     /// # Errors
     /// Returns an error if project rows cannot be read from the database.
-    pub async fn load_projects(&self) -> Result<Vec<ProjectRow>, String> {
+    pub async fn load_projects_with_stats(&self) -> Result<Vec<ProjectListRow>, String> {
         let rows = sqlx::query(
             r"
-SELECT id, path, git_branch
-FROM project
-ORDER BY path
+SELECT p.created_at,
+       p.display_name,
+       p.git_branch,
+       p.id,
+       p.is_favorite,
+       p.last_opened_at,
+       stats.last_session_updated_at,
+       p.path,
+       COALESCE(stats.session_count, 0) AS session_count,
+       p.updated_at
+FROM project AS p
+LEFT JOIN (
+    SELECT project_id,
+           MAX(updated_at) AS last_session_updated_at,
+           COUNT(*) AS session_count
+    FROM session
+    WHERE project_id IS NOT NULL
+    GROUP BY project_id
+) AS stats
+ON stats.project_id = p.id
+ORDER BY p.is_favorite DESC,
+         COALESCE(p.last_opened_at, 0) DESC,
+         p.path
 ",
         )
         .fetch_all(&self.pool)
@@ -195,12 +247,73 @@ ORDER BY path
 
         Ok(rows
             .iter()
-            .map(|row| ProjectRow {
+            .map(|row| ProjectListRow {
+                created_at: row.get("created_at"),
+                display_name: row.get("display_name"),
                 git_branch: row.get("git_branch"),
                 id: row.get("id"),
+                is_favorite: row.get::<i64, _>("is_favorite") != 0,
+                last_opened_at: row.get("last_opened_at"),
+                last_session_updated_at: row.get("last_session_updated_at"),
                 path: row.get("path"),
+                session_count: row.get("session_count"),
+                updated_at: row.get("updated_at"),
             })
             .collect())
+    }
+
+    /// Marks a project as recently opened at the current Unix timestamp.
+    ///
+    /// # Errors
+    /// Returns an error if the project row cannot be updated.
+    pub async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), String> {
+        let now = unix_timestamp_now();
+
+        sqlx::query(
+            r"
+UPDATE project
+SET last_opened_at = ?,
+    updated_at = ?
+WHERE id = ?
+",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to update last-opened project timestamp: {err}"))?;
+
+        Ok(())
+    }
+
+    /// Updates favorite state for one project.
+    ///
+    /// # Errors
+    /// Returns an error if the project row cannot be updated.
+    pub async fn set_project_favorite(
+        &self,
+        project_id: i64,
+        is_favorite: bool,
+    ) -> Result<(), String> {
+        let now = unix_timestamp_now();
+
+        sqlx::query(
+            r"
+UPDATE project
+SET is_favorite = ?,
+    updated_at = ?
+WHERE id = ?
+",
+        )
+        .bind(i64::from(is_favorite))
+        .bind(now)
+        .bind(project_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to update project favorite flag: {err}"))?;
+
+        Ok(())
     }
 
     /// Inserts a newly created session row.
@@ -276,6 +389,49 @@ ON CONFLICT(session_id) DO NOTHING
         .map_err(|err| format!("Failed to persist session activity: {err}"))?;
 
         Ok(())
+    }
+
+    /// Loads all sessions ordered by most recent update.
+    ///
+    /// # Errors
+    /// Returns an error if session rows cannot be read from the database.
+    pub async fn load_sessions_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionRow>, String> {
+        let rows = sqlx::query(
+            r"
+SELECT id, model, base_branch, status, title, project_id, prompt, output,
+       created_at, updated_at, input_tokens, output_tokens, size, summary
+FROM session
+WHERE project_id = ?
+ORDER BY updated_at DESC, id
+",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to load sessions: {err}"))?;
+
+        Ok(rows
+            .iter()
+            .map(|row| SessionRow {
+                base_branch: row.get("base_branch"),
+                created_at: row.get("created_at"),
+                id: row.get("id"),
+                input_tokens: row.get("input_tokens"),
+                model: row.get("model"),
+                output: row.get("output"),
+                output_tokens: row.get("output_tokens"),
+                project_id: row.get("project_id"),
+                prompt: row.get("prompt"),
+                size: row.get("size"),
+                status: row.get("status"),
+                summary: row.get("summary"),
+                title: row.get("title"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect())
     }
 
     /// Loads all sessions ordered by most recent update.
@@ -935,6 +1091,25 @@ WHERE name = ?
         Ok(row.map(|row| row.get("value")))
     }
 
+    /// Persists the active project identifier in application settings.
+    ///
+    /// # Errors
+    /// Returns an error if settings persistence fails.
+    pub async fn set_active_project_id(&self, project_id: i64) -> Result<(), String> {
+        self.upsert_setting("ActiveProjectId", &project_id.to_string())
+            .await
+    }
+
+    /// Loads the active project identifier from application settings.
+    ///
+    /// # Errors
+    /// Returns an error if settings lookup fails.
+    pub async fn load_active_project_id(&self) -> Result<Option<i64>, String> {
+        let setting_value = self.get_setting("ActiveProjectId").await?;
+
+        Ok(setting_value.and_then(|value| value.parse::<i64>().ok()))
+    }
+
     /// Accumulates per-model token usage for a session.
     ///
     /// Each call inserts a new row if the `(session_id, model)` pair does not
@@ -1262,5 +1437,87 @@ mod tests {
 
         // Assert
         assert_eq!(activity_timestamps, vec![100, 200]);
+    }
+
+    #[tokio::test]
+    async fn test_load_projects_with_stats_returns_session_counts_and_last_update() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-a", "gpt-5.3-codex", "main", "Done", project_id)
+            .await
+            .expect("failed to insert session-a");
+        database
+            .insert_session("session-b", "gpt-5.3-codex", "main", "Done", project_id)
+            .await
+            .expect("failed to insert session-b");
+
+        // Act
+        let projects = database
+            .load_projects_with_stats()
+            .await
+            .expect("failed to load projects with stats");
+
+        // Assert
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].session_count, 2);
+        assert!(projects[0].last_session_updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_set_and_load_active_project_id_round_trip() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+
+        // Act
+        database
+            .set_active_project_id(project_id)
+            .await
+            .expect("failed to persist active project id");
+        let active_project_id = database
+            .load_active_project_id()
+            .await
+            .expect("failed to load active project id");
+
+        // Assert
+        assert_eq!(active_project_id, Some(project_id));
+    }
+
+    #[tokio::test]
+    async fn test_set_project_favorite_updates_project_state() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+
+        // Act
+        database
+            .set_project_favorite(project_id, true)
+            .await
+            .expect("failed to set project favorite");
+        let project = database
+            .get_project(project_id)
+            .await
+            .expect("failed to load project")
+            .expect("expected existing project");
+
+        // Assert
+        assert!(project.is_favorite);
     }
 }

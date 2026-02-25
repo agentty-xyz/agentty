@@ -46,6 +46,13 @@ pub enum AppMode {
         /// Popup title describing sync state.
         title: String,
     },
+    /// Query-based project switcher overlay.
+    ProjectSwitcher {
+        /// Current search filter text entered by the user.
+        query: String,
+        /// Zero-based index of the highlighted project in filtered results.
+        selected_index: usize,
+    },
     Prompt {
         at_mention_state: Option<PromptAtMentionState>,
         history_state: PromptHistoryState,

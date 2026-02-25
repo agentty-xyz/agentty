@@ -9,7 +9,8 @@ use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::state::help_action::{
-    HelpAction, onboarding_actions, session_list_actions, settings_actions, stats_actions,
+    HelpAction, onboarding_actions, project_list_actions, session_list_actions, settings_actions,
+    stats_actions,
 };
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
@@ -36,27 +37,38 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Tab => {
             app.tabs.next();
         }
+        KeyCode::Char('p') => {
+            app.mode = AppMode::ProjectSwitcher {
+                query: String::new(),
+                selected_index: 0,
+            };
+        }
         KeyCode::Char('a') => {
             open_new_session_prompt(app).await?;
         }
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
+            Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
             Tab::Stats => {}
             Tab::Settings => app.settings.next(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
+            Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
             Tab::Stats => {}
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Enter => {
-            if app.should_show_onboarding() {
+            if app.should_show_onboarding() && app.tabs.current() == Tab::Sessions {
                 open_new_session_prompt(app).await?;
 
                 return Ok(EventResult::Continue);
             }
 
             match app.tabs.current() {
+                Tab::Projects => {
+                    let _ = app.switch_selected_project().await;
+                }
                 Tab::Sessions => {
                     if let Some(session_index) = app.sessions.table_state.selected()
                         && let Some(session) = app.sessions.sessions.get(session_index)
@@ -75,6 +87,12 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 }
                 Tab::Stats => {}
             }
+        }
+        KeyCode::Char('f') if app.tabs.current() == Tab::Projects => {
+            app.toggle_selected_project_favorite().await;
+        }
+        KeyCode::Char('b') if app.tabs.current() == Tab::Projects => {
+            let _ = app.switch_to_previous_project().await;
         }
         KeyCode::Char('d') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app
@@ -153,8 +171,8 @@ fn open_list_help_overlay(app: &mut App) {
 
 /// Projects current list-mode action availability into keybinding entries.
 fn list_keybindings(app: &App) -> Vec<HelpAction> {
-    if app.should_show_onboarding() {
-        return onboarding_actions();
+    if app.tabs.current() == Tab::Projects {
+        return project_list_actions();
     }
 
     if app.tabs.current() == Tab::Settings {
@@ -163,6 +181,10 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Stats {
         return stats_actions();
+    }
+
+    if app.should_show_onboarding() {
+        return onboarding_actions();
     }
 
     let is_sessions_tab = app.tabs.current() == Tab::Sessions;
@@ -371,6 +393,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create session");
+        app.tabs.set(Tab::Sessions);
         app.sessions.table_state.select(Some(0));
         app.mode = AppMode::List;
 
@@ -402,6 +425,7 @@ mod tests {
         if let Some(session) = app.sessions.sessions.first_mut() {
             session.status = Status::Done;
         }
+        app.tabs.set(Tab::Sessions);
         app.sessions.table_state.select(Some(0));
         app.mode = AppMode::List;
 
@@ -527,6 +551,7 @@ mod tests {
     async fn test_handle_enter_key_starts_session_from_onboarding() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.tabs.set(Tab::Sessions);
         app.mode = AppMode::List;
 
         // Act
@@ -556,6 +581,7 @@ mod tests {
             .await
             .expect("failed to create session");
         let expected_session_title = app.sessions.sessions[0].display_title().to_string();
+        app.tabs.set(Tab::Sessions);
         app.sessions.table_state.select(Some(0));
 
         // Act

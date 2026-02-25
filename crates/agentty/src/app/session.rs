@@ -2352,13 +2352,15 @@ FROM session
         let mut app = new_test_app(dir.path().to_path_buf()).await;
 
         // Act & Assert
+        assert_eq!(app.tabs.current(), Tab::Projects);
+        app.tabs.next();
         assert_eq!(app.tabs.current(), Tab::Sessions);
         app.tabs.next();
         assert_eq!(app.tabs.current(), Tab::Stats);
         app.tabs.next();
         assert_eq!(app.tabs.current(), Tab::Settings);
         app.tabs.next();
-        assert_eq!(app.tabs.current(), Tab::Sessions);
+        assert_eq!(app.tabs.current(), Tab::Projects);
     }
 
     #[tokio::test]

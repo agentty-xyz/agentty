@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
+use crate::app::ProjectSwitcherItem;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::{Component, Page, components, pages};
@@ -66,6 +67,25 @@ pub(crate) fn render_sync_blocked_popup(
     components::info_overlay::InfoOverlay::new(title, &popup_message)
         .is_loading(is_loading)
         .render(f, area);
+}
+
+/// Renders the list background and the project quick-switch overlay.
+pub(crate) fn render_project_switcher_overlay(
+    f: &mut Frame,
+    area: Rect,
+    list_background: ListBackgroundRenderContext<'_>,
+    projects: &[ProjectSwitcherItem],
+    query: &str,
+    selected_index: usize,
+) {
+    render_list_background(f, area, list_background);
+
+    components::project_switcher_overlay::ProjectSwitcherOverlay::new(
+        projects,
+        query,
+        selected_index,
+    )
+    .render(f, area);
 }
 
 /// Composes sync popup body with optional project and branch context.

@@ -1,0 +1,176 @@
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+use crate::app::ProjectSwitcherItem;
+use crate::ui::Component;
+
+const EMPTY_RESULTS_TEXT: &str = "No matching projects";
+const MAX_VISIBLE_ITEMS: u16 = 8;
+
+/// Overlay renderer for query-based project switching.
+pub struct ProjectSwitcherOverlay<'a> {
+    projects: &'a [ProjectSwitcherItem],
+    query: &'a str,
+    selected_index: usize,
+}
+
+impl<'a> ProjectSwitcherOverlay<'a> {
+    /// Creates one project switcher overlay renderer.
+    pub fn new(projects: &'a [ProjectSwitcherItem], query: &'a str, selected_index: usize) -> Self {
+        Self {
+            projects,
+            query,
+            selected_index,
+        }
+    }
+}
+
+impl Component for ProjectSwitcherOverlay<'_> {
+    fn render(&self, f: &mut Frame, area: Rect) {
+        let popup_area = centered_rect(72, 60, area);
+        let layout = Layout::default()
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(MAX_VISIBLE_ITEMS + 2),
+                Constraint::Length(1),
+            ])
+            .margin(1)
+            .split(popup_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Switch Project");
+        f.render_widget(Clear, popup_area);
+        f.render_widget(block, popup_area);
+
+        let query_text = format!("Query: {}", self.query);
+        let query_widget = Paragraph::new(query_text)
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Left);
+        f.render_widget(query_widget, layout[0]);
+
+        let list_text = switcher_list_lines(self.projects, self.selected_index);
+        let list_widget = Paragraph::new(list_text).alignment(Alignment::Left);
+        f.render_widget(list_widget, layout[1]);
+
+        let footer_widget = Paragraph::new("Enter: switch | Esc: close | j/k: navigate")
+            .style(Style::default().fg(Color::Gray));
+        f.render_widget(footer_widget, layout[2]);
+    }
+}
+
+/// Builds switcher list lines with one highlighted selection row.
+fn switcher_list_lines(
+    projects: &[ProjectSwitcherItem],
+    selected_index: usize,
+) -> Vec<Line<'static>> {
+    if projects.is_empty() {
+        return vec![Line::from(Span::styled(
+            EMPTY_RESULTS_TEXT,
+            Style::default().fg(Color::DarkGray),
+        ))];
+    }
+
+    projects
+        .iter()
+        .take(usize::from(MAX_VISIBLE_ITEMS))
+        .enumerate()
+        .map(|(index, project)| {
+            let marker = if index == selected_index { ">" } else { " " };
+            let favorite = if project.is_favorite { "★ " } else { "" };
+            let branch = project.git_branch.as_deref().unwrap_or("-");
+            let line_text = format!(
+                "{marker} {favorite}{}  [{}]  sessions:{}",
+                project.title, branch, project.session_count
+            );
+
+            if index == selected_index {
+                Line::from(Span::styled(
+                    line_text,
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::styled(line_text, Style::default().fg(Color::White)))
+            }
+        })
+        .collect()
+}
+
+/// Returns a centered popup rectangle using percent-based dimensions.
+fn centered_rect(horizontal_percent: u16, vertical_percent: u16, area: Rect) -> Rect {
+    let vertical_layout = Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - vertical_percent) / 2),
+            Constraint::Percentage(vertical_percent),
+            Constraint::Percentage((100 - vertical_percent) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(ratatui::layout::Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - horizontal_percent) / 2),
+            Constraint::Percentage(horizontal_percent),
+            Constraint::Percentage((100 - horizontal_percent) / 2),
+        ])
+        .split(vertical_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn test_switcher_list_lines_show_empty_hint_when_no_projects() {
+        // Arrange
+        let projects = Vec::new();
+
+        // Act
+        let lines = switcher_list_lines(&projects, 0);
+
+        // Assert
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans[0].content.as_ref(), EMPTY_RESULTS_TEXT);
+    }
+
+    #[test]
+    fn test_switcher_list_lines_mark_selected_row() {
+        // Arrange
+        let projects = vec![
+            ProjectSwitcherItem {
+                git_branch: Some("main".to_string()),
+                id: 1,
+                is_favorite: true,
+                last_opened_at: None,
+                path: PathBuf::from("/tmp/agentty"),
+                session_count: 3,
+                title: "agentty".to_string(),
+            },
+            ProjectSwitcherItem {
+                git_branch: Some("develop".to_string()),
+                id: 2,
+                is_favorite: false,
+                last_opened_at: None,
+                path: PathBuf::from("/tmp/service"),
+                session_count: 1,
+                title: "service".to_string(),
+            },
+        ];
+
+        // Act
+        let lines = switcher_list_lines(&projects, 1);
+
+        // Assert
+        assert!(lines[0].spans[0].content.starts_with("  ★ agentty"));
+        assert!(lines[1].spans[0].content.starts_with("> service"));
+    }
+}

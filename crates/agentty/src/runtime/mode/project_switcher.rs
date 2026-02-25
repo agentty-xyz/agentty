@@ -1,0 +1,176 @@
+use std::io;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::app::App;
+use crate::runtime::EventResult;
+use crate::ui::state::app_mode::AppMode;
+
+/// Handles key input while the quick project switcher overlay is open.
+pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    let (mut query, mut selected_index) = match &app.mode {
+        AppMode::ProjectSwitcher {
+            query,
+            selected_index,
+        } => (query.clone(), *selected_index),
+        _ => return Ok(EventResult::Continue),
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::List;
+
+            return Ok(EventResult::Continue);
+        }
+        KeyCode::Enter => {
+            let filtered_items = app.project_switcher_items(&query);
+            if let Some(project_item) = filtered_items.get(selected_index)
+                && app.switch_project(project_item.id).await.is_ok()
+            {
+                app.mode = AppMode::List;
+
+                return Ok(EventResult::Continue);
+            }
+        }
+        KeyCode::Down => {
+            let item_count = app.project_switcher_items(&query).len();
+            selected_index = increment_selected_index(selected_index, item_count);
+        }
+        KeyCode::Up => {
+            let item_count = app.project_switcher_items(&query).len();
+            selected_index = decrement_selected_index(selected_index, item_count);
+        }
+        KeyCode::Backspace => {
+            query.pop();
+            selected_index = 0;
+        }
+        KeyCode::Char(character) if is_text_input_key(key) => {
+            query.push(character);
+            selected_index = 0;
+        }
+        _ => {}
+    }
+
+    let item_count = app.project_switcher_items(&query).len();
+    selected_index = clamp_selected_index(selected_index, item_count);
+    app.mode = AppMode::ProjectSwitcher {
+        query,
+        selected_index,
+    };
+
+    Ok(EventResult::Continue)
+}
+
+/// Returns whether a key event should append to the switcher query.
+fn is_text_input_key(key: KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
+}
+
+/// Returns selected index clamped into `[0, project_count - 1]`.
+fn clamp_selected_index(selected_index: usize, project_count: usize) -> usize {
+    if project_count == 0 {
+        return 0;
+    }
+
+    selected_index.min(project_count - 1)
+}
+
+/// Increments selected index with wrap-around.
+fn increment_selected_index(selected_index: usize, project_count: usize) -> usize {
+    if project_count == 0 {
+        return 0;
+    }
+
+    (selected_index + 1) % project_count
+}
+
+/// Decrements selected index with wrap-around.
+fn decrement_selected_index(selected_index: usize, project_count: usize) -> usize {
+    if project_count == 0 {
+        return 0;
+    }
+
+    if selected_index == 0 {
+        return project_count - 1;
+    }
+
+    selected_index - 1
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crossterm::event::KeyModifiers;
+
+    use super::*;
+    use crate::db::Database;
+
+    async fn new_test_app() -> App {
+        let base_path = PathBuf::from("/tmp");
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        App::new(base_path.clone(), base_path, None, database).await
+    }
+
+    #[tokio::test]
+    async fn test_handle_esc_closes_switcher() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = AppMode::ProjectSwitcher {
+            query: String::new(),
+            selected_index: 0,
+        };
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_text_input_appends_query() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = AppMode::ProjectSwitcher {
+            query: "a".to_string(),
+            selected_index: 1,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectSwitcher {
+                ref query,
+                selected_index: 0,
+            } if query == "ab"
+        ));
+    }
+
+    #[test]
+    fn test_increment_selected_index_wraps() {
+        // Arrange
+        let selected_index = 1;
+
+        // Act
+        let next_index = increment_selected_index(selected_index, 2);
+
+        // Assert
+        assert_eq!(next_index, 0);
+    }
+}

@@ -3,6 +3,7 @@
 /// Available top-level tabs in list mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tab {
+    Projects,
     Sessions,
     Stats,
     Settings,
@@ -12,6 +13,7 @@ impl Tab {
     /// Returns the display label used in the tabs header.
     pub fn title(self) -> &'static str {
         match self {
+            Tab::Projects => "Projects",
             Tab::Sessions => "Sessions",
             Tab::Stats => "Stats",
             Tab::Settings => "Settings",
@@ -22,9 +24,10 @@ impl Tab {
     #[must_use]
     pub fn next(self) -> Self {
         match self {
+            Tab::Projects => Tab::Sessions,
             Tab::Sessions => Tab::Stats,
             Tab::Stats => Tab::Settings,
-            Tab::Settings => Tab::Sessions,
+            Tab::Settings => Tab::Projects,
         }
     }
 }
@@ -35,10 +38,10 @@ pub struct TabManager {
 }
 
 impl TabManager {
-    /// Creates a manager with `Tab::Sessions` selected.
+    /// Creates a manager with `Tab::Projects` selected.
     pub fn new() -> Self {
         Self {
-            current: Tab::Sessions,
+            current: Tab::Projects,
         }
     }
 
@@ -72,6 +75,7 @@ mod tests {
     #[test]
     fn test_tab_title() {
         // Arrange & Act & Assert
+        assert_eq!(Tab::Projects.title(), "Projects");
         assert_eq!(Tab::Sessions.title(), "Sessions");
         assert_eq!(Tab::Stats.title(), "Stats");
         assert_eq!(Tab::Settings.title(), "Settings");
@@ -80,18 +84,19 @@ mod tests {
     #[test]
     fn test_tab_next() {
         // Arrange & Act & Assert
+        assert_eq!(Tab::Projects.next(), Tab::Sessions);
         assert_eq!(Tab::Sessions.next(), Tab::Stats);
         assert_eq!(Tab::Stats.next(), Tab::Settings);
-        assert_eq!(Tab::Settings.next(), Tab::Sessions);
+        assert_eq!(Tab::Settings.next(), Tab::Projects);
     }
 
     #[test]
-    fn test_tab_manager_new_defaults_to_sessions() {
+    fn test_tab_manager_new_defaults_to_projects() {
         // Arrange & Act
         let manager = TabManager::new();
 
         // Assert
-        assert_eq!(manager.current(), Tab::Sessions);
+        assert_eq!(manager.current(), Tab::Projects);
     }
 
     #[test]
@@ -100,13 +105,15 @@ mod tests {
         let mut manager = TabManager::new();
 
         // Act & Assert
+        assert_eq!(manager.current(), Tab::Projects);
+        manager.next();
         assert_eq!(manager.current(), Tab::Sessions);
         manager.next();
         assert_eq!(manager.current(), Tab::Stats);
         manager.next();
         assert_eq!(manager.current(), Tab::Settings);
         manager.next();
-        assert_eq!(manager.current(), Tab::Sessions);
+        assert_eq!(manager.current(), Tab::Projects);
     }
 
     #[test]

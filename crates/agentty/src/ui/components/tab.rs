@@ -32,7 +32,7 @@ impl Component for Tabs {
 }
 
 fn tab_spans(current_tab: Tab) -> Vec<Span<'static>> {
-    [Tab::Sessions, Tab::Stats, Tab::Settings]
+    [Tab::Projects, Tab::Sessions, Tab::Stats, Tab::Settings]
         .iter()
         .map(|tab| {
             let label = format!(" {} ", tab.title());
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn test_tab_spans_use_equal_spacing_between_labels() {
         // Arrange
-        let current_tab = Tab::Sessions;
+        let current_tab = Tab::Projects;
 
         // Act
         let spans = tab_spans(current_tab);
@@ -68,7 +68,7 @@ mod tests {
             .join("");
 
         // Assert
-        assert_eq!(rendered_tabs, " Sessions  Stats  Settings ");
+        assert_eq!(rendered_tabs, " Projects  Sessions  Stats  Settings ");
     }
 
     #[test]
@@ -81,8 +81,9 @@ mod tests {
 
         // Assert
         assert_eq!(spans[0].style.fg, Some(Color::Gray));
-        assert_eq!(spans[1].style.fg, Some(Color::Yellow));
-        assert_eq!(spans[2].style.fg, Some(Color::Gray));
-        assert!(spans[1].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(spans[2].style.fg, Some(Color::Yellow));
+        assert_eq!(spans[3].style.fg, Some(Color::Gray));
+        assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
     }
 }

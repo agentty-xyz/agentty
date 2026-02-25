@@ -28,3 +28,4 @@ SQLite migrations for the `agentty` crate.
 - [022_create_session_usage.sql](022_create_session_usage.sql) - Creates per-model token usage tracking table with `ON DELETE SET NULL` for data retention.
 - [023_create_session_activity.sql](023_create_session_activity.sql) - Creates immutable session-creation activity history for stats retention.
 - [024_drop_permission_mode_from_session.sql](024_drop_permission_mode_from_session.sql) - Drops `permission_mode` from `session`.
+- [025_add_project_metadata.sql](025_add_project_metadata.sql) - Adds `created_at`, `display_name`, `is_favorite`, `last_opened_at`, and `updated_at` columns to `project`.

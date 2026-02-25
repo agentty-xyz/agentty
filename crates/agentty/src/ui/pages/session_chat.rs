@@ -75,6 +75,7 @@ impl<'a> SessionChatPage<'a> {
             AppMode::List
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
+            | AppMode::ProjectSwitcher { .. }
             | AppMode::Prompt { .. }
             | AppMode::Diff { .. }
             | AppMode::Help { .. } => DoneSessionOutputMode::Summary,

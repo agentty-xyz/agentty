@@ -4,7 +4,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{SettingsManager, Tab};
+use crate::app::{ProjectSwitcherItem, SettingsManager, Tab};
+use crate::domain::project::ProjectListItem;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::overlays::SyncBlockedPopupRenderContext;
 use crate::ui::state::app_mode::AppMode;
@@ -16,6 +17,8 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
     pub(crate) codex_usage_limits: Option<CodexUsageLimits>,
     pub(crate) current_tab: Tab,
     pub(crate) longest_session_duration_seconds: u64,
+    pub(crate) project_table_state: &'a mut TableState,
+    pub(crate) projects: &'a [ProjectListItem],
     pub(crate) sessions: &'a [Session],
     pub(crate) settings: &'a mut SettingsManager,
     pub(crate) stats_activity: &'a [DailyActivity],
@@ -28,6 +31,8 @@ struct RouteSharedContext<'a> {
     codex_usage_limits: Option<CodexUsageLimits>,
     current_tab: Tab,
     longest_session_duration_seconds: u64,
+    project_table_state: &'a mut TableState,
+    projects: &'a [ProjectListItem],
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
     stats_activity: &'a [DailyActivity],
@@ -43,6 +48,8 @@ impl RouteSharedContext<'_> {
             codex_usage_limits: self.codex_usage_limits,
             current_tab: self.current_tab,
             longest_session_duration_seconds: self.longest_session_duration_seconds,
+            project_table_state: self.project_table_state,
+            projects: self.projects,
             sessions: self.sessions,
             settings: self.settings,
             stats_activity: self.stats_activity,
@@ -64,6 +71,7 @@ struct SessionChatRenderContext<'a> {
 /// Shared immutable routing inputs that are not part of list-background state.
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
+    project_switcher_items: &'a [ProjectSwitcherItem],
     session_progress_messages: &'a HashMap<String, String>,
 }
 
@@ -75,6 +83,9 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         current_tab,
         longest_session_duration_seconds,
         mode,
+        project_table_state,
+        project_switcher_items,
+        projects,
         session_progress_messages,
         settings,
         stats_activity,
@@ -88,6 +99,8 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         codex_usage_limits,
         current_tab,
         longest_session_duration_seconds,
+        project_table_state,
+        projects,
         sessions,
         settings,
         stats_activity,
@@ -95,6 +108,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     };
 
     let aux = RouteAuxContext {
+        project_switcher_items,
         session_progress_messages,
     };
 
@@ -147,6 +161,17 @@ fn render_list_or_overlay_mode(
             *scroll_offset,
             shared.list_background(),
             aux.session_progress_messages,
+        ),
+        AppMode::ProjectSwitcher {
+            query,
+            selected_index,
+        } => overlays::render_project_switcher_overlay(
+            f,
+            area,
+            shared.list_background(),
+            aux.project_switcher_items,
+            query,
+            *selected_index,
         ),
         AppMode::View { .. } | AppMode::Prompt { .. } | AppMode::Diff { .. } => {
             return false;
@@ -202,7 +227,8 @@ fn render_session_or_diff_mode(
         AppMode::List
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
-        | AppMode::Help { .. } => {}
+        | AppMode::Help { .. }
+        | AppMode::ProjectSwitcher { .. } => {}
     }
 }
 
@@ -266,6 +292,8 @@ pub(crate) fn render_list_background(
         codex_usage_limits,
         current_tab,
         longest_session_duration_seconds,
+        project_table_state,
+        projects,
         sessions,
         settings,
         stats_activity,
@@ -279,6 +307,10 @@ pub(crate) fn render_list_background(
     components::tab::Tabs::new(current_tab).render(f, chunks[0]);
 
     match current_tab {
+        Tab::Projects => {
+            pages::project_list::ProjectListPage::new(projects, project_table_state)
+                .render(f, chunks[1]);
+        }
         Tab::Sessions => {
             pages::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
         }
