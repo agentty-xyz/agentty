@@ -14,6 +14,12 @@ pub const DB_DIR: &str = "db";
 /// Default database filename.
 pub const DB_FILE: &str = "agentty.db";
 
+/// Maximum number of pooled `SQLite` connections for the on-disk database.
+///
+/// A value greater than `1` allows read operations to continue while
+/// background writers flush session output.
+pub const DB_POOL_MAX_CONNECTIONS: u32 = 10;
+
 /// Thin wrapper around a `SQLite` connection pool providing query methods.
 #[derive(Clone)]
 pub struct Database {
@@ -100,6 +106,9 @@ pub struct AllTimeModelUsageRow {
 impl Database {
     /// Opens the `SQLite` database and runs embedded migrations.
     ///
+    /// Uses up to `DB_POOL_MAX_CONNECTIONS` pooled connections so UI reads do
+    /// not serialize behind frequent background writes.
+    ///
     /// # Errors
     /// Returns an error if the directory cannot be created, the database cannot
     /// be opened, or migrations fail.
@@ -116,7 +125,7 @@ impl Database {
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
+            .max_connections(DB_POOL_MAX_CONNECTIONS)
             .connect_with(options)
             .await
             .map_err(|err| format!("Failed to connect to database: {err}"))?;
