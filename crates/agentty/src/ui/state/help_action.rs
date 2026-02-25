@@ -100,7 +100,6 @@ pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
         HelpAction::new("previous", "b", "Switch to previous project"),
         HelpAction::new("quick switch", "p", "Open switcher"),
         HelpAction::new("nav", "j/k", "Navigate projects"),
-        HelpAction::new("next tab", "Tab", "Switch tab"),
         HelpAction::new("help", "?", "Help"),
     ]
 }
@@ -114,7 +113,6 @@ pub(crate) fn session_list_footer_actions(can_open_selected_session: bool) -> Ve
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
-    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
 
     actions
@@ -139,7 +137,6 @@ pub(crate) fn settings_footer_actions() -> Vec<HelpAction> {
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("nav", "j/k", "Navigate settings"),
         HelpAction::new("edit", "Enter", "Edit setting"),
-        HelpAction::new("next tab", "Tab", "Switch tab"),
         HelpAction::new("help", "?", "Help"),
     ]
 }
@@ -159,7 +156,6 @@ pub(crate) fn stats_actions() -> Vec<HelpAction> {
 pub(crate) fn stats_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
-        HelpAction::new("next tab", "Tab", "Switch tab"),
         HelpAction::new("help", "?", "Help"),
     ]
 }
@@ -329,6 +325,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "c"));
+        assert!(!actions.iter().any(|action| action.key == "Tab"));
     }
 
     #[test]
