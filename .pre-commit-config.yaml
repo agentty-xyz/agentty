@@ -16,6 +16,7 @@ repos:
         language: python
         additional_dependencies: [mdformat==0.7.22]
         files: \.(md|markdown)$
+        exclude: ^skills/[^/]+/SKILL\.md$
       - id: djlint-reformat
         name: djlint reformat
         description: Format HTML files and embedded CSS blocks.

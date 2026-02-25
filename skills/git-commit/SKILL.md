@@ -1,6 +1,7 @@
-______________________________________________________________________
-
-## name: git-commit description: Guide for preparing git commits in this repository, including context gathering and repository-specific commit message conventions.
+---
+name: git-commit
+description: Guide for preparing git commits in this repository, including context gathering and repository-specific commit message conventions.
+---
 
 # Git Commit Workflow
 

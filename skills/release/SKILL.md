@@ -1,6 +1,7 @@
-______________________________________________________________________
-
-## name: release description: Guide for releasing a new version of the project, including version bumping, changelog updates, and tagging.
+---
+name: release
+description: Guide for releasing a new version of the project, including version bumping, changelog updates, and tagging.
+---
 
 # Release Workflow
 
