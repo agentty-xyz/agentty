@@ -30,6 +30,17 @@ impl Tab {
             Tab::Settings => Tab::Projects,
         }
     }
+
+    /// Cycles to the previous tab in display order.
+    #[must_use]
+    pub fn previous(self) -> Self {
+        match self {
+            Tab::Projects => Tab::Settings,
+            Tab::Sessions => Tab::Projects,
+            Tab::Stats => Tab::Sessions,
+            Tab::Settings => Tab::Stats,
+        }
+    }
 }
 
 /// Manages selection state for top-level tabs.
@@ -54,6 +65,11 @@ impl TabManager {
     /// Cycles selection to the next tab.
     pub fn next(&mut self) {
         self.current = self.current.next();
+    }
+
+    /// Cycles selection to the previous tab.
+    pub fn previous(&mut self) {
+        self.current = self.current.previous();
     }
 
     /// Sets the currently selected tab.
@@ -91,6 +107,15 @@ mod tests {
     }
 
     #[test]
+    fn test_tab_previous() {
+        // Arrange & Act & Assert
+        assert_eq!(Tab::Projects.previous(), Tab::Settings);
+        assert_eq!(Tab::Sessions.previous(), Tab::Projects);
+        assert_eq!(Tab::Stats.previous(), Tab::Sessions);
+        assert_eq!(Tab::Settings.previous(), Tab::Stats);
+    }
+
+    #[test]
     fn test_tab_manager_new_defaults_to_projects() {
         // Arrange & Act
         let manager = TabManager::new();
@@ -113,6 +138,23 @@ mod tests {
         manager.next();
         assert_eq!(manager.current(), Tab::Settings);
         manager.next();
+        assert_eq!(manager.current(), Tab::Projects);
+    }
+
+    #[test]
+    fn test_tab_manager_previous_cycles_tabs() {
+        // Arrange
+        let mut manager = TabManager::new();
+
+        // Act & Assert
+        assert_eq!(manager.current(), Tab::Projects);
+        manager.previous();
+        assert_eq!(manager.current(), Tab::Settings);
+        manager.previous();
+        assert_eq!(manager.current(), Tab::Stats);
+        manager.previous();
+        assert_eq!(manager.current(), Tab::Sessions);
+        manager.previous();
         assert_eq!(manager.current(), Tab::Projects);
     }
 

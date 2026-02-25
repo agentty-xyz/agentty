@@ -18,6 +18,7 @@ use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 /// Pressing `q` opens a confirmation overlay instead of quitting immediately,
 /// with `No` selected by default. Pressing `Enter` on the `Projects` tab
 /// switches the active project and then moves focus to `Tab::Sessions`.
+/// `Tab` cycles tabs forward and `Shift+Tab` cycles tabs backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
         return handle_settings_text_input(app, key).await;
@@ -36,6 +37,9 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         }
         KeyCode::Tab => {
             app.tabs.next();
+        }
+        KeyCode::BackTab => {
+            app.tabs.previous();
         }
         KeyCode::Char('p') => {
             app.mode = AppMode::ProjectSwitcher {
@@ -351,6 +355,25 @@ mod tests {
                 selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if confirmation_title == "Confirm Quit" && confirmation_message == "Quit agentty?"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_backtab_key_cycles_tabs_backward() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.tabs.set(Tab::Projects);
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.tabs.current(), Tab::Settings);
     }
 
     #[tokio::test]
