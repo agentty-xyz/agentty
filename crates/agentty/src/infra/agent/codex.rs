@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -16,6 +17,7 @@ impl AgentBackend for CodexBackend {
     }
 
     fn build_start_command(&self, folder: &Path, prompt: &str, model: &str) -> Command {
+        let prompt = prepend_root_instructions_if_available(prompt, folder);
         let mut command = Command::new("codex");
         command
             .arg("exec")
@@ -39,6 +41,7 @@ impl AgentBackend for CodexBackend {
         session_output: Option<String>,
     ) -> Command {
         let prompt = build_resume_prompt(prompt, session_output.as_deref());
+        let prompt = prepend_root_instructions_if_available(&prompt, folder);
         let mut command = Command::new("codex");
         command
             .arg("exec")
@@ -54,5 +57,83 @@ impl AgentBackend for CodexBackend {
             .stderr(Stdio::piped());
 
         command
+    }
+}
+
+/// Prefixes a user prompt with worktree root instructions when `AGENTS.md`
+/// exists and is non-empty.
+fn prepend_root_instructions_if_available(prompt: &str, folder: &Path) -> String {
+    let Some(instructions) = load_root_agents_instructions(folder) else {
+        return prompt.to_string();
+    };
+
+    format!("Project instructions from AGENTS.md:\n\n{instructions}\n\nUser prompt:\n{prompt}")
+}
+
+fn load_root_agents_instructions(folder: &Path) -> Option<String> {
+    let agents_markdown = folder.join("AGENTS.md");
+
+    fs::read_to_string(agents_markdown)
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .filter(|instructions| !instructions.is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn build_start_command_appends_root_instructions() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = CodexBackend;
+        let instructions = "Follow project rules";
+        std::fs::write(temp_directory.path().join("AGENTS.md"), instructions)
+            .expect("failed to write test instructions");
+
+        // Act
+        let command = AgentBackend::build_start_command(
+            &backend,
+            temp_directory.path(),
+            "Run checks",
+            "gpt-5.3-codex",
+        );
+        let debug_command = format!("{command:?}");
+
+        // Assert
+        assert!(debug_command.contains("Project instructions from AGENTS.md"));
+        assert!(debug_command.contains(instructions));
+        assert!(debug_command.contains("User prompt:\nRun checks"));
+    }
+
+    #[test]
+    fn build_resume_command_appends_root_instructions_and_session_output() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = CodexBackend;
+        let instructions = "Follow project rules";
+        std::fs::write(temp_directory.path().join("AGENTS.md"), instructions)
+            .expect("failed to write test instructions");
+
+        // Act
+        let command = AgentBackend::build_resume_command(
+            &backend,
+            temp_directory.path(),
+            "Continue edits",
+            "gpt-5.3-codex",
+            Some("previous assistant output".to_string()),
+        );
+        let debug_command = format!("{command:?}");
+
+        // Assert
+        assert!(debug_command.contains("Project instructions from AGENTS.md"));
+        assert!(debug_command.contains(instructions));
+        assert!(debug_command.contains("Continue this session using the full transcript below."));
+        assert!(debug_command.contains("previous assistant output"));
     }
 }

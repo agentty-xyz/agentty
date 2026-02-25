@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
@@ -151,6 +152,7 @@ impl RealCodexAppServerClient {
     /// Starts one Codex thread and returns its identifier.
     async fn start_thread(session: &mut CodexSessionRuntime) -> Result<String, String> {
         let thread_start_id = format!("thread-start-{}", uuid::Uuid::new_v4());
+        let instructions = load_root_instructions(&session.folder);
         let thread_start_payload = serde_json::json!({
             "method": "thread/start",
             "id": thread_start_id,
@@ -161,8 +163,8 @@ impl RealCodexAppServerClient {
                 "approvalPolicy": Self::approval_policy(),
                 "sandbox": Self::thread_sandbox_mode(),
                 "config": Value::Null,
-                "baseInstructions": Value::Null,
-                "developerInstructions": Value::Null,
+                "baseInstructions": instructions.clone(),
+                "developerInstructions": instructions,
                 "personality": Value::Null,
                 "ephemeral": Value::Null,
                 "dynamicTools": Value::Null,
@@ -549,6 +551,25 @@ fn extract_agent_message(response_value: &Value) -> Option<String> {
     Some(message)
 }
 
+fn load_root_instructions(folder: &Path) -> Value {
+    read_root_agents_instructions(folder).map_or(Value::Null, |instructions| {
+        Value::String(format!(
+            "Project instructions from AGENTS.md:\n\n{instructions}"
+        ))
+    })
+}
+
+fn read_root_agents_instructions(folder: &Path) -> Option<String> {
+    let agents_markdown = folder.join("AGENTS.md");
+
+    fs::read_to_string(agents_markdown)
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .filter(|instructions| !instructions.is_empty())
+        .map(ToString::to_string)
+}
+
 /// Parses `turn/completed` notifications and maps failures to user errors.
 ///
 /// Completion notifications are only considered when `expected_turn_id` is
@@ -700,6 +721,8 @@ fn extract_turn_usage_for_turn(
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -1294,5 +1317,25 @@ mod tests {
         assert_eq!(camel_to_snake("webSearch"), "web_search");
         assert_eq!(camel_to_snake("reasoning"), "reasoning");
         assert_eq!(camel_to_snake("already_snake"), "already_snake");
+    }
+
+    #[test]
+    fn load_root_instructions_returns_instructions_from_agents_markdown() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let instructions = "Project rules are strict";
+        std::fs::write(temp_directory.path().join("AGENTS.md"), instructions)
+            .expect("failed to write AGENTS file");
+
+        // Act
+        let loaded = load_root_instructions(temp_directory.path());
+
+        // Assert
+        assert_eq!(
+            loaded,
+            Value::String(format!(
+                "Project instructions from AGENTS.md:\n\n{instructions}"
+            ))
+        );
     }
 }
