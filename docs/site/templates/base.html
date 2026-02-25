@@ -12,47 +12,13 @@
         <link rel="canonical"
               href="{% block canonical %}{{ config.base_url }}{% endblock canonical %}">
         <link rel="icon" href="{{ config.base_url }}/favicon.ico">
+        <link rel="stylesheet" href="{{ get_url(path='site.css') }}">
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
               rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-        <style type="text/tailwindcss">
-            @theme {
-                --color-bg: #080c08;
-                --color-surface: #0d160d;
-                --color-accent: #3ddd6a;
-                --color-muted: #507a5c;
-                --color-dim: #2a5935;
-                --color-border: #1b3d20;
-                --color-accent-dim: #2ab355;
-                --font-mono: "Share Tech Mono", "Courier New", monospace;
-            }
-
-            /* Logo ASCII art: subtle accent glow — text-shadow has no Tailwind utility */
-            .logo {
-                text-shadow: 0 0 12px rgba(61, 221, 106, 0.4);
-            }
-
-            /* Dark theme: white accent, neutral grey borders, pure black backgrounds */
-            :root.theme-dark {
-                --color-accent: #e0e0e0;
-                --color-muted: #909090;
-                --color-dim: #585858;
-                --color-accent-dim: #b8b8b8;
-                --color-bg: #080808;
-                --color-surface: #111111;
-                --color-border: #2a2a2a;
-            }
-
-            /* Soften logo glow for white text in dark theme */
-            :root.theme-dark .logo {
-                text-shadow: 0 0 12px rgba(224, 224, 224, 0.2);
-            }
-
-            {% block extra_css %}
-            {% endblock extra_css %}
-        </style>
+        {% block extra_css %}
+        {% endblock extra_css %}
         <!-- Apply saved theme before paint to avoid flash of unstyled content -->
         <script>
             (function () {
@@ -61,26 +27,26 @@
             })();
         </script>
     </head>
-    <body class="font-mono bg-bg text-accent min-h-screen">
+    <body class="site-body">
         {% set docs_section = get_section(path="docs/_index.md") %}
-        <nav class="border-b border-border">
-            <div class="flex items-center justify-between {% block page_width_class %}max-w-[800px]{% endblock page_width_class %} mx-auto px-6 py-3">
-                <a class="text-base font-semibold text-accent tracking-[0.02em] no-underline"
+        <nav class="site-nav">
+            <div class="site-nav-inner {% block page_width_class %}site-container{% endblock page_width_class %}">
+                <a class="site-brand"
                    href="{{ config.base_url }}">&gt; agentty</a>
-                <div class="flex items-center gap-4">
+                <div class="site-nav-links">
                     {% block nav_links %}
-                        <a class="text-[0.82rem] text-accent no-underline opacity-85 hover:opacity-100 transition-opacity duration-150"
+                        <a class="site-nav-link"
                            href="{{ config.base_url }}/">home</a>
-                        <a class="text-[0.82rem] text-accent no-underline opacity-85 hover:opacity-100 transition-opacity duration-150"
+                        <a class="site-nav-link"
                            href="{{ docs_section.permalink }}">docs</a>
                     {% endblock nav_links %}
-                    <div class="flex items-center gap-[0.3rem] font-mono select-none"
+                    <div class="site-theme-switch"
                          aria-label="Color theme">
-                        <button class="theme-btn bg-transparent border-0 p-0 font-mono text-[0.75rem] text-accent cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                        <button class="theme-btn site-theme-btn"
                                 data-theme="hacker"
                                 aria-pressed="true">hacker</button>
-                        <span class="text-[0.7rem] text-dim">/</span>
-                        <button class="theme-btn bg-transparent border-0 p-0 font-mono text-[0.75rem] text-muted cursor-pointer transition-colors duration-[120ms] hover:text-accent"
+                        <span class="site-theme-separator">/</span>
+                        <button class="theme-btn site-theme-btn"
                                 data-theme="dark"
                                 aria-pressed="false">dark</button>
                     </div>
@@ -89,7 +55,7 @@
                 </div>
             </div>
         </nav>
-        <main class="mx-auto {% block main_width_class %}max-w-[800px]{% endblock main_width_class %} px-6 pt-16 pb-20 {% block main_extra_classes %}{% endblock main_extra_classes %}">
+        <main class="site-main site-container {% block main_width_class %}site-container{% endblock main_width_class %} {% block main_extra_classes %}{% endblock main_extra_classes %}">
             {% block content %}
             {% endblock content %}
         </main>

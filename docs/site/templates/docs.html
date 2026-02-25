@@ -2,20 +2,20 @@
 {% macro render_section_listing(section_path, show_heading=false) %}
     {% set docs_listing_section = get_section(path=section_path) %}
     {% if show_heading %}
-        <h2 class="text-[1rem] m-0 mb-4 mt-8 text-muted tracking-[0.02em]">{{ docs_listing_section.title }}</h2>
+        <h2 class="docs-section-title">{{ docs_listing_section.title }}</h2>
     {% endif %}
     {% if docs_listing_section.pages | length > 0 %}
-        <section class="grid gap-4">
+        <section class="docs-cards">
             {% for docs_page in docs_listing_section.pages %}
-                <article class="bg-surface border border-border rounded-[10px] p-5">
-                    <h3 class="m-0 text-[1rem]">
-                        <a class="text-accent no-underline hover:underline"
+                <article class="docs-card">
+                    <h3 class="docs-card-title">
+                        <a class="docs-card-link"
                            href="{{ docs_page.permalink }}">{{ docs_page.title }}</a>
                     </h3>
                     {% if docs_page.summary %}
-                        <p class="m-0 mt-2 text-muted leading-[1.6]">{{ docs_page.summary | safe }}</p>
+                        <p class="docs-card-description">{{ docs_page.summary | safe }}</p>
                     {% elif docs_page.description %}
-                        <p class="m-0 mt-2 text-muted leading-[1.6]">{{ docs_page.description }}</p>
+                        <p class="docs-card-description">{{ docs_page.description }}</p>
                     {% endif %}
                 </article>
             {% endfor %}
@@ -32,15 +32,15 @@
     {{ section.permalink }}
 {% endblock canonical %}
 {% block page_width_class %}
-    max-w-[960px]
+    site-container-wide
 {% endblock page_width_class %}
 {% block main_width_class %}
-    max-w-[960px]
+    site-container-wide
 {% endblock main_width_class %}
 {% block content %}
-    <header class="mb-8">
-        <h1 class="text-[1.35rem] m-0">{{ section.title }}</h1>
-        <p class="m-0 mt-3 text-muted leading-[1.65]">{{ section.content | safe }}</p>
+    <header class="docs-section-header">
+        <h1 class="docs-page-title">{{ section.title }}</h1>
+        <p class="docs-section-intro">{{ section.content | safe }}</p>
     </header>
     {{ self::render_section_listing(section_path="docs/_index.md") }}
 {% endblock content %}

@@ -7,11 +7,11 @@
 {% endblock canonical %}
 {% block nav_links %}
     {% set docs_section = get_section(path="docs/_index.md") %}
-    <a class="text-[0.82rem] text-accent no-underline opacity-85 hover:opacity-100 transition-opacity duration-150"
+    <a class="site-nav-link"
        href="{{ docs_section.permalink }}">docs</a>
 {% endblock nav_links %}
 {% block extra_nav %}
-    <a class="text-accent flex items-center opacity-75 hover:opacity-100 transition-opacity duration-150"
+    <a class="github-link"
        href="{{ config.extra.github_repo }}"
        aria-label="GitHub"
        target="_blank"
@@ -27,35 +27,35 @@
     </a>
 {% endblock extra_nav %}
 {% block content %}
-    <section class="text-center mb-16">
-        <pre class="logo text-accent text-[clamp(0.55rem,1.5vw,0.85rem)] leading-snug m-0 mb-8 inline-block text-left whitespace-pre overflow-x-auto max-w-full">    _    ____ _____ _   _ _____ _____ __   __
+    <section class="hero-section">
+        <pre class="logo">    _    ____ _____ _   _ _____ _____ __   __
    / \  / ___| ____| \ | |_   _|_   _|\ \ / /
   / _ \| |  _|  _| |  \| | | |   | |   \ V /
  / ___ \ |_| | |___| |\  | | |   | |    | |
 /_/   \_\____|_____|_| \_| |_|   |_|    |_|</pre>
-        <div class="text-muted text-[0.95rem] leading-[1.7] mx-auto mb-8 max-w-[52ch]">{{ section.content | safe }}</div>
+        <div class="hero-description">{{ section.content | safe }}</div>
     </section>
-    <section class="mb-14">
-        <h2 class="text-base font-semibold text-accent m-0 mb-5 tracking-[0.03em]">// installation</h2>
-        <div class="w-full">
+    <section class="site-section">
+        <h2 class="section-heading">// installation</h2>
+        <div class="install-wrapper">
             <!-- Negative bottom margin pulls tabs down so their bottom border overlaps
                  the panel's top border, creating a seamless visual connection -->
-            <div class="flex gap-[0.15rem] -mb-px">
-                <button class="install-tab border rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold cursor-pointer transition-colors duration-[120ms] hover:text-accent text-accent border-border border-b-surface bg-surface"
+            <div class="install-tabs">
+                <button class="install-tab is-active"
                         data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh">
                     sh
                 </button>
-                <button class="install-tab border rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold cursor-pointer transition-colors duration-[120ms] hover:text-accent bg-transparent border-transparent text-muted"
+                <button class="install-tab"
                         data-cmd="cargo install agentty">cargo</button>
-                <button class="install-tab border rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold cursor-pointer transition-colors duration-[120ms] hover:text-accent bg-transparent border-transparent text-muted"
+                <button class="install-tab"
                         data-cmd="npm install -g agentty">npm</button>
-                <button class="install-tab border rounded-t-md px-[0.7rem] py-[0.3rem] font-mono text-[0.8rem] font-semibold cursor-pointer transition-colors duration-[120ms] hover:text-accent bg-transparent border-transparent text-muted"
+                <button class="install-tab"
                         data-cmd="npx agentty">npx</button>
             </div>
-            <div class="flex items-center gap-2 bg-surface border border-border rounded-b-md rounded-tr-md px-[0.9rem] py-[0.65rem] overflow-x-auto">
-                <span class="text-accent font-bold shrink-0 select-none">$</span>
-                <code class="install-cmd-text grow font-mono text-[0.82rem] text-accent whitespace-nowrap overflow-hidden text-ellipsis">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh</code>
-                <button class="copy-btn bg-transparent border border-border rounded px-[0.55rem] py-[0.2rem] font-mono text-[0.75rem] font-semibold text-muted cursor-pointer shrink-0 transition-colors duration-[120ms] hover:text-accent hover:border-accent"
+            <div class="install-command">
+                <span class="install-prompt">$</span>
+                <code class="install-cmd-text">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh</code>
+                <button class="copy-btn"
                         title="Copy to clipboard"
                         aria-label="Copy command">copy</button>
             </div>
@@ -65,17 +65,12 @@
   var tabs = document.querySelectorAll('.install-tab');
   var cmdText = document.querySelector('.install-cmd-text');
   var copyBtn = document.querySelector('.copy-btn');
-  var INACTIVE = ['bg-transparent', 'border-transparent', 'text-muted'];
-  var ACTIVE = ['text-accent', 'border-border', 'border-b-surface', 'bg-surface'];
-
   /** Deactivate all tabs then activate the given one. */
   function setActive(activeTab) {
-    tabs.forEach(function (t) {
-      ACTIVE.forEach(function (c) { t.classList.remove(c); });
-      INACTIVE.forEach(function (c) { t.classList.add(c); });
+    tabs.forEach(function (tab) {
+      tab.classList.remove('is-active');
     });
-    INACTIVE.forEach(function (c) { activeTab.classList.remove(c); });
-    ACTIVE.forEach(function (c) { activeTab.classList.add(c); });
+    activeTab.classList.add('is-active');
   }
 
   tabs.forEach(function (tab) {
@@ -94,11 +89,11 @@
 })();
         </script>
     </section>
-    <section class="mb-14">
-        <h2 class="text-base font-semibold text-accent m-0 mb-5 tracking-[0.03em]">// features</h2>
-        <div class="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
-            <article class="bg-surface border border-border rounded-[10px] p-5">
-                <div class="text-accent mb-[0.9rem] flex">
+    <section class="site-section">
+        <h2 class="section-heading">// features</h2>
+        <div class="feature-grid">
+            <article class="feature-card">
+                <div class="feature-icon">
                     <svg xmlns="http://www.w3.org/2000/svg"
                          width="20"
                          height="20"
@@ -113,13 +108,13 @@
                         <path d="M6 21V9a9 9 0 0 0 9 9" />
                     </svg>
                 </div>
-                <h3 class="m-0 mb-2 text-[0.95rem] font-semibold text-accent">Isolated By Default</h3>
-                <p class="m-0 text-[0.82rem] text-muted leading-[1.6]">
+                <h3 class="feature-title">Isolated By Default</h3>
+                <p class="feature-text">
                     Each session runs in its own worktree and branch, so experiments stay contained.
                 </p>
             </article>
-            <article class="bg-surface border border-border rounded-[10px] p-5">
-                <div class="text-accent mb-[0.9rem] flex">
+            <article class="feature-card">
+                <div class="feature-icon">
                     <svg xmlns="http://www.w3.org/2000/svg"
                          width="20"
                          height="20"
@@ -133,13 +128,13 @@
                         <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
                     </svg>
                 </div>
-                <h3 class="m-0 mb-2 text-[0.95rem] font-semibold text-accent">Built For Flow</h3>
-                <p class="m-0 text-[0.82rem] text-muted leading-[1.6]">
+                <h3 class="feature-title">Built For Flow</h3>
+                <p class="feature-text">
                     Review diffs, switch models, and iterate without leaving the TUI.
                 </p>
             </article>
-            <article class="bg-surface border border-border rounded-[10px] p-5">
-                <div class="text-accent mb-[0.9rem] flex">
+            <article class="feature-card">
+                <div class="feature-icon">
                     <svg xmlns="http://www.w3.org/2000/svg"
                          width="20"
                          height="20"
@@ -153,14 +148,14 @@
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                     </svg>
                 </div>
-                <h3 class="m-0 mb-2 text-[0.95rem] font-semibold text-accent">Fast Setup</h3>
-                <p class="m-0 text-[0.82rem] text-muted leading-[1.6]">
+                <h3 class="feature-title">Fast Setup</h3>
+                <p class="feature-text">
                     Install with npm, cargo, or shell script and start an agent session in minutes.
                 </p>
             </article>
         </div>
     </section>
-    <footer class="text-center mt-16 pt-8 border-t border-border">
-        <p class="m-0 text-[0.8rem] text-dim">Built for developers who want control over their AI coding sessions.</p>
+    <footer class="site-footer">
+        <p class="site-footer-text">Built for developers who want control over their AI coding sessions.</p>
     </footer>
 {% endblock content %}
