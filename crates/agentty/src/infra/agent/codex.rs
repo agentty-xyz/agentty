@@ -56,5 +56,3 @@ impl AgentBackend for CodexBackend {
         command
     }
 }
-
-impl CodexBackend {}

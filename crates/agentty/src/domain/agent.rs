@@ -13,6 +13,7 @@ pub enum AgentKind {
 pub enum AgentModel {
     Gemini3FlashPreview,
     Gemini3ProPreview,
+    Gpt53CodexSpark,
     Gpt53Codex,
     Gpt52Codex,
     ClaudeOpus46,
@@ -36,6 +37,7 @@ impl AgentModel {
             // TODO: Update to `gemini-3.1-pro-preview` when
             // https://github.com/google-gemini/gemini-cli/issues/19532 is resolved.
             Self::Gemini3ProPreview => "gemini-3-pro-preview",
+            Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::Gpt53Codex => "gpt-5.3-codex",
             Self::Gpt52Codex => "gpt-5.2-codex",
             Self::ClaudeOpus46 => "claude-opus-4-6",
@@ -47,7 +49,7 @@ impl AgentModel {
     pub fn kind(self) -> AgentKind {
         match self {
             Self::Gemini3FlashPreview | Self::Gemini3ProPreview => AgentKind::Gemini,
-            Self::Gpt53Codex | Self::Gpt52Codex => AgentKind::Codex,
+            Self::Gpt53CodexSpark | Self::Gpt53Codex | Self::Gpt52Codex => AgentKind::Codex,
             Self::ClaudeOpus46 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
             }
@@ -62,6 +64,7 @@ impl FromStr for AgentModel {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
             "gemini-3-pro-preview" => Ok(Self::Gemini3ProPreview),
+            "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "gpt-5.3-codex" => Ok(Self::Gpt53Codex),
             "gpt-5.2-codex" => Ok(Self::Gpt52Codex),
             "claude-opus-4-6" => Ok(Self::ClaudeOpus46),
@@ -81,6 +84,7 @@ impl AgentSelectionMetadata for AgentModel {
         match self {
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
             Self::Gemini3ProPreview => "Higher-quality Gemini model for deeper reasoning.",
+            Self::Gpt53CodexSpark => "Latest Codex spark model for coding quality.",
             Self::Gpt53Codex => "Latest Codex model for coding quality.",
             Self::Gpt52Codex => "Faster Codex model with lower cost.",
             Self::ClaudeOpus46 => "Top-tier Claude model for complex tasks.",
@@ -136,7 +140,11 @@ impl AgentKind {
             AgentModel::ClaudeSonnet46,
             AgentModel::ClaudeHaiku4520251001,
         ];
-        const CODEX_MODELS: &[AgentModel] = &[AgentModel::Gpt53Codex, AgentModel::Gpt52Codex];
+        const CODEX_MODELS: &[AgentModel] = &[
+            AgentModel::Gpt53Codex,
+            AgentModel::Gpt53CodexSpark,
+            AgentModel::Gpt52Codex,
+        ];
 
         match self {
             Self::Gemini => GEMINI_MODELS,
