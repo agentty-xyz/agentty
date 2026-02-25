@@ -153,26 +153,12 @@ impl RealCodexAppServerClient {
     async fn start_thread(session: &mut CodexSessionRuntime) -> Result<String, String> {
         let thread_start_id = format!("thread-start-{}", uuid::Uuid::new_v4());
         let instructions = load_root_instructions(&session.folder);
-        let thread_start_payload = serde_json::json!({
-            "method": "thread/start",
-            "id": thread_start_id,
-            "params": {
-                "model": Value::Null,
-                "modelProvider": Value::Null,
-                "cwd": Value::Null,
-                "approvalPolicy": Self::approval_policy(),
-                "sandbox": Self::thread_sandbox_mode(),
-                "config": Value::Null,
-                "baseInstructions": instructions.clone(),
-                "developerInstructions": instructions,
-                "personality": Value::Null,
-                "ephemeral": Value::Null,
-                "dynamicTools": Value::Null,
-                "mockExperimentalField": Value::Null,
-                "experimentalRawEvents": false,
-                "persistExtendedHistory": false
-            }
-        });
+        let thread_start_payload = Self::build_thread_start_payload(
+            &session.folder,
+            &session.model,
+            &thread_start_id,
+            &instructions,
+        );
 
         write_json_line(&mut session.stdin, &thread_start_payload).await?;
         let response_line = app_server_transport::wait_for_response_line(
@@ -194,6 +180,35 @@ impl RealCodexAppServerClient {
             })
     }
 
+    /// Builds one `thread/start` request payload for a runtime folder.
+    fn build_thread_start_payload(
+        folder: &Path,
+        model: &str,
+        thread_start_id: &str,
+        instructions: &Value,
+    ) -> Value {
+        serde_json::json!({
+            "method": "thread/start",
+            "id": thread_start_id,
+            "params": {
+                "model": model,
+                "modelProvider": Value::Null,
+                "cwd": folder.to_string_lossy(),
+                "approvalPolicy": Self::approval_policy(),
+                "sandbox": Self::thread_sandbox_mode(),
+                "config": Value::Null,
+                "baseInstructions": instructions.clone(),
+                "developerInstructions": instructions.clone(),
+                "personality": Value::Null,
+                "ephemeral": Value::Null,
+                "dynamicTools": Value::Null,
+                "mockExperimentalField": Value::Null,
+                "experimentalRawEvents": false,
+                "persistExtendedHistory": false
+            }
+        })
+    }
+
     /// Sends one turn prompt and waits for terminal completion notification.
     ///
     /// Intermediate agent messages and progress updates are emitted through
@@ -204,8 +219,13 @@ impl RealCodexAppServerClient {
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> Result<(String, u64, u64), String> {
         let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
-        let turn_start_payload =
-            Self::build_turn_start_payload(&session.thread_id, prompt, &turn_start_id);
+        let turn_start_payload = Self::build_turn_start_payload(
+            &session.folder,
+            &session.model,
+            &session.thread_id,
+            prompt,
+            &turn_start_id,
+        );
         write_json_line(&mut session.stdin, &turn_start_payload).await?;
 
         let mut assistant_messages = Vec::new();
@@ -294,7 +314,13 @@ impl RealCodexAppServerClient {
     }
 
     /// Builds one `turn/start` request payload for the active thread.
-    fn build_turn_start_payload(thread_id: &str, prompt: &str, turn_start_id: &str) -> Value {
+    fn build_turn_start_payload(
+        folder: &Path,
+        model: &str,
+        thread_id: &str,
+        prompt: &str,
+        turn_start_id: &str,
+    ) -> Value {
         serde_json::json!({
             "method": "turn/start",
             "id": turn_start_id,
@@ -305,10 +331,10 @@ impl RealCodexAppServerClient {
                     "text": prompt,
                     "text_elements": []
                 }],
-                "cwd": Value::Null,
+                "cwd": folder.to_string_lossy(),
                 "approvalPolicy": Self::approval_policy(),
                 "sandboxPolicy": Self::turn_sandbox_policy(),
-                "model": Value::Null,
+                "model": model,
                 "effort": Value::Null,
                 "summary": Value::Null,
                 "personality": Value::Null,
@@ -897,6 +923,77 @@ mod tests {
         // Assert
         assert_eq!(camel_case_result, Some(Ok(())));
         assert_eq!(snake_case_result, Some(Ok(())));
+    }
+
+    #[test]
+    fn build_thread_start_payload_uses_thread_folder_as_cwd() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let instructions =
+            Value::String("Project instructions from AGENTS.md\n\nRules".to_string());
+        let thread_start_id = "thread-start-1";
+
+        // Act
+        let payload = RealCodexAppServerClient::build_thread_start_payload(
+            temp_directory.path(),
+            "gpt-5.3-codex",
+            thread_start_id,
+            &instructions,
+        );
+        let payload_cwd = payload
+            .get("params")
+            .and_then(|params| params.get("cwd"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        // Assert
+        assert_eq!(
+            payload_cwd,
+            temp_directory.path().to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            payload
+                .get("params")
+                .and_then(|params| params.get("model"))
+                .and_then(Value::as_str),
+            Some("gpt-5.3-codex")
+        );
+    }
+
+    #[test]
+    fn build_turn_start_payload_uses_thread_folder_as_cwd() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let prompt = "Implement task";
+        let turn_start_id = "turn-start-1";
+        let thread_id = "thread-1";
+
+        // Act
+        let payload = RealCodexAppServerClient::build_turn_start_payload(
+            temp_directory.path(),
+            "gpt-5.3-codex",
+            thread_id,
+            prompt,
+            turn_start_id,
+        );
+        let payload_cwd = payload
+            .get("params")
+            .and_then(|params| params.get("cwd"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        // Assert
+        assert_eq!(
+            payload_cwd,
+            temp_directory.path().to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            payload
+                .get("params")
+                .and_then(|params| params.get("model"))
+                .and_then(Value::as_str),
+            Some("gpt-5.3-codex")
+        );
     }
 
     #[test]
