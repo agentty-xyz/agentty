@@ -39,6 +39,7 @@ TUI tool to manage agents.
   - Private functions last.
   - If a function has multiple callees, they should appear in the order they are first called within that function.
 - **File Naming:** Use **singular** names for Rust source files (e.g., `model.rs`, `icon.rs`, `agent.rs`). Do not use plural forms.
+- **Module Layout:** Prefer `module.rs` paired with `module/` for modules that have child modules. Do not introduce new `mod.rs` files.
 - **Imports:** Always place imports at the top of the file. Do not use local `use` statements within functions or other blocks.
   - In test modules, prefer `use super::*;` where practical.
 - **Test-only code placement:** Do not add `#[cfg(test)]` to top-level imports/functions in production modules. Keep test-only helpers inside `#[cfg(test)] mod tests` (duplicate code there if needed). Exception: `#[cfg_attr(test, mockall::automock)]` on traits used for mocking.

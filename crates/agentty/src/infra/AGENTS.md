@@ -18,5 +18,4 @@ Implementations of external interfaces (Database, Git, System).
 - [git/](git/) - Workflow-focused git operation modules (`merge`, `rebase`, `repo`, `sync`, `worktree`).
 - [git.rs](git.rs) - Git module root with public API re-exports and `GitClient` wiring.
 - [lock.rs](lock.rs) - File locking mechanisms.
-- [mod.rs](mod.rs) - Module definition.
 - [version.rs](version.rs) - Version checking infrastructure.

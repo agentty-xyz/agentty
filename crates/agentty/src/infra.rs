@@ -1,3 +1,5 @@
+//! Infrastructure adapters for database, git, and agent backends.
+
 pub mod agent;
 /// Shared app-server types and runtime trait boundaries.
 pub mod app_server;

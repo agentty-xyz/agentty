@@ -8,8 +8,6 @@ Pure business logic and domain entities, decoupled from UI and infrastructure.
 
 - [agent.rs](agent.rs) - Agent backend traits and model definitions.
 - [input.rs](input.rs) - Input state management.
-- [mod.rs](mod.rs) - Module definition.
-- [plan.rs](plan.rs) - Plan output parsing utilities.
 - [permission.rs](permission.rs) - Permission modes and logic.
 - [project.rs](project.rs) - Project entity definitions.
 - [session.rs](session.rs) - Session entity definitions.

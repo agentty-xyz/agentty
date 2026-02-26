@@ -1,3 +1,5 @@
+//! Reusable UI components.
+
 pub mod chat_input;
 pub mod confirmation_overlay;
 pub mod file_explorer;

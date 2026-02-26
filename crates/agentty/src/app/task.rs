@@ -600,7 +600,6 @@ mod tests {
         let output = Arc::new(Mutex::new(String::new()));
         let status = Arc::new(Mutex::new(Status::InProgress));
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-
         // Act
         let result = TaskService::run_app_server_task(
             Arc::new(mock_app_server_client),

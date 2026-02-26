@@ -16,7 +16,7 @@ When working within `crates/agentty/src/ui/`:
 1. Create a new module in `pages/` (e.g., `pages/my_page.rs`)
 1. Define a struct (e.g., `MyPage`) that holds necessary references
 1. Implement the `Page` trait for your struct with a `render(&mut self, f: &mut Frame, area: Rect)` method
-1. Expose the module in `pages/mod.rs`
+1. Expose the module in `pages.rs`
 1. Update the match expression in the UI module root file to instantiate and render your page
 
 ### Adding a New Component
@@ -25,7 +25,7 @@ When working within `crates/agentty/src/ui/`:
 1. Define a struct that holds the rendering data needed
 1. Implement the `Component` trait with a `render(&self, f: &mut Frame, area: Rect)` method
 1. Add a `new()` constructor to initialize the struct
-1. Expose the module in `components/mod.rs`
+1. Expose the module in `components.rs`
 1. Usage pattern: `MyWidget::new(...).render(f, area)`
 
 ### Modifying Layouts
@@ -42,7 +42,9 @@ When working within `crates/agentty/src/ui/`:
 ## Directory Index
 
 - [components/](components/) - Reusable UI components.
+- [components.rs](components.rs) - UI components module root and exports.
 - [pages/](pages/) - Full-screen page implementations.
+- [pages.rs](pages.rs) - UI pages module root and exports.
 - [AGENTS.md](AGENTS.md) - UI specific instructions.
 - [CLAUDE.md](CLAUDE.md) - Symlink to AGENTS.md.
 - [GEMINI.md](GEMINI.md) - Symlink to AGENTS.md.
@@ -56,6 +58,7 @@ When working within `crates/agentty/src/ui/`:
 - [render.rs](render.rs) - Top-level frame rendering orchestration and shared UI traits/context.
 - [router.rs](router.rs) - Mode router for content-area rendering.
 - [state/](state/) - UI state definitions.
+- [state.rs](state.rs) - UI state module root and exports.
 - [style.rs](style.rs) - UI styling constants.
 - [text_util.rs](text_util.rs) - Text wrapping and compact formatting helpers.
 - [util.rs](util.rs) - Backward-compatible re-exports for UI utility modules.

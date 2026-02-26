@@ -569,7 +569,7 @@ mod tests {
         let entries = vec![
             FileEntry {
                 is_dir: false,
-                path: "src/app/mod.rs".to_string(),
+                path: "src/app/session.rs".to_string(),
             },
             FileEntry {
                 is_dir: false,
@@ -578,11 +578,11 @@ mod tests {
         ];
 
         // Act
-        let filtered = filter_entries(&entries, "app/mod");
+        let filtered = filter_entries(&entries, "app/session");
 
         // Assert
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].path, "src/app/mod.rs");
+        assert_eq!(filtered[0].path, "src/app/session.rs");
     }
 
     #[test]

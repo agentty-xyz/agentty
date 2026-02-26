@@ -3,7 +3,7 @@
 ## Local Conventions
 
 - Avoid near-identical local variable names in the same function (for example, `gitdir` and `git_dir`). Use one clear naming style with distinct, descriptive names.
-- Keep `mod.rs` files declaration-only. Move non-declaration module logic into sibling `*.rs` files.
+- Prefer `module.rs` plus `module/` for nested modules. Avoid `mod.rs` module roots.
 - Session status flow:
   - Status state machine is: `New` -> `InProgress`, `Review` -> (`InProgress` | `Done` | `Canceled`), `InProgress` -> `Review`.
   - `New` is set when `create_session()` creates a blank session before the user types a prompt.
@@ -17,7 +17,9 @@
 - [app/](app/) - Application state and workflows split by concern (`session`, `project`, `task`).
 - [app.rs](app.rs) - App module root, shared app state, and orchestration APIs.
 - [domain/](domain/) - Domain layer entities and logic.
+- [domain.rs](domain.rs) - Domain module root and submodule declarations.
 - [infra/](infra/) - Infrastructure layer implementations.
+- [infra.rs](infra.rs) - Infrastructure module root and submodule declarations.
 - [runtime/](runtime/) - Runtime event loop, terminal integration, and mode key handling.
 - [runtime.rs](runtime.rs) - Runtime entry point and main event/render loop wiring.
 - [ui/](ui/) - User Interface module.
