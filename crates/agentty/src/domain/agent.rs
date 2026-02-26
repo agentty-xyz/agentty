@@ -12,7 +12,8 @@ pub enum AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModel {
     Gemini3FlashPreview,
-    Gemini3ProPreview,
+    /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
+    Gemini31ProPreview,
     Gpt53CodexSpark,
     Gpt53Codex,
     Gpt52Codex,
@@ -34,9 +35,7 @@ impl AgentModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
-            // TODO: Update to `gemini-3.1-pro-preview` when
-            // https://github.com/google-gemini/gemini-cli/issues/19532 is resolved.
-            Self::Gemini3ProPreview => "gemini-3-pro-preview",
+            Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::Gpt53Codex => "gpt-5.3-codex",
             Self::Gpt52Codex => "gpt-5.2-codex",
@@ -48,7 +47,7 @@ impl AgentModel {
 
     pub fn kind(self) -> AgentKind {
         match self {
-            Self::Gemini3FlashPreview | Self::Gemini3ProPreview => AgentKind::Gemini,
+            Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt53CodexSpark | Self::Gpt53Codex | Self::Gpt52Codex => AgentKind::Codex,
             Self::ClaudeOpus46 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
@@ -63,7 +62,7 @@ impl FromStr for AgentModel {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
-            "gemini-3-pro-preview" => Ok(Self::Gemini3ProPreview),
+            "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "gpt-5.3-codex" => Ok(Self::Gpt53Codex),
             "gpt-5.2-codex" => Ok(Self::Gpt52Codex),
@@ -83,7 +82,7 @@ impl AgentSelectionMetadata for AgentModel {
     fn description(&self) -> &'static str {
         match self {
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
-            Self::Gemini3ProPreview => "Higher-quality Gemini model for deeper reasoning.",
+            Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gpt53CodexSpark => "Latest Codex spark model for coding quality.",
             Self::Gpt53Codex => "Latest Codex model for coding quality.",
             Self::Gpt52Codex => "Faster Codex model with lower cost.",
@@ -136,7 +135,7 @@ impl AgentKind {
     pub fn models(self) -> &'static [AgentModel] {
         const GEMINI_MODELS: &[AgentModel] = &[
             AgentModel::Gemini3FlashPreview,
-            AgentModel::Gemini3ProPreview,
+            AgentModel::Gemini31ProPreview,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeOpus46,
