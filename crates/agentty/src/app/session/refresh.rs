@@ -85,7 +85,6 @@ impl SessionManager {
             projects.active_project_id(),
             projects.working_dir(),
             &mut self.handles,
-            services.git_client(),
         )
         .await;
         let all_time_model_usage = Self::load_all_time_model_usage(services.db()).await;

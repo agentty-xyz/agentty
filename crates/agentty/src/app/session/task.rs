@@ -2,7 +2,7 @@
 //! status persistence.
 
 use std::os::unix::process::ExitStatusExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,11 +12,11 @@ use tokio::io::{AsyncBufReadExt as _, AsyncRead};
 use tokio::sync::mpsc;
 
 use super::COMMIT_MESSAGE;
-use crate::app::AppEvent;
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
+use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::session::Status;
 use crate::infra::db::Database;
@@ -159,16 +159,19 @@ impl SessionTaskService {
                     let _ = db
                         .upsert_session_usage(&id, session_model.as_str(), &parsed.stats)
                         .await;
-                    Self::handle_auto_commit(AssistContext {
-                        app_event_tx: app_event_tx.clone(),
-                        db: db.clone(),
-                        folder,
-                        git_client: Arc::clone(&git_client),
-                        id: id.clone(),
-                        output: Arc::clone(&output),
-                        session_model,
-                    })
-                    .await;
+                    {
+                        let folder = folder.clone();
+                        Self::handle_auto_commit(AssistContext {
+                            app_event_tx: app_event_tx.clone(),
+                            db: db.clone(),
+                            folder,
+                            git_client: Arc::clone(&git_client),
+                            id: id.clone(),
+                            output: Arc::clone(&output),
+                            session_model,
+                        })
+                        .await;
+                    }
                 }
             }
             Err(spawn_error) => {
@@ -179,6 +182,7 @@ impl SessionTaskService {
             }
         }
 
+        Self::refresh_persisted_session_size(&db, git_client.as_ref(), &id, &folder).await;
         let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
 
         if let Some(error) = error {
@@ -188,7 +192,27 @@ impl SessionTaskService {
         Ok(())
     }
 
-    async fn handle_auto_commit(context: AssistContext) {
+    /// Recomputes and persists one session size using the session worktree
+    /// diff.
+    pub(crate) async fn refresh_persisted_session_size(
+        db: &Database,
+        git_client: &dyn GitClient,
+        session_id: &str,
+        folder: &Path,
+    ) {
+        let Some(base_branch) = db.get_session_base_branch(session_id).await.ok().flatten() else {
+            return;
+        };
+        let computed_size =
+            SessionManager::session_size_for_folder(git_client, folder, &base_branch).await;
+        let _ = db
+            .update_session_size(session_id, &computed_size.to_string())
+            .await;
+    }
+
+    /// Commits pending worktree changes and appends the outcome to session
+    /// output.
+    pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
         match Self::commit_changes_with_assist(&context).await {
             Ok(Some(hash)) => {
                 let message = format!("\n[Commit] committed with hash `{hash}`\n");
@@ -777,7 +801,8 @@ impl SessionTaskService {
         active_progress_message.take()
     }
 
-    fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
+    /// Clears the transient progress message for one session.
+    pub(crate) fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
         Self::set_session_progress(app_event_tx, id, None);
     }
 
@@ -796,7 +821,8 @@ impl SessionTaskService {
         ActiveProgressMessageUpdate::Updated
     }
 
-    fn set_session_progress(
+    /// Emits a transient progress message update for one session.
+    pub(crate) fn set_session_progress(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         id: &str,
         progress_message: Option<String>,

@@ -8,24 +8,14 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::app::AppEvent;
-use crate::app::assist::{
-    AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
-    run_agent_assist,
-};
-use crate::app::session::COMMIT_MESSAGE;
+use crate::app::assist::AssistContext;
+use crate::app::{AppEvent, SessionTaskService};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::Status;
 use crate::infra::app_server::{AppServerClient, AppServerStreamEvent, AppServerTurnRequest};
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
-const AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE: &str =
-    include_str!("../../resources/auto_commit_assist_prompt.md");
-const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
-    max_attempts: 10,
-    max_identical_failure_streak: 3,
-};
 /// Poll interval for account-level Codex usage limits snapshots.
 #[cfg(not(test))]
 const CODEX_USAGE_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -208,12 +198,12 @@ impl TaskService {
             id.clone(),
         );
 
-        Self::set_session_progress(&app_event_tx, &id, Some("Thinking".to_string()));
+        SessionTaskService::set_session_progress(&app_event_tx, &id, Some("Thinking".to_string()));
 
         let turn_result = app_server_client.run_turn(request, stream_tx).await;
 
         let streamed_any_content = consumer_handle.await.unwrap_or(false);
-        Self::clear_session_progress(&app_event_tx, &id);
+        SessionTaskService::clear_session_progress(&app_event_tx, &id);
 
         let response = match turn_result {
             Ok(response) => response,
@@ -223,7 +213,14 @@ impl TaskService {
                     *guard = None;
                 }
 
-                let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
+                let _ = SessionTaskService::update_status(
+                    &status,
+                    &db,
+                    &app_event_tx,
+                    &id,
+                    Status::Review,
+                )
+                .await;
 
                 return Err(error);
             }
@@ -236,13 +233,20 @@ impl TaskService {
         if response.context_reset {
             let context_reset_message = "\n[App-server] Reconnected with a new session context; \
                                          previous model context was reset.\n";
-            Self::append_session_output(&output, &db, &app_event_tx, &id, context_reset_message)
-                .await;
+            SessionTaskService::append_session_output(
+                &output,
+                &db,
+                &app_event_tx,
+                &id,
+                context_reset_message,
+            )
+            .await;
         }
 
         if !streamed_any_content && !response.assistant_message.trim().is_empty() {
             let message = format!("{}\n\n", response.assistant_message.trim_end());
-            Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
+            SessionTaskService::append_session_output(&output, &db, &app_event_tx, &id, &message)
+                .await;
         }
 
         let stats = crate::domain::session::SessionStats {
@@ -253,211 +257,26 @@ impl TaskService {
         let _ = db
             .upsert_session_usage(&id, session_model.as_str(), &stats)
             .await;
-        Self::handle_auto_commit(AssistContext {
-            app_event_tx: app_event_tx.clone(),
-            db: db.clone(),
-            folder,
-            git_client: Arc::clone(&git_client),
-            id: id.clone(),
-            output: Arc::clone(&output),
-            session_model,
-        })
-        .await;
+        {
+            let folder = folder.clone();
+            SessionTaskService::handle_auto_commit(AssistContext {
+                app_event_tx: app_event_tx.clone(),
+                db: db.clone(),
+                folder,
+                git_client: Arc::clone(&git_client),
+                id: id.clone(),
+                output: Arc::clone(&output),
+                session_model,
+            })
+            .await;
+        }
 
-        let _ = Self::update_status(&status, &db, &app_event_tx, &id, Status::Review).await;
+        SessionTaskService::refresh_persisted_session_size(&db, git_client.as_ref(), &id, &folder)
+            .await;
+        let _ = SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Review)
+            .await;
 
         Ok(())
-    }
-
-    /// Applies a status transition to memory and database when valid.
-    ///
-    /// This emits [`AppEvent::SessionUpdated`] for targeted snapshot sync and
-    /// emits [`AppEvent::RefreshSessions`] for transitions that require full
-    /// list reload.
-    pub(super) async fn update_status(
-        status: &Mutex<Status>,
-        db: &Database,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        id: &str,
-        new: Status,
-    ) -> bool {
-        let should_update = if let Ok(mut current) = status.lock() {
-            if (*current).can_transition_to(new) {
-                *current = new;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if !should_update {
-            return false;
-        }
-        let _ = db.update_session_status(id, &new.to_string()).await;
-        let session_id = id.to_string();
-        let _ = app_event_tx.send(AppEvent::SessionUpdated { session_id });
-        if Self::status_requires_full_refresh(new) {
-            let _ = app_event_tx.send(AppEvent::RefreshSessions);
-        }
-
-        true
-    }
-
-    /// Appends output to the in-memory handle buffer and database.
-    pub(super) async fn append_session_output(
-        output: &Arc<Mutex<String>>,
-        db: &Database,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        id: &str,
-        message: &str,
-    ) {
-        if let Ok(mut buffer) = output.lock() {
-            buffer.push_str(message);
-        }
-        let _ = db.append_session_output(id, message).await;
-        let _ = app_event_tx.send(AppEvent::SessionUpdated {
-            session_id: id.to_string(),
-        });
-    }
-
-    async fn handle_auto_commit(context: AssistContext) {
-        match Self::commit_changes_with_assist(&context).await {
-            Ok(Some(hash)) => {
-                let message = format!("\n[Commit] committed with hash `{hash}`\n");
-                Self::append_session_output(
-                    &context.output,
-                    &context.db,
-                    &context.app_event_tx,
-                    &context.id,
-                    &message,
-                )
-                .await;
-            }
-            Ok(None) => {}
-            Err(commit_error) => {
-                let message = format!("\n[Commit Error] {commit_error}\n");
-                Self::append_session_output(
-                    &context.output,
-                    &context.db,
-                    &context.app_event_tx,
-                    &context.id,
-                    &message,
-                )
-                .await;
-            }
-        }
-    }
-
-    async fn commit_changes_with_assist(context: &AssistContext) -> Result<Option<String>, String> {
-        let mut failure_tracker =
-            FailureTracker::new(AUTO_COMMIT_ASSIST_POLICY.max_identical_failure_streak);
-        // Test repos do not install hooks deterministically; skip hook
-        // execution in tests to keep auto-commit behavior stable.
-        let skip_verify_hooks = cfg!(test);
-
-        for assist_attempt in 1..=AUTO_COMMIT_ASSIST_POLICY.max_attempts + 1 {
-            match Self::commit_changes_with_git_client(context, skip_verify_hooks).await {
-                Ok(commit_hash) => {
-                    return Ok(Some(commit_hash));
-                }
-                Err(commit_error) if commit_error.contains("Nothing to commit") => {
-                    return Ok(None);
-                }
-                Err(commit_error) => {
-                    // Keep test execution deterministic and offline by skipping
-                    // model-assisted commit retries.
-                    if cfg!(test) {
-                        return Err(commit_error);
-                    }
-
-                    if failure_tracker.observe(&commit_error) {
-                        return Err(format!(
-                            "Auto-commit assistance made no progress: repeated identical commit \
-                             failure. Last error: {commit_error}"
-                        ));
-                    }
-
-                    if assist_attempt > AUTO_COMMIT_ASSIST_POLICY.max_attempts {
-                        return Err(commit_error);
-                    }
-
-                    Self::append_commit_assist_header(context, assist_attempt, &commit_error).await;
-                    Self::run_commit_assist_for_error(context, &commit_error).await?;
-                }
-            }
-        }
-
-        Err("Failed to auto-commit after assistance attempts".to_string())
-    }
-
-    /// Commits all worktree changes and returns the current `HEAD` short hash.
-    ///
-    /// Pass `no_verify` to skip commit hooks (used in tests for deterministic
-    /// execution without pre-commit setup).
-    ///
-    /// # Errors
-    /// Returns an error if staging/commit fails or `HEAD` cannot be resolved.
-    async fn commit_changes_with_git_client(
-        context: &AssistContext,
-        no_verify: bool,
-    ) -> Result<String, String> {
-        let folder = context.folder.clone();
-        context
-            .git_client
-            .commit_all_preserving_single_commit(
-                folder.clone(),
-                COMMIT_MESSAGE.to_string(),
-                no_verify,
-            )
-            .await?;
-
-        context.git_client.head_short_hash(folder).await
-    }
-
-    async fn append_commit_assist_header(
-        context: &AssistContext,
-        assist_attempt: usize,
-        commit_error: &str,
-    ) {
-        let formatted_error = Self::format_commit_error_for_display(commit_error);
-        append_assist_header(
-            context,
-            "Commit",
-            assist_attempt,
-            AUTO_COMMIT_ASSIST_POLICY.max_attempts,
-            "Resolving auto-commit failure:",
-            &formatted_error,
-        )
-        .await;
-    }
-
-    async fn run_commit_assist_for_error(
-        context: &AssistContext,
-        commit_error: &str,
-    ) -> Result<(), String> {
-        let prompt = Self::auto_commit_assist_prompt(commit_error);
-        let assist_context = AssistContext {
-            app_event_tx: context.app_event_tx.clone(),
-            db: context.db.clone(),
-            folder: context.folder.clone(),
-            git_client: Arc::clone(&context.git_client),
-            id: context.id.clone(),
-            output: Arc::clone(&context.output),
-            session_model: context.session_model,
-        };
-
-        run_agent_assist(&assist_context, &prompt)
-            .await
-            .map_err(|error| format!("Commit assistance failed: {error}"))
-    }
-
-    fn auto_commit_assist_prompt(commit_error: &str) -> String {
-        AUTO_COMMIT_ASSIST_PROMPT_TEMPLATE.replace("{commit_error}", commit_error.trim())
-    }
-
-    fn format_commit_error_for_display(commit_error: &str) -> String {
-        format_detail_lines(commit_error)
     }
 
     /// Spawns a background task that consumes [`AppServerStreamEvent`]s and
@@ -480,11 +299,15 @@ impl TaskService {
                 match event {
                     AppServerStreamEvent::AssistantMessage(message) => {
                         if active_progress.take().is_some() {
-                            Self::set_session_progress(&app_event_tx, &session_id, None);
+                            SessionTaskService::set_session_progress(
+                                &app_event_tx,
+                                &session_id,
+                                None,
+                            );
                         }
 
                         let formatted = format!("{}\n\n", message.trim_end());
-                        Self::append_session_output(
+                        SessionTaskService::append_session_output(
                             &output,
                             &db,
                             &app_event_tx,
@@ -498,7 +321,7 @@ impl TaskService {
                         if active_progress.as_deref() != Some(&progress) {
                             active_progress = Some(progress.clone());
 
-                            Self::set_session_progress(
+                            SessionTaskService::set_session_progress(
                                 &app_event_tx,
                                 &session_id,
                                 Some(progress.clone()),
@@ -509,33 +332,11 @@ impl TaskService {
             }
 
             if active_progress.take().is_some() {
-                Self::set_session_progress(&app_event_tx, &session_id, None);
+                SessionTaskService::set_session_progress(&app_event_tx, &session_id, None);
             }
 
             streamed_any_content
         })
-    }
-
-    fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
-        Self::set_session_progress(app_event_tx, id, None);
-    }
-
-    fn set_session_progress(
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        id: &str,
-        progress_message: Option<String>,
-    ) {
-        let _ = app_event_tx.send(AppEvent::SessionProgressUpdated {
-            progress_message,
-            session_id: id.to_string(),
-        });
-    }
-
-    fn status_requires_full_refresh(status: Status) -> bool {
-        matches!(
-            status,
-            Status::InProgress | Status::Review | Status::Merging | Status::Done | Status::Canceled
-        )
     }
 }
 

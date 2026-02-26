@@ -104,6 +104,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                 && !matches!(session.status, Status::Canceled)
                 && let Some(session_id) = app.session_id_for_index(session_index)
             {
+                app.refresh_session_size(&session_id).await;
                 app.mode = AppMode::View {
                     done_session_output_mode: DoneSessionOutputMode::Summary,
                     session_id,
@@ -199,9 +200,10 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
     )
 }
 
-/// Creates a new session and switches the UI to prompt mode for it.
+/// Creates a new session, refreshes its size snapshot, and opens prompt mode.
 async fn open_new_session_prompt(app: &mut App) -> io::Result<()> {
     let session_id = app.create_session().await.map_err(io::Error::other)?;
+    app.refresh_session_size(&session_id).await;
 
     app.mode = AppMode::Prompt {
         at_mention_state: None,
@@ -423,6 +425,65 @@ mod tests {
                 ..
             } if session_id == &expected_session_id
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_refreshes_session_size_before_opening_view_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let expected_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.services
+            .db()
+            .update_session_size(&expected_session_id, "XS")
+            .await
+            .expect("failed to set stale size");
+        let session_index = app
+            .session_index_for_id(&expected_session_id)
+            .expect("missing created session");
+        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        let changed_lines = "line\n".repeat(40);
+        std::fs::write(session_folder.join("open-size-test.txt"), changed_lines)
+            .expect("failed to write test file");
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(Some(0));
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: None,
+                ..
+            } if session_id == &expected_session_id
+        ));
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == expected_session_id)
+            .expect("missing in-memory session");
+        let db_session = db_sessions
+            .iter()
+            .find(|db_session| db_session.id == expected_session_id)
+            .expect("missing persisted session");
+        assert_eq!(session.size, crate::domain::session::SessionSize::M);
+        assert_eq!(db_session.size, "M");
     }
 
     #[tokio::test]

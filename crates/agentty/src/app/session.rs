@@ -1524,15 +1524,9 @@ FROM session
             .collect();
 
         // Act
-        let (sessions, stats_activity) = SessionManager::load_sessions(
-            dir.path(),
-            &db,
-            project_id,
-            &working_dir,
-            &mut handles,
-            Arc::new(git::RealGitClient),
-        )
-        .await;
+        let (sessions, stats_activity) =
+            SessionManager::load_sessions(dir.path(), &db, project_id, &working_dir, &mut handles)
+                .await;
 
         // Assert
         assert_eq!(sessions.len(), 3);
@@ -1569,15 +1563,9 @@ FROM session
         let mut handles: HashMap<String, SessionHandles> = HashMap::new();
 
         // Act
-        let (sessions, stats_activity) = SessionManager::load_sessions(
-            dir.path(),
-            &db,
-            project_id,
-            &working_dir,
-            &mut handles,
-            Arc::new(git::RealGitClient),
-        )
-        .await;
+        let (sessions, stats_activity) =
+            SessionManager::load_sessions(dir.path(), &db, project_id, &working_dir, &mut handles)
+                .await;
 
         // Assert
         assert_eq!(sessions.len(), 1);
@@ -1864,7 +1852,7 @@ FROM session
     }
 
     #[tokio::test]
-    async fn test_load_sessions_persists_size_for_non_terminal_status() {
+    async fn test_load_sessions_uses_persisted_size_for_non_terminal_status() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
@@ -1872,11 +1860,16 @@ FROM session
             .create_session()
             .await
             .expect("failed to create session");
+        app.services
+            .db()
+            .update_session_size(&session_id, "S")
+            .await
+            .expect("failed to update size");
         let session_index = app
             .session_index_for_id(&session_id)
             .expect("missing created session");
         let session_folder = app.sessions.sessions[session_index].folder.clone();
-        let changed_lines = "line\n".repeat(20);
+        let changed_lines = "line\n".repeat(700);
         std::fs::write(session_folder.join("size-test.txt"), changed_lines)
             .expect("failed to write test file");
 
@@ -1887,7 +1880,6 @@ FROM session
             app.projects.active_project_id(),
             app.projects.working_dir(),
             &mut app.sessions.handles,
-            Arc::new(git::RealGitClient),
         )
         .await;
         let db_sessions = app
@@ -1907,6 +1899,107 @@ FROM session
             .find(|session| session.id == session_id)
             .expect("missing persisted session");
         assert_eq!(reloaded_session.size, SessionSize::S);
+        assert_eq!(db_session.size, "S");
+    }
+
+    #[tokio::test]
+    async fn test_refresh_session_size_recomputes_and_persists_size() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_index = app
+            .session_index_for_id(&session_id)
+            .expect("missing created session");
+        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        let changed_lines = "line\n".repeat(40);
+        std::fs::write(session_folder.join("refresh-size-test.txt"), changed_lines)
+            .expect("failed to write test file");
+
+        // Act
+        app.refresh_session_size(&session_id).await;
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing session snapshot");
+        let db_session = db_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing persisted session");
+        assert_eq!(session.size, SessionSize::M);
+        assert_eq!(db_session.size, "M");
+    }
+
+    #[tokio::test]
+    async fn test_reply_turn_completion_persists_session_size() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let mut backend = MockAgentBackend::new();
+        backend
+            .expect_build_start_command()
+            .returning(|folder, _, _| {
+                let mut command = Command::new("sh");
+                command
+                    .args([
+                        "-lc",
+                        "yes line | head -n 20 > turn-size-test.txt; echo turn-complete",
+                    ])
+                    .current_dir(folder)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null());
+
+                command
+            });
+
+        // Act
+        app.sessions
+            .reply_with_backend(
+                &app.services,
+                &session_id,
+                "compute size after turn",
+                &backend,
+                AgentModel::Gemini3FlashPreview,
+            )
+            .await;
+        wait_for_status(&mut app, &session_id, Status::Review).await;
+        app.process_pending_app_events().await;
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing in-memory session");
+        let db_session = db_sessions
+            .iter()
+            .find(|db_session| db_session.id == session_id)
+            .expect("missing persisted session");
+        assert_eq!(session.size, SessionSize::S);
         assert_eq!(db_session.size, "S");
     }
 
@@ -1944,7 +2037,6 @@ FROM session
             app.projects.active_project_id(),
             app.projects.working_dir(),
             &mut app.sessions.handles,
-            Arc::new(git::RealGitClient),
         )
         .await;
         let db_sessions = app

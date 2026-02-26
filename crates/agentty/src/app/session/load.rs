@@ -2,13 +2,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::Arc;
 
 use time::{OffsetDateTime, UtcOffset};
 
 use super::session_folder;
-use crate::app::SessionManager;
 use crate::app::settings::SettingName;
+use crate::app::{AppServices, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::session::{
     AllTimeModelUsage, DailyActivity, Session, SessionHandles, SessionSize, SessionStats, Status,
@@ -34,7 +33,6 @@ impl SessionManager {
         active_project_id: i64,
         working_dir: &Path,
         handles: &mut HashMap<String, SessionHandles>,
-        git_client: Arc<dyn GitClient>,
     ) -> (Vec<Session>, Vec<DailyActivity>) {
         let project_name = working_dir
             .file_name()
@@ -79,19 +77,6 @@ impl SessionManager {
                 );
             }
 
-            let size = if is_terminal_status {
-                persisted_size
-            } else {
-                let computed_size =
-                    Self::session_size_for_folder(git_client.as_ref(), &folder, &row.base_branch)
-                        .await;
-                let _ = db
-                    .update_session_size(&row.id, &computed_size.to_string())
-                    .await;
-
-                computed_size
-            };
-
             sessions.push(Session {
                 base_branch: row.base_branch,
                 created_at: row.created_at,
@@ -101,7 +86,7 @@ impl SessionManager {
                 output: row.output,
                 project_name: project_name.clone(),
                 prompt: row.prompt,
-                size,
+                size: persisted_size,
                 stats: SessionStats {
                     input_tokens: row.input_tokens.cast_unsigned(),
                     output_tokens: row.output_tokens.cast_unsigned(),
@@ -143,7 +128,33 @@ impl SessionManager {
             .unwrap_or_default()
     }
 
-    async fn session_size_for_folder(
+    /// Recomputes git-diff size for one session and persists it.
+    ///
+    /// This is invoked explicitly by session-open and turn-complete flows,
+    /// keeping list refreshes free of per-session git diff work.
+    pub(crate) async fn refresh_session_size(&mut self, services: &AppServices, session_id: &str) {
+        let Some(session_index) = self.session_index_for_id(session_id) else {
+            return;
+        };
+        let (base_branch, folder) = {
+            let session = &self.sessions[session_index];
+            (session.base_branch.clone(), session.folder.clone())
+        };
+        let computed_size =
+            Self::session_size_for_folder(services.git_client().as_ref(), &folder, &base_branch)
+                .await;
+        let _ = services
+            .db()
+            .update_session_size(session_id, &computed_size.to_string())
+            .await;
+
+        if let Some(session) = self.sessions.get_mut(session_index) {
+            session.size = computed_size;
+        }
+    }
+
+    /// Computes session-size bucket from one worktree folder's diff.
+    pub(crate) async fn session_size_for_folder(
         git_client: &dyn GitClient,
         folder: &Path,
         base_branch: &str,

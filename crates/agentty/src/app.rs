@@ -185,7 +185,6 @@ impl App {
             active_project_id,
             startup_working_dir.as_path(),
             &mut handles,
-            Arc::clone(&git_client),
         )
         .await;
         let all_time_model_usage = SessionManager::load_all_time_model_usage(&db).await;
@@ -456,6 +455,13 @@ impl App {
     /// Returns an error if the session is not currently running.
     pub async fn stop_session(&self, session_id: &str) -> Result<(), String> {
         self.sessions.stop_session(&self.services, session_id).await
+    }
+
+    /// Recomputes one session's diff-based size and persists it.
+    pub async fn refresh_session_size(&mut self, session_id: &str) {
+        self.sessions
+            .refresh_session_size(&self.services, session_id)
+            .await;
     }
 
     /// Submits a follow-up prompt for an existing session.
