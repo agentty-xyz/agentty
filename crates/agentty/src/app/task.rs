@@ -847,7 +847,7 @@ mod tests {
             output_text.contains("fallback message"),
             "fallback output should be appended when streamed chunks are whitespace-only"
         );
-        assert!(!output_text.contains("[Commit] No changes to commit."));
+        assert!(output_text.contains("[Commit] No changes to commit."));
         assert_eq!(
             status.lock().map(|value| *value).ok(),
             Some(Status::Review),

@@ -241,9 +241,8 @@ impl SessionTaskService {
 
     /// Commits pending worktree changes and appends user-visible outcomes.
     ///
-    /// Successful commit hashes and commit errors are emitted into session
-    /// output, while clean-worktree no-op commits remain silent to avoid
-    /// cluttering non-edit conversations.
+    /// Successful commit hashes, no-op commit notices, and commit errors are
+    /// emitted into session output for user visibility.
     pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
         match Self::commit_changes_with_assist(&context).await {
             Ok(Some(hash)) => {
@@ -257,7 +256,17 @@ impl SessionTaskService {
                 )
                 .await;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let message = "\n[Commit] No changes to commit.\n";
+                Self::append_session_output(
+                    &context.output,
+                    &context.db,
+                    &context.app_event_tx,
+                    &context.id,
+                    message,
+                )
+                .await;
+            }
             Err(commit_error) => {
                 let message = format!("\n[Commit Error] {commit_error}\n");
                 Self::append_session_output(
@@ -1005,9 +1014,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies auto-commit keeps clean-worktree runs silent to avoid noisy
-    /// output after non-edit prompts.
-    async fn test_handle_auto_commit_stays_silent_when_no_changes_exist() {
+    /// Verifies auto-commit reports clean-worktree no-op commits in the
+    /// session output.
+    async fn test_handle_auto_commit_reports_when_no_changes_exist() {
         // Arrange
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -1036,7 +1045,7 @@ mod tests {
             .lock()
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
-        assert!(output_text.is_empty());
+        assert!(output_text.contains("[Commit] No changes to commit."));
     }
 
     #[tokio::test]
