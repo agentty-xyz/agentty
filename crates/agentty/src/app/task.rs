@@ -548,11 +548,34 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::Status;
-    use crate::infra::app_server::MockAppServerClient;
+    use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
     use crate::infra::db::Database;
-    use crate::infra::git;
+    use crate::infra::git::MockGitClient;
+
+    /// Collects all currently buffered app events from a receiver.
+    fn collect_app_events(app_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
+        let mut observed_events = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            observed_events.push(event);
+        }
+
+        observed_events
+    }
+
+    /// Returns `true` when a `SessionUpdated` event exists for `session_id`.
+    fn has_session_updated_event(observed_events: &[AppEvent], session_id: &str) -> bool {
+        observed_events.iter().any(|event| {
+            matches!(
+                event,
+                AppEvent::SessionUpdated { session_id: event_session_id }
+                if event_session_id == session_id
+            )
+        })
+    }
 
     #[tokio::test]
+    /// Ensures app-server turn failures clear runtime process state and
+    /// restore `Review` from `InProgress`.
     async fn test_run_app_server_task_error_restores_review_status() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -594,7 +617,7 @@ mod tests {
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
                 folder: dir.path().to_path_buf(),
-                git_client: Arc::new(git::RealGitClient),
+                git_client: Arc::new(MockGitClient::new()),
                 id: session_id.to_string(),
                 output: Arc::new(Mutex::new(String::new())),
                 prompt: "hello".to_string(),
@@ -623,6 +646,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Ensures app-server turn failures keep settled `Review` sessions in
+    /// `Review`.
     async fn test_run_app_server_task_error_keeps_review_status() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -664,7 +689,7 @@ mod tests {
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
                 folder: dir.path().to_path_buf(),
-                git_client: Arc::new(git::RealGitClient),
+                git_client: Arc::new(MockGitClient::new()),
                 id: session_id.to_string(),
                 output: Arc::new(Mutex::new(String::new())),
                 prompt: "hello".to_string(),
@@ -693,6 +718,115 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies the app-server success path streams output, stores the child
+    /// pid, and emits session refresh events without real provider processes.
+    async fn test_run_app_server_task_success_streams_output_and_updates_status() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = "session-id";
+        db.insert_session(
+            session_id,
+            AgentModel::Gpt53Codex.as_str(),
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        let mut mock_app_server_client = MockAppServerClient::new();
+        mock_app_server_client
+            .expect_run_turn()
+            .times(1)
+            .returning(|_, stream_tx| {
+                let _ =
+                    stream_tx.send(AppServerStreamEvent::ProgressUpdate("Thinking".to_string()));
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage(
+                    "streamed assistant output".to_string(),
+                ));
+                Box::pin(async {
+                    Ok(AppServerTurnResponse {
+                        assistant_message: "fallback message".to_string(),
+                        context_reset: false,
+                        input_tokens: 9,
+                        output_tokens: 7,
+                        pid: Some(5150),
+                    })
+                })
+            });
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err("Nothing to commit".to_string()) }));
+        let child_pid = Arc::new(Mutex::new(None));
+        let output = Arc::new(Mutex::new(String::new()));
+        let status = Arc::new(Mutex::new(Status::InProgress));
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = TaskService::run_app_server_task(
+            Arc::new(mock_app_server_client),
+            RunAppServerTaskInput {
+                app_event_tx,
+                child_pid: Arc::clone(&child_pid),
+                db: db.clone(),
+                folder: dir.path().to_path_buf(),
+                git_client: Arc::new(mock_git_client),
+                id: session_id.to_string(),
+                output: Arc::clone(&output),
+                prompt: "hello".to_string(),
+                session_output: Some("history".to_string()),
+                session_model: AgentModel::Gpt53Codex,
+                status: Arc::clone(&status),
+            },
+        )
+        .await;
+        let observed_events = collect_app_events(&mut app_event_rx);
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(
+            child_pid.lock().ok().and_then(|guard| *guard),
+            Some(5150),
+            "child pid should be set from app-server response"
+        );
+        assert_eq!(
+            status.lock().map(|value| *value).ok(),
+            Some(Status::Review),
+            "status should return to Review after successful turn"
+        );
+        let output_text = output
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default();
+        assert!(output_text.contains("streamed assistant output"));
+        assert!(!output_text.contains("fallback message"));
+        let sessions = db.load_sessions().await.expect("failed to load sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].status, Status::Review.to_string());
+        assert_eq!(sessions[0].input_tokens, 9);
+        assert_eq!(sessions[0].output_tokens, 7);
+        assert!(
+            has_session_updated_event(&observed_events, session_id),
+            "expected at least one SessionUpdated event"
+        );
+        assert!(
+            observed_events
+                .iter()
+                .any(|event| matches!(event, AppEvent::RefreshSessions)),
+            "expected refresh notification after status transition"
+        );
+    }
+
+    #[tokio::test]
+    /// Ensures streaming assistant chunks are appended to output buffers.
     async fn test_stream_consumer_forwards_assistant_messages_to_output() {
         // Arrange
         let output = Arc::new(Mutex::new(String::new()));
@@ -750,6 +884,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies streaming progress lines update UI state without leaking
+    /// synthetic completion messages into session output.
     async fn test_stream_consumer_updates_progress_without_completion_lines() {
         // Arrange
         let output = Arc::new(Mutex::new(String::new()));
@@ -821,6 +957,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies identical repeated progress updates are collapsed to one
+    /// state-change event.
     async fn test_stream_consumer_deduplicates_repeated_progress() {
         // Arrange
         let output = Arc::new(Mutex::new(String::new()));
@@ -881,6 +1019,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Ensures empty streams report no assistant content for fallback output
+    /// behavior.
     async fn test_stream_consumer_returns_false_when_no_content_streamed() {
         // Arrange
         let output = Arc::new(Mutex::new(String::new()));
@@ -919,6 +1059,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies Codex usage refresh is disabled in test builds.
     fn test_spawn_codex_usage_limits_task_is_noop_in_tests() {
         // Arrange
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();

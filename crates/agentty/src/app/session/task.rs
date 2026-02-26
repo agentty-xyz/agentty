@@ -821,8 +821,11 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::infra::git::MockGitClient;
 
     #[test]
+    /// Verifies lifecycle statuses that require full list refreshes are
+    /// enumerated correctly.
     fn test_status_requires_full_refresh_for_lifecycle_statuses() {
         // Arrange
         let refresh_statuses = [
@@ -843,6 +846,7 @@ mod tests {
     }
 
     #[test]
+    /// Ensures commit assistance prompts include the raw git failure details.
     fn test_auto_commit_assist_prompt_includes_commit_error() {
         // Arrange
         let commit_error = "Failed to commit: merge conflict remains";
@@ -855,6 +859,7 @@ mod tests {
     }
 
     #[test]
+    /// Ensures commit error formatting normalizes output as bullet lines.
     fn test_format_commit_error_for_display_returns_bulleted_lines() {
         // Arrange
         let commit_error = "line one\nline two";
@@ -867,6 +872,83 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies commit helper success uses the injected git trait boundary and
+    /// returns the generated commit hash.
+    async fn test_commit_changes_with_assist_returns_commit_hash_from_mock_git_client() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_head_short_hash()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+        let context = AssistContext {
+            app_event_tx,
+            db: Database::open_in_memory()
+                .await
+                .expect("failed to open in-memory db"),
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(mock_git_client),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            session_model: AgentModel::Gpt53Codex,
+        };
+
+        // Act
+        let result = SessionTaskService::commit_changes_with_assist(&context).await;
+
+        // Assert
+        assert_eq!(result, Ok(Some("abc1234".to_string())));
+        let output_text = output
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default();
+        assert!(output_text.is_empty());
+    }
+
+    #[tokio::test]
+    /// Verifies commit helper failure appends a commit error message without
+    /// invoking real git or agent subprocesses.
+    async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err("commit failed".to_string()) }));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+        let context = AssistContext {
+            app_event_tx,
+            db: Database::open_in_memory()
+                .await
+                .expect("failed to open in-memory db"),
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(mock_git_client),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            session_model: AgentModel::Gpt53Codex,
+        };
+
+        // Act
+        SessionTaskService::handle_auto_commit(context).await;
+
+        // Assert
+        let output_text = output
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default();
+        assert!(output_text.contains("[Commit Error] commit failed"));
+    }
+
+    #[tokio::test]
+    /// Ensures assist command output is appended without auto-commit side
+    /// effects for assistant-only runs.
     async fn test_run_agent_assist_task_appends_output_without_committing() {
         // Arrange
         let database = Database::open_in_memory()
@@ -924,6 +1006,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies Codex stream parsing drops command-progress JSON while keeping
+    /// final assistant output.
     async fn test_run_agent_assist_task_streams_codex_output_without_duplication() {
         // Arrange
         let database = Database::open_in_memory()
@@ -989,6 +1073,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies stream parsing keeps spacing between distinct assistant
+    /// messages.
     async fn test_run_agent_assist_task_streams_codex_output_with_spacing_between_messages() {
         // Arrange
         let database = Database::open_in_memory()
@@ -1045,6 +1131,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies Claude progress events stay compact while final response and
+    /// token stats are persisted.
     async fn test_run_agent_assist_task_streams_claude_output_with_compact_progress() {
         // Arrange
         let database = Database::open_in_memory()
@@ -1110,6 +1198,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies Gemini progress events stay compact while final response and
+    /// token stats are persisted.
     async fn test_run_agent_assist_task_streams_gemini_output_with_compact_progress() {
         // Arrange
         let database = Database::open_in_memory()
@@ -1179,6 +1269,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Ensures repeated progress updates are de-duplicated in emitted app
+    /// events.
     async fn test_run_agent_assist_task_deduplicates_repeated_progress_updates() {
         // Arrange
         let database = Database::open_in_memory()
@@ -1274,6 +1366,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies non-zero child exits surface both exit code and stderr text.
     async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         // Arrange
         let database = Database::open_in_memory()

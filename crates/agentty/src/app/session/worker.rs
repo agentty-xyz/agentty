@@ -362,8 +362,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::infra::app_server::MockAppServerClient;
+    use crate::infra::git::MockGitClient;
 
     #[test]
+    /// Ensures operation-kind mapping matches persisted operation labels.
     fn test_session_command_kind_values() {
         // Arrange
         let reply_app_server_command = SessionCommand::ReplyAppServer {
@@ -402,6 +405,8 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies restart recovery marks unfinished operations failed and
+    /// restores affected sessions to `Review`.
     async fn test_fail_unfinished_operations_from_previous_run_restores_session_review_status() {
         // Arrange
         let db = Database::open_in_memory().await.expect("failed to open db");
@@ -437,6 +442,55 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies unfinished operations remain executable when cancel has not
+    /// been requested.
+    async fn test_should_skip_worker_command_without_cancel_request() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        db.insert_session_operation("op-1", "sess1", "reply")
+            .await
+            .expect("failed to insert session operation");
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            child_pid: Arc::new(Mutex::new(None)),
+            app_server_client: Arc::new(MockAppServerClient::new()),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            git_client: Arc::new(MockGitClient::new()),
+            output: Arc::new(Mutex::new(String::new())),
+            session_id: "sess1".to_string(),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let should_skip = SessionManager::should_skip_worker_command(&context, "op-1").await;
+        let is_unfinished = db
+            .is_session_operation_unfinished("op-1")
+            .await
+            .expect("failed to check operation status");
+
+        // Assert
+        assert!(!should_skip);
+        assert!(is_unfinished);
+    }
+
+    #[tokio::test]
+    /// Verifies cancel requests skip queued operations before execution and
+    /// mark them canceled.
     async fn test_should_skip_worker_command_when_cancel_is_requested() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -463,12 +517,10 @@ mod tests {
         let context = SessionWorkerContext {
             app_event_tx: mpsc::unbounded_channel().0,
             child_pid: Arc::new(Mutex::new(None)),
-            app_server_client: Arc::new(
-                crate::infra::codex_app_server::RealCodexAppServerClient::new(),
-            ),
+            app_server_client: Arc::new(MockAppServerClient::new()),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
-            git_client: Arc::new(crate::infra::git::RealGitClient),
+            git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
             session_id: "sess1".to_string(),
             status: Arc::new(Mutex::new(Status::InProgress)),
