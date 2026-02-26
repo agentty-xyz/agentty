@@ -90,34 +90,60 @@ mod tests {
 
     #[test]
     fn test_tab_title() {
-        // Arrange & Act & Assert
-        assert_eq!(Tab::Projects.title(), "Projects");
-        assert_eq!(Tab::Sessions.title(), "Sessions");
-        assert_eq!(Tab::Stats.title(), "Stats");
-        assert_eq!(Tab::Settings.title(), "Settings");
+        // Arrange
+
+        // Act
+        let project_title = Tab::Projects.title();
+        let session_title = Tab::Sessions.title();
+        let stats_title = Tab::Stats.title();
+        let settings_title = Tab::Settings.title();
+
+        // Assert
+        assert_eq!(project_title, "Projects");
+        assert_eq!(session_title, "Sessions");
+        assert_eq!(stats_title, "Stats");
+        assert_eq!(settings_title, "Settings");
     }
 
     #[test]
     fn test_tab_next() {
-        // Arrange & Act & Assert
-        assert_eq!(Tab::Projects.next(), Tab::Sessions);
-        assert_eq!(Tab::Sessions.next(), Tab::Stats);
-        assert_eq!(Tab::Stats.next(), Tab::Settings);
-        assert_eq!(Tab::Settings.next(), Tab::Projects);
+        // Arrange
+
+        // Act
+        let project_next = Tab::Projects.next();
+        let session_next = Tab::Sessions.next();
+        let stats_next = Tab::Stats.next();
+        let settings_next = Tab::Settings.next();
+
+        // Assert
+        assert_eq!(project_next, Tab::Sessions);
+        assert_eq!(session_next, Tab::Stats);
+        assert_eq!(stats_next, Tab::Settings);
+        assert_eq!(settings_next, Tab::Projects);
     }
 
     #[test]
     fn test_tab_previous() {
-        // Arrange & Act & Assert
-        assert_eq!(Tab::Projects.previous(), Tab::Settings);
-        assert_eq!(Tab::Sessions.previous(), Tab::Projects);
-        assert_eq!(Tab::Stats.previous(), Tab::Sessions);
-        assert_eq!(Tab::Settings.previous(), Tab::Stats);
+        // Arrange
+
+        // Act
+        let project_previous = Tab::Projects.previous();
+        let session_previous = Tab::Sessions.previous();
+        let stats_previous = Tab::Stats.previous();
+        let settings_previous = Tab::Settings.previous();
+
+        // Assert
+        assert_eq!(project_previous, Tab::Settings);
+        assert_eq!(session_previous, Tab::Projects);
+        assert_eq!(stats_previous, Tab::Sessions);
+        assert_eq!(settings_previous, Tab::Stats);
     }
 
     #[test]
     fn test_tab_manager_new_defaults_to_projects() {
-        // Arrange & Act
+        // Arrange
+
+        // Act
         let manager = TabManager::new();
 
         // Assert
@@ -128,34 +154,60 @@ mod tests {
     fn test_tab_manager_next_cycles_tabs() {
         // Arrange
         let mut manager = TabManager::new();
+        let mut observed_tabs = Vec::new();
 
-        // Act & Assert
-        assert_eq!(manager.current(), Tab::Projects);
+        // Act
+        observed_tabs.push(manager.current());
         manager.next();
-        assert_eq!(manager.current(), Tab::Sessions);
+        observed_tabs.push(manager.current());
         manager.next();
-        assert_eq!(manager.current(), Tab::Stats);
+        observed_tabs.push(manager.current());
         manager.next();
-        assert_eq!(manager.current(), Tab::Settings);
+        observed_tabs.push(manager.current());
         manager.next();
-        assert_eq!(manager.current(), Tab::Projects);
+        observed_tabs.push(manager.current());
+
+        // Assert
+        assert_eq!(
+            observed_tabs,
+            vec![
+                Tab::Projects,
+                Tab::Sessions,
+                Tab::Stats,
+                Tab::Settings,
+                Tab::Projects
+            ]
+        );
     }
 
     #[test]
     fn test_tab_manager_previous_cycles_tabs() {
         // Arrange
         let mut manager = TabManager::new();
+        let mut observed_tabs = Vec::new();
 
-        // Act & Assert
-        assert_eq!(manager.current(), Tab::Projects);
+        // Act
+        observed_tabs.push(manager.current());
         manager.previous();
-        assert_eq!(manager.current(), Tab::Settings);
+        observed_tabs.push(manager.current());
         manager.previous();
-        assert_eq!(manager.current(), Tab::Stats);
+        observed_tabs.push(manager.current());
         manager.previous();
-        assert_eq!(manager.current(), Tab::Sessions);
+        observed_tabs.push(manager.current());
         manager.previous();
-        assert_eq!(manager.current(), Tab::Projects);
+        observed_tabs.push(manager.current());
+
+        // Assert
+        assert_eq!(
+            observed_tabs,
+            vec![
+                Tab::Projects,
+                Tab::Settings,
+                Tab::Stats,
+                Tab::Sessions,
+                Tab::Projects
+            ]
+        );
     }
 
     #[test]

@@ -835,8 +835,9 @@ mod tests {
             .and_then(|name| name.to_str())
             .expect("expected temp dir file name")
             .to_string();
-        app.projects.replace_context(
+        app.projects.update_active_project_context(
             app.active_project_id(),
+            app.projects.project_name().to_string(),
             Some("develop".to_string()),
             base_dir.path().to_path_buf(),
         );

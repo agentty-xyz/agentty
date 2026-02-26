@@ -14,11 +14,16 @@ mod gemini;
 #[path = "agent/response_parser.rs"]
 mod response_parser;
 
-#[cfg(test)]
-pub use backend::MockAgentBackend;
 pub(crate) use backend::build_resume_prompt;
 pub use backend::{AgentBackend, create_backend};
 pub use response_parser::{ParsedResponse, parse_response};
 pub(crate) use response_parser::{
     compact_codex_progress_message, is_codex_completion_status_message, parse_stream_output_line,
 };
+
+#[cfg(test)]
+pub(crate) mod tests {
+    //! Test-only exports for agent backend mocks.
+
+    pub(crate) use super::backend::MockAgentBackend;
+}

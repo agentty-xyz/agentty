@@ -223,26 +223,6 @@ impl ProjectManager {
 }
 
 #[cfg(test)]
-impl ProjectManager {
-    /// Replaces the active project context values.
-    ///
-    /// Only available in test builds to set up test-specific state without
-    /// exposing mutable context updates to production code.
-    pub(crate) fn replace_context(
-        &mut self,
-        active_project_id: i64,
-        git_branch: Option<String>,
-        working_dir: PathBuf,
-    ) {
-        self.active_project_id = active_project_id;
-        self.active_project_name =
-            crate::domain::project::project_name_from_path(working_dir.as_path());
-        self.git_branch = git_branch;
-        self.working_dir = working_dir;
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::project::{Project, ProjectListItem};

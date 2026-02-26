@@ -390,7 +390,9 @@ mod tests {
 
     #[test]
     fn setting_name_as_str_returns_default_model() {
-        // Arrange & Act
+        // Arrange
+
+        // Act
         let setting_name = SettingName::DefaultModel.as_str();
 
         // Assert
@@ -399,7 +401,9 @@ mod tests {
 
     #[test]
     fn setting_name_as_str_returns_dev_server() {
-        // Arrange & Act
+        // Arrange
+
+        // Act
         let setting_name = SettingName::DevServer.as_str();
 
         // Assert
@@ -408,7 +412,9 @@ mod tests {
 
     #[test]
     fn setting_name_as_str_returns_last_used_model_as_default() {
-        // Arrange & Act
+        // Arrange
+
+        // Act
         let setting_name = SettingName::LastUsedModelAsDefault.as_str();
 
         // Assert

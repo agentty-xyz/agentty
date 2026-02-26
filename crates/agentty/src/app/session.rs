@@ -196,7 +196,7 @@ mod tests {
         CodexUsageLimitWindow, CodexUsageLimits, DailyActivity, SESSION_DATA_DIR, Session,
         SessionHandles, SessionSize, SessionStats, Status,
     };
-    use crate::infra::agent::MockAgentBackend;
+    use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::db::Database;
     use crate::infra::git;
     use crate::ui::state::app_mode::AppMode;
@@ -2928,8 +2928,9 @@ FROM session
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
-        app.projects.replace_context(
+        app.projects.update_active_project_context(
             app.active_project_id(),
+            app.projects.project_name().to_string(),
             Some("develop".to_string()),
             dir.path().to_path_buf(),
         );

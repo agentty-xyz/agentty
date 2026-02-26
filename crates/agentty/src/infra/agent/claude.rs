@@ -51,8 +51,6 @@ impl AgentBackend for ClaudeBackend {
     }
 }
 
-impl ClaudeBackend {}
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
