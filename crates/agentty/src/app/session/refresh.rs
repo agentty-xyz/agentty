@@ -63,6 +63,10 @@ impl SessionManager {
     }
 
     /// Reloads sessions and derived statistics, then restores UI state.
+    ///
+    /// Codex usage limits are intentionally not fetched here because they are
+    /// refreshed by a dedicated background task that emits
+    /// `AppEvent::CodexUsageLimitsUpdated`.
     async fn reload_sessions(
         &mut self,
         mode: &mut AppMode,
@@ -85,12 +89,10 @@ impl SessionManager {
         )
         .await;
         let all_time_model_usage = Self::load_all_time_model_usage(services.db()).await;
-        let codex_usage_limits = Self::load_codex_usage_limits().await;
         let longest_session_duration_seconds =
             Self::load_longest_session_duration_seconds(services.db()).await;
         self.sessions = sessions;
         self.all_time_model_usage = all_time_model_usage;
-        self.apply_codex_usage_limits_update(codex_usage_limits);
         self.longest_session_duration_seconds = longest_session_duration_seconds;
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);

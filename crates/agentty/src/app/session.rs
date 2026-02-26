@@ -190,7 +190,8 @@ mod tests {
     use crate::app::{App, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel};
     use crate::domain::session::{
-        DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
+        CodexUsageLimitWindow, CodexUsageLimits, DailyActivity, SESSION_DATA_DIR, Session,
+        SessionHandles, SessionSize, SessionStats, Status,
     };
     use crate::infra::agent::MockAgentBackend;
     use crate::infra::db::Database;
@@ -208,6 +209,18 @@ mod tests {
             cmd
         });
         mock
+    }
+
+    /// Builds a deterministic Codex usage-limit snapshot for refresh tests.
+    fn codex_usage_limits_fixture(used_percent: u8) -> CodexUsageLimits {
+        CodexUsageLimits {
+            primary: Some(CodexUsageLimitWindow {
+                resets_at: Some(1),
+                used_percent,
+                window_minutes: Some(300),
+            }),
+            secondary: None,
+        }
     }
 
     fn create_mock_git_client_for_successful_noop_merges(
@@ -1726,6 +1739,46 @@ FROM session
         if let AppMode::View { session_id, .. } = app.mode {
             assert_eq!(session_id, selected_session_id);
         }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_sessions_now_keeps_existing_codex_usage_limits_snapshot() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "alpha000",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert alpha000");
+        let session_dir = session_folder(dir.path(), "alpha000");
+        let data_dir = session_dir.join(SESSION_DATA_DIR);
+        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            PathBuf::from("/tmp/test"),
+            None,
+            db,
+        )
+        .await;
+        let existing_limits = codex_usage_limits_fixture(42);
+        app.sessions.codex_usage_limits = Some(existing_limits);
+
+        // Act
+        app.refresh_sessions_now().await;
+
+        // Assert
+        assert_eq!(app.sessions.codex_usage_limits, Some(existing_limits));
     }
 
     #[tokio::test]
