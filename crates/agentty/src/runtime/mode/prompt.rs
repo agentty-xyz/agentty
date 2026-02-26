@@ -96,7 +96,7 @@ pub(crate) async fn handle(
             }
         }
         KeyCode::Backspace => {
-            handle_prompt_backspace(app);
+            handle_prompt_backspace(app, key);
         }
         KeyCode::Delete => {
             handle_prompt_delete(app);
@@ -675,7 +675,9 @@ fn prompt_input_width(terminal: &TuiTerminal) -> io::Result<u16> {
     Ok(terminal_width.saturating_sub(2))
 }
 
-fn handle_prompt_backspace(app: &mut App) {
+/// Handles prompt backspace by deleting one character or one whole word when
+/// the `Shift` modifier is pressed.
+fn handle_prompt_backspace(app: &mut App, key: KeyEvent) {
     if let AppMode::Prompt {
         input,
         history_state,
@@ -684,13 +686,44 @@ fn handle_prompt_backspace(app: &mut App) {
         ..
     } = &mut app.mode
     {
-        input.delete_backward();
+        if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+            delete_prompt_word_backward(input);
+        } else {
+            input.delete_backward();
+        }
+
         history_state.reset_navigation();
         slash_state.reset();
         if at_mention_state.is_some() && input.at_mention_query().is_none() {
             *at_mention_state = None;
         }
     }
+}
+
+/// Deletes backward to the previous word boundary, removing the previous word
+/// and the whitespace separator directly before it.
+fn delete_prompt_word_backward(input: &mut InputState) {
+    if input.cursor == 0 {
+        return;
+    }
+
+    let cursor = input.cursor;
+    let characters: Vec<char> = input.text().chars().collect();
+    let mut start = cursor;
+
+    while start > 0 && characters[start - 1].is_whitespace() {
+        start -= 1;
+    }
+
+    while start > 0 && !characters[start - 1].is_whitespace() {
+        start -= 1;
+    }
+
+    while start > 0 && characters[start - 1].is_whitespace() {
+        start -= 1;
+    }
+
+    input.replace_range(start, cursor, "");
 }
 
 fn handle_prompt_delete(app: &mut App) {
@@ -1324,7 +1357,8 @@ mod tests {
         }
 
         // Act
-        handle_prompt_backspace(&mut app);
+        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::NONE);
+        handle_prompt_backspace(&mut app, key);
 
         // Assert
         if let AppMode::Prompt {
@@ -1334,6 +1368,60 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "secon");
+            assert_eq!(history_state.selected_index, None);
+            assert_eq!(history_state.draft_text, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_backspace_with_shift_removes_whole_word() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.draft_text = Some("draft".to_string());
+            history_state.entries = vec!["first".to_string(), "second".to_string()];
+            history_state.selected_index = Some(1);
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SHIFT);
+        handle_prompt_backspace(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt {
+            history_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "hello brave");
+            assert_eq!(history_state.selected_index, None);
+            assert_eq!(history_state.draft_text, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_backspace_with_shift_removes_whitespace_separators() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("hello\t \nworld", None).await;
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.draft_text = Some("draft".to_string());
+            history_state.entries = vec!["first".to_string(), "second".to_string()];
+            history_state.selected_index = Some(1);
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SHIFT);
+        handle_prompt_backspace(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt {
+            history_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "hello");
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }
