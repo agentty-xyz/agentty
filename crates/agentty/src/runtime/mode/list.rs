@@ -91,6 +91,8 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
 }
 
 /// Handles `Enter` in list mode and triggers the selected tab primary action.
+///
+/// On the sessions tab, any selected session can be opened in view mode.
 async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
     match app.tabs.current() {
         Tab::Projects => {
@@ -100,8 +102,6 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         }
         Tab::Sessions => {
             if let Some(session_index) = app.sessions.table_state.selected()
-                && let Some(session) = app.sessions.sessions.get(session_index)
-                && !matches!(session.status, Status::Canceled)
                 && let Some(session_id) = app.session_id_for_index(session_index)
             {
                 app.refresh_session_size(&session_id).await;
@@ -191,7 +191,7 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
             .table_state
             .selected()
             .and_then(|selected_index| app.sessions.sessions.get(selected_index))
-            .is_some_and(|session| !matches!(session.status, Status::Canceled));
+            .is_some();
 
     session_list_actions(
         can_cancel_selected_session,
@@ -519,16 +519,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_key_does_not_open_canceled_session() {
+    async fn test_handle_enter_key_opens_canceled_session() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_with_git().await;
-        let _session_id = app
+        let expected_session_id = app
             .create_session()
             .await
             .expect("failed to create session");
         if let Some(session) = app.sessions.sessions.first_mut() {
             session.status = Status::Canceled;
         }
+        app.tabs.set(Tab::Sessions);
         app.sessions.table_state.select(Some(0));
         app.mode = AppMode::List;
 
@@ -539,7 +540,14 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(app.mode, AppMode::List));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                ref session_id,
+                scroll_offset: None,
+            } if session_id == &expected_session_id
+        ));
     }
 
     #[tokio::test]

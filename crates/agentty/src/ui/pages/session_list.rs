@@ -99,8 +99,7 @@ impl Page for SessionListPage<'_> {
 
 /// Builds footer help text for session list mode.
 fn session_list_help_text(selected_session: Option<&Session>) -> String {
-    let can_open_selected_session =
-        selected_session.is_some_and(|session| !matches!(session.status, Status::Canceled));
+    let can_open_selected_session = selected_session.is_some();
     let actions = help_action::session_list_footer_actions(can_open_selected_session);
 
     help_action::footer_text(&actions)
@@ -598,5 +597,17 @@ mod tests {
 
         // Assert
         assert!(!help_text.contains("c: cancel"));
+    }
+
+    #[test]
+    fn test_session_list_help_text_includes_open_for_canceled_session() {
+        // Arrange
+        let session = test_session("session-1", Status::Canceled);
+
+        // Act
+        let help_text = session_list_help_text(Some(&session));
+
+        // Assert
+        assert!(help_text.contains("Enter: view"));
     }
 }
