@@ -116,8 +116,11 @@ impl AgentKind {
     }
 
     /// Returns whether this agent kind uses the app-server transport path.
+    ///
+    /// `Gemini` and `Codex` run through persistent app-server sessions, while
+    /// `Claude` continues to use the direct CLI command path.
     pub fn supports_app_server(self) -> bool {
-        matches!(self, Self::Codex)
+        matches!(self, Self::Gemini | Self::Codex)
     }
 
     /// Returns the model string when it belongs to this agent kind.
@@ -208,12 +211,15 @@ mod tests {
     #[test]
     fn test_supports_app_server_returns_true_for_supported_agents() {
         // Arrange
+        let gemini_kind = AgentKind::Gemini;
         let codex_kind = AgentKind::Codex;
 
         // Act
+        let gemini_supports_app_server = gemini_kind.supports_app_server();
         let codex_supports_app_server = codex_kind.supports_app_server();
 
         // Assert
+        assert!(gemini_supports_app_server);
         assert!(codex_supports_app_server);
     }
 

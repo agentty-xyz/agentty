@@ -19,6 +19,13 @@ pub struct RealGeminiAcpClient {
     sessions: AppServerSessionRegistry<GeminiSessionRuntime>,
 }
 
+/// Normalized data extracted from one ACP `session/prompt` completion response.
+struct PromptCompletion {
+    assistant_message: Option<String>,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
 impl RealGeminiAcpClient {
     /// Creates an empty ACP runtime registry for Gemini sessions.
     pub fn new() -> Self {
@@ -106,11 +113,17 @@ impl RealGeminiAcpClient {
             }
         });
         write_json_line(&mut session.stdin, &initialization_request).await?;
-        app_server_transport::wait_for_response_line(
+        let initialize_response_line = app_server_transport::wait_for_response_line(
             &mut session.stdout_lines,
             &initialization_request_id,
         )
         .await?;
+        let initialize_response = serde_json::from_str::<Value>(&initialize_response_line)
+            .map_err(|error| format!("Failed to parse Gemini ACP initialize response: {error}"))?;
+        if initialize_response.get("error").is_some() {
+            return Err(extract_json_error_message(&initialize_response)
+                .unwrap_or_else(|| "Gemini ACP returned an error for `initialize`".to_string()));
+        }
 
         let initialized_notification = serde_json::json!({
             "jsonrpc": "2.0",
@@ -151,6 +164,9 @@ impl RealGeminiAcpClient {
     }
 
     /// Sends one prompt turn and waits for the matching prompt response id.
+    ///
+    /// Streaming progress updates are forwarded to the UI while assistant text
+    /// chunks are accumulated and returned as the final assistant message.
     async fn run_turn_with_runtime(
         session: &mut GeminiSessionRuntime,
         prompt: &str,
@@ -191,14 +207,32 @@ impl RealGeminiAcpClient {
                     continue;
                 };
 
+                if let Some(permission_response) =
+                    build_permission_response(&response_value, &session.session_id)
+                {
+                    write_json_line(&mut session.stdin, &permission_response).await?;
+
+                    continue;
+                }
+
                 if response_id_matches(&response_value, &prompt_id) {
                     if response_value.get("error").is_some() {
                         return Err(extract_json_error_message(&response_value).unwrap_or_else(
                             || "Gemini ACP returned an error for `session/prompt`".to_string(),
                         ));
                     }
+                    let prompt_completion = parse_prompt_completion_response(&response_value)?;
+                    if assistant_message.trim().is_empty()
+                        && let Some(fallback_message) = prompt_completion.assistant_message
+                    {
+                        assistant_message = fallback_message;
+                    }
 
-                    return Ok((assistant_message, 0, 0));
+                    return Ok((
+                        assistant_message,
+                        prompt_completion.input_tokens,
+                        prompt_completion.output_tokens,
+                    ));
                 }
 
                 if let Some(progress) =
@@ -272,6 +306,193 @@ impl GeminiSessionRuntime {
     /// Returns whether the runtime matches one incoming turn request.
     fn matches_request(&self, request: &AppServerTurnRequest) -> bool {
         self.folder == request.folder && self.model == request.model
+    }
+}
+
+/// Builds a `session/request_permission` response for the active session.
+///
+/// The response follows ACP's `RequestPermissionResponse` shape. When an allow
+/// option is available, this selects it to match auto-edit behavior. When no
+/// options are provided, this returns a `cancelled` outcome to avoid leaving
+/// the turn blocked indefinitely.
+fn build_permission_response(response_value: &Value, expected_session_id: &str) -> Option<Value> {
+    if response_value.get("method").and_then(Value::as_str) != Some("session/request_permission") {
+        return None;
+    }
+
+    let params = response_value.get("params")?;
+    if params.get("sessionId").and_then(Value::as_str)? != expected_session_id {
+        return None;
+    }
+
+    let request_id = response_value.get("id")?.clone();
+    if let Some(option_id) = select_permission_option_id(params.get("options")?) {
+        return Some(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "outcome": {
+                    "outcome": "selected",
+                    "optionId": option_id
+                }
+            }
+        }));
+    }
+
+    Some(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "outcome": {
+                "outcome": "cancelled"
+            }
+        }
+    }))
+}
+
+/// Selects the safest available allow option from ACP permission choices.
+///
+/// Preference order is `allow_once`, then `allow_always`, then the first
+/// listed option when no allow-kind option is available.
+fn select_permission_option_id(options: &Value) -> Option<String> {
+    let options = options.as_array()?;
+    for preferred_kind in ["allow_once", "allow_always"] {
+        if let Some(option_id) = options.iter().find_map(|option| {
+            if option.get("kind").and_then(Value::as_str) == Some(preferred_kind) {
+                return option
+                    .get("optionId")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+            }
+
+            None
+        }) {
+            return Some(option_id);
+        }
+    }
+
+    options
+        .first()
+        .and_then(|option| option.get("optionId"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
+/// Parses one completed `session/prompt` response into normalized turn fields.
+fn parse_prompt_completion_response(response_value: &Value) -> Result<PromptCompletion, String> {
+    let result = response_value
+        .get("result")
+        .ok_or_else(|| "Gemini ACP `session/prompt` response missing `result`".to_string())?;
+    let (input_tokens, output_tokens) = extract_prompt_usage_tokens(result);
+    let assistant_message = extract_prompt_result_text(result);
+
+    Ok(PromptCompletion {
+        assistant_message,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+/// Extracts prompt completion usage values from ACP result payloads.
+fn extract_prompt_usage_tokens(result: &Value) -> (u64, u64) {
+    let Some(usage) = result.get("usage") else {
+        return (0, 0);
+    };
+    let input_tokens = usage
+        .get("inputTokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("outputTokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    (input_tokens, output_tokens)
+}
+
+/// Extracts assistant text from known ACP prompt completion result shapes.
+fn extract_prompt_result_text(result: &Value) -> Option<String> {
+    if let Some(response_text) = result.get("response").and_then(Value::as_str) {
+        return Some(response_text.to_string());
+    }
+
+    if let Some(message_text) = result.get("text").and_then(Value::as_str) {
+        return Some(message_text.to_string());
+    }
+
+    if let Some(content) = result.get("content")
+        && let Some(content_text) = extract_text_from_content_value(content)
+        && !content_text.is_empty()
+    {
+        return Some(content_text);
+    }
+
+    if let Some(message) = result.get("message") {
+        if let Some(message_text) = message.get("text").and_then(Value::as_str) {
+            return Some(message_text.to_string());
+        }
+
+        if let Some(content) = message.get("content")
+            && let Some(content_text) = extract_text_from_content_value(content)
+            && !content_text.is_empty()
+        {
+            return Some(content_text);
+        }
+    }
+
+    let output_items = result.get("output").and_then(Value::as_array)?;
+    let mut output_text = String::new();
+    for output_item in output_items {
+        if let Some(item_text) = output_item.get("text").and_then(Value::as_str) {
+            output_text.push_str(item_text);
+
+            continue;
+        }
+
+        if let Some(content) = output_item.get("content")
+            && let Some(content_text) = extract_text_from_content_value(content)
+        {
+            output_text.push_str(&content_text);
+        }
+    }
+    if output_text.is_empty() {
+        return None;
+    }
+
+    Some(output_text)
+}
+
+/// Extracts text from ACP content values represented as strings, arrays, or
+/// objects.
+fn extract_text_from_content_value(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => {
+            let mut combined_text = String::new();
+            for part in parts {
+                if let Some(part_text) = part.as_str() {
+                    combined_text.push_str(part_text);
+
+                    continue;
+                }
+
+                if let Some(part_text) = part.get("text").and_then(Value::as_str) {
+                    combined_text.push_str(part_text);
+                }
+            }
+            if combined_text.is_empty() {
+                return None;
+            }
+
+            Some(combined_text)
+        }
+        Value::Object(_) => content
+            .get("text")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        _ => None,
     }
 }
 
@@ -473,5 +694,194 @@ mod tests {
 
         // Assert
         assert_eq!(progress_update, Some("Tool completed".to_string()));
+    }
+
+    #[test]
+    fn parse_prompt_completion_response_returns_usage_and_assistant_message() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-prompt-1",
+            "result": {
+                "usage": {
+                    "inputTokens": 7,
+                    "outputTokens": 11
+                },
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Hello"},
+                        {"type": "text", "text": " ACP"}
+                    ]
+                }
+            }
+        });
+
+        // Act
+        let prompt_completion = parse_prompt_completion_response(&response_value);
+
+        // Assert
+        assert!(prompt_completion.is_ok());
+        let prompt_completion = match prompt_completion {
+            Ok(prompt_completion) => prompt_completion,
+            Err(_) => PromptCompletion {
+                assistant_message: None,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        };
+        assert_eq!(
+            prompt_completion.assistant_message,
+            Some("Hello ACP".to_string())
+        );
+        assert_eq!(prompt_completion.input_tokens, 7);
+        assert_eq!(prompt_completion.output_tokens, 11);
+    }
+
+    #[test]
+    fn parse_prompt_completion_response_reads_snake_case_usage_fields() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-prompt-1",
+            "result": {
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 5
+                },
+                "text": "Done"
+            }
+        });
+
+        // Act
+        let prompt_completion = parse_prompt_completion_response(&response_value);
+
+        // Assert
+        assert!(prompt_completion.is_ok());
+        let prompt_completion = match prompt_completion {
+            Ok(prompt_completion) => prompt_completion,
+            Err(_) => PromptCompletion {
+                assistant_message: None,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        };
+        assert_eq!(
+            prompt_completion.assistant_message,
+            Some("Done".to_string())
+        );
+        assert_eq!(prompt_completion.input_tokens, 3);
+        assert_eq!(prompt_completion.output_tokens, 5);
+    }
+
+    #[test]
+    fn parse_prompt_completion_response_returns_error_without_result_payload() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-prompt-1"
+        });
+
+        // Act
+        let prompt_completion = parse_prompt_completion_response(&response_value);
+
+        // Assert
+        assert_eq!(
+            prompt_completion.err(),
+            Some("Gemini ACP `session/prompt` response missing `result`".to_string())
+        );
+    }
+
+    #[test]
+    fn build_permission_response_selects_allow_once_option() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": [
+                    {
+                        "optionId": "reject-once",
+                        "kind": "reject_once"
+                    },
+                    {
+                        "optionId": "allow-once",
+                        "kind": "allow_once"
+                    }
+                ]
+            }
+        });
+
+        // Act
+        let permission_response = build_permission_response(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(
+            permission_response,
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "result": {
+                    "outcome": {
+                        "outcome": "selected",
+                        "optionId": "allow-once"
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn build_permission_response_returns_cancelled_without_options() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": []
+            }
+        });
+
+        // Act
+        let permission_response = build_permission_response(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(
+            permission_response,
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "perm-1",
+                "result": {
+                    "outcome": {
+                        "outcome": "cancelled"
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn build_permission_response_ignores_mismatched_session_id() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-2",
+                "options": [
+                    {
+                        "optionId": "allow-once",
+                        "kind": "allow_once"
+                    }
+                ]
+            }
+        });
+
+        // Act
+        let permission_response = build_permission_response(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(permission_response, None);
     }
 }
