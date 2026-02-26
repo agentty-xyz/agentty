@@ -494,21 +494,15 @@ fn extract_prompt_result_text(result: &Value) -> Option<String> {
 }
 
 /// Extracts text from ACP content values represented as strings, arrays, or
-/// objects.
+/// nested objects, including `parts` and `content` fields.
 fn extract_text_from_content_value(content: &Value) -> Option<String> {
     match content {
         Value::String(text) => Some(text.clone()),
         Value::Array(parts) => {
             let mut combined_text = String::new();
             for part in parts {
-                if let Some(part_text) = part.as_str() {
-                    combined_text.push_str(part_text);
-
-                    continue;
-                }
-
-                if let Some(part_text) = part.get("text").and_then(Value::as_str) {
-                    combined_text.push_str(part_text);
+                if let Some(part_text) = extract_text_from_content_value(part) {
+                    combined_text.push_str(&part_text);
                 }
             }
             if combined_text.is_empty() {
@@ -517,10 +511,29 @@ fn extract_text_from_content_value(content: &Value) -> Option<String> {
 
             Some(combined_text)
         }
-        Value::Object(_) => content
-            .get("text")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        Value::Object(_) => {
+            if let Some(text) = content.get("text").and_then(Value::as_str) {
+                return Some(text.to_string());
+            }
+
+            if let Some(parts_text) = content
+                .get("parts")
+                .and_then(extract_text_from_content_value)
+                && !parts_text.is_empty()
+            {
+                return Some(parts_text);
+            }
+
+            if let Some(nested_content_text) = content
+                .get("content")
+                .and_then(extract_text_from_content_value)
+                && !nested_content_text.is_empty()
+            {
+                return Some(nested_content_text);
+            }
+
+            None
+        }
         _ => None,
     }
 }
@@ -534,13 +547,16 @@ fn extract_assistant_message_chunk(
         return None;
     }
 
-    response_value
+    let content = response_value
         .get("params")
         .and_then(|params| params.get("update"))
         .and_then(|update| update.get("content"))
-        .and_then(|content| content.get("text"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+        .and_then(extract_text_from_content_value)?;
+    if content.trim().is_empty() {
+        return None;
+    }
+
+    Some(content)
 }
 
 /// Extracts a short user-facing progress label from ACP `session/update`.
@@ -738,6 +754,68 @@ mod tests {
 
         // Assert
         assert_eq!(message_chunk, Some("Hello from ACP".to_string()));
+    }
+
+    #[test]
+    fn extract_assistant_message_chunk_reads_text_from_nested_parts() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                        "parts": [
+                            {"type": "text", "text": "Hello"},
+                            {"type": "text", "text": " nested"}
+                        ]
+                    }
+                }
+            }
+        });
+
+        // Act
+        let message_chunk = extract_assistant_message_chunk(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(message_chunk, Some("Hello nested".to_string()));
+    }
+
+    #[test]
+    fn parse_prompt_completion_response_reads_output_content_parts() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-prompt-1",
+            "result": {
+                "output": [{
+                    "content": {
+                        "parts": [
+                            {"type": "text", "text": "Final"},
+                            {"type": "text", "text": " message"}
+                        ]
+                    }
+                }]
+            }
+        });
+
+        // Act
+        let prompt_completion = parse_prompt_completion_response(&response_value);
+
+        // Assert
+        assert!(prompt_completion.is_ok());
+        let prompt_completion = match prompt_completion {
+            Ok(prompt_completion) => prompt_completion,
+            Err(_) => PromptCompletion {
+                assistant_message: None,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        };
+        assert_eq!(
+            prompt_completion.assistant_message,
+            Some("Final message".to_string())
+        );
     }
 
     #[test]

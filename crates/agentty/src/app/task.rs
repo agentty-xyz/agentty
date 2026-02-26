@@ -283,7 +283,7 @@ impl TaskService {
     /// forwards them to the session output buffer and progress indicator.
     ///
     /// Returns a join handle that resolves to `true` when at least one
-    /// assistant message was streamed, or `false` otherwise.
+    /// non-empty assistant message was streamed, or `false` otherwise.
     fn spawn_stream_consumer(
         mut stream_rx: mpsc::UnboundedReceiver<AppServerStreamEvent>,
         output: Arc<Mutex<String>>,
@@ -298,6 +298,11 @@ impl TaskService {
             while let Some(event) = stream_rx.recv().await {
                 match event {
                     AppServerStreamEvent::AssistantMessage(message) => {
+                        let trimmed_message = message.trim_end();
+                        if trimmed_message.trim().is_empty() {
+                            continue;
+                        }
+
                         if active_progress.take().is_some() {
                             SessionTaskService::set_session_progress(
                                 &app_event_tx,
@@ -306,7 +311,7 @@ impl TaskService {
                             );
                         }
 
-                        let formatted = format!("{}\n\n", message.trim_end());
+                        let formatted = format!("{trimmed_message}\n\n");
                         SessionTaskService::append_session_output(
                             &output,
                             &db,
@@ -682,6 +687,91 @@ mod tests {
         assert!(
             buffer.contains("Second message"),
             "output should contain second message"
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies whitespace-only assistant chunks are ignored so fallback output
+    /// can still be emitted by the completed turn response.
+    async fn test_run_app_server_task_uses_fallback_after_whitespace_only_streamed_chunk() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        let session_id = "session-id";
+        db.insert_session(
+            session_id,
+            AgentModel::Gemini3FlashPreview.as_str(),
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        let mut mock_app_server_client = MockAppServerClient::new();
+        mock_app_server_client
+            .expect_run_turn()
+            .times(1)
+            .returning(|_, stream_tx| {
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage("\n".to_string()));
+                Box::pin(async {
+                    Ok(AppServerTurnResponse {
+                        assistant_message: "fallback message".to_string(),
+                        context_reset: false,
+                        input_tokens: 5,
+                        output_tokens: 6,
+                        pid: Some(5151),
+                    })
+                })
+            });
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err("Nothing to commit".to_string()) }));
+        let child_pid = Arc::new(Mutex::new(None));
+        let output = Arc::new(Mutex::new(String::new()));
+        let status = Arc::new(Mutex::new(Status::InProgress));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = TaskService::run_app_server_task(
+            Arc::new(mock_app_server_client),
+            RunAppServerTaskInput {
+                app_event_tx,
+                child_pid: Arc::clone(&child_pid),
+                db,
+                folder: dir.path().to_path_buf(),
+                git_client: Arc::new(mock_git_client),
+                id: session_id.to_string(),
+                output: Arc::clone(&output),
+                prompt: "hello".to_string(),
+                session_output: Some("history".to_string()),
+                session_model: AgentModel::Gemini3FlashPreview,
+                status: Arc::clone(&status),
+            },
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok());
+        let output_text = output
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default();
+        assert!(
+            output_text.contains("fallback message"),
+            "fallback output should be appended when streamed chunks are whitespace-only"
+        );
+        assert_eq!(
+            status.lock().map(|value| *value).ok(),
+            Some(Status::Review),
+            "status should return to Review after successful turn"
         );
     }
 
