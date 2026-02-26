@@ -177,7 +177,8 @@ impl RealCodexAppServerClient {
     /// Builds one `thread/start` request payload for a runtime folder.
     ///
     /// Root `AGENTS.md` content is intentionally not forwarded through
-    /// app-server instruction fields.
+    /// app-server instruction fields. Codex config overrides are omitted so
+    /// runtime defaults (including configured MCP servers) are preserved.
     fn build_thread_start_payload(folder: &Path, model: &str, thread_start_id: &str) -> Value {
         serde_json::json!({
             "method": "thread/start",
@@ -188,12 +189,10 @@ impl RealCodexAppServerClient {
                 "cwd": folder.to_string_lossy(),
                 "approvalPolicy": Self::approval_policy(),
                 "sandbox": Self::thread_sandbox_mode(),
-                "config": Value::Null,
                 "baseInstructions": Value::Null,
                 "developerInstructions": Value::Null,
                 "personality": Value::Null,
                 "ephemeral": Value::Null,
-                "dynamicTools": Value::Null,
                 "mockExperimentalField": Value::Null,
                 "experimentalRawEvents": false,
                 "persistExtendedHistory": false
@@ -1569,5 +1568,24 @@ mod tests {
                 .and_then(|params| params.get("developerInstructions")),
             Some(&Value::Null)
         );
+    }
+
+    #[test]
+    fn build_thread_start_payload_omits_config_and_dynamic_tools_overrides() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let thread_start_id = "thread-start-1";
+
+        // Act
+        let payload = RealCodexAppServerClient::build_thread_start_payload(
+            temp_directory.path(),
+            "gpt-5.3-codex",
+            thread_start_id,
+        );
+        let params = payload.get("params").unwrap_or(&Value::Null);
+
+        // Assert
+        assert!(params.get("config").is_none());
+        assert!(params.get("dynamicTools").is_none());
     }
 }

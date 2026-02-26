@@ -194,14 +194,14 @@ mod tests {
     #[test]
     fn test_switcher_list_lines_keep_selected_row_visible_beyond_max_visible_items() {
         // Arrange
-        let projects: Vec<ProjectSwitcherItem> = (0_i64..12)
+        let projects: Vec<ProjectSwitcherItem> = (0_u32..12)
             .map(|index| ProjectSwitcherItem {
                 git_branch: Some("main".to_string()),
-                id: index,
+                id: i64::from(index),
                 is_favorite: false,
                 last_opened_at: None,
                 path: PathBuf::from(format!("/tmp/project-{index:02}")),
-                session_count: index as u32,
+                session_count: index,
                 title: format!("project-{index:02}"),
             })
             .collect();
