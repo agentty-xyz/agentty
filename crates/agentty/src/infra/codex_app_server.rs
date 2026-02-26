@@ -274,8 +274,10 @@ impl RealCodexAppServerClient {
                     }
 
                     if let Some(message) = extract_agent_message(&response_value) {
-                        let _ =
-                            stream_tx.send(AppServerStreamEvent::AssistantMessage(message.clone()));
+                        let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                            is_delta: false,
+                            message: message.clone(),
+                        });
                         assistant_messages.push(message);
                     }
 
@@ -377,7 +379,10 @@ impl RealCodexAppServerClient {
             }
             Err(error) => {
                 let streamed_error = format!("[Codex app-server] {error}");
-                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage(streamed_error));
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                    is_delta: false,
+                    message: streamed_error,
+                });
 
                 Err(error)
             }
@@ -958,9 +963,10 @@ mod tests {
         assert_eq!(result, Err("turn interrupted".to_string()));
         assert_eq!(
             stream_rx.try_recv().ok(),
-            Some(AppServerStreamEvent::AssistantMessage(
-                "[Codex app-server] turn interrupted".to_string()
-            ))
+            Some(AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "[Codex app-server] turn interrupted".to_string(),
+            })
         );
     }
 

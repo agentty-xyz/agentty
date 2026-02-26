@@ -239,8 +239,11 @@ impl SessionTaskService {
             .await;
     }
 
-    /// Commits pending worktree changes and appends the outcome to session
-    /// output.
+    /// Commits pending worktree changes and appends user-visible outcomes.
+    ///
+    /// Successful commit hashes and commit errors are emitted into session
+    /// output, while clean-worktree no-op commits remain silent to avoid
+    /// cluttering non-edit conversations.
     pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
         match Self::commit_changes_with_assist(&context).await {
             Ok(Some(hash)) => {
@@ -254,17 +257,7 @@ impl SessionTaskService {
                 )
                 .await;
             }
-            Ok(None) => {
-                let message = "\n[Commit] No changes to commit.\n";
-                Self::append_session_output(
-                    &context.output,
-                    &context.db,
-                    &context.app_event_tx,
-                    &context.id,
-                    message,
-                )
-                .await;
-            }
+            Ok(None) => {}
             Err(commit_error) => {
                 let message = format!("\n[Commit Error] {commit_error}\n");
                 Self::append_session_output(
@@ -1012,9 +1005,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies auto-commit reports the clean-worktree case as a visible output
-    /// message so session completion is still clearly observable.
-    async fn test_handle_auto_commit_appends_no_changes_message() {
+    /// Verifies auto-commit keeps clean-worktree runs silent to avoid noisy
+    /// output after non-edit prompts.
+    async fn test_handle_auto_commit_stays_silent_when_no_changes_exist() {
         // Arrange
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -1043,7 +1036,7 @@ mod tests {
             .lock()
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
-        assert!(output_text.contains("[Commit] No changes to commit."));
+        assert!(output_text.is_empty());
     }
 
     #[tokio::test]

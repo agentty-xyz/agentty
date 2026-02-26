@@ -21,8 +21,14 @@ type BorrowedAppServerFuture<'scope, T> = Pin<Box<dyn Future<Output = T> + Send 
 /// agent output and progress updates to the UI.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppServerStreamEvent {
-    /// Incremental assistant message text received while a turn is running.
-    AssistantMessage(String),
+    /// Assistant text received while a turn is running.
+    AssistantMessage {
+        /// Text payload emitted by the provider.
+        message: String,
+        /// Whether `message` is a partial delta chunk that should be appended
+        /// inline without paragraph spacing.
+        is_delta: bool,
+    },
     /// An `item/started` event produced a progress description.
     ProgressUpdate(String),
 }

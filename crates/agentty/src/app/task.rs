@@ -297,7 +297,7 @@ impl TaskService {
 
             while let Some(event) = stream_rx.recv().await {
                 match event {
-                    AppServerStreamEvent::AssistantMessage(message) => {
+                    AppServerStreamEvent::AssistantMessage { is_delta, message } => {
                         let trimmed_message = message.trim_end();
                         if trimmed_message.trim().is_empty() {
                             continue;
@@ -311,7 +311,11 @@ impl TaskService {
                             );
                         }
 
-                        let formatted = format!("{trimmed_message}\n\n");
+                        let formatted = if is_delta {
+                            message
+                        } else {
+                            format!("{trimmed_message}\n\n")
+                        };
                         SessionTaskService::append_session_output(
                             &output,
                             &db,
@@ -378,6 +382,21 @@ mod tests {
                 if event_session_id == session_id
             )
         })
+    }
+
+    /// Returns `true` when a `RefreshSessions` event was emitted.
+    fn has_refresh_sessions_event(observed_events: &[AppEvent]) -> bool {
+        observed_events
+            .iter()
+            .any(|event| matches!(event, AppEvent::RefreshSessions))
+    }
+
+    /// Clones the current session output buffer from shared state.
+    fn output_snapshot(output: &Arc<Mutex<String>>) -> String {
+        output
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default()
     }
 
     #[tokio::test]
@@ -554,9 +573,10 @@ mod tests {
             .returning(|_, stream_tx| {
                 let _ =
                     stream_tx.send(AppServerStreamEvent::ProgressUpdate("Thinking".to_string()));
-                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage(
-                    "streamed assistant output".to_string(),
-                ));
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                    is_delta: false,
+                    message: "streamed assistant output".to_string(),
+                });
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
                         assistant_message: "fallback message".to_string(),
@@ -572,6 +592,10 @@ mod tests {
             .expect_commit_all_preserving_single_commit()
             .times(1)
             .returning(|_, _, _| Box::pin(async { Err("Nothing to commit".to_string()) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         let child_pid = Arc::new(Mutex::new(None));
         let output = Arc::new(Mutex::new(String::new()));
         let status = Arc::new(Mutex::new(Status::InProgress));
@@ -609,10 +633,7 @@ mod tests {
             Some(Status::Review),
             "status should return to Review after successful turn"
         );
-        let output_text = output
-            .lock()
-            .map(|buffer| buffer.clone())
-            .unwrap_or_default();
+        let output_text = output_snapshot(&output);
         assert!(output_text.contains("streamed assistant output"));
         assert!(!output_text.contains("fallback message"));
         let sessions = db.load_sessions().await.expect("failed to load sessions");
@@ -625,9 +646,7 @@ mod tests {
             "expected at least one SessionUpdated event"
         );
         assert!(
-            observed_events
-                .iter()
-                .any(|event| matches!(event, AppEvent::RefreshSessions)),
+            has_refresh_sessions_event(&observed_events),
             "expected refresh notification after status transition"
         );
     }
@@ -665,14 +684,16 @@ mod tests {
             "stream-test".to_string(),
         );
         stream_tx
-            .send(AppServerStreamEvent::AssistantMessage(
-                "Hello world".to_string(),
-            ))
+            .send(AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "Hello world".to_string(),
+            })
             .expect("send should succeed");
         stream_tx
-            .send(AppServerStreamEvent::AssistantMessage(
-                "Second message".to_string(),
-            ))
+            .send(AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "Second message".to_string(),
+            })
             .expect("send should succeed");
         drop(stream_tx);
         let streamed_any = handle.await.expect("consumer task should complete");
@@ -688,6 +709,61 @@ mod tests {
             buffer.contains("Second message"),
             "output should contain second message"
         );
+    }
+
+    #[tokio::test]
+    /// Ensures streamed delta chunks are concatenated inline without synthetic
+    /// paragraph spacing between chunks.
+    async fn test_stream_consumer_concatenates_delta_chunks_inline() {
+        // Arrange
+        let output = Arc::new(Mutex::new(String::new()));
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "delta-test",
+            AgentModel::Gemini3FlashPreview.as_str(),
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let (stream_tx, stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let handle = TaskService::spawn_stream_consumer(
+            stream_rx,
+            Arc::clone(&output),
+            db,
+            app_event_tx,
+            "delta-test".to_string(),
+        );
+        stream_tx
+            .send(AppServerStreamEvent::AssistantMessage {
+                is_delta: true,
+                message: "The current weather in Kazan, Russia is **-9C (16".to_string(),
+            })
+            .expect("send should succeed");
+        stream_tx
+            .send(AppServerStreamEvent::AssistantMessage {
+                is_delta: true,
+                message: "F)** with moderate snow.".to_string(),
+            })
+            .expect("send should succeed");
+        drop(stream_tx);
+        let streamed_any = handle.await.expect("consumer task should complete");
+
+        // Assert
+        assert!(streamed_any);
+        let buffer = output.lock().expect("lock output").clone();
+        assert!(buffer.contains("16F)** with moderate snow."));
+        assert!(!buffer.contains("16\n\nF)**"));
     }
 
     #[tokio::test]
@@ -718,7 +794,10 @@ mod tests {
             .expect_run_turn()
             .times(1)
             .returning(|_, stream_tx| {
-                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage("\n".to_string()));
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                    is_delta: false,
+                    message: "\n".to_string(),
+                });
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
                         assistant_message: "fallback message".to_string(),
@@ -734,6 +813,10 @@ mod tests {
             .expect_commit_all_preserving_single_commit()
             .times(1)
             .returning(|_, _, _| Box::pin(async { Err("Nothing to commit".to_string()) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         let child_pid = Arc::new(Mutex::new(None));
         let output = Arc::new(Mutex::new(String::new()));
         let status = Arc::new(Mutex::new(Status::InProgress));
@@ -760,14 +843,12 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        let output_text = output
-            .lock()
-            .map(|buffer| buffer.clone())
-            .unwrap_or_default();
+        let output_text = output_snapshot(&output);
         assert!(
             output_text.contains("fallback message"),
             "fallback output should be appended when streamed chunks are whitespace-only"
         );
+        assert!(!output_text.contains("[Commit] No changes to commit."));
         assert_eq!(
             status.lock().map(|value| *value).ok(),
             Some(Status::Review),
@@ -814,7 +895,10 @@ mod tests {
             ))
             .expect("send should succeed");
         stream_tx
-            .send(AppServerStreamEvent::AssistantMessage("Done".to_string()))
+            .send(AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "Done".to_string(),
+            })
             .expect("send should succeed");
         drop(stream_tx);
         handle.await.expect("consumer task should complete");

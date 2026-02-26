@@ -274,7 +274,7 @@ impl RealGeminiAcpClient {
         })?
     }
 
-    /// Streams one non-empty assistant chunk to the UI.
+    /// Streams one non-empty assistant delta chunk to the UI.
     fn stream_assistant_chunk(
         stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
         chunk: String,
@@ -283,7 +283,10 @@ impl RealGeminiAcpClient {
             return;
         }
 
-        let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage(chunk));
+        let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+            is_delta: true,
+            message: chunk,
+        });
     }
 
     /// Terminates one Gemini ACP runtime process.
@@ -674,9 +677,10 @@ mod tests {
         // Assert
         assert_eq!(
             stream_rx.try_recv().ok(),
-            Some(AppServerStreamEvent::AssistantMessage(
-                "Hello from Gemini".to_string()
-            ))
+            Some(AppServerStreamEvent::AssistantMessage {
+                is_delta: true,
+                message: "Hello from Gemini".to_string(),
+            })
         );
     }
 
