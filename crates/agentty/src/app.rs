@@ -126,18 +126,6 @@ struct SyncPopupContext {
     project_name: String,
 }
 
-/// Immutable projection used by the quick project switcher overlay.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProjectSwitcherItem {
-    pub(crate) git_branch: Option<String>,
-    pub(crate) id: i64,
-    pub(crate) is_favorite: bool,
-    pub(crate) last_opened_at: Option<i64>,
-    pub(crate) path: PathBuf,
-    pub(crate) session_count: u32,
-    pub(crate) title: String,
-}
-
 // SessionState definition moved to session_state.rs
 
 /// Stores application state and coordinates session/project workflows.
@@ -304,10 +292,6 @@ impl App {
         let projects = self.projects.project_items().to_vec();
         let session_progress_messages = self.session_progress_messages.clone();
         let mode = &self.mode;
-        let project_switcher_items = match mode {
-            AppMode::ProjectSwitcher { .. } => self.project_switcher_items(),
-            _ => Vec::new(),
-        };
         let project_table_state = self.projects.project_table_state_mut();
         let (
             sessions,
@@ -331,7 +315,6 @@ impl App {
                 longest_session_duration_seconds,
                 mode,
                 project_table_state,
-                project_switcher_items: &project_switcher_items,
                 projects: &projects,
                 session_progress_messages: &session_progress_messages,
                 settings,
@@ -361,23 +344,6 @@ impl App {
     /// Moves selection to the previous project in the projects list.
     pub fn previous_project(&mut self) {
         self.projects.previous_project();
-    }
-
-    /// Returns quick-switch candidates from the current project list.
-    pub fn project_switcher_items(&self) -> Vec<ProjectSwitcherItem> {
-        self.projects
-            .project_items()
-            .iter()
-            .map(|project_item| ProjectSwitcherItem {
-                git_branch: project_item.project.git_branch.clone(),
-                id: project_item.project.id,
-                is_favorite: project_item.project.is_favorite,
-                last_opened_at: project_item.project.last_opened_at,
-                path: project_item.project.path.clone(),
-                session_count: project_item.session_count,
-                title: project_item.project.display_label(),
-            })
-            .collect()
     }
 
     /// Switches to the currently selected project in the projects list.
@@ -1186,7 +1152,7 @@ impl App {
         }
     }
 
-    /// Loads project list entries for projects tab and project switcher.
+    /// Loads project list entries for the projects tab.
     ///
     /// Agentty-managed session worktrees are excluded so the list keeps only
     /// user-facing repository roots.

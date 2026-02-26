@@ -98,7 +98,6 @@ pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("switch", "Enter", "Switch active project"),
         HelpAction::new("previous", "b", "Switch to previous project"),
-        HelpAction::new("quick switch", "p", "Open switcher"),
         HelpAction::new("nav", "j/k", "Navigate projects"),
         HelpAction::new("help", "?", "Help"),
     ]
@@ -294,7 +293,6 @@ fn list_base_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("start new session", "a", "Start new session"),
-        HelpAction::new("quick switch", "p", "Open project switcher"),
         HelpAction::new("sync", "s", "Sync"),
     ]
 }

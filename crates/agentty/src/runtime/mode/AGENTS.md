@@ -10,6 +10,5 @@ Key handling logic split by `AppMode`.
 - [list.rs](list.rs) - Session list mode key handling.
 - [mod.rs](mod.rs) - Mode module exports.
 - [prompt.rs](prompt.rs) - Prompt mode editing and submit handling.
-- [project_switcher.rs](project_switcher.rs) - Project switcher mode key handling.
 - [sync_blocked.rs](sync_blocked.rs) - Sync-blocked popup key handling.
 - [session_view.rs](session_view.rs) - Session view mode navigation and actions.

@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{ProjectSwitcherItem, SettingsManager, Tab};
+use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::overlays::SyncBlockedPopupRenderContext;
@@ -71,7 +71,6 @@ struct SessionChatRenderContext<'a> {
 /// Shared immutable routing inputs that are not part of list-background state.
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
-    project_switcher_items: &'a [ProjectSwitcherItem],
     session_progress_messages: &'a HashMap<String, String>,
 }
 
@@ -84,7 +83,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         longest_session_duration_seconds,
         mode,
         project_table_state,
-        project_switcher_items,
         projects,
         session_progress_messages,
         settings,
@@ -108,7 +106,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     };
 
     let aux = RouteAuxContext {
-        project_switcher_items,
         session_progress_messages,
     };
 
@@ -161,13 +158,6 @@ fn render_list_or_overlay_mode(
             *scroll_offset,
             shared.list_background(),
             aux.session_progress_messages,
-        ),
-        AppMode::ProjectSwitcher { selected_index } => overlays::render_project_switcher_overlay(
-            f,
-            area,
-            shared.list_background(),
-            aux.project_switcher_items,
-            *selected_index,
         ),
         AppMode::View { .. } | AppMode::Prompt { .. } | AppMode::Diff { .. } => {
             return false;
@@ -223,8 +213,7 @@ fn render_session_or_diff_mode(
         AppMode::List
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
-        | AppMode::Help { .. }
-        | AppMode::ProjectSwitcher { .. } => {}
+        | AppMode::Help { .. } => {}
     }
 }
 

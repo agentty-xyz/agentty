@@ -6,7 +6,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
-use crate::app::{ProjectSwitcherItem, SettingsManager, Tab};
+use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
@@ -35,7 +35,6 @@ pub struct RenderContext<'a> {
     pub longest_session_duration_seconds: u64,
     pub mode: &'a AppMode,
     pub project_table_state: &'a mut TableState,
-    pub project_switcher_items: &'a [ProjectSwitcherItem],
     pub projects: &'a [ProjectListItem],
     pub session_progress_messages: &'a HashMap<String, String>,
     pub settings: &'a mut SettingsManager,

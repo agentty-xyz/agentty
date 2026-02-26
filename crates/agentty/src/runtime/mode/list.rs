@@ -41,9 +41,6 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::BackTab => {
             app.tabs.previous();
         }
-        KeyCode::Char('p') => {
-            app.mode = AppMode::ProjectSwitcher { selected_index: 0 };
-        }
         KeyCode::Char('a') => {
             open_new_session_prompt(app).await?;
         }
