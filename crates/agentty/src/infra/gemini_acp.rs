@@ -135,6 +135,9 @@ impl RealGeminiAcpClient {
     }
 
     /// Creates one ACP session and returns the assigned `sessionId`.
+    ///
+    /// JSON-RPC `error` payloads are surfaced directly to keep diagnostics
+    /// actionable when session creation fails.
     async fn start_session(session: &mut GeminiSessionRuntime) -> Result<String, String> {
         let session_new_id = format!("session-new-{}", uuid::Uuid::new_v4());
         let session_new_payload = serde_json::json!({
@@ -154,6 +157,19 @@ impl RealGeminiAcpClient {
         .await?;
         let response_value = serde_json::from_str::<Value>(&response_line)
             .map_err(|error| format!("Failed to parse session/new response JSON: {error}"))?;
+
+        Self::parse_session_new_response(&response_value)
+    }
+
+    /// Parses one ACP `session/new` response into a session identifier.
+    ///
+    /// Returns a JSON-RPC error message when present; otherwise extracts
+    /// `result.sessionId`.
+    fn parse_session_new_response(response_value: &Value) -> Result<String, String> {
+        if response_value.get("error").is_some() {
+            return Err(extract_json_error_message(response_value)
+                .unwrap_or_else(|| "Gemini ACP returned an error for `session/new`".to_string()));
+        }
 
         response_value
             .get("result")
@@ -567,6 +583,59 @@ fn extract_session_update_kind<'value>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_session_new_response_returns_session_id_for_success_payload() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-new-1",
+            "result": {
+                "sessionId": "session-1"
+            }
+        });
+
+        // Act
+        let session_id = RealGeminiAcpClient::parse_session_new_response(&response_value);
+
+        // Assert
+        assert_eq!(session_id, Ok("session-1".to_string()));
+    }
+
+    #[test]
+    fn parse_session_new_response_returns_json_rpc_error_message() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-new-1",
+            "error": {
+                "code": -32000,
+                "message": "Session creation failed"
+            }
+        });
+
+        // Act
+        let session_id = RealGeminiAcpClient::parse_session_new_response(&response_value);
+
+        // Assert
+        assert_eq!(session_id, Err("Session creation failed".to_string()));
+    }
+
+    #[test]
+    fn parse_session_new_response_returns_error_when_session_id_is_missing() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "session-new-1",
+            "result": {}
+        });
+
+        // Act
+        let session_id = RealGeminiAcpClient::parse_session_new_response(&response_value);
+
+        // Assert
+        assert_eq!(
+            session_id,
+            Err("Gemini ACP `session/new` response missing `sessionId`".to_string())
+        );
+    }
 
     #[test]
     fn extract_session_update_kind_reads_matching_update_kind() {
