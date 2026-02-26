@@ -254,7 +254,17 @@ impl SessionTaskService {
                 )
                 .await;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let message = "\n[Commit] No changes to commit.\n";
+                Self::append_session_output(
+                    &context.output,
+                    &context.db,
+                    &context.app_event_tx,
+                    &context.id,
+                    message,
+                )
+                .await;
+            }
             Err(commit_error) => {
                 let message = format!("\n[Commit Error] {commit_error}\n");
                 Self::append_session_output(
@@ -999,6 +1009,41 @@ mod tests {
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
         assert!(output_text.contains("[Commit Error] commit failed"));
+    }
+
+    #[tokio::test]
+    /// Verifies auto-commit reports the clean-worktree case as a visible output
+    /// message so session completion is still clearly observable.
+    async fn test_handle_auto_commit_appends_no_changes_message() {
+        // Arrange
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_commit_all_preserving_single_commit()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Err("Nothing to commit".to_string()) }));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Mutex::new(String::new()));
+        let context = AssistContext {
+            app_event_tx,
+            db: Database::open_in_memory()
+                .await
+                .expect("failed to open in-memory db"),
+            folder: PathBuf::from("/tmp/project"),
+            git_client: Arc::new(mock_git_client),
+            id: "session-id".to_string(),
+            output: Arc::clone(&output),
+            session_model: AgentModel::Gpt53Codex,
+        };
+
+        // Act
+        SessionTaskService::handle_auto_commit(context).await;
+
+        // Assert
+        let output_text = output
+            .lock()
+            .map(|buffer| buffer.clone())
+            .unwrap_or_default();
+        assert!(output_text.contains("[Commit] No changes to commit."));
     }
 
     #[tokio::test]
