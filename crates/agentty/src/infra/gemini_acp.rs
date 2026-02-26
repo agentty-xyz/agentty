@@ -313,8 +313,8 @@ impl GeminiSessionRuntime {
 ///
 /// The response follows ACP's `RequestPermissionResponse` shape. When an allow
 /// option is available, this selects it to match auto-edit behavior. When no
-/// options are provided, this returns a `cancelled` outcome to avoid leaving
-/// the turn blocked indefinitely.
+/// options are provided or parsable, this returns a `cancelled` outcome to
+/// avoid leaving the turn blocked indefinitely.
 fn build_permission_response(response_value: &Value, expected_session_id: &str) -> Option<Value> {
     if response_value.get("method").and_then(Value::as_str) != Some("session/request_permission") {
         return None;
@@ -326,7 +326,10 @@ fn build_permission_response(response_value: &Value, expected_session_id: &str) 
     }
 
     let request_id = response_value.get("id")?.clone();
-    if let Some(option_id) = select_permission_option_id(params.get("options")?) {
+    if let Some(option_id) = params
+        .get("options")
+        .and_then(select_permission_option_id)
+    {
         return Some(serde_json::json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -350,13 +353,13 @@ fn build_permission_response(response_value: &Value, expected_session_id: &str) 
     }))
 }
 
-/// Selects the safest available allow option from ACP permission choices.
+/// Selects the preferred allow option from ACP permission choices.
 ///
-/// Preference order is `allow_once`, then `allow_always`, then the first
+/// Preference order is `allow_always`, then `allow_once`, then the first
 /// listed option when no allow-kind option is available.
 fn select_permission_option_id(options: &Value) -> Option<String> {
     let options = options.as_array()?;
-    for preferred_kind in ["allow_once", "allow_always"] {
+    for preferred_kind in ["allow_always", "allow_once"] {
         if let Some(option_id) = options.iter().find_map(|option| {
             if option.get("kind").and_then(Value::as_str) == Some(preferred_kind) {
                 return option
@@ -789,7 +792,48 @@ mod tests {
     }
 
     #[test]
-    fn build_permission_response_selects_allow_once_option() {
+    fn build_permission_response_prefers_allow_always_over_allow_once() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": [
+                    {
+                        "optionId": "allow-once",
+                        "kind": "allow_once"
+                    },
+                    {
+                        "optionId": "allow-always",
+                        "kind": "allow_always"
+                    }
+                ]
+            }
+        });
+
+        // Act
+        let permission_response = build_permission_response(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(
+            permission_response,
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "result": {
+                    "outcome": {
+                        "outcome": "selected",
+                        "optionId": "allow-always"
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn build_permission_response_selects_allow_once_when_allow_always_is_missing() {
         // Arrange
         let response_value = serde_json::json!({
             "jsonrpc": "2.0",
@@ -839,6 +883,36 @@ mod tests {
             "params": {
                 "sessionId": "session-1",
                 "options": []
+            }
+        });
+
+        // Act
+        let permission_response = build_permission_response(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(
+            permission_response,
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "perm-1",
+                "result": {
+                    "outcome": {
+                        "outcome": "cancelled"
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn build_permission_response_returns_cancelled_when_options_field_is_missing() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1"
             }
         });
 
