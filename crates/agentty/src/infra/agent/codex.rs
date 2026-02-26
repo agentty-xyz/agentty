@@ -4,6 +4,9 @@ use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, build_resume_prompt};
 
+/// Codex config override that forces high reasoning effort per invocation.
+const CODEX_REASONING_EFFORT_CONFIG: &str = r#"model_reasoning_effort="high""#;
+
 /// Uses non-interactive Codex commands so Agentty can capture piped output.
 ///
 /// Interactive `codex` requires a TTY and fails in this app with
@@ -21,6 +24,8 @@ impl AgentBackend for CodexBackend {
         let mut command = Command::new("codex");
         command
             .arg("exec")
+            .arg("-c")
+            .arg(CODEX_REASONING_EFFORT_CONFIG)
             .arg("--model")
             .arg(model)
             .arg("--full-auto")
@@ -47,6 +52,8 @@ impl AgentBackend for CodexBackend {
             .arg("exec")
             .arg("resume")
             .arg("--last")
+            .arg("-c")
+            .arg(CODEX_REASONING_EFFORT_CONFIG)
             .arg("--model")
             .arg(model)
             .arg("--full-auto")
@@ -108,6 +115,9 @@ mod tests {
         // Assert
         assert!(debug_command.contains("Project instructions from AGENTS.md"));
         assert!(debug_command.contains(instructions));
+        assert!(debug_command.contains("-c"));
+        assert!(debug_command.contains("model_reasoning_effort"));
+        assert!(debug_command.contains("high"));
         assert!(
             debug_command.contains("User prompt:\nRun checks")
                 || debug_command.contains("User prompt:\\nRun checks")
@@ -136,6 +146,9 @@ mod tests {
         // Assert
         assert!(debug_command.contains("Project instructions from AGENTS.md"));
         assert!(debug_command.contains(instructions));
+        assert!(debug_command.contains("-c"));
+        assert!(debug_command.contains("model_reasoning_effort"));
+        assert!(debug_command.contains("high"));
         assert!(debug_command.contains("Continue this session using the full transcript below."));
         assert!(debug_command.contains("previous assistant output"));
     }
