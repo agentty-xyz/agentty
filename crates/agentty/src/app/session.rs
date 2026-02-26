@@ -16,6 +16,7 @@ use crate::domain::agent::AgentModel;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
 
 mod access;
+mod codex_usage;
 mod lifecycle;
 mod load;
 mod merge;
