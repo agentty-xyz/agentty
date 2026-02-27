@@ -43,7 +43,7 @@ trait GeminiRuntimeTransport {
     ) -> GeminiTransportFuture<'_, Result<String, String>>;
 
     /// Reads the next raw stdout line from the runtime.
-    fn next_stdout_line(&mut self) -> GeminiTransportFuture<'_, Result<Option<String>, String>>;
+    fn next_stdout(&mut self) -> GeminiTransportFuture<'_, Result<Option<String>, String>>;
 }
 
 /// Production ACP transport backed by Gemini child process stdio streams.
@@ -76,7 +76,7 @@ impl GeminiRuntimeTransport for GeminiStdioTransport {
         })
     }
 
-    fn next_stdout_line(&mut self) -> GeminiTransportFuture<'_, Result<Option<String>, String>> {
+    fn next_stdout(&mut self) -> GeminiTransportFuture<'_, Result<Option<String>, String>> {
         Box::pin(async move {
             self.stdout_lines
                 .next_line()
@@ -336,7 +336,7 @@ impl RealGeminiAcpClient {
         tokio::time::timeout(app_server_transport::TURN_TIMEOUT, async {
             loop {
                 let stdout_line = transport
-                    .next_stdout_line()
+                    .next_stdout()
                     .await
                     .map_err(|error| format!("Failed reading Gemini ACP stdout: {error}"))?
                     .ok_or_else(|| {
@@ -845,7 +845,7 @@ mod tests {
         sequence: &mut Sequence,
     ) {
         transport
-            .expect_next_stdout_line()
+            .expect_next_stdout()
             .times(1)
             .in_sequence(sequence)
             .returning(|| {
@@ -901,7 +901,7 @@ mod tests {
         sequence: &mut Sequence,
     ) {
         transport
-            .expect_next_stdout_line()
+            .expect_next_stdout()
             .times(1)
             .in_sequence(sequence)
             .returning(|| {
@@ -930,7 +930,7 @@ mod tests {
         sequence: &mut Sequence,
     ) {
         transport
-            .expect_next_stdout_line()
+            .expect_next_stdout()
             .times(1)
             .in_sequence(sequence)
             .returning(|| {
@@ -963,7 +963,7 @@ mod tests {
         prompt_id: Arc<Mutex<Option<String>>>,
     ) {
         transport
-            .expect_next_stdout_line()
+            .expect_next_stdout()
             .times(1)
             .in_sequence(sequence)
             .returning(move || {

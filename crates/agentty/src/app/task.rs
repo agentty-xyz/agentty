@@ -160,6 +160,9 @@ impl TaskService {
     /// session back to `Review`, and then returns the original error so session
     /// workers do not leave sessions stuck in `InProgress`.
     ///
+    /// Context resets are surfaced through app-server streaming progress and
+    /// prompt replay; no additional reconnect banner is appended to output.
+    ///
     /// # Errors
     /// Returns an error when app-server turn execution fails.
     pub(super) async fn run_app_server_task(
@@ -228,19 +231,6 @@ impl TaskService {
 
         if let Ok(mut guard) = child_pid.lock() {
             *guard = response.pid;
-        }
-
-        if response.context_reset {
-            let context_reset_message = "\n[App-server] Reconnected with a new session context; \
-                                         previous model context was reset.\n";
-            SessionTaskService::append_session_output(
-                &output,
-                &db,
-                &app_event_tx,
-                &id,
-                context_reset_message,
-            )
-            .await;
         }
 
         if !streamed_any_content && !response.assistant_message.trim().is_empty() {
