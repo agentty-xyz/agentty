@@ -207,17 +207,32 @@ impl RealGeminiAcpClient {
     /// Builds a typed ACP `initialize` request with conservative client
     /// capabilities.
     ///
-    /// The client intentionally does not advertise optional capability handlers
-    /// it does not implement yet (for example `fs` and `terminal`) to avoid
-    /// protocol-level deadlocks on unsupported client calls.
+    /// Gemini ACP runtime behavior expects unsupported client capabilities to
+    /// be omitted entirely instead of advertised with explicit `false` values.
+    /// To prevent unsupported `fs/*` and `terminal/*` calls from being sent to
+    /// this client, this function overwrites `clientCapabilities` with an empty
+    /// object after typed serialization.
     fn build_initialize_request_payload(request_id: &str) -> Result<Value, String> {
         let initialize_params = InitializeRequest::new(ProtocolVersion::LATEST);
-
-        Self::build_json_rpc_request_payload(
+        let mut initialize_payload = Self::build_json_rpc_request_payload(
             request_id,
             AGENT_METHOD_NAMES.initialize,
             initialize_params,
-        )
+        )?;
+        let Some(params) = initialize_payload.get_mut("params") else {
+            return Err("Failed to build Gemini ACP `initialize` request params".to_string());
+        };
+        let Some(params) = params.as_object_mut() else {
+            return Err(
+                "Failed to build Gemini ACP `initialize` request params object".to_string(),
+            );
+        };
+        params.insert(
+            "clientCapabilities".to_string(),
+            Value::Object(serde_json::Map::new()),
+        );
+
+        Ok(initialize_payload)
     }
 
     /// Builds a typed JSON-RPC request payload.
@@ -1006,29 +1021,9 @@ mod tests {
                 let client_capabilities = payload
                     .get("params")
                     .and_then(|params| params.get("clientCapabilities"));
-                let terminal_disabled = client_capabilities
-                    .and_then(|capabilities| capabilities.get("terminal"))
-                    .and_then(Value::as_bool)
-                    .is_none_or(|terminal_enabled| !terminal_enabled);
-                let filesystem_disabled = client_capabilities
-                    .and_then(|capabilities| capabilities.get("fs"))
-                    .and_then(Value::as_object)
-                    .is_none_or(|filesystem| {
-                        let can_read_text_file = filesystem
-                            .get("readTextFile")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false);
-                        let can_write_text_file = filesystem
-                            .get("writeTextFile")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false);
-
-                        !can_read_text_file && !can_write_text_file
-                    });
 
                 payload.get("method").and_then(Value::as_str) == Some("initialize")
-                    && terminal_disabled
-                    && filesystem_disabled
+                    && client_capabilities == Some(&Value::Object(serde_json::Map::new()))
             })
             .returning(|_| Box::pin(async { Ok(()) }));
         transport
