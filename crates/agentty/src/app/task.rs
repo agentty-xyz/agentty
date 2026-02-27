@@ -411,6 +411,23 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Asserts runtime state after a successful app-server turn.
+    fn assert_successful_turn_runtime_state(
+        child_pid: &Arc<Mutex<Option<u32>>>,
+        status: &Arc<Mutex<Status>>,
+    ) {
+        assert_eq!(
+            child_pid.lock().ok().and_then(|guard| *guard),
+            Some(5150),
+            "child pid should be set from app-server response"
+        );
+        assert_eq!(
+            status.lock().map(|value| *value).ok(),
+            Some(Status::Review),
+            "status should return to Review after successful turn"
+        );
+    }
+
     #[tokio::test]
     /// Ensures app-server turn failures clear runtime process state and
     /// restore `Review` from `InProgress`.
@@ -636,16 +653,7 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        assert_eq!(
-            child_pid.lock().ok().and_then(|guard| *guard),
-            Some(5150),
-            "child pid should be set from app-server response"
-        );
-        assert_eq!(
-            status.lock().map(|value| *value).ok(),
-            Some(Status::Review),
-            "status should return to Review after successful turn"
-        );
+        assert_successful_turn_runtime_state(&child_pid, &status);
         let output_text = output_snapshot(&output);
         assert!(output_text.contains("streamed assistant output"));
         assert!(!output_text.contains("fallback message"));

@@ -142,8 +142,9 @@ pub async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Result<()
 ///
 /// Uses `git add --intent-to-add` to mark untracked files in the index, then
 /// finds the merge-base between `HEAD` and `base_branch` to diff against the
-/// fork point. This ensures only the session's changes are shown, excluding
-/// any new commits pushed to the base branch after the session was created.
+/// fork point. To avoid re-showing squash-merged/cherry-picked session commits
+/// on non-rebased branches, this also checks `git cherry` and, when applicable,
+/// diffs from the last leading commit already applied to `base_branch`.
 /// Finally resets the index to restore the original state.
 ///
 /// # Arguments
@@ -168,9 +169,11 @@ pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, Str
             run_git_command_output_sync(&repo_path, &["merge-base", "HEAD", &base_branch])?;
 
         let diff_target = if merge_base_output.status.success() {
-            String::from_utf8_lossy(&merge_base_output.stdout)
-                .trim()
-                .to_string()
+            resolve_diff_target(
+                &repo_path,
+                &base_branch,
+                String::from_utf8_lossy(&merge_base_output.stdout).trim(),
+            )?
         } else {
             base_branch
         };
@@ -179,10 +182,21 @@ pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, Str
             &repo_path,
             &["diff", diff_target.as_str()],
             "Git diff failed",
-        )?;
-        run_git_command_sync(&repo_path, &["reset"], "Git reset failed")?;
+        );
+        let reset_result = run_git_command_sync(&repo_path, &["reset"], "Git reset failed");
 
-        Ok(diff_output)
+        if let Err(diff_error) = diff_output {
+            return match reset_result {
+                Ok(_) => Err(diff_error),
+                Err(reset_error) => Err(format!(
+                    "{diff_error} Additionally failed to restore index state: {reset_error}"
+                )),
+            };
+        }
+
+        reset_result?;
+
+        diff_output
     })
     .await
     .map_err(|error| format!("Join error: {error}"))?
@@ -440,6 +454,64 @@ pub async fn get_ahead_behind(repo_path: PathBuf) -> Result<(u32, u32), String> 
     }
 
     Err("Unexpected output format from git rev-list".to_string())
+}
+
+/// Resolves the commit/tree to use as the `git diff` "before" side.
+///
+/// Starts from the merge-base fallback and, when `git cherry` reports leading
+/// commits already applied to `base_branch`, advances the baseline to the last
+/// such commit so squash-merged session changes are not shown again.
+fn resolve_diff_target(
+    repo_path: &Path,
+    base_branch: &str,
+    merge_base: &str,
+) -> Result<String, String> {
+    let cherry_output = run_git_command_output_sync(repo_path, &["cherry", base_branch, "HEAD"])?;
+    if !cherry_output.status.success() {
+        return Ok(merge_base.to_string());
+    }
+
+    let cherry_stdout = String::from_utf8_lossy(&cherry_output.stdout);
+    let Some(last_leading_applied_commit) = last_leading_applied_commit(&cherry_stdout) else {
+        return Ok(merge_base.to_string());
+    };
+
+    Ok(last_leading_applied_commit.to_string())
+}
+
+/// Returns the last leading commit from `git cherry` marked as already applied.
+///
+/// `git cherry` prefixes commits with `-` when an equivalent patch exists in
+/// the upstream branch and `+` when it does not. This helper only consumes the
+/// initial contiguous `-` block and stops at the first `+` to avoid dropping
+/// non-merged changes.
+fn last_leading_applied_commit(cherry_output: &str) -> Option<&str> {
+    let mut last_applied_commit = None;
+
+    for line in cherry_output.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() {
+            continue;
+        }
+
+        let mut parts = trimmed_line.split_whitespace();
+        let marker = parts.next()?;
+        let commit_hash = parts.next()?;
+
+        if marker == "-" {
+            last_applied_commit = Some(commit_hash);
+
+            continue;
+        }
+
+        if marker == "+" {
+            break;
+        }
+
+        break;
+    }
+
+    last_applied_commit
 }
 
 /// Stages all changes and commits or amends with retry behavior for hook

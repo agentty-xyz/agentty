@@ -609,6 +609,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_diff_hides_leading_squash_merged_commit_for_non_rebased_session() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(dir.path(), &["checkout", "-b", "session-branch"]);
+        fs::write(dir.path().join("merged.txt"), "already merged change")
+            .expect("failed to write merged file");
+        run_git_command(dir.path(), &["add", "merged.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Session change"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+        run_git_command(dir.path(), &["merge", "--squash", "session-branch"]);
+        run_git_command(dir.path(), &["commit", "-m", "Squash merge session change"]);
+        run_git_command(dir.path(), &["checkout", "session-branch"]);
+
+        // Act
+        let diff_output = diff(dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect("failed to load diff");
+
+        // Assert
+        assert!(
+            diff_output.trim().is_empty(),
+            "expected no diff, got: {diff_output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_diff_keeps_new_commits_after_leading_squash_merged_commit() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(dir.path(), &["checkout", "-b", "session-branch"]);
+        fs::write(dir.path().join("merged.txt"), "already merged change")
+            .expect("failed to write merged file");
+        run_git_command(dir.path(), &["add", "merged.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Session change"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+        run_git_command(dir.path(), &["merge", "--squash", "session-branch"]);
+        run_git_command(dir.path(), &["commit", "-m", "Squash merge session change"]);
+        run_git_command(dir.path(), &["checkout", "session-branch"]);
+        fs::write(dir.path().join("new.txt"), "new session-only change")
+            .expect("failed to write new file");
+        run_git_command(dir.path(), &["add", "new.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "New session change"]);
+
+        // Act
+        let diff_output = diff(dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect("failed to load diff");
+
+        // Assert
+        assert!(diff_output.contains("new.txt"));
+        assert!(!diff_output.contains("merged.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_diff_does_not_include_base_only_commits() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(dir.path(), &["checkout", "-b", "session-branch"]);
+        fs::write(dir.path().join("session.txt"), "session change").expect("failed to write file");
+        run_git_command(dir.path(), &["add", "session.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Session change"]);
+        run_git_command(dir.path(), &["checkout", "main"]);
+        fs::write(dir.path().join("main-only.txt"), "base branch only")
+            .expect("failed to write base-only file");
+        run_git_command(dir.path(), &["add", "main-only.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Main branch change"]);
+        run_git_command(dir.path(), &["checkout", "session-branch"]);
+
+        // Act
+        let diff_output = diff(dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect("failed to load diff");
+
+        // Assert
+        assert!(diff_output.contains("session.txt"));
+        assert!(!diff_output.contains("main-only.txt"));
+    }
+
+    #[tokio::test]
     async fn test_is_worktree_clean_returns_true_for_clean_repo() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
