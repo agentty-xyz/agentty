@@ -478,6 +478,7 @@ pub(crate) fn compact_codex_progress_message(item_type: &str) -> Option<String> 
     match item_type {
         "agent_message" => None,
         "command_execution" => Some("Running a command".to_string()),
+        "context_compaction" => Some("Compacting context".to_string()),
         "reasoning" => Some("Thinking".to_string()),
         "web_search" => Some("Searching the web".to_string()),
         other => Some(format!("Working: {}", other.replace('_', " "))),
@@ -620,5 +621,14 @@ mod tests {
 
         // Assert
         assert_eq!(parsed_line, Some(("Final answer".to_string(), true)));
+    }
+
+    #[test]
+    fn compact_codex_progress_message_returns_compacting_for_context_compaction() {
+        // Act
+        let progress = compact_codex_progress_message("context_compaction");
+
+        // Assert
+        assert_eq!(progress, Some("Compacting context".to_string()));
     }
 }

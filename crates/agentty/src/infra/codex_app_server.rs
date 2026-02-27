@@ -34,6 +34,14 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
     turn_sandbox_type: "workspaceWrite",
 };
 
+/// Input token threshold above which proactive context compaction is triggered
+/// before starting the next turn.
+///
+/// Codex models typically have 128k-200k context windows. 120k leaves headroom
+/// for the current turn's input while triggering compaction early enough to
+/// avoid `ContextWindowExceeded` failures.
+const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD: u64 = 120_000;
+
 /// Production [`AppServerClient`] backed by `codex app-server` process
 /// instances.
 pub struct RealCodexAppServerClient {
@@ -103,6 +111,7 @@ impl RealCodexAppServerClient {
             .ok_or_else(|| "Codex app-server stdout is unavailable".to_string())?;
         let mut session = CodexSessionRuntime {
             child,
+            latest_input_tokens: 0,
             folder: request.folder.clone(),
             model: request.model.clone(),
             stdin,
@@ -202,9 +211,121 @@ impl RealCodexAppServerClient {
 
     /// Sends one turn prompt and waits for terminal completion notification.
     ///
+    /// Before executing the turn, proactive compaction is triggered when
+    /// cumulative input token usage exceeds
+    /// [`AUTO_COMPACT_INPUT_TOKEN_THRESHOLD`]. If the turn fails with a
+    /// `ContextWindowExceeded` error, reactive compaction is attempted and
+    /// the turn is retried once.
+    ///
     /// Intermediate agent messages and progress updates are emitted through
     /// `stream_tx` as they arrive from the app-server event stream.
     async fn run_turn_with_runtime(
+        session: &mut CodexSessionRuntime,
+        prompt: &str,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    ) -> Result<(String, u64, u64), String> {
+        if session.latest_input_tokens >= AUTO_COMPACT_INPUT_TOKEN_THRESHOLD {
+            let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
+                "Compacting context".to_string(),
+            ));
+            Self::send_compact_request(session).await?;
+        }
+
+        let result = Self::execute_turn_event_loop(session, prompt, stream_tx.clone()).await;
+
+        match result {
+            Ok((message, input_tokens, output_tokens)) => {
+                session.latest_input_tokens = input_tokens;
+
+                Ok((message, input_tokens, output_tokens))
+            }
+            Err(ref error) if is_context_window_exceeded_error(error) => {
+                let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
+                    "Compacting context".to_string(),
+                ));
+                Self::send_compact_request(session).await?;
+
+                let (message, input_tokens, output_tokens) =
+                    Self::execute_turn_event_loop(session, prompt, stream_tx).await?;
+                session.latest_input_tokens = input_tokens;
+
+                Ok((message, input_tokens, output_tokens))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Sends `thread/compact/start` and waits for compaction to complete.
+    ///
+    /// The request returns immediately, then progress is communicated via
+    /// `turn/*` and `item/*` notifications. This method consumes events until
+    /// a `turn/completed` notification is received, indicating compaction has
+    /// finished. On success, the runtime's cumulative token counter is reset.
+    async fn send_compact_request(session: &mut CodexSessionRuntime) -> Result<(), String> {
+        let compact_id = format!("compact-{}", uuid::Uuid::new_v4());
+        let compact_payload = serde_json::json!({
+            "method": "thread/compact/start",
+            "id": compact_id,
+            "params": {
+                "threadId": session.thread_id
+            }
+        });
+
+        write_json_line(&mut session.stdin, &compact_payload).await?;
+        app_server_transport::wait_for_response_line(&mut session.stdout_lines, &compact_id)
+            .await?;
+
+        tokio::time::timeout(app_server_transport::TURN_TIMEOUT, async {
+            loop {
+                let stdout_line = session
+                    .stdout_lines
+                    .next_line()
+                    .await
+                    .map_err(|error| {
+                        format!("Failed reading Codex app-server stdout during compaction: {error}")
+                    })?
+                    .ok_or_else(|| "Codex app-server terminated during compaction".to_string())?;
+
+                if stdout_line.trim().is_empty() {
+                    continue;
+                }
+
+                let Ok(response_value) = serde_json::from_str::<Value>(&stdout_line) else {
+                    continue;
+                };
+
+                if response_value.get("method").and_then(Value::as_str) == Some("turn/completed") {
+                    let status = response_value
+                        .get("params")
+                        .and_then(|params| params.get("turn"))
+                        .and_then(|turn| turn.get("status"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+
+                    if status == "completed" {
+                        session.latest_input_tokens = 0;
+
+                        return Ok(());
+                    }
+
+                    let error_message = extract_turn_completed_error_message(&response_value)
+                        .unwrap_or_else(|| "Compaction failed".to_string());
+
+                    return Err(format!("Codex context compaction failed: {error_message}"));
+                }
+            }
+        })
+        .await
+        .map_err(|_| "Timed out waiting for Codex app-server compaction to complete".to_string())?
+    }
+
+    /// Sends one `turn/start` request and processes the event stream until
+    /// `turn/completed` is received.
+    ///
+    /// This is the raw turn execution loop without compaction logic. Callers
+    /// wrap it with proactive and reactive compaction in
+    /// [`Self::run_turn_with_runtime`].
+    async fn execute_turn_event_loop(
         session: &mut CodexSessionRuntime,
         prompt: &str,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -509,6 +630,14 @@ impl AppServerClient for RealCodexAppServerClient {
 
 struct CodexSessionRuntime {
     child: tokio::process::Child,
+    /// Most recent input token count reported by the app-server.
+    ///
+    /// The app-server reports `input_tokens` as the total context size (full
+    /// conversation history plus new input), not incremental tokens. This
+    /// value is compared against [`AUTO_COMPACT_INPUT_TOKEN_THRESHOLD`] to
+    /// trigger proactive compaction. Resets to zero after compaction or
+    /// runtime restart.
+    latest_input_tokens: u64,
     folder: PathBuf,
     model: String,
     stdin: tokio::process::ChildStdin,
@@ -654,14 +783,35 @@ fn parse_turn_completed(
 }
 
 /// Extracts an optional turn-level error message from `turn/completed`.
+///
+/// When the error payload includes a `codexErrorInfo` discriminant (for example
+/// `ContextWindowExceeded`), the discriminant is prefixed to the message so
+/// downstream callers can detect structured error classes.
 fn extract_turn_completed_error_message(response_value: &Value) -> Option<String> {
-    response_value
+    let error = response_value
         .get("params")
         .and_then(|params| params.get("turn"))
-        .and_then(|turn| turn.get("error"))
-        .and_then(|error| error.get("message"))
+        .and_then(|turn| turn.get("error"))?;
+    let message = error.get("message").and_then(Value::as_str)?;
+    let error_info = error
+        .get("codexErrorInfo")
         .and_then(Value::as_str)
-        .map(ToString::to_string)
+        .unwrap_or("");
+
+    if error_info.is_empty() {
+        Some(message.to_string())
+    } else {
+        Some(format!("[{error_info}] {message}"))
+    }
+}
+
+/// Returns whether a turn error message indicates context window overflow.
+///
+/// Checks for the structured `codexErrorInfo` tag and common text patterns
+/// that Codex app-server uses when the context window is exhausted.
+fn is_context_window_exceeded_error(error_message: &str) -> bool {
+    error_message.contains("ContextWindowExceeded")
+        || error_message.contains("context_window_exceeded")
 }
 
 /// Extracts one turn id from a `turn/completed` notification payload.
@@ -1593,5 +1743,74 @@ mod tests {
         // Assert
         assert!(params.get("config").is_none());
         assert!(params.get("dynamicTools").is_none());
+    }
+
+    #[test]
+    fn is_context_window_exceeded_error_detects_structured_error() {
+        // Act / Assert
+        assert!(is_context_window_exceeded_error(
+            "[ContextWindowExceeded] Token limit exceeded"
+        ));
+        assert!(is_context_window_exceeded_error(
+            "context_window_exceeded: too many tokens"
+        ));
+    }
+
+    #[test]
+    fn is_context_window_exceeded_error_returns_false_for_other_errors() {
+        // Act / Assert
+        assert!(!is_context_window_exceeded_error("Connection reset"));
+        assert!(!is_context_window_exceeded_error("Rate limit exceeded"));
+        assert!(!is_context_window_exceeded_error(""));
+    }
+
+    #[test]
+    fn extract_turn_completed_error_message_includes_codex_error_info() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "id": "active-turn",
+                    "status": "failed",
+                    "error": {
+                        "message": "Token limit exceeded",
+                        "codexErrorInfo": "ContextWindowExceeded"
+                    }
+                }
+            }
+        });
+
+        // Act
+        let error_message = extract_turn_completed_error_message(&response_value);
+
+        // Assert
+        assert_eq!(
+            error_message,
+            Some("[ContextWindowExceeded] Token limit exceeded".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_turn_completed_error_message_omits_absent_codex_error_info() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "id": "active-turn",
+                    "status": "failed",
+                    "error": {
+                        "message": "Something else went wrong"
+                    }
+                }
+            }
+        });
+
+        // Act
+        let error_message = extract_turn_completed_error_message(&response_value);
+
+        // Assert
+        assert_eq!(error_message, Some("Something else went wrong".to_string()));
     }
 }
