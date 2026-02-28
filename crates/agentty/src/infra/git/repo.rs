@@ -160,6 +160,11 @@ pub(super) fn run_git_command_output_sync(
 /// Runs a git command in `repo_path` with environment overrides and returns
 /// raw process output.
 ///
+/// Applies non-interactive defaults (`GIT_TERMINAL_PROMPT=0`,
+/// `GCM_INTERACTIVE=never`) so credential failures do not block waiting for
+/// terminal input. Caller-provided `environment` pairs are then applied and
+/// can override these defaults.
+///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 /// * `args` - Git command arguments
@@ -177,6 +182,7 @@ pub(super) fn run_git_command_output_with_env_sync(
 ) -> Result<Output, String> {
     let mut command = Command::new("git");
     command.args(args).current_dir(repo_path);
+    apply_non_interactive_environment(&mut command);
 
     for (key, value) in environment {
         command.env(key, value);
@@ -185,6 +191,14 @@ pub(super) fn run_git_command_output_with_env_sync(
     command
         .output()
         .map_err(|error| format!("Failed to execute git{}: {error}", git_command_suffix(args)))
+}
+
+/// Applies non-interactive defaults so git failures return immediately instead
+/// of waiting for terminal credential prompts.
+fn apply_non_interactive_environment(command: &mut Command) {
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
 }
 
 /// Extracts the best human-readable error detail from command output.
@@ -285,4 +299,41 @@ fn git_command_suffix(args: &[&str]) -> String {
     }
 
     format!(" {}", args.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_apply_non_interactive_environment_sets_git_prompt_controls() {
+        // Arrange
+        let mut command = Command::new("git");
+
+        // Act
+        apply_non_interactive_environment(&mut command);
+
+        // Assert
+        let env_pairs: Vec<(String, String)> = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|resolved_value| {
+                    (
+                        key.to_string_lossy().to_string(),
+                        resolved_value.to_string_lossy().to_string(),
+                    )
+                })
+            })
+            .collect();
+        assert!(
+            env_pairs
+                .iter()
+                .any(|(key, value)| key == "GIT_TERMINAL_PROMPT" && value == "0")
+        );
+        assert!(
+            env_pairs
+                .iter()
+                .any(|(key, value)| key == "GCM_INTERACTIVE" && value == "never")
+        );
+    }
 }
