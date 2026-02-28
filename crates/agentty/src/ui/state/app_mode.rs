@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
@@ -77,8 +79,12 @@ pub enum AppMode {
     /// Displays the project file explorer with a preview for one session
     /// worktree.
     ProjectExplorer {
+        /// Full gitignore-aware file index used to derive visible tree rows.
+        all_entries: Vec<FileEntry>,
         /// Indexed file and directory rows shown in the explorer list.
         entries: Vec<FileEntry>,
+        /// Expanded directory paths used to project visible tree rows.
+        expanded_directories: BTreeSet<String>,
         /// Preview text for the currently selected row.
         preview: String,
         /// Whether closing explorer should return to list mode.
@@ -117,8 +123,12 @@ pub enum HelpContext {
     },
     /// Help overlay opened from the project explorer page.
     ProjectExplorer {
+        /// Full gitignore-aware file index used to derive visible tree rows.
+        all_entries: Vec<FileEntry>,
         /// Indexed file and directory rows shown in the explorer list.
         entries: Vec<FileEntry>,
+        /// Expanded directory paths used to project visible tree rows.
+        expanded_directories: BTreeSet<String>,
         /// Preview text for the currently selected row.
         preview: String,
         /// Whether closing explorer should return to list mode.
@@ -175,14 +185,18 @@ impl HelpContext {
                 file_explorer_selected_index,
             },
             HelpContext::ProjectExplorer {
+                all_entries,
                 entries,
+                expanded_directories,
                 preview,
                 return_to_list,
                 scroll_offset,
                 selected_index,
                 session_id,
             } => AppMode::ProjectExplorer {
+                all_entries,
                 entries,
+                expanded_directories,
                 preview,
                 return_to_list,
                 scroll_offset,
@@ -299,7 +313,9 @@ mod tests {
     fn test_help_context_project_explorer_keybindings_include_navigation() {
         // Arrange
         let context = HelpContext::ProjectExplorer {
+            all_entries: vec![],
             entries: vec![],
+            expanded_directories: BTreeSet::new(),
             preview: String::new(),
             return_to_list: true,
             scroll_offset: 0,
@@ -321,10 +337,15 @@ mod tests {
     fn test_help_context_restore_mode_returns_project_explorer_mode() {
         // Arrange
         let context = HelpContext::ProjectExplorer {
+            all_entries: vec![FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            }],
             entries: vec![FileEntry {
                 is_dir: false,
                 path: "src/main.rs".to_string(),
             }],
+            expanded_directories: BTreeSet::from(["src".to_string()]),
             preview: "fn main() {}".to_string(),
             return_to_list: false,
             scroll_offset: 3,

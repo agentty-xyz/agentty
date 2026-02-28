@@ -171,7 +171,9 @@ fn render_help_background(
             }
         }
         HelpContext::ProjectExplorer {
+            all_entries: _,
             entries,
+            expanded_directories: _,
             preview,
             return_to_list: _,
             scroll_offset,

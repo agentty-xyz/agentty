@@ -48,8 +48,8 @@ const FOCUSED_REVIEW_LOADING_MESSAGE: &str = "Preparing focused review with agen
 const FOCUSED_REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for focused review.";
 
 /// Processes view-mode key presses and keeps shortcut availability aligned with
-/// session status (`open` disabled for `Done`/`Canceled`, `diff`/focused
-/// review only for `Review`).
+/// session status (`o`/`e` disabled for `Done`/`Canceled`, diff/focused review
+/// only for `Review`).
 pub(crate) async fn handle(
     app: &mut App,
     terminal: &mut TuiTerminal,
@@ -58,7 +58,6 @@ pub(crate) async fn handle(
     let Some(view_context) = view_context(app) else {
         return Ok(EventResult::Continue);
     };
-
     let view_metrics = view_metrics(app, terminal, &view_context)?;
     let mut next_scroll_offset = view_context.scroll_offset;
     let mut next_done_session_output_mode = view_context.done_session_output_mode;
@@ -70,11 +69,12 @@ pub(crate) async fn handle(
     };
 
     match key.code {
-        KeyCode::Char('q') => {
-            app.mode = AppMode::List;
-        }
+        KeyCode::Char('q') => app.mode = AppMode::List,
         KeyCode::Char('o') if view_session_snapshot.can_open_worktree => {
             app.open_session_worktree_in_tmux().await;
+        }
+        KeyCode::Char('e') if view_session_snapshot.can_open_worktree => {
+            open_project_explorer_for_view_session(app, &view_context).await;
         }
         KeyCode::Enter if view_session_snapshot.is_action_allowed => {
             switch_view_to_prompt(
@@ -92,12 +92,8 @@ pub(crate) async fn handle(
         KeyCode::Char('k') | KeyCode::Up => {
             next_scroll_offset = Some(scroll_offset_up(next_scroll_offset, view_metrics, 1));
         }
-        KeyCode::Char('g') => {
-            next_scroll_offset = Some(0);
-        }
-        KeyCode::Char('G') => {
-            next_scroll_offset = None;
-        }
+        KeyCode::Char('g') => next_scroll_offset = Some(0),
+        KeyCode::Char('G') => next_scroll_offset = None,
         KeyCode::Char('c')
             if key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.is_in_progress =>
@@ -145,12 +141,10 @@ pub(crate) async fn handle(
         }
         KeyCode::Char('?') => {
             open_view_help_overlay(app, &view_context, view_session_snapshot.session_state);
-
             return Ok(EventResult::Continue);
         }
         _ => {}
     }
-
     apply_view_scroll_and_output_mode(
         app,
         next_done_session_output_mode,
@@ -216,7 +210,7 @@ fn is_done_output_toggle_key(status: Status, key: KeyEvent) -> bool {
     status == Status::Done && is_toggle_key && !key.modifiers.contains(event::KeyModifiers::CONTROL)
 }
 
-/// Returns whether `o` can open the session worktree in tmux.
+/// Returns whether `o` and `e` can access the session worktree.
 fn is_view_worktree_open_allowed(status: Status) -> bool {
     !matches!(status, Status::Done | Status::Canceled)
 }
@@ -238,6 +232,12 @@ fn is_view_focused_review_allowed(status: Status) -> bool {
     status == Status::Review
 }
 
+/// Opens project explorer mode for the currently viewed session.
+async fn open_project_explorer_for_view_session(app: &mut App, view_context: &ViewContext) {
+    crate::runtime::mode::project_explorer::open_for_session(app, &view_context.session_id, false)
+        .await;
+}
+
 fn switch_view_to_prompt(
     app: &mut App,
     view_context: &ViewContext,
@@ -254,8 +254,8 @@ fn switch_view_to_prompt(
     };
 }
 
-/// Returns whether the 'o' shortcut should open the worktree for the provided
-/// session status.
+/// Returns whether worktree-dependent shortcuts (`o` and `e`) are enabled for
+/// the provided session status.
 fn can_open_session_worktree(status: Status) -> bool {
     !matches!(status, Status::Done | Status::Canceled)
 }
@@ -1065,6 +1065,33 @@ mod tests {
             AppMode::Diff {
                 ref session_id,
                 scroll_offset: 0,
+                ..
+            } if session_id == &context.session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_open_project_explorer_for_view_session_sets_project_explorer_mode() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: Some(0),
+            session_id: session_id.clone(),
+            session_index: 0,
+        };
+
+        // Act
+        open_project_explorer_for_view_session(&mut app, &context).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectExplorer {
+                ref session_id,
+                return_to_list: false,
                 ..
             } if session_id == &context.session_id
         ));

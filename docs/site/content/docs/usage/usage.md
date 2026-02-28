@@ -69,6 +69,7 @@ Agentty classifies sessions by the number of changed lines in their diff:
 | `d` | Delete session |
 | `c` | Cancel session |
 | `Enter` | Open session |
+| `e` | Open project explorer |
 | `j` / `k` | Navigate sessions |
 | `Tab` | Switch tab |
 | `?` | Help |
@@ -103,7 +104,8 @@ state:
 |-----|--------|
 | `q` | Back to list |
 | `Enter` | Reply to agent |
-| `o` | Open worktree in file manager |
+| `o` | Open worktree in tmux |
+| `e` | Open project explorer |
 | `d` | Show diff |
 | `f` | Show focused review (read-only) |
 | `m` | Queue merge |
@@ -123,6 +125,16 @@ Additional state-specific keys:
 - **Focused review**: Runs in read-only review mode. It can use internet lookup
   and non-editing verification commands, but it should not edit files or
   mutate git/workspace state.
+
+### Project Explorer
+
+| Key | Action |
+|-----|--------|
+| `q` / `Esc` | Back |
+| `Enter` | Open file or toggle directory |
+| `j` / `k` | Select entry |
+| `Up` / `Down` | Scroll preview |
+| `?` | Help |
 
 ### Diff Mode
 

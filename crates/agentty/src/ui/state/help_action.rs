@@ -67,6 +67,10 @@ pub(crate) fn session_list_actions(
         actions.push(HelpAction::new("view", "Enter", "Open session"));
     }
 
+    if can_open_selected_session {
+        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
+    }
+
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
@@ -109,6 +113,7 @@ pub(crate) fn session_list_footer_actions(can_open_selected_session: bool) -> Ve
 
     if can_open_selected_session {
         actions.push(HelpAction::new("view", "Enter", "Open session"));
+        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
@@ -180,6 +185,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_open_worktree {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
+        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
     }
 
     if can_show_diff {
@@ -240,6 +246,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_open_worktree {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
+        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
     }
 
     if can_show_focused_review {
@@ -292,7 +299,8 @@ pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
 pub(crate) fn project_explorer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back"),
-        HelpAction::new("select file", "j/k", "Select file"),
+        HelpAction::new("open/toggle", "Enter", "Open file or toggle directory"),
+        HelpAction::new("select entry", "j/k", "Select entry"),
         HelpAction::new("scroll file", "Up/Down", "Scroll file"),
         HelpAction::new("help", "?", "Help"),
     ]
@@ -303,7 +311,8 @@ pub(crate) fn project_explorer_actions() -> Vec<HelpAction> {
 pub(crate) fn project_explorer_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back"),
-        HelpAction::new("select file", "j/k", "Select file"),
+        HelpAction::new("open/toggle", "Enter", "Open file or toggle directory"),
+        HelpAction::new("select entry", "j/k", "Select entry"),
         HelpAction::new("scroll file", "Up/Down", "Scroll file"),
         HelpAction::new("help", "?", "Help"),
     ]
@@ -350,6 +359,7 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(!actions.iter().any(|action| action.key == "e"));
         assert!(actions.iter().any(|action| action.key == "j/k"));
     }
 
@@ -362,6 +372,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "e"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "Tab"));
@@ -381,6 +392,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(actions.iter().any(|action| action.key == "e"));
         assert!(!actions.iter().any(|action| action.key == "d"));
     }
 
@@ -397,6 +409,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "d"));
         assert!(actions.iter().any(|action| action.key == "f"));
+        assert!(actions.iter().any(|action| action.key == "e"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
     }
 
@@ -431,6 +444,7 @@ mod tests {
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "f"));
+        assert!(!actions.iter().any(|action| action.key == "e"));
         assert!(!actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
     }
@@ -448,6 +462,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(actions.iter().any(|action| action.key == "e"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
@@ -477,6 +492,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "q/Esc"));
+        assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "j/k"));
         assert!(actions.iter().any(|action| action.key == "Up/Down"));
         assert!(actions.iter().any(|action| action.key == "?"));
@@ -491,6 +507,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "q/Esc"));
+        assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "j/k"));
         assert!(actions.iter().any(|action| action.key == "Up/Down"));
         assert!(actions.iter().any(|action| action.key == "?"));

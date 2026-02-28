@@ -214,7 +214,9 @@ fn render_session_or_diff_mode(
             *file_explorer_selected_index,
         ),
         AppMode::ProjectExplorer {
+            all_entries: _,
             entries,
+            expanded_directories: _,
             preview,
             return_to_list: _,
             scroll_offset,

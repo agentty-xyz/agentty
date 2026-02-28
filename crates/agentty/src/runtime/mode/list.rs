@@ -57,6 +57,9 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Enter => return handle_enter_key(app).await,
+        KeyCode::Char('e') if app.tabs.current() == Tab::Sessions => {
+            open_project_explorer_for_selected_session(app).await;
+        }
         KeyCode::Char('b') if app.tabs.current() == Tab::Projects => {
             let _ = app.switch_to_previous_project().await;
         }
@@ -121,6 +124,20 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Opens project explorer mode for the selected session on the sessions tab.
+async fn open_project_explorer_for_selected_session(app: &mut App) {
+    let Some(session_id) = app
+        .sessions
+        .table_state
+        .selected()
+        .and_then(|selected_index| app.session_id_for_index(selected_index))
+    else {
+        return;
+    };
+
+    crate::runtime::mode::project_explorer::open_for_session(app, &session_id, true).await;
 }
 
 /// Handles text input while a settings editor is active.
@@ -194,7 +211,6 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
             .selected()
             .and_then(|selected_index| app.sessions.sessions.get(selected_index))
             .is_some();
-
     session_list_actions(
         can_cancel_selected_session,
         can_delete_selected_session,
@@ -680,6 +696,63 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.sessions.sessions.is_empty());
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_e_key_opens_project_explorer_for_selected_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let expected_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(Some(0));
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectExplorer {
+                ref session_id,
+                return_to_list: true,
+                ..
+            } if session_id == &expected_session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_e_key_without_session_selection_keeps_list_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let _session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(None);
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::List));
     }
 

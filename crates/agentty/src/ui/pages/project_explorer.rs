@@ -199,7 +199,8 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("j/k: select file"));
+        assert!(text.contains("Enter: open/toggle"));
+        assert!(text.contains("j/k: select entry"));
         assert!(text.contains("Up/Down: scroll file"));
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,19 @@ use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 
 const DIRECTORY_PREVIEW_PREFIX: &str = "Directory selected:";
 const EMPTY_PREVIEW_MESSAGE: &str = "No files found in this worktree.";
+const PATH_SEPARATOR: char = '/';
+const ROOT_DIRECTORY_KEY: &str = "";
+
+/// Snapshot of project-explorer mode state used for async-safe transitions.
+#[derive(Clone)]
+struct ProjectExplorerModeState {
+    all_entries: Vec<FileEntry>,
+    entries: Vec<FileEntry>,
+    expanded_directories: BTreeSet<String>,
+    return_to_list: bool,
+    selected_index: usize,
+    session_id: String,
+}
 
 /// Opens project explorer mode for `session_id` using gitignore-aware file
 /// indexing.
@@ -20,12 +34,16 @@ pub(crate) async fn open_for_session(app: &mut App, session_id: &str, return_to_
         return;
     };
 
-    let entries = load_entries(session_folder.clone()).await;
+    let all_entries = load_entries(session_folder.clone()).await;
+    let expanded_directories = BTreeSet::new();
+    let entries = build_visible_entries(&all_entries, &expanded_directories);
     let selected_index = initial_selected_index(&entries);
     let preview = load_preview(session_folder, entries.get(selected_index).cloned()).await;
 
     app.mode = AppMode::ProjectExplorer {
+        all_entries,
         entries,
+        expanded_directories,
         preview,
         return_to_list,
         scroll_offset: 0,
@@ -36,8 +54,6 @@ pub(crate) async fn open_for_session(app: &mut App, session_id: &str, return_to_
 
 /// Handles key input while the app is in `AppMode::ProjectExplorer`.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
-    let _ = open_for_session;
-
     match key.code {
         KeyCode::Char('?') => {
             open_help_overlay(app);
@@ -50,6 +66,9 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         }
         KeyCode::Char('k') if is_plain_char_key(key, 'k') => {
             move_selection(app, -1).await;
+        }
+        KeyCode::Enter => {
+            activate_selected_entry(app).await;
         }
         KeyCode::Down => {
             scroll_preview(app, 1);
@@ -80,8 +99,99 @@ async fn load_entries(session_folder: PathBuf) -> Vec<FileEntry> {
     .unwrap_or_default()
 }
 
+/// Returns visible tree rows from `all_entries` based on expanded directories.
+fn build_visible_entries(
+    all_entries: &[FileEntry],
+    expanded_directories: &BTreeSet<String>,
+) -> Vec<FileEntry> {
+    let children_by_parent = build_children_by_parent(all_entries);
+    let mut visible_entries = Vec::new();
+    append_visible_entries(
+        &children_by_parent,
+        ROOT_DIRECTORY_KEY,
+        expanded_directories,
+        &mut visible_entries,
+    );
+
+    visible_entries
+}
+
+/// Groups entries by their direct parent directory and sorts each sibling
+/// group in tree order.
+fn build_children_by_parent(all_entries: &[FileEntry]) -> BTreeMap<String, Vec<FileEntry>> {
+    let mut children_by_parent: BTreeMap<String, Vec<FileEntry>> = BTreeMap::new();
+
+    for entry in all_entries {
+        let parent_key = parent_directory(entry.path.as_str())
+            .unwrap_or(ROOT_DIRECTORY_KEY)
+            .to_string();
+        children_by_parent
+            .entry(parent_key)
+            .or_default()
+            .push(entry.clone());
+    }
+
+    for siblings in children_by_parent.values_mut() {
+        sort_sibling_entries(siblings);
+    }
+
+    children_by_parent
+}
+
+/// Sorts sibling entries with folders first, then alphabetically by displayed
+/// name.
+fn sort_sibling_entries(entries: &mut [FileEntry]) {
+    entries.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| entry_name(left.path.as_str()).cmp(entry_name(right.path.as_str())))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+}
+
+/// Returns the display name used for one tree row.
+fn entry_name(path: &str) -> &str {
+    path.rsplit(PATH_SEPARATOR).next().unwrap_or(path)
+}
+
+/// Appends visible rows in depth-first order so expanded directory contents
+/// remain adjacent to their parent directory.
+fn append_visible_entries(
+    children_by_parent: &BTreeMap<String, Vec<FileEntry>>,
+    parent_key: &str,
+    expanded_directories: &BTreeSet<String>,
+    visible_entries: &mut Vec<FileEntry>,
+) {
+    let Some(children) = children_by_parent.get(parent_key) else {
+        return;
+    };
+
+    for child in children {
+        visible_entries.push(child.clone());
+
+        if child.is_dir && expanded_directories.contains(child.path.as_str()) {
+            append_visible_entries(
+                children_by_parent,
+                child.path.as_str(),
+                expanded_directories,
+                visible_entries,
+            );
+        }
+    }
+}
+
+/// Returns the directory part of `path`, if any.
+fn parent_directory(path: &str) -> Option<&str> {
+    path.rsplit_once(PATH_SEPARATOR).map(|(parent, _)| parent)
+}
+
 /// Returns the initial selected index for project explorer mode.
 fn initial_selected_index(entries: &[FileEntry]) -> usize {
+    if entries.is_empty() {
+        return 0;
+    }
+
     entries
         .iter()
         .position(|entry| !entry.is_dir)
@@ -115,7 +225,9 @@ fn build_preview(session_folder: &Path, selected_entry: Option<FileEntry>) -> St
 fn open_help_overlay(app: &mut App) {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
     if let AppMode::ProjectExplorer {
+        all_entries,
         entries,
+        expanded_directories,
         preview,
         return_to_list,
         scroll_offset,
@@ -125,7 +237,9 @@ fn open_help_overlay(app: &mut App) {
     {
         app.mode = AppMode::Help {
             context: HelpContext::ProjectExplorer {
+                all_entries,
                 entries,
+                expanded_directories,
                 preview,
                 return_to_list,
                 scroll_offset,
@@ -178,33 +292,156 @@ fn project_explorer_origin(app: &App) -> Option<(bool, String)> {
 
 /// Updates selected index and refreshes preview content.
 async fn move_selection(app: &mut App, offset: isize) {
-    let Some((entries, return_to_list, selected_index, session_id)) = next_selection(app, offset)
-    else {
+    let Some(state) = project_explorer_mode_state(app) else {
         return;
     };
 
-    let Some(session_folder) = session_folder(app, &session_id) else {
+    let Some(next_state) = next_selection(&state, offset) else {
+        return;
+    };
+
+    let Some(session_folder) = session_folder(app, &next_state.session_id) else {
         app.mode = AppMode::List;
 
         return;
     };
 
-    let preview = load_preview(session_folder, entries.get(selected_index).cloned()).await;
+    let preview = load_preview(
+        session_folder,
+        next_state.entries.get(next_state.selected_index).cloned(),
+    )
+    .await;
 
     app.mode = AppMode::ProjectExplorer {
-        entries,
+        all_entries: next_state.all_entries,
+        entries: next_state.entries,
+        expanded_directories: next_state.expanded_directories,
         preview,
-        return_to_list,
+        return_to_list: next_state.return_to_list,
         scroll_offset: 0,
-        selected_index,
-        session_id,
+        selected_index: next_state.selected_index,
+        session_id: next_state.session_id,
     };
 }
 
 /// Computes the next explorer selection target.
-fn next_selection(app: &App, offset: isize) -> Option<(Vec<FileEntry>, bool, usize, String)> {
+fn next_selection(
+    state: &ProjectExplorerModeState,
+    offset: isize,
+) -> Option<ProjectExplorerModeState> {
+    if state.entries.is_empty() {
+        return None;
+    }
+
+    let current_index = state.selected_index;
+    let next_index = if offset.is_negative() {
+        current_index.saturating_sub(offset.unsigned_abs())
+    } else {
+        current_index
+            .saturating_add(offset.unsigned_abs())
+            .min(state.entries.len().saturating_sub(1))
+    };
+
+    if next_index == current_index {
+        return None;
+    }
+
+    let mut next_state = state.clone();
+    next_state.selected_index = next_index;
+
+    Some(next_state)
+}
+
+/// Activates the selected row: toggles directory expansion or refreshes file
+/// preview.
+async fn activate_selected_entry(app: &mut App) {
+    let Some(mut state) = project_explorer_mode_state(app) else {
+        return;
+    };
+
+    let Some(selected_entry) = selected_entry(&state) else {
+        return;
+    };
+
+    if selected_entry.is_dir {
+        state.expanded_directories =
+            toggled_directory_paths(&state.expanded_directories, selected_entry.path.as_str());
+        state.entries = build_visible_entries(&state.all_entries, &state.expanded_directories);
+        state.selected_index =
+            selected_index_for_entry_path(&state.entries, selected_entry.path.as_str());
+    }
+
+    let Some(session_folder) = session_folder(app, &state.session_id) else {
+        app.mode = AppMode::List;
+
+        return;
+    };
+
+    let preview = load_preview(
+        session_folder,
+        state.entries.get(state.selected_index).cloned(),
+    )
+    .await;
+
+    app.mode = AppMode::ProjectExplorer {
+        all_entries: state.all_entries,
+        entries: state.entries,
+        expanded_directories: state.expanded_directories,
+        preview,
+        return_to_list: state.return_to_list,
+        scroll_offset: 0,
+        selected_index: state.selected_index,
+        session_id: state.session_id,
+    };
+}
+
+/// Returns the selected row entry from current state.
+fn selected_entry(state: &ProjectExplorerModeState) -> Option<FileEntry> {
+    state.entries.get(state.selected_index).cloned()
+}
+
+/// Returns the next expanded-directory set after toggling `directory_path`.
+fn toggled_directory_paths(
+    expanded_directories: &BTreeSet<String>,
+    directory_path: &str,
+) -> BTreeSet<String> {
+    let mut next_expanded_directories = expanded_directories.clone();
+
+    if next_expanded_directories.remove(directory_path) {
+        remove_collapsed_descendants(&mut next_expanded_directories, directory_path);
+
+        return next_expanded_directories;
+    }
+
+    next_expanded_directories.insert(directory_path.to_string());
+
+    next_expanded_directories
+}
+
+/// Removes expanded descendants when one directory gets collapsed.
+fn remove_collapsed_descendants(expanded_directories: &mut BTreeSet<String>, directory_path: &str) {
+    let descendant_prefix = format!("{directory_path}{PATH_SEPARATOR}");
+    expanded_directories.retain(|path| !path.starts_with(descendant_prefix.as_str()));
+}
+
+/// Finds `target_path` in visible entries and falls back to index `0`.
+fn selected_index_for_entry_path(entries: &[FileEntry], target_path: &str) -> usize {
+    if entries.is_empty() {
+        return 0;
+    }
+
+    entries
+        .iter()
+        .position(|entry| entry.path == target_path)
+        .unwrap_or_default()
+}
+
+/// Returns a cloned snapshot of project explorer mode fields.
+fn project_explorer_mode_state(app: &App) -> Option<ProjectExplorerModeState> {
     let AppMode::ProjectExplorer {
+        all_entries,
         entries,
+        expanded_directories,
         return_to_list,
         selected_index,
         session_id,
@@ -214,29 +451,14 @@ fn next_selection(app: &App, offset: isize) -> Option<(Vec<FileEntry>, bool, usi
         return None;
     };
 
-    if entries.is_empty() {
-        return None;
-    }
-
-    let current_index = *selected_index;
-    let next_index = if offset.is_negative() {
-        current_index.saturating_sub(offset.unsigned_abs())
-    } else {
-        current_index
-            .saturating_add(offset.unsigned_abs())
-            .min(entries.len().saturating_sub(1))
-    };
-
-    if next_index == current_index {
-        return None;
-    }
-
-    Some((
-        entries.clone(),
-        *return_to_list,
-        next_index,
-        session_id.clone(),
-    ))
+    Some(ProjectExplorerModeState {
+        all_entries: all_entries.clone(),
+        entries: entries.clone(),
+        expanded_directories: expanded_directories.clone(),
+        return_to_list: *return_to_list,
+        selected_index: *selected_index,
+        session_id: session_id.clone(),
+    })
 }
 
 /// Updates preview scroll position by `offset` lines.
@@ -346,6 +568,26 @@ mod tests {
         (app, base_dir)
     }
 
+    /// Creates a project-explorer mode fixture with one selectable row.
+    fn project_explorer_mode_fixture(
+        all_entries: Vec<FileEntry>,
+        entries: Vec<FileEntry>,
+        selected_index: usize,
+        session_id: &str,
+        return_to_list: bool,
+    ) -> AppMode {
+        AppMode::ProjectExplorer {
+            all_entries,
+            entries,
+            expanded_directories: BTreeSet::new(),
+            preview: String::new(),
+            return_to_list,
+            scroll_offset: 0,
+            selected_index,
+            session_id: session_id.to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn test_open_for_session_sets_project_explorer_mode() {
         // Arrange
@@ -373,14 +615,7 @@ mod tests {
     async fn test_handle_escape_returns_to_list_when_opened_from_list() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
-        app.mode = AppMode::ProjectExplorer {
-            entries: vec![],
-            preview: String::new(),
-            return_to_list: true,
-            scroll_offset: 0,
-            selected_index: 0,
-            session_id: "session-id".to_string(),
-        };
+        app.mode = project_explorer_mode_fixture(vec![], vec![], 0, "session-id", true);
 
         // Act
         let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
@@ -396,14 +631,7 @@ mod tests {
     async fn test_handle_escape_returns_to_view_when_opened_from_view() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
-        app.mode = AppMode::ProjectExplorer {
-            entries: vec![],
-            preview: String::new(),
-            return_to_list: false,
-            scroll_offset: 0,
-            selected_index: 0,
-            session_id: "session-id".to_string(),
-        };
+        app.mode = project_explorer_mode_fixture(vec![], vec![], 0, "session-id", false);
 
         // Act
         let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
@@ -426,17 +654,12 @@ mod tests {
     async fn test_handle_question_mark_opens_help_overlay() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
-        app.mode = AppMode::ProjectExplorer {
-            entries: vec![FileEntry {
-                is_dir: false,
-                path: "src/main.rs".to_string(),
-            }],
-            preview: "fn main() {}".to_string(),
-            return_to_list: true,
-            scroll_offset: 0,
-            selected_index: 0,
-            session_id: "session-id".to_string(),
+        let entry = FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
         };
+        app.mode =
+            project_explorer_mode_fixture(vec![entry.clone()], vec![entry], 0, "session-id", true);
 
         // Act
         let event_result = handle(
@@ -471,18 +694,20 @@ mod tests {
         let session_folder = app.sessions.sessions[session_index].folder.clone();
         std::fs::write(session_folder.join("a.rs"), "alpha").expect("failed to write file");
         std::fs::write(session_folder.join("b.rs"), "beta").expect("failed to write file");
-
+        let all_entries = vec![
+            FileEntry {
+                is_dir: false,
+                path: "a.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "b.rs".to_string(),
+            },
+        ];
         app.mode = AppMode::ProjectExplorer {
-            entries: vec![
-                FileEntry {
-                    is_dir: false,
-                    path: "a.rs".to_string(),
-                },
-                FileEntry {
-                    is_dir: false,
-                    path: "b.rs".to_string(),
-                },
-            ],
+            all_entries: all_entries.clone(),
+            entries: all_entries,
+            expanded_directories: BTreeSet::new(),
             preview: "alpha".to_string(),
             return_to_list: false,
             scroll_offset: 5,
@@ -507,6 +732,210 @@ mod tests {
                 scroll_offset: 0,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn test_build_visible_entries_shows_only_root_with_no_expanded_directory() {
+        // Arrange
+        let all_entries = vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "README.md".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+        ];
+        let expanded_directories = BTreeSet::new();
+
+        // Act
+        let entries = build_visible_entries(&all_entries, &expanded_directories);
+
+        // Assert
+        assert_eq!(
+            entries,
+            vec![
+                FileEntry {
+                    is_dir: true,
+                    path: "src".to_string(),
+                },
+                FileEntry {
+                    is_dir: false,
+                    path: "README.md".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_visible_entries_keeps_expanded_children_under_directory() {
+        // Arrange
+        let all_entries = vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: true,
+                path: "tests".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "README.md".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/lib.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "tests/project_explorer.rs".to_string(),
+            },
+        ];
+        let expanded_directories = BTreeSet::from(["src".to_string()]);
+
+        // Act
+        let entries = build_visible_entries(&all_entries, &expanded_directories);
+
+        // Assert
+        assert_eq!(
+            entries,
+            vec![
+                FileEntry {
+                    is_dir: true,
+                    path: "src".to_string(),
+                },
+                FileEntry {
+                    is_dir: false,
+                    path: "src/lib.rs".to_string(),
+                },
+                FileEntry {
+                    is_dir: false,
+                    path: "src/main.rs".to_string(),
+                },
+                FileEntry {
+                    is_dir: true,
+                    path: "tests".to_string(),
+                },
+                FileEntry {
+                    is_dir: false,
+                    path: "README.md".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_on_directory_toggles_expansion_and_reveals_children() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_index = app
+            .session_index_for_id(&session_id)
+            .expect("missing session");
+        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        std::fs::create_dir_all(session_folder.join("src")).expect("failed to create src folder");
+        std::fs::write(session_folder.join("src/main.rs"), "fn main() {}\n")
+            .expect("failed to write file");
+        let all_entries = vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+        ];
+        let visible_entries = vec![FileEntry {
+            is_dir: true,
+            path: "src".to_string(),
+        }];
+        app.mode = AppMode::ProjectExplorer {
+            all_entries,
+            entries: visible_entries,
+            expanded_directories: BTreeSet::new(),
+            preview: String::new(),
+            return_to_list: false,
+            scroll_offset: 0,
+            selected_index: 0,
+            session_id,
+        };
+
+        // Act
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectExplorer {
+                ref entries,
+                ref expanded_directories,
+                ..
+            } if expanded_directories.contains("src")
+                && entries
+                    .iter()
+                    .any(|entry| entry.path == "src/main.rs" && !entry.is_dir)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_on_file_resets_preview_scroll() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let session_index = app
+            .session_index_for_id(&session_id)
+            .expect("missing session");
+        let session_folder = app.sessions.sessions[session_index].folder.clone();
+        std::fs::write(session_folder.join("README.md"), "updated preview")
+            .expect("failed to write readme");
+        let file_entry = FileEntry {
+            is_dir: false,
+            path: "README.md".to_string(),
+        };
+        app.mode = AppMode::ProjectExplorer {
+            all_entries: vec![file_entry.clone()],
+            entries: vec![file_entry],
+            expanded_directories: BTreeSet::new(),
+            preview: String::new(),
+            return_to_list: false,
+            scroll_offset: 8,
+            selected_index: 0,
+            session_id,
+        };
+
+        // Act
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ProjectExplorer {
+                scroll_offset: 0,
+                ref preview,
+                ..
+            } if preview == "updated preview"
         ));
     }
 }
