@@ -575,8 +575,8 @@ impl App {
             .await
     }
 
-    /// Opens the selected session worktree in tmux and optionally starts the
-    /// configured Dev Server command.
+    /// Opens the selected session worktree in tmux and optionally runs the
+    /// configured open command.
     pub async fn open_session_worktree_in_tmux(&self) {
         let Some(session) = self.selected_session() else {
             return;
@@ -586,13 +586,12 @@ impl App {
             return;
         };
 
-        let Some(dev_server_command) =
-            Self::dev_server_command_to_run(self.settings.dev_server.as_str())
+        let Some(open_command) = Self::open_command_to_run(self.settings.open_command.as_str())
         else {
             return;
         };
 
-        Self::run_tmux_command_in_window(&window_id, dev_server_command).await;
+        Self::run_tmux_command_in_window(&window_id, open_command).await;
     }
 
     /// Appends output text to a session stream and persists it.
@@ -1110,9 +1109,9 @@ impl App {
         Self::parse_tmux_window_id(&output.stdout)
     }
 
-    /// Returns the Dev Server command to execute when it is configured.
-    fn dev_server_command_to_run(dev_server: &str) -> Option<&str> {
-        let command = dev_server.trim();
+    /// Returns the open command to execute when it is configured.
+    fn open_command_to_run(open_command: &str) -> Option<&str> {
+        let command = open_command.trim();
         if command.is_empty() {
             return None;
         }
@@ -1546,24 +1545,24 @@ mod tests {
     use crate::infra::file_index::FileEntry;
 
     #[test]
-    fn dev_server_command_to_run_returns_none_for_empty_input() {
+    fn open_command_to_run_returns_none_for_empty_input() {
         // Arrange
-        let dev_server = "   ";
+        let open_command = "   ";
 
         // Act
-        let command = App::dev_server_command_to_run(dev_server);
+        let command = App::open_command_to_run(open_command);
 
         // Assert
         assert_eq!(command, None);
     }
 
     #[test]
-    fn dev_server_command_to_run_trims_and_returns_command() {
+    fn open_command_to_run_trims_and_returns_command() {
         // Arrange
-        let dev_server = "  npm run dev -- --port 5173  ";
+        let open_command = "  npm run dev -- --port 5173  ";
 
         // Act
-        let command = App::dev_server_command_to_run(dev_server);
+        let command = App::open_command_to_run(open_command);
 
         // Assert
         assert_eq!(command, Some("npm run dev -- --port 5173"));

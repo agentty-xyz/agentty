@@ -7,7 +7,7 @@ use crate::app::AppServices;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingName {
     DefaultModel,
-    DevServer,
+    OpenCommand,
     LastUsedModelAsDefault,
     LongestSessionDurationSeconds,
 }
@@ -17,7 +17,7 @@ impl SettingName {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::DefaultModel => "DefaultModel",
-            Self::DevServer => "DevServer",
+            Self::OpenCommand => "OpenCommand",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
             Self::LongestSessionDurationSeconds => "LongestSessionDurationSeconds",
         }
@@ -35,11 +35,11 @@ enum SettingControl {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
     DefaultModel,
-    DevServer,
+    OpenCommand,
 }
 
 impl SettingRow {
-    const ALL: [Self; 2] = [Self::DefaultModel, Self::DevServer];
+    const ALL: [Self; 2] = [Self::DefaultModel, Self::OpenCommand];
     const ROW_COUNT: usize = Self::ALL.len();
 
     /// Builds a row selector from the table row index.
@@ -51,7 +51,7 @@ impl SettingRow {
     fn label(self) -> &'static str {
         match self {
             Self::DefaultModel => "Default Model",
-            Self::DevServer => "Dev Server",
+            Self::OpenCommand => "Open Command",
         }
     }
 
@@ -59,7 +59,7 @@ impl SettingRow {
     fn control(self) -> SettingControl {
         match self {
             Self::DefaultModel => SettingControl::Selector,
-            Self::DevServer => SettingControl::TextInput,
+            Self::OpenCommand => SettingControl::TextInput,
         }
     }
 
@@ -67,7 +67,7 @@ impl SettingRow {
     fn setting_name(self) -> SettingName {
         match self {
             Self::DefaultModel => SettingName::DefaultModel,
-            Self::DevServer => SettingName::DevServer,
+            Self::OpenCommand => SettingName::OpenCommand,
         }
     }
 }
@@ -76,8 +76,8 @@ impl SettingRow {
 pub struct SettingsManager {
     /// Default model used when creating new sessions.
     pub default_model: AgentModel,
-    /// Optional app-server endpoint override entered by the user.
-    pub dev_server: String,
+    /// Optional command run in tmux when opening a session worktree.
+    pub open_command: String,
     /// Table selection state for the settings page.
     pub table_state: TableState,
     editing_text_row: Option<SettingRow>,
@@ -95,9 +95,9 @@ impl SettingsManager {
             .and_then(|setting| setting.parse().ok())
             .unwrap_or_else(|| AgentKind::Gemini.default_model());
 
-        let dev_server = services
+        let open_command = services
             .db()
-            .get_setting(SettingName::DevServer.as_str())
+            .get_setting(SettingName::OpenCommand.as_str())
             .await
             .unwrap_or(None)
             .unwrap_or_default();
@@ -115,7 +115,7 @@ impl SettingsManager {
 
         Self {
             default_model,
-            dev_server,
+            open_command,
             table_state,
             editing_text_row: None,
             use_last_used_model_as_default,
@@ -245,7 +245,7 @@ impl SettingsManager {
         match row.control() {
             SettingControl::Selector => false,
             SettingControl::TextInput => {
-                self.dev_server.push(character);
+                self.open_command.push(character);
 
                 true
             }
@@ -256,7 +256,7 @@ impl SettingsManager {
     fn remove_text_character(&mut self, row: SettingRow) -> bool {
         match row.control() {
             SettingControl::Selector => false,
-            SettingControl::TextInput => self.dev_server.pop().is_some(),
+            SettingControl::TextInput => self.open_command.pop().is_some(),
         }
     }
 
@@ -270,13 +270,13 @@ impl SettingsManager {
                     self.default_model.as_str().to_string()
                 }
             }
-            SettingRow::DevServer => {
+            SettingRow::OpenCommand => {
                 if self.is_editing_text_input_for(row) {
-                    format!("{}|", self.dev_server)
-                } else if self.dev_server.is_empty() {
+                    format!("{}|", self.open_command)
+                } else if self.open_command.is_empty() {
                     "<empty>".to_string()
                 } else {
-                    self.dev_server.clone()
+                    self.open_command.clone()
                 }
             }
         }
@@ -292,7 +292,7 @@ impl SettingsManager {
             SettingName::DefaultModel => {
                 self.cycle_default_model_selector(services).await;
             }
-            SettingName::DevServer
+            SettingName::OpenCommand
             | SettingName::LastUsedModelAsDefault
             | SettingName::LongestSessionDurationSeconds => {}
         }
@@ -305,10 +305,10 @@ impl SettingsManager {
         }
 
         match row.setting_name() {
-            SettingName::DevServer => {
+            SettingName::OpenCommand => {
                 let _ = services
                     .db()
-                    .upsert_setting(SettingName::DevServer.as_str(), &self.dev_server)
+                    .upsert_setting(SettingName::OpenCommand.as_str(), &self.open_command)
                     .await;
             }
             SettingName::DefaultModel
@@ -381,7 +381,7 @@ mod tests {
 
         SettingsManager {
             default_model: AgentKind::Gemini.default_model(),
-            dev_server: String::new(),
+            open_command: String::new(),
             table_state,
             editing_text_row: None,
             use_last_used_model_as_default: false,
@@ -400,14 +400,14 @@ mod tests {
     }
 
     #[test]
-    fn setting_name_as_str_returns_dev_server() {
+    fn setting_name_as_str_returns_open_command() {
         // Arrange
 
         // Act
-        let setting_name = SettingName::DevServer.as_str();
+        let setting_name = SettingName::OpenCommand.as_str();
 
         // Assert
-        assert_eq!(setting_name, "DevServer");
+        assert_eq!(setting_name, "OpenCommand");
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn next_moves_selection_to_dev_server_row() {
+    fn next_moves_selection_to_open_command_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_dev_server_row_from_default_model_row() {
+    fn previous_wraps_to_open_command_row_from_default_model_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_include_default_model_and_dev_server() {
+    fn settings_rows_include_default_model_and_open_command() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -468,14 +468,14 @@ mod tests {
         // Assert
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, "Default Model");
-        assert_eq!(rows[1].0, "Dev Server");
+        assert_eq!(rows[1].0, "Open Command");
     }
 
     #[test]
     fn footer_hint_returns_editing_text_when_text_input_is_active() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.editing_text_row = Some(SettingRow::DevServer);
+        manager.editing_text_row = Some(SettingRow::OpenCommand);
 
         // Act
         let footer_hint = manager.footer_hint();
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_show_empty_placeholder_for_dev_server() {
+    fn settings_rows_show_empty_placeholder_for_open_command() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -500,11 +500,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_show_cursor_for_dev_server_while_editing() {
+    fn settings_rows_show_cursor_for_open_command_while_editing() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.dev_server = "http://localhost:5173".to_string();
-        manager.editing_text_row = Some(SettingRow::DevServer);
+        manager.open_command = "http://localhost:5173".to_string();
+        manager.editing_text_row = Some(SettingRow::OpenCommand);
 
         // Act
         let rows = manager.settings_rows();

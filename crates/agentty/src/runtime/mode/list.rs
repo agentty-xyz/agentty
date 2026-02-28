@@ -587,7 +587,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_key_starts_dev_server_editing_in_settings_tab() {
+    async fn test_handle_enter_key_starts_open_command_editing_in_settings_tab() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
 
@@ -602,7 +602,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_char_key_appends_dev_server_value_while_editing() {
+    async fn test_handle_char_key_appends_open_command_value_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
@@ -619,15 +619,15 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.dev_server, "a");
+        assert_eq!(app.settings.open_command, "a");
         assert_eq!(app.sessions.sessions.len(), 1);
     }
 
     #[tokio::test]
-    async fn test_handle_backspace_key_removes_dev_server_character_while_editing() {
+    async fn test_handle_backspace_key_removes_open_command_character_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.dev_server = "abc".to_string();
+        app.settings.open_command = "abc".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to start settings editing");
@@ -642,11 +642,11 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.settings.dev_server, "ab");
+        assert_eq!(app.settings.open_command, "ab");
     }
 
     #[tokio::test]
-    async fn test_handle_enter_key_stops_dev_server_editing_when_already_editing() {
+    async fn test_handle_enter_key_stops_open_command_editing_when_already_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
