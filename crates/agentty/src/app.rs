@@ -1090,14 +1090,17 @@ impl App {
     }
 
     /// Returns sync failure copy with actionable guidance for auth failures.
+    ///
+    /// Authentication failures show a dismiss-only message so users can fix
+    /// credentials first, then restart sync from the list.
     fn sync_failure_message(sync_error: &SyncSessionStartError) -> String {
         let detail_message = sync_error.detail_message();
         if !Self::is_sync_push_authentication_error(&detail_message) {
             return detail_message;
         }
 
-        "Git push requires authentication for this repository.\nAuthorize git access, then retry \
-         sync with `r`.\nRun `gh auth login`, or configure credentials with a PAT/SSH key."
+        "Git push requires authentication for this repository.\nAuthorize git access, then run \
+         sync again.\nRun `gh auth login`, or configure credentials with a PAT/SSH key."
             .to_string()
     }
 
@@ -1536,7 +1539,7 @@ mod tests {
                 && default_branch.as_deref() == Some("main")
                 && message.contains("Git push requires authentication")
                 && message.contains("`gh auth login`")
-                && message.contains("retry sync with `r`")
+                && message.contains("then run sync again")
                 && project_name.as_deref() == Some("agentty")
         ));
     }

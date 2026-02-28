@@ -14,9 +14,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
         return EventResult::Continue;
     }
 
-    if should_retry_sync(key) {
-        app.start_sync_main();
-    } else if should_close_sync_blocked_popup(key) {
+    if should_close_sync_blocked_popup(key) {
         app.mode = AppMode::List;
     }
 
@@ -30,14 +28,6 @@ fn should_close_sync_blocked_popup(key: KeyEvent) -> bool {
         KeyCode::Char(character) => character.eq_ignore_ascii_case(&'q'),
         _ => false,
     }
-}
-
-/// Returns whether the pressed key should restart the main sync flow.
-fn should_retry_sync(key: KeyEvent) -> bool {
-    matches!(
-        key.code,
-        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'r')
-    )
 }
 
 #[cfg(test)]
@@ -161,7 +151,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_r_retries_sync() {
+    async fn test_handle_r_keeps_sync_blocked_popup_open() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::SyncBlockedPopup {
@@ -180,14 +170,6 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(
-            app.mode,
-            AppMode::SyncBlockedPopup {
-                is_loading: true,
-                ref message,
-                ref title,
-                ..
-            } if title == "Sync in progress" && message == "Synchronizing with its upstream."
-        ));
+        assert!(matches!(app.mode, AppMode::SyncBlockedPopup { .. }));
     }
 }
