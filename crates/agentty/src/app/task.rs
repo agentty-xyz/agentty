@@ -320,8 +320,9 @@ impl TaskService {
         Ok(())
     }
 
-    /// Generates focused-review assist text by running one model command and
-    /// parsing the final assistant response content.
+    /// Generates focused-review assist text by running one model command with
+    /// read-only review constraints and parsing the final assistant response
+    /// content.
     async fn focused_review_assist_text(
         session_folder: &Path,
         session_model: AgentModel,
@@ -624,6 +625,26 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Err("Nothing to commit".to_string()) }));
 
         (mock_app_server_client, mock_git_client)
+    }
+
+    #[test]
+    /// Ensures focused-review prompt rendering includes read-only constraints
+    /// while keeping internet and non-editing verification options available.
+    fn test_focused_review_assist_prompt_enforces_read_only_constraints() {
+        // Arrange
+        let focused_review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+        let session_summary = Some("Refactor parser error mapping.");
+
+        // Act
+        let prompt =
+            TaskService::focused_review_assist_prompt(focused_review_diff, session_summary)
+                .expect("focused review prompt should render");
+
+        // Assert
+        assert!(prompt.contains("You are in read-only review mode."));
+        assert!(prompt.contains("Do not create, modify, rename, or delete files."));
+        assert!(prompt.contains("You may browse the internet when needed."));
+        assert!(prompt.contains("You may run non-editing CLI commands"));
     }
 
     #[tokio::test]

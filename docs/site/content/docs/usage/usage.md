@@ -105,7 +105,7 @@ state:
 | `Enter` | Reply to agent |
 | `o` | Open worktree in file manager |
 | `d` | Show diff |
-| `f` | Show focused review |
+| `f` | Show focused review (read-only) |
 | `m` | Queue merge |
 | `r` | Rebase |
 | `Shift+Tab` | Toggle permission mode |
@@ -120,6 +120,9 @@ Additional state-specific keys:
 
 - **InProgress**: `Ctrl+c` stops the agent.
 - **Done**: `t` toggles between summary and full output.
+- **Focused review**: Runs in read-only review mode. It can use internet lookup
+  and non-editing verification commands, but it should not edit files or
+  mutate git/workspace state.
 
 ### Diff Mode
 

@@ -342,9 +342,10 @@ impl<'a> SessionChatPage<'a> {
     /// session in view mode.
     ///
     /// `InProgress` sessions keep worktree access but hide edit and diff
-    /// shortcuts, `Review` sessions expose focused-review shortcuts, and
-    /// `Done` sessions expose only read-only shortcuts. `Canceled` sessions
-    /// expose only `back`, `scroll`, and `help`.
+    /// shortcuts, `Review` sessions expose focused-review shortcuts with
+    /// read-only assist generation, and `Done` sessions expose only read-only
+    /// shortcuts. `Canceled` sessions expose only `back`, `scroll`, and
+    /// `help`.
     fn view_help_text(
         session: &Session,
         done_session_output_mode: DoneSessionOutputMode,

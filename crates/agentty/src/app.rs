@@ -674,6 +674,9 @@ impl App {
 
     /// Starts focused-review assist generation for one session using the
     /// current diff text.
+    ///
+    /// The focused-review assist prompt enforces read-only review constraints
+    /// and allows only internet lookup and non-editing verification commands.
     pub(crate) fn start_focused_review_assist(
         &self,
         session_id: &str,
