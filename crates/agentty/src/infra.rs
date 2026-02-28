@@ -14,5 +14,4 @@ pub mod file_index;
 /// Gemini ACP-backed app-server client implementation.
 pub mod gemini_acp;
 pub mod git;
-pub mod lock;
 pub mod version;

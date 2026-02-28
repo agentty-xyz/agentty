@@ -25,4 +25,4 @@
 - [ui/](ui/) - User Interface module.
 - [ui.rs](ui.rs) - UI module root with shared exports and submodule declarations.
 - [lib.rs](lib.rs) - Library entry point, exports modules.
-- [main.rs](main.rs) - Binary composition root for lock, DB bootstrap, and runtime launch.
+- [main.rs](main.rs) - Binary composition root for DB bootstrap and runtime launch.
