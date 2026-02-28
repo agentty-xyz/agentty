@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use askama::Template;
 use tokio::sync::mpsc;
 
 use crate::app::assist::AssistContext;
@@ -37,6 +38,24 @@ pub(super) struct RunAppServerTaskInput {
     pub(super) session_output: Option<String>,
     pub(super) session_model: AgentModel,
     pub(super) status: Arc<Mutex<Status>>,
+}
+
+/// Inputs needed to generate focused-review assist text in the background.
+pub(super) struct FocusedReviewAssistTaskInput {
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub(super) focused_review_diff: String,
+    pub(super) session_folder: PathBuf,
+    pub(super) session_id: String,
+    pub(super) session_model: AgentModel,
+    pub(super) session_summary: Option<String>,
+}
+
+/// Askama view model for rendering focused-review assist prompts.
+#[derive(Template)]
+#[template(path = "focused_review_assist_prompt.md", escape = "none")]
+struct FocusedReviewAssistPromptTemplate<'a> {
+    focused_review_diff: &'a str,
+    session_summary: &'a str,
 }
 
 impl TaskService {
@@ -154,6 +173,38 @@ impl TaskService {
         });
     }
 
+    /// Spawns one background focused-review assist generation task and emits
+    /// an event with either final review text or a failure description.
+    pub(super) fn spawn_focused_review_assist_task(input: FocusedReviewAssistTaskInput) {
+        let FocusedReviewAssistTaskInput {
+            app_event_tx,
+            focused_review_diff,
+            session_folder,
+            session_id,
+            session_model,
+            session_summary,
+        } = input;
+
+        tokio::spawn(async move {
+            let focused_review_result = Self::focused_review_assist_text(
+                &session_folder,
+                session_model,
+                &focused_review_diff,
+                session_summary.as_deref(),
+            )
+            .await;
+
+            let app_event = match focused_review_result {
+                Ok(review_text) => AppEvent::FocusedReviewPrepared {
+                    review_text,
+                    session_id,
+                },
+                Err(error) => AppEvent::FocusedReviewPreparationFailed { error, session_id },
+            };
+            let _ = app_event_tx.send(app_event);
+        });
+    }
+
     /// Executes one app-server turn for a session.
     ///
     /// On failure, this clears runtime process tracking, transitions the
@@ -267,6 +318,102 @@ impl TaskService {
             .await;
 
         Ok(())
+    }
+
+    /// Generates focused-review assist text by running one model command and
+    /// parsing the final assistant response content.
+    async fn focused_review_assist_text(
+        session_folder: &Path,
+        session_model: AgentModel,
+        focused_review_diff: &str,
+        session_summary: Option<&str>,
+    ) -> Result<String, String> {
+        let focused_review_prompt =
+            Self::focused_review_assist_prompt(focused_review_diff, session_summary)?;
+        let backend = crate::infra::agent::create_backend(session_model.kind());
+        let command = backend
+            .build_command(crate::infra::agent::BuildCommandRequest {
+                folder: session_folder,
+                mode: crate::infra::agent::AgentCommandMode::Resume {
+                    prompt: &focused_review_prompt,
+                    session_output: None,
+                },
+                model: session_model.as_str(),
+            })
+            .map_err(|error| error.to_string())?;
+        let mut tokio_command = tokio::process::Command::from(command);
+        tokio_command.stdin(std::process::Stdio::null());
+        let command_output = tokio_command
+            .output()
+            .await
+            .map_err(|error| format!("Failed to execute focused review assist command: {error}"))?;
+
+        let stdout_text = String::from_utf8_lossy(&command_output.stdout).into_owned();
+        let stderr_text = String::from_utf8_lossy(&command_output.stderr).into_owned();
+        if !command_output.status.success() {
+            return Err(Self::format_focused_review_assist_exit_error(
+                command_output.status.code(),
+                &stdout_text,
+                &stderr_text,
+            ));
+        }
+
+        let parsed =
+            crate::infra::agent::parse_response(session_model.kind(), &stdout_text, &stderr_text);
+        let focused_review_text = parsed.content.trim();
+        if focused_review_text.is_empty() {
+            return Err("Focused review assist returned empty output".to_string());
+        }
+
+        Ok(focused_review_text.to_string())
+    }
+
+    /// Renders the focused-review assist prompt from the markdown template.
+    ///
+    /// # Errors
+    /// Returns an error when Askama template rendering fails.
+    fn focused_review_assist_prompt(
+        focused_review_diff: &str,
+        session_summary: Option<&str>,
+    ) -> Result<String, String> {
+        let template = FocusedReviewAssistPromptTemplate {
+            focused_review_diff: focused_review_diff.trim(),
+            session_summary: session_summary.map_or("", str::trim),
+        };
+
+        template
+            .render()
+            .map_err(|error| format!("Failed to render `focused_review_assist_prompt.md`: {error}"))
+    }
+
+    /// Formats a focused-review assist process failure with normalized output
+    /// details for UI display.
+    fn format_focused_review_assist_exit_error(
+        exit_code: Option<i32>,
+        stdout: &str,
+        stderr: &str,
+    ) -> String {
+        let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
+        let output_detail = Self::focused_review_assist_output_detail(stdout, stderr);
+
+        format!("Focused review assist failed with exit code {exit_code}: {output_detail}")
+    }
+
+    /// Formats stdout/stderr details for focused-review assist failures.
+    fn focused_review_assist_output_detail(stdout: &str, stderr: &str) -> String {
+        let trimmed_stdout = stdout.trim();
+        let trimmed_stderr = stderr.trim();
+        if !trimmed_stderr.is_empty() && !trimmed_stdout.is_empty() {
+            return format!("stderr: {trimmed_stderr}; stdout: {trimmed_stdout}");
+        }
+        if !trimmed_stderr.is_empty() {
+            return format!("stderr: {trimmed_stderr}");
+        }
+        if !trimmed_stdout.is_empty() {
+            return format!("stdout: {trimmed_stdout}");
+        }
+
+        "no stdout or stderr output".to_string()
     }
 
     /// Spawns a background task that consumes [`AppServerStreamEvent`]s and

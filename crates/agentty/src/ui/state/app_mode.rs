@@ -59,8 +59,11 @@ pub enum AppMode {
     View {
         /// Selected content view for the session output panel.
         done_session_output_mode: DoneSessionOutputMode,
-        /// Cached git diff used to build focused-review output.
-        focused_review_diff: Option<String>,
+        /// Optional status line shown while focused-review text is loading or
+        /// unavailable.
+        focused_review_status_message: Option<String>,
+        /// Agent-assisted focused-review text for the active session.
+        focused_review_text: Option<String>,
         session_id: String,
         scroll_offset: Option<u16>,
     },
@@ -83,7 +86,8 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         done_session_output_mode: DoneSessionOutputMode,
-        focused_review_diff: Option<String>,
+        focused_review_status_message: Option<String>,
+        focused_review_text: Option<String>,
         session_id: String,
         session_state: ViewSessionState,
         scroll_offset: Option<u16>,
@@ -114,13 +118,15 @@ impl HelpContext {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
                 done_session_output_mode,
-                focused_review_diff,
+                focused_review_status_message,
+                focused_review_text,
                 session_id,
                 scroll_offset,
                 ..
             } => AppMode::View {
                 done_session_output_mode,
-                focused_review_diff,
+                focused_review_status_message,
+                focused_review_text,
                 session_id,
                 scroll_offset,
             },
@@ -171,7 +177,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_diff: None,
+            focused_review_status_message: None,
+            focused_review_text: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(2),
@@ -197,7 +204,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_diff: Some("diff --git".to_string()),
+            focused_review_status_message: Some("Preparing focused review...".to_string()),
+            focused_review_text: Some("Ready".to_string()),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(4),
@@ -211,10 +219,13 @@ mod tests {
             mode,
             AppMode::View {
                 ref session_id,
-                focused_review_diff: Some(ref focused_review_diff),
+                focused_review_status_message: Some(ref focused_review_status_message),
+                focused_review_text: Some(ref focused_review_text),
                 scroll_offset: Some(4),
                 ..
-            } if session_id == "session-id" && focused_review_diff == "diff --git"
+            } if session_id == "session-id"
+                && focused_review_status_message == "Preparing focused review..."
+                && focused_review_text == "Ready"
         ));
     }
 

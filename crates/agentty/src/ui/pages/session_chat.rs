@@ -55,14 +55,16 @@ impl<'a> SessionChatPage<'a> {
         session: &Session,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
-        focused_review_diff: Option<&str>,
+        focused_review_status_message: Option<&str>,
+        focused_review_text: Option<&str>,
         active_progress: Option<&str>,
     ) -> u16 {
         SessionOutput::rendered_line_count(
             session,
             output_width,
             done_session_output_mode,
-            focused_review_diff,
+            focused_review_status_message,
+            focused_review_text,
             active_progress,
         )
     }
@@ -84,13 +86,29 @@ impl<'a> SessionChatPage<'a> {
         }
     }
 
-    /// Returns focused-review diff text for the active view mode.
-    fn focused_review_diff(&self) -> Option<&str> {
+    /// Returns focused-review status text for the active view mode.
+    fn focused_review_status_message(&self) -> Option<&str> {
         match self.mode {
             AppMode::View {
-                focused_review_diff,
+                focused_review_status_message,
                 ..
-            } => focused_review_diff.as_deref(),
+            } => focused_review_status_message.as_deref(),
+            AppMode::List
+            | AppMode::Confirmation { .. }
+            | AppMode::SyncBlockedPopup { .. }
+            | AppMode::Prompt { .. }
+            | AppMode::Diff { .. }
+            | AppMode::Help { .. } => None,
+        }
+    }
+
+    /// Returns focused-review assist text for the active view mode.
+    fn focused_review_text(&self) -> Option<&str> {
+        match self.mode {
+            AppMode::View {
+                focused_review_text,
+                ..
+            } => focused_review_text.as_deref(),
             AppMode::List
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
@@ -228,7 +246,8 @@ impl<'a> SessionChatPage<'a> {
 
         let mut output =
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
-        output = output.focused_review_diff(self.focused_review_diff());
+        output = output.focused_review_status_message(self.focused_review_status_message());
+        output = output.focused_review_text(self.focused_review_text());
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
         }
@@ -364,8 +383,7 @@ impl<'a> SessionChatPage<'a> {
     fn done_toggle_action_label(done_session_output_mode: DoneSessionOutputMode) -> &'static str {
         match done_session_output_mode {
             DoneSessionOutputMode::Summary => "output",
-            DoneSessionOutputMode::Output => "summary",
-            DoneSessionOutputMode::FocusedReview => "summary",
+            DoneSessionOutputMode::Output | DoneSessionOutputMode::FocusedReview => "summary",
         }
     }
 }
@@ -673,6 +691,7 @@ mod tests {
             &session,
             20,
             DoneSessionOutputMode::Summary,
+            None,
             None,
             None,
         );

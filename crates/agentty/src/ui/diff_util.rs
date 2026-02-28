@@ -323,17 +323,26 @@ fn focused_review_highlight(
     content: &str,
     order: usize,
 ) -> Option<FocusedReviewHighlight> {
+    const DEFAULT_COMMENT: &str = "Behavior changed.";
+    const RUNTIME_COMMENT: &str = "Runtime safety or error handling changed.";
+    const SECURITY_COMMENT: &str = "Authorization or security-sensitive logic changed.";
+    const DATABASE_COMMENT: &str = "Database behavior or schema logic changed.";
+    const PROCESS_COMMENT: &str = "External command execution path changed.";
+    const CONFIG_COMMENT: &str = "Build or runtime configuration changed.";
+
     let normalized_content = content.to_lowercase();
     let normalized_path = file_path.to_lowercase();
     let mut score = 0_u16;
-    let mut comment = "Behavior changed.";
+    let mut comment = DEFAULT_COMMENT;
+    let mut matched_runtime = false;
 
     if contains_any(
         &normalized_content,
         &["unsafe", "unwrap(", "expect(", "panic!("],
     ) {
         score = score.saturating_add(5);
-        comment = "Runtime safety or error handling changed.";
+        comment = RUNTIME_COMMENT;
+        matched_runtime = true;
     }
 
     if contains_any(
@@ -351,7 +360,9 @@ fn focused_review_highlight(
     ) || contains_any(&normalized_path, &["auth", "permission", "security"])
     {
         score = score.saturating_add(4);
-        comment = "Authorization or security-sensitive logic changed.";
+        if !matched_runtime {
+            comment = SECURITY_COMMENT;
+        }
     }
 
     if contains_any(
@@ -362,7 +373,9 @@ fn focused_review_highlight(
     ) || contains_any(&normalized_path, &["migration", ".sql"])
     {
         score = score.saturating_add(4);
-        comment = "Database behavior or schema logic changed.";
+        if !matched_runtime {
+            comment = DATABASE_COMMENT;
+        }
     }
 
     if contains_any(
@@ -370,7 +383,9 @@ fn focused_review_highlight(
         &["command", "shell", "process", "exec(", "spawn(", "system("],
     ) {
         score = score.saturating_add(3);
-        comment = "External command execution path changed.";
+        if !matched_runtime {
+            comment = PROCESS_COMMENT;
+        }
     }
 
     if contains_any(
@@ -385,7 +400,9 @@ fn focused_review_highlight(
         ],
     ) {
         score = score.saturating_add(2);
-        comment = "Build or runtime configuration changed.";
+        if !matched_runtime {
+            comment = CONFIG_COMMENT;
+        }
     }
 
     if score == 0 {

@@ -402,7 +402,8 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
 
     app.mode = AppMode::View {
         done_session_output_mode: DoneSessionOutputMode::Summary,
-        focused_review_diff: None,
+        focused_review_status_message: None,
+        focused_review_text: None,
         session_id: prompt_context.session_id.clone(),
         scroll_offset: None,
     };
@@ -510,7 +511,8 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
 
     app.mode = AppMode::View {
         done_session_output_mode: DoneSessionOutputMode::Summary,
-        focused_review_diff: None,
+        focused_review_status_message: None,
+        focused_review_text: None,
         session_id: prompt_context.session_id.clone(),
         scroll_offset: prompt_context.scroll_offset,
     };

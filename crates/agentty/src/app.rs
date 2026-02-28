@@ -92,6 +92,13 @@ pub(crate) enum AppEvent {
     SyncMainCompleted {
         result: Result<SyncMainOutcome, SyncSessionStartError>,
     },
+    /// Indicates focused-review assist output became available for a session.
+    FocusedReviewPrepared {
+        review_text: String,
+        session_id: String,
+    },
+    /// Indicates focused-review assist failed for a session.
+    FocusedReviewPreparationFailed { error: String, session_id: String },
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
 }
@@ -100,6 +107,7 @@ pub(crate) enum AppEvent {
 struct AppEventBatch {
     at_mention_entries_updates: HashMap<String, Vec<FileEntry>>,
     codex_usage_limits_update: CodexUsageLimitsBatchUpdate,
+    focused_review_updates: HashMap<String, FocusedReviewUpdate>,
     git_status_update: Option<(u32, u32)>,
     has_git_status_update: bool,
     has_latest_available_version_update: bool,
@@ -124,6 +132,12 @@ enum CodexUsageLimitsBatchUpdate {
 struct SyncPopupContext {
     default_branch: String,
     project_name: String,
+}
+
+/// Aggregated focused-review assist output keyed by session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FocusedReviewUpdate {
+    result: Result<String, String>,
 }
 
 // SessionState definition moved to session_state.rs
@@ -652,6 +666,26 @@ impl App {
         });
     }
 
+    /// Starts focused-review assist generation for one session using the
+    /// current diff text.
+    pub(crate) fn start_focused_review_assist(
+        &self,
+        session_id: &str,
+        session_folder: &Path,
+        session_model: AgentModel,
+        focused_review_diff: &str,
+        session_summary: Option<&str>,
+    ) {
+        task::TaskService::spawn_focused_review_assist_task(task::FocusedReviewAssistTaskInput {
+            app_event_tx: self.services.event_sender(),
+            focused_review_diff: focused_review_diff.to_string(),
+            session_folder: session_folder.to_path_buf(),
+            session_id: session_id.to_string(),
+            session_model,
+            session_summary: session_summary.map(str::to_string),
+        });
+    }
+
     /// Reloads sessions when metadata cache indicates changes.
     pub async fn refresh_sessions_if_needed(&mut self) {
         self.sessions
@@ -774,6 +808,9 @@ impl App {
         for (session_id, entries) in event_batch.at_mention_entries_updates {
             self.apply_prompt_at_mention_entries(&session_id, entries);
         }
+
+        self.apply_focused_review_updates(event_batch.focused_review_updates);
+
         for (session_id, progress_message) in event_batch.session_progress_updates {
             if let Some(progress_message) = progress_message {
                 self.session_progress_messages
@@ -820,6 +857,85 @@ impl App {
             }
 
             *at_mention_state = Some(crate::ui::state::prompt::PromptAtMentionState::new(entries));
+        }
+    }
+
+    /// Applies focused-review assist updates for all sessions in the batch.
+    fn apply_focused_review_updates(
+        &mut self,
+        focused_review_updates: HashMap<String, FocusedReviewUpdate>,
+    ) {
+        for (session_id, focused_review_update) in focused_review_updates {
+            self.apply_focused_review_update(&session_id, focused_review_update);
+        }
+    }
+
+    /// Applies focused-review assist output to the active view/help mode when
+    /// session identifiers still match.
+    fn apply_focused_review_update(
+        &mut self,
+        session_id: &str,
+        focused_review_update: FocusedReviewUpdate,
+    ) {
+        let FocusedReviewUpdate { result } = focused_review_update;
+
+        match &mut self.mode {
+            AppMode::View {
+                focused_review_status_message,
+                focused_review_text,
+                session_id: view_session_id,
+                ..
+            } if view_session_id == session_id => {
+                Self::apply_focused_review_result(
+                    focused_review_status_message,
+                    focused_review_text,
+                    result,
+                );
+            }
+            AppMode::Help {
+                context:
+                    crate::ui::state::app_mode::HelpContext::View {
+                        focused_review_status_message,
+                        focused_review_text,
+                        session_id: view_session_id,
+                        ..
+                    },
+                ..
+            } if view_session_id == session_id => {
+                Self::apply_focused_review_result(
+                    focused_review_status_message,
+                    focused_review_text,
+                    result,
+                );
+            }
+            AppMode::List
+            | AppMode::Confirmation { .. }
+            | AppMode::SyncBlockedPopup { .. }
+            | AppMode::Prompt { .. }
+            | AppMode::Diff { .. }
+            | AppMode::Help { .. }
+            | AppMode::View { .. } => {}
+        }
+    }
+
+    /// Applies one focused-review assist result to render-state fields.
+    fn apply_focused_review_result(
+        focused_review_status_message: &mut Option<String>,
+        focused_review_text: &mut Option<String>,
+        result: Result<String, String>,
+    ) {
+        match result {
+            Ok(review_text) => {
+                *focused_review_status_message = None;
+                *focused_review_text = Some(review_text);
+            }
+            Err(error) => {
+                *focused_review_status_message = Some(format!(
+                    "Focused review assist unavailable: {}",
+                    error.trim()
+                ));
+                *focused_review_text = None;
+            }
         }
     }
 
@@ -1381,6 +1497,21 @@ impl AppEventBatch {
             }
             AppEvent::SyncMainCompleted { result } => {
                 self.sync_main_result = Some(result);
+            }
+            AppEvent::FocusedReviewPrepared {
+                review_text,
+                session_id,
+            } => {
+                self.focused_review_updates.insert(
+                    session_id,
+                    FocusedReviewUpdate {
+                        result: Ok(review_text),
+                    },
+                );
+            }
+            AppEvent::FocusedReviewPreparationFailed { error, session_id } => {
+                self.focused_review_updates
+                    .insert(session_id, FocusedReviewUpdate { result: Err(error) });
             }
             AppEvent::SessionUpdated { session_id } => {
                 self.session_ids.insert(session_id);
