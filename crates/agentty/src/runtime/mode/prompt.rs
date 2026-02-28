@@ -218,9 +218,17 @@ fn is_control_newline_key(key: KeyEvent, character: char) -> bool {
 ///
 /// `Option`+`Backspace` is reported as `Alt` on macOS terminals. `Shift` is
 /// also accepted for backward compatibility with existing behavior.
+/// `Cmd`+`Backspace` is handled separately as a whole-line deletion shortcut.
 fn is_word_delete_backspace(key: KeyEvent) -> bool {
     key.modifiers
         .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT)
+}
+
+/// Returns true when backspace should delete the current line content.
+///
+/// On macOS terminals this is produced by pressing `Cmd`+`Backspace`.
+fn is_line_delete_backspace(key: KeyEvent) -> bool {
+    key.modifiers.contains(event::KeyModifiers::SUPER)
 }
 
 /// Normalizes pasted text line-endings to `\n`.
@@ -749,6 +757,8 @@ fn move_prompt_cursor_word_right(input: &mut InputState) {
 
 /// Handles prompt backspace by deleting one character or one whole word when
 /// `Option`/`Alt` (or `Shift` for compatibility) is pressed.
+///
+/// `Cmd`+`Backspace` takes precedence and clears the current line content.
 fn handle_prompt_backspace(app: &mut App, key: KeyEvent) {
     if let AppMode::Prompt {
         input,
@@ -758,7 +768,9 @@ fn handle_prompt_backspace(app: &mut App, key: KeyEvent) {
         ..
     } = &mut app.mode
     {
-        if is_word_delete_backspace(key) {
+        if is_line_delete_backspace(key) {
+            input.delete_current_line();
+        } else if is_word_delete_backspace(key) {
             delete_prompt_word_backward(input);
         } else {
             input.delete_backward();
@@ -1324,6 +1336,30 @@ mod tests {
     }
 
     #[test]
+    fn test_is_line_delete_backspace_accepts_super_modifier() {
+        // Arrange
+        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SUPER);
+
+        // Act
+        let result = is_line_delete_backspace(key);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_line_delete_backspace_rejects_plain_backspace() {
+        // Arrange
+        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::NONE);
+
+        // Act
+        let result = is_line_delete_backspace(key);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
     fn test_normalize_pasted_text_replaces_carriage_returns() {
         // Arrange
         let pasted_text = "line 1\r\nline 2\rline 3\nline 4";
@@ -1587,6 +1623,36 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "hello brave");
+            assert_eq!(history_state.selected_index, None);
+            assert_eq!(history_state.draft_text, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_backspace_with_super_deletes_current_line_content() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("first line\nsecond line", None).await;
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.draft_text = Some("draft".to_string());
+            history_state.entries = vec!["first".to_string(), "second".to_string()];
+            history_state.selected_index = Some(1);
+        }
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = "first line\nsecond".chars().count();
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SUPER);
+        handle_prompt_backspace(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt {
+            history_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "first line\n");
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }

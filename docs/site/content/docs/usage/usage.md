@@ -139,6 +139,8 @@ Additional state-specific keys:
 |-----|--------|
 | `Enter` | Submit prompt |
 | `Shift+Enter` | Insert newline |
+| `Option+Backspace` | Delete previous word |
+| `Cmd+Backspace` | Delete current line |
 | `Esc` | Cancel |
 | `@` | Open file picker |
 | `/` | Open slash commands |

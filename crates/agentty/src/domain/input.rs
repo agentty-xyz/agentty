@@ -74,6 +74,24 @@ impl InputState {
         self.cursor -= 1;
     }
 
+    /// Deletes all text in the current line without removing newline
+    /// separators around that line.
+    pub fn delete_current_line(&mut self) {
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut start = self.cursor.min(characters.len());
+        let mut end = self.cursor.min(characters.len());
+
+        while start > 0 && characters[start - 1] != '\n' {
+            start -= 1;
+        }
+
+        while end < characters.len() && characters[end] != '\n' {
+            end += 1;
+        }
+
+        self.replace_range(start, end, "");
+    }
+
     /// Deletes the character at the cursor position.
     pub fn delete_forward(&mut self) {
         let char_count = self.text.chars().count();
@@ -293,5 +311,47 @@ mod tests {
         // Assert
         assert_eq!(state.text(), "hello");
         assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn test_delete_current_line_clears_single_line_content() {
+        // Arrange
+        let mut state = InputState::with_text("hello world".to_string());
+        state.cursor = "hello".chars().count();
+
+        // Act
+        state.delete_current_line();
+
+        // Assert
+        assert_eq!(state.text(), "");
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_delete_current_line_clears_current_multiline_content() {
+        // Arrange
+        let mut state = InputState::with_text("first line\nsecond line".to_string());
+        state.cursor = "first line\nsecond".chars().count();
+
+        // Act
+        state.delete_current_line();
+
+        // Assert
+        assert_eq!(state.text(), "first line\n");
+        assert_eq!(state.cursor, "first line\n".chars().count());
+    }
+
+    #[test]
+    fn test_delete_current_line_preserves_surrounding_newlines() {
+        // Arrange
+        let mut state = InputState::with_text("first line\nsecond line\nthird line".to_string());
+        state.cursor = "first line\nsecond".chars().count();
+
+        // Act
+        state.delete_current_line();
+
+        // Assert
+        assert_eq!(state.text(), "first line\n\nthird line");
+        assert_eq!(state.cursor, "first line\n".chars().count());
     }
 }
