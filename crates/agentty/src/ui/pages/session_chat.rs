@@ -49,17 +49,20 @@ impl<'a> SessionChatPage<'a> {
     /// width.
     ///
     /// This mirrors the exact wrapping and footer line rules used during
-    /// rendering so scroll math can stay in sync with what users see.
+    /// rendering, including focused-review text, so scroll math can stay in
+    /// sync with what users see.
     pub(crate) fn rendered_output_line_count(
         session: &Session,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
+        focused_review_diff: Option<&str>,
         active_progress: Option<&str>,
     ) -> u16 {
         SessionOutput::rendered_line_count(
             session,
             output_width,
             done_session_output_mode,
+            focused_review_diff,
             active_progress,
         )
     }
@@ -78,6 +81,22 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::Prompt { .. }
             | AppMode::Diff { .. }
             | AppMode::Help { .. } => DoneSessionOutputMode::Summary,
+        }
+    }
+
+    /// Returns focused-review diff text for the active view mode.
+    fn focused_review_diff(&self) -> Option<&str> {
+        match self.mode {
+            AppMode::View {
+                focused_review_diff,
+                ..
+            } => focused_review_diff.as_deref(),
+            AppMode::List
+            | AppMode::Confirmation { .. }
+            | AppMode::SyncBlockedPopup { .. }
+            | AppMode::Prompt { .. }
+            | AppMode::Diff { .. }
+            | AppMode::Help { .. } => None,
         }
     }
 
@@ -209,6 +228,7 @@ impl<'a> SessionChatPage<'a> {
 
         let mut output =
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
+        output = output.focused_review_diff(self.focused_review_diff());
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
         }
@@ -303,7 +323,8 @@ impl<'a> SessionChatPage<'a> {
     /// session in view mode.
     ///
     /// `InProgress` sessions keep worktree access but hide edit and diff
-    /// shortcuts, while `Done` sessions expose only read-only shortcuts.
+    /// shortcuts, `Review` sessions expose focused-review shortcuts, and
+    /// `Done` sessions expose only read-only shortcuts.
     fn view_help_text(
         session: &Session,
         done_session_output_mode: DoneSessionOutputMode,
@@ -333,6 +354,7 @@ impl<'a> SessionChatPage<'a> {
         match done_session_output_mode {
             DoneSessionOutputMode::Summary => "output",
             DoneSessionOutputMode::Output => "summary",
+            DoneSessionOutputMode::FocusedReview => "summary",
         }
     }
 }
@@ -641,6 +663,7 @@ mod tests {
             20,
             DoneSessionOutputMode::Summary,
             None,
+            None,
         );
 
         // Assert
@@ -682,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_review_hides_diff_hint() {
+    fn test_view_help_text_review_shows_focused_review_and_hides_diff_hint() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Review;
@@ -692,6 +715,7 @@ mod tests {
 
         // Assert
         assert!(!help_text.contains("d: diff"));
+        assert!(help_text.contains("f: focused review"));
         assert!(help_text.contains("Enter: reply"));
     }
 
@@ -718,6 +742,20 @@ mod tests {
 
         // Act
         let help_text = SessionChatPage::view_help_text(&session, DoneSessionOutputMode::Output);
+
+        // Assert
+        assert!(help_text.contains("t: summary"));
+    }
+
+    #[test]
+    fn test_view_help_text_done_focused_review_mode_shows_summary_toggle_hint() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+
+        // Act
+        let help_text =
+            SessionChatPage::view_help_text(&session, DoneSessionOutputMode::FocusedReview);
 
         // Assert
         assert!(help_text.contains("t: summary"));

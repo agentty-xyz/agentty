@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::domain::session::{Session, Status};
 use crate::icon::Icon;
 use crate::ui::Component;
+use crate::ui::diff_util::build_focused_review_text;
 use crate::ui::markdown::render_markdown;
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::truncate_with_ellipsis;
@@ -16,8 +17,9 @@ use crate::ui::util::truncate_with_ellipsis;
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
     active_progress: Option<&'a str>,
-    /// Selected panel content for completed sessions.
+    /// Selected panel content for the session output panel.
     done_session_output_mode: DoneSessionOutputMode,
+    focused_review_diff: Option<&'a str>,
     scroll_offset: Option<u16>,
     session: &'a Session,
 }
@@ -28,6 +30,7 @@ impl<'a> SessionOutput<'a> {
         Self {
             active_progress: None,
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_diff: None,
             scroll_offset: None,
             session,
         }
@@ -47,6 +50,13 @@ impl<'a> SessionOutput<'a> {
         self
     }
 
+    /// Sets the raw diff text used when focused-review mode is active.
+    #[must_use]
+    pub fn focused_review_diff(mut self, diff: Option<&'a str>) -> Self {
+        self.focused_review_diff = diff;
+        self
+    }
+
     /// Sets the vertical scroll offset.
     #[must_use]
     pub fn scroll_offset(mut self, offset: u16) -> Self {
@@ -63,6 +73,7 @@ impl<'a> SessionOutput<'a> {
         session: &Session,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
+        focused_review_diff: Option<&str>,
         active_progress: Option<&str>,
     ) -> u16 {
         let output_area = Rect::new(0, 0, output_width, 0);
@@ -71,6 +82,7 @@ impl<'a> SessionOutput<'a> {
             output_area,
             session.status,
             done_session_output_mode,
+            focused_review_diff,
             active_progress,
         );
 
@@ -87,10 +99,16 @@ impl<'a> SessionOutput<'a> {
         output_area: Rect,
         status: Status,
         done_session_output_mode: DoneSessionOutputMode,
+        focused_review_diff: Option<&str>,
         active_progress: Option<&str>,
     ) -> Vec<Line<'static>> {
-        let output_text = Self::output_text(session, status, done_session_output_mode);
-        let output_text = Self::output_text_with_spaced_user_input(output_text);
+        let output_text = Self::output_text(
+            session,
+            status,
+            done_session_output_mode,
+            focused_review_diff,
+        );
+        let output_text = Self::output_text_with_spaced_user_input(&output_text);
         let inner_width = output_area.width.saturating_sub(2) as usize;
         let mut lines = render_markdown(&output_text, inner_width);
 
@@ -125,7 +143,7 @@ impl<'a> SessionOutput<'a> {
     fn done_output_toggle_line(done_session_output_mode: DoneSessionOutputMode) -> Line<'static> {
         let toggle_target = match done_session_output_mode {
             DoneSessionOutputMode::Summary => "output",
-            DoneSessionOutputMode::Output => "summary",
+            DoneSessionOutputMode::Output | DoneSessionOutputMode::FocusedReview => "summary",
         };
 
         Line::from(vec![Span::styled(
@@ -140,7 +158,15 @@ impl<'a> SessionOutput<'a> {
         session: &Session,
         status: Status,
         done_session_output_mode: DoneSessionOutputMode,
-    ) -> &str {
+        focused_review_diff: Option<&str>,
+    ) -> String {
+        if done_session_output_mode == DoneSessionOutputMode::FocusedReview {
+            return build_focused_review_text(
+                focused_review_diff.unwrap_or_default(),
+                session.summary.as_deref(),
+            );
+        }
+
         match status {
             Status::Done if done_session_output_mode == DoneSessionOutputMode::Summary => {
                 if let Some(summary) = session
@@ -148,7 +174,7 @@ impl<'a> SessionOutput<'a> {
                     .as_deref()
                     .filter(|summary| !summary.is_empty())
                 {
-                    return summary;
+                    return summary.to_string();
                 }
             }
             Status::Canceled => {
@@ -157,7 +183,7 @@ impl<'a> SessionOutput<'a> {
                     .as_deref()
                     .filter(|summary| !summary.is_empty())
                 {
-                    return summary;
+                    return summary.to_string();
                 }
             }
             Status::New
@@ -169,7 +195,7 @@ impl<'a> SessionOutput<'a> {
             | Status::Done => {}
         }
 
-        &session.output
+        session.output.clone()
     }
 
     /// Adds visual spacing around user prompt blocks while preserving pasted
@@ -309,6 +335,7 @@ impl Component for SessionOutput<'_> {
             output_area,
             status,
             self.done_session_output_mode,
+            self.focused_review_diff,
             self.active_progress,
         );
         let final_scroll = self.final_scroll_offset(output_area, lines.len());
@@ -363,8 +390,13 @@ mod tests {
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
 
         // Act
-        let rendered_line_count =
-            SessionOutput::rendered_line_count(&session, 20, DoneSessionOutputMode::Summary, None);
+        let rendered_line_count = SessionOutput::rendered_line_count(
+            &session,
+            20,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+        );
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
@@ -384,6 +416,7 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Summary,
+            None,
             None,
         );
         let text = lines
@@ -412,6 +445,7 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Output,
             None,
+            None,
         );
         let text = lines
             .iter()
@@ -439,6 +473,7 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
+            None,
         );
         let text = lines
             .iter()
@@ -464,6 +499,70 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Output,
+            None,
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Press t to switch to summary."));
+    }
+
+    #[test]
+    fn test_output_lines_focused_review_mode_renders_review_sections() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.summary = Some("Review auth updates".to_string());
+        let focused_review_diff = "\
+diff --git a/src/auth.rs b/src/auth.rs
+@@ -1,1 +1,1 @@
+-let allowed = false;
++let allowed = user.role == \"admin\";";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            DoneSessionOutputMode::FocusedReview,
+            Some(focused_review_diff),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Focused Review"));
+        assert!(text.contains("Critical Diff Highlights"));
+        assert!(text.contains("src/auth.rs"));
+    }
+
+    #[test]
+    fn test_output_lines_done_focused_review_mode_shows_summary_toggle_action() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+        let focused_review_diff = "\
+diff --git a/src/main.rs b/src/main.rs
+@@ -1,1 +1,1 @@
+-old
++new";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            DoneSessionOutputMode::FocusedReview,
+            Some(focused_review_diff),
             None,
         );
         let text = lines
@@ -491,6 +590,7 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
+            None,
         );
         let text = lines
             .iter()
@@ -515,6 +615,7 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Summary,
+            None,
             None,
         );
 
@@ -544,6 +645,7 @@ mod tests {
             session.status,
             DoneSessionOutputMode::Summary,
             None,
+            None,
         );
 
         // Assert
@@ -564,6 +666,7 @@ mod tests {
             Rect::new(0, 0, 80, 5),
             session.status,
             DoneSessionOutputMode::Summary,
+            None,
             None,
         );
 
@@ -649,12 +752,14 @@ mod tests {
     fn test_builder_methods() {
         // Arrange
         let session = session_fixture();
+        let focused_review_diff = "diff --git a/src/main.rs b/src/main.rs";
         let progress = "Scanning...";
 
         // Act
         let output = SessionOutput::new(&session)
             .active_progress(progress)
             .done_session_output_mode(DoneSessionOutputMode::Output)
+            .focused_review_diff(Some(focused_review_diff))
             .scroll_offset(10);
 
         // Assert
@@ -663,6 +768,7 @@ mod tests {
             output.done_session_output_mode,
             DoneSessionOutputMode::Output
         );
+        assert_eq!(output.focused_review_diff, Some(focused_review_diff));
         assert_eq!(output.scroll_offset, Some(10));
     }
 }

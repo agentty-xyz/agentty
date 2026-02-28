@@ -2,13 +2,15 @@ use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
 
-/// Selects the visible panel content for `Status::Done` sessions.
+/// Selects the visible panel content for session view output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DoneSessionOutputMode {
     /// Renders the concise final summary, when available.
     Summary,
     /// Renders the full captured session output stream.
     Output,
+    /// Renders a concise focused-review view with critical diff highlights.
+    FocusedReview,
 }
 
 impl DoneSessionOutputMode {
@@ -17,7 +19,7 @@ impl DoneSessionOutputMode {
     pub const fn toggled(self) -> Self {
         match self {
             Self::Summary => Self::Output,
-            Self::Output => Self::Summary,
+            Self::Output | Self::FocusedReview => Self::Summary,
         }
     }
 }
@@ -55,8 +57,10 @@ pub enum AppMode {
         scroll_offset: Option<u16>,
     },
     View {
-        /// Selected content view for `Status::Done` sessions.
+        /// Selected content view for the session output panel.
         done_session_output_mode: DoneSessionOutputMode,
+        /// Cached git diff used to build focused-review output.
+        focused_review_diff: Option<String>,
         session_id: String,
         scroll_offset: Option<u16>,
     },
@@ -79,6 +83,7 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         done_session_output_mode: DoneSessionOutputMode,
+        focused_review_diff: Option<String>,
         session_id: String,
         session_state: ViewSessionState,
         scroll_offset: Option<u16>,
@@ -109,11 +114,13 @@ impl HelpContext {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
                 done_session_output_mode,
+                focused_review_diff,
                 session_id,
                 scroll_offset,
                 ..
             } => AppMode::View {
                 done_session_output_mode,
+                focused_review_diff,
                 session_id,
                 scroll_offset,
             },
@@ -146,14 +153,17 @@ mod tests {
         // Arrange
         let summary_mode = DoneSessionOutputMode::Summary;
         let output_mode = DoneSessionOutputMode::Output;
+        let focused_review_mode = DoneSessionOutputMode::FocusedReview;
 
         // Act
         let toggled_from_summary = summary_mode.toggled();
         let toggled_from_output = output_mode.toggled();
+        let toggled_from_focused_review = focused_review_mode.toggled();
 
         // Assert
         assert_eq!(toggled_from_summary, DoneSessionOutputMode::Output);
         assert_eq!(toggled_from_output, DoneSessionOutputMode::Summary);
+        assert_eq!(toggled_from_focused_review, DoneSessionOutputMode::Summary);
     }
 
     #[test]
@@ -161,6 +171,7 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_diff: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(2),
@@ -186,6 +197,7 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_diff: Some("diff --git".to_string()),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(4),
@@ -199,9 +211,10 @@ mod tests {
             mode,
             AppMode::View {
                 ref session_id,
+                focused_review_diff: Some(ref focused_review_diff),
                 scroll_offset: Some(4),
                 ..
-            } if session_id == "session-id"
+            } if session_id == "session-id" && focused_review_diff == "diff --git"
         ));
     }
 

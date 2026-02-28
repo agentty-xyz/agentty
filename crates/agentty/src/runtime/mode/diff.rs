@@ -43,6 +43,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
             KeyCode::Char('q') | KeyCode::Esc => {
                 app.mode = AppMode::View {
                     done_session_output_mode: DoneSessionOutputMode::Summary,
+                    focused_review_diff: None,
                     session_id: session_id.clone(),
                     scroll_offset: None,
                 };

@@ -169,6 +169,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ViewSessionState::Interactive | ViewSessionState::Review
     );
     let can_show_diff = state.session_state == ViewSessionState::Review;
+    let can_show_focused_review = state.session_state == ViewSessionState::Review;
     let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -183,6 +184,14 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_show_diff {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
+    }
+
+    if can_show_focused_review {
+        actions.push(HelpAction::new(
+            "focused review",
+            "f",
+            "Show focused review",
+        ));
     }
 
     if can_edit_session {
@@ -219,6 +228,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Interactive | ViewSessionState::Review
     );
+    let can_show_focused_review = state.session_state == ViewSessionState::Review;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
@@ -230,6 +240,14 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_open_worktree {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
+    }
+
+    if can_show_focused_review {
+        actions.push(HelpAction::new(
+            "focused review",
+            "f",
+            "Show focused review",
+        ));
     }
 
     if state.session_state == ViewSessionState::InProgress {
@@ -355,6 +373,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "d"));
+        assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
     }
 
@@ -370,6 +389,7 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "d"));
+        assert!(!actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
     }
 
@@ -387,6 +407,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "t"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
+        assert!(!actions.iter().any(|action| action.key == "f"));
         assert!(!actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
     }
@@ -404,6 +425,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
     }

@@ -124,6 +124,7 @@ fn render_help_background(
         }
         HelpContext::View {
             done_session_output_mode,
+            focused_review_diff,
             session_id,
             scroll_offset: view_scroll,
             ..
@@ -134,6 +135,7 @@ fn render_help_background(
             {
                 let bg_mode = AppMode::View {
                     done_session_output_mode: *done_session_output_mode,
+                    focused_review_diff: focused_review_diff.clone(),
                     session_id: session_id.clone(),
                     scroll_offset: *view_scroll,
                 };

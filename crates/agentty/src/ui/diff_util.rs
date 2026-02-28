@@ -138,6 +138,346 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
+const DEFAULT_FOCUSED_REVIEW_COMMENT: &str =
+    "Agent summary unavailable; review the highlighted changes.";
+const MAX_AGENT_COMMENT_COUNT: usize = 3;
+const MAX_FOCUSED_REVIEW_HIGHLIGHT_COUNT: usize = 8;
+const MAX_FOCUSED_REVIEW_FALLBACK_COUNT: usize = 5;
+const MAX_FOCUSED_REVIEW_SNIPPET_WIDTH: usize = 96;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FocusedReviewHighlight {
+    comment: &'static str,
+    file_path: String,
+    line_number: Option<u32>,
+    order: usize,
+    score: u16,
+    sign: char,
+    snippet: String,
+}
+
+/// Builds focused-review markdown using concise agent comments and critical
+/// diff highlights.
+pub fn build_focused_review_text(diff: &str, summary: Option<&str>) -> String {
+    let agent_comments = focused_review_agent_comments(summary);
+    let highlights = focused_review_highlights(diff);
+
+    let mut lines = vec![
+        "## Focused Review".to_string(),
+        String::new(),
+        "### Agent Comments".to_string(),
+    ];
+
+    lines.extend(
+        agent_comments
+            .into_iter()
+            .map(|comment| format!("- {comment}")),
+    );
+
+    lines.push(String::new());
+    lines.push("### Critical Diff Highlights".to_string());
+
+    if highlights.is_empty() {
+        lines.push("- No changes found in the current diff.".to_string());
+    } else {
+        lines.extend(highlights.iter().map(focused_review_highlight_markdown));
+    }
+
+    lines.push(String::new());
+    lines.push("Press `d` for the full diff.".to_string());
+
+    lines.join("\n")
+}
+
+/// Extracts concise one-line agent comments from session summary text.
+fn focused_review_agent_comments(summary: Option<&str>) -> Vec<String> {
+    let mut comments = summary
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(strip_markdown_list_prefix)
+        .map(strip_markdown_heading_prefix)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .take(MAX_AGENT_COMMENT_COUNT)
+        .collect::<Vec<_>>();
+
+    if comments.is_empty() {
+        comments.push(DEFAULT_FOCUSED_REVIEW_COMMENT.to_string());
+    }
+
+    comments
+}
+
+/// Returns scored focused-review highlights from unified diff text.
+fn focused_review_highlights(diff: &str) -> Vec<FocusedReviewHighlight> {
+    let mut highlights = Vec::new();
+    let mut fallback_highlights = Vec::new();
+    let mut current_file = "unknown".to_string();
+    let mut old_line = 0_u32;
+    let mut new_line = 0_u32;
+    let mut order = 0_usize;
+
+    for raw_line in diff.lines() {
+        if let Some(file_path) = parse_diff_file_path(raw_line) {
+            current_file = file_path;
+
+            continue;
+        }
+
+        if let Some((old_start, _, new_start, _)) = parse_hunk_header(raw_line) {
+            old_line = old_start;
+            new_line = new_start;
+
+            continue;
+        }
+
+        if raw_line.starts_with("index ")
+            || raw_line.starts_with("--- ")
+            || raw_line.starts_with("+++ ")
+        {
+            continue;
+        }
+
+        if let Some(content) = raw_line.strip_prefix('+') {
+            let line_number = Some(new_line);
+            new_line = new_line.saturating_add(1);
+
+            if let Some(highlight) =
+                focused_review_highlight(&current_file, line_number, '+', content, order)
+            {
+                highlights.push(highlight);
+            } else if let Some(fallback_highlight) =
+                focused_review_fallback_highlight(&current_file, line_number, '+', content, order)
+            {
+                fallback_highlights.push(fallback_highlight);
+            }
+
+            order = order.saturating_add(1);
+
+            continue;
+        }
+
+        if let Some(content) = raw_line.strip_prefix('-') {
+            let line_number = Some(old_line);
+            old_line = old_line.saturating_add(1);
+
+            if let Some(highlight) =
+                focused_review_highlight(&current_file, line_number, '-', content, order)
+            {
+                highlights.push(highlight);
+            } else if let Some(fallback_highlight) =
+                focused_review_fallback_highlight(&current_file, line_number, '-', content, order)
+            {
+                fallback_highlights.push(fallback_highlight);
+            }
+
+            order = order.saturating_add(1);
+
+            continue;
+        }
+
+        if !raw_line.starts_with('\\') {
+            old_line = old_line.saturating_add(1);
+            new_line = new_line.saturating_add(1);
+        }
+    }
+
+    if highlights.is_empty() {
+        fallback_highlights.truncate(MAX_FOCUSED_REVIEW_FALLBACK_COUNT);
+
+        return fallback_highlights;
+    }
+
+    highlights.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then(left.order.cmp(&right.order))
+    });
+    highlights.truncate(MAX_FOCUSED_REVIEW_HIGHLIGHT_COUNT);
+    highlights.sort_by_key(|highlight| highlight.order);
+
+    highlights
+}
+
+/// Builds one markdown list item for a focused-review highlight.
+fn focused_review_highlight_markdown(highlight: &FocusedReviewHighlight) -> String {
+    let location = highlight
+        .line_number
+        .map_or_else(|| "?".to_string(), |line_number| line_number.to_string());
+
+    format!(
+        "- `{}`:{} {} `{}` — {}",
+        highlight.file_path, location, highlight.sign, highlight.snippet, highlight.comment
+    )
+}
+
+/// Creates a scored highlight when a change matches high-signal criticality
+/// heuristics.
+fn focused_review_highlight(
+    file_path: &str,
+    line_number: Option<u32>,
+    sign: char,
+    content: &str,
+    order: usize,
+) -> Option<FocusedReviewHighlight> {
+    let normalized_content = content.to_lowercase();
+    let normalized_path = file_path.to_lowercase();
+    let mut score = 0_u16;
+    let mut comment = "Behavior changed.";
+
+    if contains_any(
+        &normalized_content,
+        &["unsafe", "unwrap(", "expect(", "panic!("],
+    ) {
+        score = score.saturating_add(5);
+        comment = "Runtime safety or error handling changed.";
+    }
+
+    if contains_any(
+        &normalized_content,
+        &[
+            "auth",
+            "permission",
+            "token",
+            "secret",
+            "password",
+            "admin",
+            "role",
+            "acl",
+        ],
+    ) || contains_any(&normalized_path, &["auth", "permission", "security"])
+    {
+        score = score.saturating_add(4);
+        comment = "Authorization or security-sensitive logic changed.";
+    }
+
+    if contains_any(
+        &normalized_content,
+        &[
+            "select ", "insert ", "update ", "delete ", "drop ", "alter ",
+        ],
+    ) || contains_any(&normalized_path, &["migration", ".sql"])
+    {
+        score = score.saturating_add(4);
+        comment = "Database behavior or schema logic changed.";
+    }
+
+    if contains_any(
+        &normalized_content,
+        &["command", "shell", "process", "exec(", "spawn(", "system("],
+    ) {
+        score = score.saturating_add(3);
+        comment = "External command execution path changed.";
+    }
+
+    if contains_any(
+        &normalized_path,
+        &[
+            "cargo.toml",
+            ".github/workflows",
+            "dockerfile",
+            ".yaml",
+            ".yml",
+            ".toml",
+        ],
+    ) {
+        score = score.saturating_add(2);
+        comment = "Build or runtime configuration changed.";
+    }
+
+    if score == 0 {
+        return None;
+    }
+
+    Some(FocusedReviewHighlight {
+        comment,
+        file_path: file_path.to_string(),
+        line_number,
+        order,
+        score,
+        sign,
+        snippet: focused_review_snippet(content),
+    })
+}
+
+/// Creates an unscored fallback highlight when no criticality heuristic
+/// matches.
+fn focused_review_fallback_highlight(
+    file_path: &str,
+    line_number: Option<u32>,
+    sign: char,
+    content: &str,
+    order: usize,
+) -> Option<FocusedReviewHighlight> {
+    let snippet = focused_review_snippet(content);
+    if snippet.is_empty() {
+        return None;
+    }
+
+    Some(FocusedReviewHighlight {
+        comment: "General code change; inspect full diff for context.",
+        file_path: file_path.to_string(),
+        line_number,
+        order,
+        score: 0,
+        sign,
+        snippet,
+    })
+}
+
+/// Parses the destination file path from a `diff --git` header line.
+fn parse_diff_file_path(line: &str) -> Option<String> {
+    let suffix = line.strip_prefix("diff --git a/")?;
+    let (_, rhs) = suffix.split_once(" b/")?;
+
+    Some(rhs.to_string())
+}
+
+/// Returns a clean one-line snippet for focused-review output.
+fn focused_review_snippet(content: &str) -> String {
+    let collapsed = content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if collapsed.is_empty() {
+        return String::new();
+    }
+
+    let char_count = collapsed.chars().count();
+    if char_count <= MAX_FOCUSED_REVIEW_SNIPPET_WIDTH {
+        return collapsed;
+    }
+
+    let truncated = collapsed
+        .chars()
+        .take(MAX_FOCUSED_REVIEW_SNIPPET_WIDTH.saturating_sub(3))
+        .collect::<String>();
+
+    format!("{truncated}...")
+}
+
+/// Returns whether `text` contains any token from `needles`.
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+/// Removes common markdown bullet prefixes from a summary line.
+fn strip_markdown_list_prefix(line: &str) -> &str {
+    line.trim_start_matches("- ")
+        .trim_start_matches("* ")
+        .trim_start_matches("+ ")
+}
+
+/// Removes leading markdown heading markers from a summary line.
+fn strip_markdown_heading_prefix(line: &str) -> &str {
+    line.trim_start_matches('#').trim_start()
+}
+
 fn parse_range(range: &str) -> Option<(u32, u32)> {
     if let Some((start, count)) = range.split_once(',') {
         Some((start.parse().ok()?, count.parse().ok()?))
@@ -326,5 +666,60 @@ index abc..def 100644
 
         // Assert
         assert_eq!(chunks, vec!["abcd"]);
+    }
+
+    #[test]
+    fn test_build_focused_review_text_includes_summary_and_critical_highlights() {
+        // Arrange
+        let diff = "\
+diff --git a/src/auth.rs b/src/auth.rs
+@@ -8,1 +8,1 @@
+-let can_merge = false;
++let can_merge = user.role == \"admin\";
+@@ -20,1 +20,1 @@
+-let value = maybe_value.unwrap();
++let value = maybe_value.expect(\"missing value\");";
+        let summary = Some("Tighten merge access\n- Add role guard");
+
+        // Act
+        let focused_review = build_focused_review_text(diff, summary);
+
+        // Assert
+        assert!(focused_review.contains("## Focused Review"));
+        assert!(focused_review.contains("- Tighten merge access"));
+        assert!(focused_review.contains("Authorization or security-sensitive logic changed."));
+        assert!(focused_review.contains("Runtime safety or error handling changed."));
+        assert!(focused_review.contains("src/auth.rs"));
+    }
+
+    #[test]
+    fn test_build_focused_review_text_uses_fallback_when_summary_and_critical_hits_missing() {
+        // Arrange
+        let diff = "\
+diff --git a/src/main.rs b/src/main.rs
+@@ -1,1 +1,1 @@
+-let old_value = 1;
++let new_value = 2;";
+
+        // Act
+        let focused_review = build_focused_review_text(diff, None);
+
+        // Assert
+        assert!(focused_review.contains(DEFAULT_FOCUSED_REVIEW_COMMENT));
+        assert!(focused_review.contains("General code change; inspect full diff for context."));
+        assert!(focused_review.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_build_focused_review_text_handles_empty_diff() {
+        // Arrange
+        let summary = Some("Keep behavior stable");
+
+        // Act
+        let focused_review = build_focused_review_text("", summary);
+
+        // Assert
+        assert!(focused_review.contains("- Keep behavior stable"));
+        assert!(focused_review.contains("No changes found in the current diff."));
     }
 }

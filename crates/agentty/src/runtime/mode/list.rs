@@ -107,6 +107,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                 app.refresh_session_size(&session_id).await;
                 app.mode = AppMode::View {
                     done_session_output_mode: DoneSessionOutputMode::Summary,
+                    focused_review_diff: None,
                     session_id,
                     scroll_offset: None,
                 };
@@ -525,6 +526,7 @@ mod tests {
             app.mode,
             AppMode::View {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_diff: None,
                 ref session_id,
                 scroll_offset: None,
             } if session_id == &expected_session_id
@@ -557,6 +559,7 @@ mod tests {
             app.mode,
             AppMode::View {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_diff: None,
                 ref session_id,
                 scroll_offset: None,
             } if session_id == &expected_session_id
