@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.4] - 2026-02-28
+
+### Added
+
+- **UI:** Add focused review mode to session view and diff mode.
+- **Docs:** Add MCP docs section, Context7 setup guide, and workflow documentation.
+- **Codex:** Enable live web search and network access.
+- **Docs:** Redirect docs landing page to getting started overview.
+
+### Changed
+
+- **UI:** Keep info overlay action row visible for multiline messages.
+- **UI:** Handle shifted J/K scrolling in diff mode and block actions for canceled sessions.
+- **Sync:** Improve sync popup guidance for push authentication failures and render sync success metrics on separate lines.
+- **Git:** Set non-interactive git prompt defaults for repo commands.
+- **Architecture:** Backend command construction uses one build API.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.4.3] - 2026-02-26
 
 ### Added
