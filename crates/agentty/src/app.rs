@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use ignore::WalkBuilder;
 use ratatui::Frame;
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
@@ -18,7 +19,7 @@ use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::session::{CodexUsageLimits, Session, Status};
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
-use crate::infra::git::{GitClient, RealGitClient};
+use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
 use crate::ui;
 use crate::ui::state::app_mode::AppMode;
 
@@ -45,6 +46,12 @@ pub use tab::{Tab, TabManager};
 
 /// Relative directory name used for session git worktrees under `~/.agentty`.
 pub const AGENTTY_WT_DIR: &str = "wt";
+
+/// Maximum directory depth to scan under the user home for git repositories.
+const HOME_PROJECT_SCAN_MAX_DEPTH: usize = 4;
+
+/// Maximum number of repositories discovered from one home-directory scan.
+const HOME_PROJECT_SCAN_MAX_RESULTS: usize = 200;
 
 /// Returns the agentty home directory (`~/.agentty`).
 pub fn agentty_home() -> PathBuf {
@@ -1384,10 +1391,14 @@ impl App {
 
     /// Loads project list entries for the projects tab.
     ///
+    /// Repositories discovered in the user home directory are upserted first
+    /// so the list can include projects even before they have sessions.
+    ///
     /// Agentty-managed session worktrees are excluded so the list keeps only
     /// user-facing repository roots.
     async fn load_project_items(db: &Database) -> Vec<ProjectListItem> {
         let session_worktree_root = agentty_home().join(AGENTTY_WT_DIR);
+        Self::load_projects_from_home_directory(db, session_worktree_root.as_path()).await;
 
         db.load_projects_with_stats()
             .await
@@ -1401,6 +1412,89 @@ impl App {
             })
             .map(Self::project_list_item_from_row)
             .collect()
+    }
+
+    /// Discovers git repositories under the user home directory and persists
+    /// them so the project list can render them.
+    async fn load_projects_from_home_directory(db: &Database, session_worktree_root: &Path) {
+        let Some(home_directory) = dirs::home_dir() else {
+            return;
+        };
+
+        let session_worktree_root = session_worktree_root.to_path_buf();
+        let Ok(discovered_project_paths) = tokio::task::spawn_blocking(move || {
+            Self::discover_home_project_paths(
+                home_directory.as_path(),
+                session_worktree_root.as_path(),
+            )
+        })
+        .await
+        else {
+            return;
+        };
+
+        for project_path in discovered_project_paths {
+            let git_branch = detect_git_info(project_path.clone()).await;
+            let project_path = project_path.to_string_lossy().to_string();
+            let _ = db
+                .upsert_project(project_path.as_str(), git_branch.as_deref())
+                .await;
+        }
+    }
+
+    /// Returns git repository roots discovered under the user home directory.
+    ///
+    /// A repository root is identified by a direct `.git` marker inside the
+    /// directory and discovery stops after `HOME_PROJECT_SCAN_MAX_RESULTS`.
+    fn discover_home_project_paths(
+        home_directory: &Path,
+        session_worktree_root: &Path,
+    ) -> Vec<PathBuf> {
+        let mut discovered_project_paths = Vec::new();
+
+        let mut walker_builder = WalkBuilder::new(home_directory);
+        walker_builder
+            .max_depth(Some(HOME_PROJECT_SCAN_MAX_DEPTH))
+            .hidden(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .parents(true)
+            .ignore(true);
+        let walker = walker_builder.build();
+
+        for directory_entry in walker.flatten() {
+            let Some(file_type) = directory_entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let directory_path = directory_entry.path();
+            if directory_path == home_directory {
+                continue;
+            }
+            if Self::is_session_worktree_project_path(
+                directory_path.to_string_lossy().as_ref(),
+                session_worktree_root,
+            ) {
+                continue;
+            }
+            if !directory_path.join(".git").exists() {
+                continue;
+            }
+
+            discovered_project_paths.push(directory_path.to_path_buf());
+            if discovered_project_paths.len() >= HOME_PROJECT_SCAN_MAX_RESULTS {
+                break;
+            }
+        }
+
+        discovered_project_paths.sort();
+        discovered_project_paths.dedup();
+
+        discovered_project_paths
     }
 
     /// Returns whether a persisted project path points to an agentty session
@@ -1540,6 +1634,10 @@ impl AppEventBatch {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
     use super::*;
     use crate::domain::session::{CodexUsageLimitWindow, CodexUsageLimits};
     use crate::infra::file_index::FileEntry;
@@ -1760,6 +1858,61 @@ mod tests {
     }
 
     #[test]
+    fn discover_home_project_paths_includes_git_repos_and_excludes_session_worktrees() {
+        // Arrange
+        let home_directory = tempdir().expect("failed to create temp dir");
+        let top_level_repo = home_directory.path().join("agentty");
+        create_git_repo_marker(top_level_repo.as_path());
+        let nested_repo = home_directory.path().join("code").join("service");
+        create_git_repo_marker(nested_repo.as_path());
+        let session_worktree_root = home_directory.path().join("agentty-worktrees");
+        let session_worktree_repo = session_worktree_root.join("a1b2c3d4");
+        create_git_repo_marker(session_worktree_repo.as_path());
+
+        // Act
+        let discovered_project_paths = App::discover_home_project_paths(
+            home_directory.path(),
+            session_worktree_root.as_path(),
+        );
+
+        // Assert
+        assert!(
+            discovered_project_paths.contains(&top_level_repo),
+            "top-level git repository should be discovered"
+        );
+        assert!(
+            discovered_project_paths.contains(&nested_repo),
+            "nested git repository should be discovered"
+        );
+        assert!(
+            !discovered_project_paths.contains(&session_worktree_repo),
+            "session worktree repositories must be excluded"
+        );
+    }
+
+    #[test]
+    fn discover_home_project_paths_respects_repository_limit() {
+        // Arrange
+        let home_directory = tempdir().expect("failed to create temp dir");
+        for index in 0..=HOME_PROJECT_SCAN_MAX_RESULTS {
+            let repository = home_directory.path().join(format!("repo-{index}"));
+            create_git_repo_marker(repository.as_path());
+        }
+
+        // Act
+        let discovered_project_paths = App::discover_home_project_paths(
+            home_directory.path(),
+            Path::new("/tmp/non-session-worktree"),
+        );
+
+        // Assert
+        assert_eq!(
+            discovered_project_paths.len(),
+            HOME_PROJECT_SCAN_MAX_RESULTS
+        );
+    }
+
+    #[test]
     fn is_session_worktree_project_path_returns_true_for_agentty_worktree_path() {
         // Arrange
         let session_worktree_root = Path::new("/home/test/.agentty/wt");
@@ -1785,6 +1938,13 @@ mod tests {
 
         // Assert
         assert!(!is_session_worktree);
+    }
+
+    /// Creates one directory with a `.git` marker for repository discovery
+    /// tests.
+    fn create_git_repo_marker(repository_path: &Path) {
+        fs::create_dir_all(repository_path.join(".git"))
+            .expect("failed to create repository .git marker");
     }
 
     /// Builds deterministic Codex usage-limit snapshots for tests.
