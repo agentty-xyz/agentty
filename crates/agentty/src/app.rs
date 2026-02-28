@@ -1201,8 +1201,8 @@ impl App {
             Self::sync_conflict_summary(&sync_main_outcome.resolved_conflict_files);
 
         format!(
-            "Successfully synchronized with its upstream.\n{pulled_summary}\n{pushed_summary}\n\
-             {conflict_summary}"
+            "Successfully synchronized with its \
+             upstream.\n{pulled_summary}\n{pushed_summary}\n{conflict_summary}"
         )
     }
 

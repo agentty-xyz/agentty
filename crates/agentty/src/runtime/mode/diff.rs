@@ -70,12 +70,12 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                     *scroll_offset = 0;
                 }
             }
-            KeyCode::Down | KeyCode::Char('J') | KeyCode::Char('j')
+            KeyCode::Down | KeyCode::Char('J' | 'j')
                 if key.code == KeyCode::Down || is_shift_char_key(key, 'j') =>
             {
                 *scroll_offset = scroll_offset.saturating_add(1);
             }
-            KeyCode::Up | KeyCode::Char('K') | KeyCode::Char('k')
+            KeyCode::Up | KeyCode::Char('K' | 'k')
                 if key.code == KeyCode::Up || is_shift_char_key(key, 'k') =>
             {
                 *scroll_offset = scroll_offset.saturating_sub(1);

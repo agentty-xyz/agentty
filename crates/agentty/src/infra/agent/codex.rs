@@ -23,9 +23,9 @@ impl AgentBackend for CodexBackend {
         Ok(())
     }
 
-    fn build_command(
-        &self,
-        request: BuildCommandRequest<'_>,
+    fn build_command<'request>(
+        &'request self,
+        request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
         let BuildCommandRequest {
             folder,

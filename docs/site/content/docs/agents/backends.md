@@ -17,9 +17,9 @@ installed and available on your `PATH`.
 
 | Backend | CLI command | Description |
 |---------|-------------|-------------|
-| Gemini  | `gemini`    | Google Gemini CLI agent. |
-| Claude  | `claude`    | Anthropic Claude Code agent. |
-| Codex   | `codex`     | OpenAI Codex CLI agent. |
+| Gemini | `gemini` | Google Gemini CLI agent. |
+| Claude | `claude` | Anthropic Claude Code agent. |
+| Codex | `codex` | OpenAI Codex CLI agent. |
 
 ## Selecting a Backend
 

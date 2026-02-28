@@ -107,6 +107,31 @@ impl<Runtime> AppServerSessionRegistry<Runtime> {
         Ok(())
     }
 
+    /// Stores or replaces the runtime for `session_id`, returning ownership
+    /// back to the caller when lock acquisition fails.
+    ///
+    /// This allows callers to shut down process-backed runtimes before
+    /// returning an error, preventing orphaned child processes on early exits.
+    ///
+    /// # Errors
+    /// Returns `(error, session)` when the session map lock is poisoned.
+    pub fn store_session_or_recover(
+        &self,
+        session_id: String,
+        session: Runtime,
+    ) -> Result<(), (String, Runtime)> {
+        let lock_error = format!(
+            "Failed to lock {} app-server session map",
+            self.provider_name
+        );
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return Err((lock_error, session));
+        };
+        sessions.insert(session_id, session);
+
+        Ok(())
+    }
+
     /// Returns the provider label used in user-facing retry errors.
     pub fn provider_name(&self) -> &'static str {
         self.provider_name
@@ -200,15 +225,28 @@ where
         None => start_runtime(&request).await?,
     };
     let first_attempt_session_output = read_latest_session_output(&request);
-    let first_attempt_prompt = turn_prompt_for_runtime(
+    let first_attempt_prompt = match turn_prompt_for_runtime(
         request.prompt.as_str(),
         first_attempt_session_output.as_deref(),
         context_reset,
-    )?;
+    ) {
+        Ok(first_attempt_prompt) => first_attempt_prompt,
+        Err(error) => {
+            shutdown_runtime(&mut session_runtime).await;
+
+            return Err(error);
+        }
+    };
     let first_attempt = run_turn_with_runtime(&mut session_runtime, &first_attempt_prompt).await;
     if let Ok((assistant_message, input_tokens, output_tokens)) = first_attempt {
         let pid = runtime_pid(&session_runtime);
-        sessions.store_session(session_id, session_runtime)?;
+        if let Err((error, mut leaked_runtime)) =
+            sessions.store_session_or_recover(session_id, session_runtime)
+        {
+            shutdown_runtime(&mut leaked_runtime).await;
+
+            return Err(error);
+        }
 
         return Ok(AppServerTurnResponse {
             assistant_message,
@@ -227,16 +265,29 @@ where
 
     let mut restarted_runtime = start_runtime(&request).await?;
     let retry_session_output = read_latest_session_output(&request);
-    let retry_attempt_prompt = turn_prompt_for_runtime(
+    let retry_attempt_prompt = match turn_prompt_for_runtime(
         request.prompt.as_str(),
         retry_session_output.as_deref(),
         true,
-    )?;
+    ) {
+        Ok(retry_attempt_prompt) => retry_attempt_prompt,
+        Err(error) => {
+            shutdown_runtime(&mut restarted_runtime).await;
+
+            return Err(error);
+        }
+    };
     let retry_attempt = run_turn_with_runtime(&mut restarted_runtime, &retry_attempt_prompt).await;
     match retry_attempt {
         Ok((assistant_message, input_tokens, output_tokens)) => {
             let pid = runtime_pid(&restarted_runtime);
-            sessions.store_session(session_id, restarted_runtime)?;
+            if let Err((error, mut leaked_runtime)) =
+                sessions.store_session_or_recover(session_id, restarted_runtime)
+            {
+                shutdown_runtime(&mut leaked_runtime).await;
+
+                return Err(error);
+            }
 
             Ok(AppServerTurnResponse {
                 assistant_message,
@@ -298,6 +349,7 @@ pub fn turn_prompt_for_runtime(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;

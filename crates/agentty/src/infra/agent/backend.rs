@@ -112,9 +112,9 @@ pub trait AgentBackend: Send + Sync {
     /// # Errors
     /// Returns an error when prompt rendering or provider argument
     /// construction fails.
-    fn build_command<'a>(
-        &self,
-        request: BuildCommandRequest<'a>,
+    fn build_command<'request>(
+        &'request self,
+        request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError>;
 }
 

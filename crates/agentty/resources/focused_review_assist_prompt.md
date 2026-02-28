@@ -7,6 +7,7 @@ Required structure:
 ## Focused Review
 
 ### Key Diff Points
+
 - Think like a human reviewer: first identify what changed, then explain why each change matters.
 - List only the most material changes from the diff (not every hunk).
 - For each bullet, include:
@@ -16,15 +17,18 @@ Required structure:
 - If there are no material changes, write `- None`.
 
 ### High Risk Changes
+
 - Include only items from `Key Diff Points` that are truly high risk and could break behavior, data integrity, security, or reliability.
 - If none, write `- None`.
 
 ### Critical Verification
+
 - Provide short, concrete checks/tests tied to the key diff points.
 - Prioritize checks that would catch the most damaging regressions first.
 - If none, write `- None`.
 
 ### Follow-up Questions
+
 - List missing context/questions that would reduce uncertainty in the impact/risk assessment.
 - Ask only questions that would materially change approval confidence.
 - If none, write `- None`.

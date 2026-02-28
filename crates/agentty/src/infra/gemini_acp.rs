@@ -140,6 +140,9 @@ impl RealGeminiAcpClient {
     }
 
     /// Starts one Gemini ACP runtime, initializes it, and creates a session.
+    ///
+    /// If bootstrap fails after spawn, the child is shut down before returning
+    /// the error to avoid leaking an orphaned runtime process.
     async fn start_runtime(request: &AppServerTurnRequest) -> Result<GeminiSessionRuntime, String> {
         let mut command = tokio::process::Command::new("gemini");
         command
@@ -170,10 +173,29 @@ impl RealGeminiAcpClient {
             transport: GeminiStdioTransport::new(stdin, stdout),
         };
 
-        Self::initialize_runtime(&mut session.transport).await?;
-        session.session_id = Self::start_session(&mut session.transport, &session.folder).await?;
+        let bootstrap_result =
+            Self::bootstrap_runtime_session(&mut session.transport, session.folder.as_path()).await;
+        session.session_id = match bootstrap_result {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                app_server_transport::shutdown_child(&mut session.child).await;
+
+                return Err(error);
+            }
+        };
 
         Ok(session)
+    }
+
+    /// Completes ACP bootstrap by sending `initialize` and creating
+    /// `session/new`.
+    async fn bootstrap_runtime_session<Transport: GeminiRuntimeTransport>(
+        transport: &mut Transport,
+        folder: &Path,
+    ) -> Result<String, String> {
+        Self::initialize_runtime(transport).await?;
+
+        Self::start_session(transport, folder).await
     }
 
     /// Sends the ACP initialize handshake.
@@ -1137,6 +1159,110 @@ mod tests {
 
         // Assert
         assert_eq!(session_id, Ok("session-123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_runtime_session_initializes_then_creates_session() {
+        // Arrange
+        let mut transport = MockGeminiRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let folder = PathBuf::from("/tmp/worktree");
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("initialize"))
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_wait_for_response_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|response_id| response_id.starts_with("init-"))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "init-1",
+                        "result": {
+                            "protocolVersion": 1
+                        }
+                    })
+                    .to_string())
+                })
+            });
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("initialized"))
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("session/new"))
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_wait_for_response_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .withf(|response_id| response_id.starts_with("session-new-"))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "session-new-1",
+                        "result": {
+                            "sessionId": "session-123"
+                        }
+                    })
+                    .to_string())
+                })
+            });
+
+        // Act
+        let session_id =
+            RealGeminiAcpClient::bootstrap_runtime_session(&mut transport, folder.as_path()).await;
+
+        // Assert
+        assert_eq!(session_id, Ok("session-123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_runtime_session_returns_initialize_error_without_session_creation() {
+        // Arrange
+        let mut transport = MockGeminiRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let folder = PathBuf::from("/tmp/worktree");
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_wait_for_response_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": "init-1",
+                        "error": {
+                            "code": -32000,
+                            "message": "initialize failed"
+                        }
+                    })
+                    .to_string())
+                })
+            });
+
+        // Act
+        let session_id =
+            RealGeminiAcpClient::bootstrap_runtime_session(&mut transport, folder.as_path()).await;
+
+        // Assert
+        assert_eq!(session_id, Err("initialize failed".to_string()));
     }
 
     #[tokio::test]

@@ -105,18 +105,10 @@ pub(crate) async fn handle(
             stop_view_session(app, &view_context.session_id).await;
         }
         KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            next_scroll_offset = scroll_offset_down(
-                next_scroll_offset,
-                view_metrics,
-                view_metrics.view_height / 2,
-            );
+            next_scroll_offset = scroll_offset_half_page_down(next_scroll_offset, view_metrics);
         }
         KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            next_scroll_offset = Some(scroll_offset_up(
-                next_scroll_offset,
-                view_metrics,
-                view_metrics.view_height / 2,
-            ));
+            next_scroll_offset = Some(scroll_offset_half_page_up(next_scroll_offset, view_metrics));
         }
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -129,33 +121,15 @@ pub(crate) async fn handle(
                 && !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && is_view_focused_review_allowed(view_session_snapshot.session_status) =>
         {
-            if next_done_session_output_mode == DoneSessionOutputMode::FocusedReview {
-                next_done_session_output_mode = DoneSessionOutputMode::Summary;
-            } else {
-                next_done_session_output_mode = DoneSessionOutputMode::FocusedReview;
-
-                let focused_review_is_loading = next_focused_review_status_message.as_deref()
-                    == Some(FOCUSED_REVIEW_LOADING_MESSAGE);
-                if next_focused_review_text.is_none() && !focused_review_is_loading {
-                    let focused_review_diff =
-                        focused_review_diff_for_view_session(app, &view_context).await;
-                    if should_request_focused_review_assist(&focused_review_diff) {
-                        next_focused_review_status_message =
-                            focused_review_initial_status_message(&focused_review_diff);
-                        next_focused_review_text = None;
-                        app.start_focused_review_assist(
-                            &view_context.session_id,
-                            view_session_snapshot.session_folder.as_path(),
-                            view_session_snapshot.session_model,
-                            &focused_review_diff,
-                            view_session_snapshot.session_summary.as_deref(),
-                        );
-                    } else {
-                        next_focused_review_status_message = None;
-                        next_focused_review_text = Some(focused_review_diff);
-                    }
-                }
-            }
+            toggle_focused_review_output_mode(
+                app,
+                &view_context,
+                &view_session_snapshot,
+                &mut next_done_session_output_mode,
+                &mut next_focused_review_status_message,
+                &mut next_focused_review_text,
+            )
+            .await;
 
             next_scroll_offset = None;
         }
@@ -448,6 +422,68 @@ fn scroll_offset_up(scroll_offset: Option<u16>, metrics: ViewMetrics, step: u16)
         scroll_offset.unwrap_or_else(|| metrics.total_lines.saturating_sub(metrics.view_height));
 
     current_offset.saturating_sub(step.max(1))
+}
+
+/// Computes the next scroll offset for half-page downward navigation.
+fn scroll_offset_half_page_down(scroll_offset: Option<u16>, metrics: ViewMetrics) -> Option<u16> {
+    scroll_offset_down(scroll_offset, metrics, half_page_scroll_step(metrics))
+}
+
+/// Computes the next scroll offset for half-page upward navigation.
+fn scroll_offset_half_page_up(scroll_offset: Option<u16>, metrics: ViewMetrics) -> u16 {
+    scroll_offset_up(scroll_offset, metrics, half_page_scroll_step(metrics))
+}
+
+/// Returns the number of lines used for half-page scroll shortcuts.
+fn half_page_scroll_step(metrics: ViewMetrics) -> u16 {
+    metrics.view_height / 2
+}
+
+/// Toggles focused-review mode and optionally starts focused-review assist.
+///
+/// When focused-review content is missing, this loads diff text and either
+/// starts async assist generation or stores the diff directly when assist is
+/// not applicable.
+async fn toggle_focused_review_output_mode(
+    app: &mut App,
+    view_context: &ViewContext,
+    view_session_snapshot: &ViewSessionSnapshot,
+    done_session_output_mode: &mut DoneSessionOutputMode,
+    focused_review_status_message: &mut Option<String>,
+    focused_review_text: &mut Option<String>,
+) {
+    if *done_session_output_mode == DoneSessionOutputMode::FocusedReview {
+        *done_session_output_mode = DoneSessionOutputMode::Summary;
+
+        return;
+    }
+
+    *done_session_output_mode = DoneSessionOutputMode::FocusedReview;
+
+    let focused_review_is_loading =
+        focused_review_status_message.as_deref() == Some(FOCUSED_REVIEW_LOADING_MESSAGE);
+    if focused_review_text.is_some() || focused_review_is_loading {
+        return;
+    }
+
+    let focused_review_diff = focused_review_diff_for_view_session(app, view_context).await;
+    if should_request_focused_review_assist(&focused_review_diff) {
+        *focused_review_status_message =
+            focused_review_initial_status_message(&focused_review_diff);
+        *focused_review_text = None;
+        app.start_focused_review_assist(
+            &view_context.session_id,
+            view_session_snapshot.session_folder.as_path(),
+            view_session_snapshot.session_model,
+            &focused_review_diff,
+            view_session_snapshot.session_summary.as_deref(),
+        );
+
+        return;
+    }
+
+    *focused_review_status_message = None;
+    *focused_review_text = Some(focused_review_diff);
 }
 
 async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
