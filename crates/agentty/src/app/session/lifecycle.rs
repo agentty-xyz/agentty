@@ -355,7 +355,7 @@ impl SessionManager {
     /// Updates and persists the model for a single session.
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
-    /// session model as `DefaultModel`.
+    /// session model as `DefaultSmartModel`.
     ///
     /// # Errors
     /// Returns an error if the session is missing or persistence fails.
@@ -379,7 +379,10 @@ impl SessionManager {
         if Self::should_persist_last_used_model_as_default(services).await? {
             services
                 .db()
-                .upsert_setting(SettingName::DefaultModel.as_str(), session_model.as_str())
+                .upsert_setting(
+                    SettingName::DefaultSmartModel.as_str(),
+                    session_model.as_str(),
+                )
                 .await?;
         }
 
@@ -396,7 +399,7 @@ impl SessionManager {
     }
 
     /// Returns whether session model switches should also persist
-    /// `DefaultModel`.
+    /// `DefaultSmartModel`.
     async fn should_persist_last_used_model_as_default(
         services: &AppServices,
     ) -> Result<bool, String> {
@@ -874,14 +877,8 @@ impl SessionManager {
     }
 
     async fn resolve_default_session_model(&self, services: &AppServices) -> AgentModel {
-        services
-            .db()
-            .get_setting(SettingName::DefaultModel.as_str())
+        crate::app::settings::load_default_smart_model_setting(services, self.default_session_model)
             .await
-            .ok()
-            .flatten()
-            .and_then(|setting_value| setting_value.parse().ok())
-            .unwrap_or(self.default_session_model)
     }
 
     /// Reverts filesystem and database changes after session creation failure.

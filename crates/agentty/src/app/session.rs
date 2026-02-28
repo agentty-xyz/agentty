@@ -10,7 +10,6 @@ use std::time::Duration;
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
-use crate::app::settings::SettingName;
 use crate::app::{AppServices, SessionState};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
@@ -93,24 +92,18 @@ impl SessionManager {
         Arc::clone(&self.git_client)
     }
 
-    /// Returns the default model used for session-scoped agent workflows.
+    /// Returns the default smart model used for session-scoped agent
+    /// workflows.
     pub(crate) fn default_session_model(&self) -> AgentModel {
         self.default_session_model
     }
 
-    /// Loads the default model persisted for new sessions.
+    /// Loads the default smart model persisted for new sessions.
     pub(crate) async fn load_default_session_model(
         services: &AppServices,
         fallback_model: AgentModel,
     ) -> AgentModel {
-        services
-            .db()
-            .get_setting(SettingName::DefaultModel.as_str())
-            .await
-            .ok()
-            .flatten()
-            .and_then(|setting_value| setting_value.parse().ok())
-            .unwrap_or(fallback_model)
+        crate::app::settings::load_default_smart_model_setting(services, fallback_model).await
     }
 
     /// Returns session snapshots and stats payloads required for rendering.
@@ -853,7 +846,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_session_keeps_default_model_setting_when_session_model_changes() {
+    async fn test_create_session_keeps_default_smart_model_setting_when_session_model_changes() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
@@ -864,10 +857,10 @@ mod tests {
         app.set_session_model(&first_session_id, AgentModel::Gpt52Codex)
             .await
             .expect("failed to set session model");
-        let default_model_setting = app
+        let default_smart_model_setting = app
             .services
             .db()
-            .get_setting(SettingName::DefaultModel.as_str())
+            .get_setting(SettingName::DefaultSmartModel.as_str())
             .await
             .expect("failed to load setting");
 
@@ -885,7 +878,7 @@ mod tests {
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
         assert_eq!(second_session.model, AgentKind::Gemini.default_model());
-        assert_eq!(default_model_setting, None);
+        assert_eq!(default_smart_model_setting, None);
 
         let db_sessions = app
             .services
@@ -904,7 +897,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_session_persists_default_model_setting_when_last_used_model_is_enabled() {
+    async fn test_create_session_persists_default_smart_model_setting_when_last_used_model_is_enabled()
+     {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         setup_test_git_repo(dir.path());
@@ -933,10 +927,10 @@ mod tests {
         app.set_session_model(&first_session_id, AgentModel::Gpt52Codex)
             .await
             .expect("failed to set session model");
-        let default_model_setting = app
+        let default_smart_model_setting = app
             .services
             .db()
-            .get_setting(SettingName::DefaultModel.as_str())
+            .get_setting(SettingName::DefaultSmartModel.as_str())
             .await
             .expect("failed to load setting");
         drop(app);
@@ -955,7 +949,7 @@ mod tests {
 
         // Assert
         assert_eq!(
-            default_model_setting,
+            default_smart_model_setting,
             Some(AgentModel::Gpt52Codex.as_str().to_string())
         );
         let second_session = restarted_app
@@ -968,18 +962,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_session_reads_default_model_from_db_setting() {
+    async fn test_create_session_reads_default_smart_model_from_db_setting() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         app.services
             .db()
             .upsert_setting(
-                SettingName::DefaultModel.as_str(),
+                SettingName::DefaultSmartModel.as_str(),
                 AgentModel::ClaudeHaiku4520251001.as_str(),
             )
             .await
-            .expect("failed to upsert default model setting");
+            .expect("failed to upsert default smart model setting");
+
+        // Act
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+
+        // Assert
+        let created_session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing created session");
+        assert_eq!(created_session.model, AgentModel::ClaudeHaiku4520251001);
+    }
+
+    #[tokio::test]
+    async fn test_create_session_reads_legacy_default_model_setting_when_default_smart_key_is_missing()
+     {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        app.services
+            .db()
+            .upsert_setting("DefaultModel", AgentModel::ClaudeHaiku4520251001.as_str())
+            .await
+            .expect("failed to upsert legacy default model setting");
 
         // Act
         let session_id = app
@@ -1300,7 +1322,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_session_uses_default_model_setting_and_most_recent_permission_mode() {
+    async fn test_create_session_uses_default_smart_model_setting_and_most_recent_permission_mode()
+    {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         setup_test_git_repo(dir.path());
@@ -1330,11 +1353,11 @@ mod tests {
         .await
         .expect("failed to insert beta00002");
         db.upsert_setting(
-            SettingName::DefaultModel.as_str(),
+            SettingName::DefaultSmartModel.as_str(),
             AgentModel::ClaudeHaiku4520251001.as_str(),
         )
         .await
-        .expect("failed to upsert default model setting");
+        .expect("failed to upsert default smart model setting");
         sqlx::query(
             r"
     UPDATE session

@@ -6,7 +6,8 @@ use crate::app::AppServices;
 /// Names of persisted application settings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingName {
-    DefaultModel,
+    DefaultFastModel,
+    DefaultSmartModel,
     OpenCommand,
     LastUsedModelAsDefault,
     LongestSessionDurationSeconds,
@@ -16,12 +17,32 @@ impl SettingName {
     /// Returns the persisted key name for this setting.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::DefaultModel => "DefaultModel",
+            Self::DefaultFastModel => "DefaultFastModel",
+            Self::DefaultSmartModel => "DefaultSmartModel",
             Self::OpenCommand => "OpenCommand",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
             Self::LongestSessionDurationSeconds => "LongestSessionDurationSeconds",
         }
     }
+}
+
+/// Loads the persisted smart-model default used for new sessions.
+///
+/// This prefers the new `DefaultSmartModel` key and falls back to the legacy
+/// `DefaultModel` key for backward compatibility.
+pub(crate) async fn load_default_smart_model_setting(
+    services: &AppServices,
+    fallback_model: AgentModel,
+) -> AgentModel {
+    if let Some(model) = load_model_setting(services, SettingName::DefaultSmartModel).await {
+        return model;
+    }
+
+    if let Some(model) = load_legacy_default_smart_model_setting(services).await {
+        return model;
+    }
+
+    fallback_model
 }
 
 /// Declares how a settings row is edited.
@@ -34,23 +55,32 @@ enum SettingControl {
 /// Backing table rows for the settings page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
-    DefaultModel,
+    DefaultSmartModel,
+    DefaultFastModel,
     OpenCommand,
 }
 
 impl SettingRow {
-    const ALL: [Self; 2] = [Self::DefaultModel, Self::OpenCommand];
+    const ALL: [Self; 3] = [
+        Self::DefaultSmartModel,
+        Self::DefaultFastModel,
+        Self::OpenCommand,
+    ];
     const ROW_COUNT: usize = Self::ALL.len();
 
     /// Builds a row selector from the table row index.
     fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or(Self::DefaultModel)
+        Self::ALL
+            .get(index)
+            .copied()
+            .unwrap_or(Self::DefaultSmartModel)
     }
 
     /// Returns the display label for the row.
     fn label(self) -> &'static str {
         match self {
-            Self::DefaultModel => "Default Model",
+            Self::DefaultSmartModel => "Default Smart Model",
+            Self::DefaultFastModel => "Default Fast Model",
             Self::OpenCommand => "Open Command",
         }
     }
@@ -58,7 +88,7 @@ impl SettingRow {
     /// Returns how this row is edited.
     fn control(self) -> SettingControl {
         match self {
-            Self::DefaultModel => SettingControl::Selector,
+            Self::DefaultSmartModel | Self::DefaultFastModel => SettingControl::Selector,
             Self::OpenCommand => SettingControl::TextInput,
         }
     }
@@ -66,7 +96,8 @@ impl SettingRow {
     /// Returns the persisted setting name represented by this row.
     fn setting_name(self) -> SettingName {
         match self {
-            Self::DefaultModel => SettingName::DefaultModel,
+            Self::DefaultSmartModel => SettingName::DefaultSmartModel,
+            Self::DefaultFastModel => SettingName::DefaultFastModel,
             Self::OpenCommand => SettingName::OpenCommand,
         }
     }
@@ -74,8 +105,10 @@ impl SettingRow {
 
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
-    /// Default model used when creating new sessions.
-    pub default_model: AgentModel,
+    /// Default fast model used by fast-path workflows.
+    pub default_fast_model: AgentModel,
+    /// Default smart model used when creating new sessions.
+    pub default_smart_model: AgentModel,
     /// Optional command run in tmux when opening a session worktree.
     pub open_command: String,
     /// Table selection state for the settings page.
@@ -87,13 +120,12 @@ pub struct SettingsManager {
 impl SettingsManager {
     /// Creates a settings manager and loads persisted values from the database.
     pub async fn new(services: &AppServices) -> Self {
-        let default_model = services
-            .db()
-            .get_setting(SettingName::DefaultModel.as_str())
+        let default_smart_model =
+            load_default_smart_model_setting(services, AgentKind::Gemini.default_model()).await;
+
+        let default_fast_model = load_model_setting(services, SettingName::DefaultFastModel)
             .await
-            .unwrap_or(None)
-            .and_then(|setting| setting.parse().ok())
-            .unwrap_or_else(|| AgentKind::Gemini.default_model());
+            .unwrap_or(default_smart_model);
 
         let open_command = services
             .db()
@@ -114,7 +146,8 @@ impl SettingsManager {
         table_state.select(Some(0));
 
         Self {
-            default_model,
+            default_fast_model,
+            default_smart_model,
             open_command,
             table_state,
             editing_text_row: None,
@@ -263,13 +296,14 @@ impl SettingsManager {
     /// Returns the text displayed for a row value.
     fn display_value_for_row(&self, row: SettingRow) -> String {
         match row {
-            SettingRow::DefaultModel => {
+            SettingRow::DefaultSmartModel => {
                 if self.use_last_used_model_as_default {
                     "Last used model as default".to_string()
                 } else {
-                    self.default_model.as_str().to_string()
+                    self.default_smart_model.as_str().to_string()
                 }
             }
+            SettingRow::DefaultFastModel => self.default_fast_model.as_str().to_string(),
             SettingRow::OpenCommand => {
                 if self.is_editing_text_input_for(row) {
                     format!("{}|", self.open_command)
@@ -289,8 +323,11 @@ impl SettingsManager {
         }
 
         match row.setting_name() {
-            SettingName::DefaultModel => {
-                self.cycle_default_model_selector(services).await;
+            SettingName::DefaultSmartModel => {
+                self.cycle_default_smart_model_selector(services).await;
+            }
+            SettingName::DefaultFastModel => {
+                self.cycle_default_fast_model_selector(services).await;
             }
             SettingName::OpenCommand
             | SettingName::LastUsedModelAsDefault
@@ -311,52 +348,55 @@ impl SettingsManager {
                     .upsert_setting(SettingName::OpenCommand.as_str(), &self.open_command)
                     .await;
             }
-            SettingName::DefaultModel
+            SettingName::DefaultFastModel
+            | SettingName::DefaultSmartModel
             | SettingName::LastUsedModelAsDefault
             | SettingName::LongestSessionDurationSeconds => {}
         }
     }
 
-    /// Cycles the default-model selector through all explicit models and the
+    /// Cycles the smart-model selector through all explicit models and the
     /// `Last used model as default` option.
-    async fn cycle_default_model_selector(&mut self, services: &AppServices) {
-        let all_models: Vec<AgentModel> = AgentKind::ALL
-            .iter()
-            .flat_map(|kind| kind.models())
-            .copied()
-            .collect();
-
-        let last_used_option_index = all_models.len();
+    async fn cycle_default_smart_model_selector(&mut self, services: &AppServices) {
+        let all_models = all_models();
+        let explicit_model_count = all_models.len();
         let current_index = if self.use_last_used_model_as_default {
-            last_used_option_index
+            explicit_model_count
         } else {
             all_models
                 .iter()
-                .position(|model| *model == self.default_model)
+                .position(|model| *model == self.default_smart_model)
                 .unwrap_or(0)
         };
-        let next_index = (current_index + 1) % (last_used_option_index + 1);
+        let next_index = (current_index + 1) % (explicit_model_count + 1);
 
-        if next_index == last_used_option_index {
+        if next_index == explicit_model_count {
             self.use_last_used_model_as_default = true;
         } else {
-            self.default_model = all_models[next_index];
+            self.default_smart_model = all_models[next_index];
             self.use_last_used_model_as_default = false;
         }
 
-        self.persist_default_model_settings(services).await;
+        self.persist_default_smart_model_settings(services).await;
     }
 
-    /// Persists default-model selector values (`DefaultModel` and
+    /// Cycles the fast-model selector through all explicit models.
+    async fn cycle_default_fast_model_selector(&mut self, services: &AppServices) {
+        self.default_fast_model = next_model(self.default_fast_model);
+
+        self.persist_default_fast_model_setting(services).await;
+    }
+
+    /// Persists smart-model selector values (`DefaultSmartModel` and
     /// `LastUsedModelAsDefault`).
-    async fn persist_default_model_settings(&self, services: &AppServices) {
+    async fn persist_default_smart_model_settings(&self, services: &AppServices) {
         let last_used_model_as_default_value = self.use_last_used_model_as_default.to_string();
 
         let _ = services
             .db()
             .upsert_setting(
-                SettingName::DefaultModel.as_str(),
-                self.default_model.as_str(),
+                SettingName::DefaultSmartModel.as_str(),
+                self.default_smart_model.as_str(),
             )
             .await;
         let _ = services
@@ -367,6 +407,61 @@ impl SettingsManager {
             )
             .await;
     }
+
+    /// Persists the fast-model selector value (`DefaultFastModel`).
+    async fn persist_default_fast_model_setting(&self, services: &AppServices) {
+        let _ = services
+            .db()
+            .upsert_setting(
+                SettingName::DefaultFastModel.as_str(),
+                self.default_fast_model.as_str(),
+            )
+            .await;
+    }
+}
+
+/// Returns all selectable models in settings display order.
+fn all_models() -> Vec<AgentModel> {
+    AgentKind::ALL
+        .iter()
+        .flat_map(|kind| kind.models())
+        .copied()
+        .collect()
+}
+
+/// Returns the next model from the explicit selectable model list.
+fn next_model(current_model: AgentModel) -> AgentModel {
+    let models = all_models();
+    let current_index = models
+        .iter()
+        .position(|model| *model == current_model)
+        .unwrap_or(0);
+    let next_index = (current_index + 1) % models.len();
+
+    models[next_index]
+}
+
+/// Loads a model setting and parses it into an [`AgentModel`].
+async fn load_model_setting(
+    services: &AppServices,
+    setting_name: SettingName,
+) -> Option<AgentModel> {
+    services
+        .db()
+        .get_setting(setting_name.as_str())
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| setting_value.parse().ok())
+}
+
+/// Loads the legacy smart-model setting from the previous key name.
+async fn load_legacy_default_smart_model_setting(services: &AppServices) -> Option<AgentModel> {
+    services
+        .db()
+        .get_setting("DefaultModel")
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| setting_value.parse().ok())
 }
 
 #[cfg(test)]
@@ -380,7 +475,8 @@ mod tests {
         table_state.select(Some(0));
 
         SettingsManager {
-            default_model: AgentKind::Gemini.default_model(),
+            default_fast_model: AgentKind::Gemini.default_model(),
+            default_smart_model: AgentKind::Gemini.default_model(),
             open_command: String::new(),
             table_state,
             editing_text_row: None,
@@ -389,14 +485,25 @@ mod tests {
     }
 
     #[test]
-    fn setting_name_as_str_returns_default_model() {
+    fn setting_name_as_str_returns_default_fast_model() {
         // Arrange
 
         // Act
-        let setting_name = SettingName::DefaultModel.as_str();
+        let setting_name = SettingName::DefaultFastModel.as_str();
 
         // Assert
-        assert_eq!(setting_name, "DefaultModel");
+        assert_eq!(setting_name, "DefaultFastModel");
+    }
+
+    #[test]
+    fn setting_name_as_str_returns_default_smart_model() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::DefaultSmartModel.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "DefaultSmartModel");
     }
 
     #[test]
@@ -422,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn next_moves_selection_to_open_command_row() {
+    fn next_moves_selection_to_default_fast_model_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -434,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_open_command_row_from_default_model_row() {
+    fn previous_wraps_to_open_command_row_from_default_smart_model_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -442,7 +549,7 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(1));
+        assert_eq!(manager.table_state.selected(), Some(2));
     }
 
     #[test]
@@ -458,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_include_default_model_and_open_command() {
+    fn settings_rows_include_smart_fast_model_and_open_command() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -466,9 +573,10 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, "Default Model");
-        assert_eq!(rows[1].0, "Open Command");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, "Default Smart Model");
+        assert_eq!(rows[1].0, "Default Fast Model");
+        assert_eq!(rows[2].0, "Open Command");
     }
 
     #[test]
@@ -496,7 +604,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[1].1, "<empty>");
+        assert_eq!(rows[2].1, "<empty>");
     }
 
     #[test]
@@ -510,7 +618,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[1].1, "http://localhost:5173|");
+        assert_eq!(rows[2].1, "http://localhost:5173|");
     }
 
     #[test]
@@ -524,5 +632,18 @@ mod tests {
 
         // Assert
         assert_eq!(rows[0].1, "Last used model as default");
+    }
+
+    #[test]
+    fn settings_rows_show_default_fast_model_value() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.default_fast_model = AgentModel::Gpt52Codex;
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[1].1, AgentModel::Gpt52Codex.as_str());
     }
 }

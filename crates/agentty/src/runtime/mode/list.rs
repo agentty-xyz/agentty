@@ -308,12 +308,14 @@ mod tests {
         (app, base_dir)
     }
 
+    /// Builds a settings-focused test app with the `Open Command` row selected.
     async fn new_test_app_for_settings() -> (App, tempfile::TempDir) {
         let (mut app, base_dir) = new_test_app_with_git().await;
         app.create_session()
             .await
             .expect("failed to create session for settings tests");
         app.tabs.set(Tab::Settings);
+        app.settings.next();
         app.settings.next();
 
         (app, base_dir)
