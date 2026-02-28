@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::App;
 use crate::runtime::EventResult;
@@ -6,6 +6,7 @@ use crate::ui::components::file_explorer::FileExplorer;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::util::parse_diff_lines;
 
+/// Handles key input while the app is in `AppMode::Diff`.
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     if key.code == KeyCode::Char('?') {
         let mode = std::mem::replace(&mut app.mode, AppMode::List);
@@ -48,7 +49,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                     scroll_offset: None,
                 };
             }
-            KeyCode::Char('j') => {
+            KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
                 let parsed = parse_diff_lines(diff);
                 let count = FileExplorer::count_items(&parsed);
                 let new_index = file_explorer_selected_index
@@ -60,7 +61,7 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                     *scroll_offset = 0;
                 }
             }
-            KeyCode::Char('k') => {
+            KeyCode::Char('k') if is_plain_char_key(key, 'k') => {
                 let new_index = file_explorer_selected_index.saturating_sub(1);
 
                 if *file_explorer_selected_index != new_index {
@@ -68,10 +69,14 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
                     *scroll_offset = 0;
                 }
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('J') | KeyCode::Char('j')
+                if key.code == KeyCode::Down || is_shift_char_key(key, 'j') =>
+            {
                 *scroll_offset = scroll_offset.saturating_add(1);
             }
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('K') | KeyCode::Char('k')
+                if key.code == KeyCode::Up || is_shift_char_key(key, 'k') =>
+            {
                 *scroll_offset = scroll_offset.saturating_sub(1);
             }
             _ => {}
@@ -79,6 +84,26 @@ pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     }
 
     EventResult::Continue
+}
+
+/// Returns true when the key event is a plain character key with no
+/// modifiers.
+fn is_plain_char_key(key: KeyEvent, character: char) -> bool {
+    key.code == KeyCode::Char(character) && key.modifiers == KeyModifiers::NONE
+}
+
+/// Returns true when the key event is a shifted character key, accepting both
+/// uppercase and lowercase char payloads emitted by terminals.
+fn is_shift_char_key(key: KeyEvent, character: char) -> bool {
+    let lowercase_character = character.to_ascii_lowercase();
+    let uppercase_character = character.to_ascii_uppercase();
+
+    key.modifiers == KeyModifiers::SHIFT
+        && matches!(
+            key.code,
+            KeyCode::Char(pressed)
+                if pressed == lowercase_character || pressed == uppercase_character
+        )
 }
 
 #[cfg(test)]
@@ -167,6 +192,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_shift_j_increments_scroll_offset() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-id".to_string(),
+            diff: "diff output".to_string(),
+            scroll_offset: 3,
+            file_explorer_selected_index: 2,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                scroll_offset: 4,
+                file_explorer_selected_index: 2,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_up_key_saturates_scroll_offset_at_zero() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
@@ -186,6 +240,35 @@ mod tests {
             app.mode,
             AppMode::Diff {
                 scroll_offset: 0,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_shift_k_saturates_scroll_offset_at_zero() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-id".to_string(),
+            diff: "diff output".to_string(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 2,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                scroll_offset: 0,
+                file_explorer_selected_index: 2,
                 ..
             }
         ));
