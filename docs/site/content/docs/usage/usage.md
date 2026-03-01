@@ -124,6 +124,9 @@ state:
 
 Additional state-specific keys:
 
+- **Open command behavior**: `o` runs the configured `Open Command` as
+  `exec <command>` unless it already starts with `exec`, so the tmux window
+  exits when that command ends.
 - **InProgress**: `Ctrl+c` stops the agent.
 - **Done**: `t` toggles between summary and full output.
 - **Focused review**: Runs in read-only review mode. It can use internet lookup
