@@ -45,12 +45,7 @@ impl<'a> InfoOverlay<'a> {
         let mut message_lines = self
             .message
             .lines()
-            .map(|message_line| {
-                Line::from(Span::styled(
-                    message_line,
-                    Style::default().fg(Color::White),
-                ))
-            })
+            .map(|message_line| Line::from(Span::styled(message_line, message_text_style())))
             .collect::<Vec<_>>();
 
         if message_lines.is_empty() {
@@ -58,6 +53,78 @@ impl<'a> InfoOverlay<'a> {
         }
 
         message_lines
+    }
+
+    /// Centers the first body line when it matches the sync context header
+    /// format (`Project ...` or `Main branch ...`).
+    fn center_sync_context_header(message_lines: &mut [Line<'a>]) {
+        let Some(first_line) = message_lines.first_mut() else {
+            return;
+        };
+
+        if !Self::is_sync_context_header(first_line) {
+            return;
+        }
+
+        *first_line = first_line.clone().alignment(Alignment::Center);
+    }
+
+    /// Returns whether a message line is the generated sync context header.
+    fn is_sync_context_header(line: &Line<'_>) -> bool {
+        let Some(first_span) = line.spans.first() else {
+            return false;
+        };
+
+        let line_text = first_span.content.as_ref();
+
+        line_text.starts_with("Project `") || line_text.starts_with("Main branch `")
+    }
+
+    /// Builds the styled body lines including the action row at the bottom.
+    fn body_lines(&self) -> Vec<Line<'a>> {
+        let mut lines = self.message_lines();
+
+        if !self.is_loading {
+            Self::center_sync_context_header(&mut lines);
+        }
+
+        lines.push(Line::from(""));
+        lines.push(self.action_row());
+
+        lines
+    }
+
+    /// Returns the bottom action row: a spinner during loading or an `OK`
+    /// button when complete.
+    fn action_row(&self) -> Line<'a> {
+        if self.is_loading {
+            let loading_text = format!("{} Sync in progress...", Icon::current_spinner());
+
+            Line::from(vec![Span::styled(loading_text, loading_indicator_style())])
+                .alignment(Alignment::Center)
+        } else {
+            Line::from(vec![Span::styled(" OK ", ok_button_style())]).alignment(Alignment::Center)
+        }
+    }
+
+    /// Returns the popup border color: cyan during loading, yellow when
+    /// complete.
+    fn border_color(&self) -> Color {
+        if self.is_loading {
+            Color::Cyan
+        } else {
+            Color::Yellow
+        }
+    }
+
+    /// Returns the body text alignment: centered during loading, left-aligned
+    /// when complete.
+    fn body_alignment(&self) -> Alignment {
+        if self.is_loading {
+            Alignment::Center
+        } else {
+            Alignment::Left
+        }
     }
 
     /// Returns popup width constrained by overlay defaults and frame bounds.
@@ -95,49 +162,10 @@ impl<'a> InfoOverlay<'a> {
 impl Component for InfoOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let width = Self::popup_width(area);
-        let title = format!(" {} ", self.title);
-        let mut paragraph_lines = self.message_lines();
-        let paragraph_alignment = if self.is_loading {
-            Alignment::Center
-        } else {
-            Alignment::Left
-        };
-        let border_color = if self.is_loading {
-            Color::Cyan
-        } else {
-            Color::Yellow
-        };
-        let title_style = Style::default()
-            .fg(border_color)
-            .add_modifier(Modifier::BOLD);
-
-        if self.is_loading {
-            let loading_line = format!("{} Sync in progress...", Icon::current_spinner());
-
-            paragraph_lines.push(Line::from(""));
-            paragraph_lines.push(
-                Line::from(vec![Span::styled(
-                    loading_line,
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )])
-                .alignment(Alignment::Center),
-            );
-        } else {
-            let ok_style = Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD);
-
-            paragraph_lines.push(Line::from(""));
-            paragraph_lines.push(
-                Line::from(vec![Span::styled(" OK ", ok_style)]).alignment(Alignment::Center),
-            );
-        }
-
-        let paragraph = Paragraph::new(paragraph_lines)
-            .alignment(paragraph_alignment)
+        let border_color = self.border_color();
+        let title_text = format!(" {} ", self.title);
+        let paragraph = Paragraph::new(self.body_lines())
+            .alignment(self.body_alignment())
             .wrap(Wrap { trim: true })
             .block(
                 Block::default()
@@ -150,9 +178,10 @@ impl Component for InfoOverlay<'_> {
                         BODY_VERTICAL_PADDING,
                         BODY_VERTICAL_PADDING,
                     ))
-                    .title(Span::styled(title, title_style))
+                    .title(Span::styled(title_text, title_style(border_color)))
                     .title_alignment(Alignment::Center),
             );
+
         let height = self.popup_height(area, width);
         let popup_area = Rect::new(
             area.x + (area.width.saturating_sub(width)) / 2,
@@ -164,6 +193,33 @@ impl Component for InfoOverlay<'_> {
         f.render_widget(Clear, popup_area);
         f.render_widget(paragraph, popup_area);
     }
+}
+
+/// Style for the popup title text, colored to match the border.
+fn title_style(border_color: Color) -> Style {
+    Style::default()
+        .fg(border_color)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Style for the `OK` confirmation button.
+fn ok_button_style() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Style for the loading spinner text.
+fn loading_indicator_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Style for body message text.
+fn message_text_style() -> Style {
+    Style::default().fg(Color::White)
 }
 
 #[cfg(test)]
@@ -283,14 +339,16 @@ mod tests {
     }
 
     #[test]
-    fn test_loading_state_centers_branch_header_and_loader() {
+    fn test_result_state_centers_branch_header_like_loading_state() {
         // Arrange
         let message =
             "Project `agentty` on main branch `main`.\n\nSynchronizing with its upstream.";
-        let loading_lines =
-            render_overlay_lines(InfoOverlay::new("Sync in progress", message).is_loading(true));
-        let blocked_lines = render_overlay_lines(InfoOverlay::new("Sync blocked", message));
+        let loading_overlay = InfoOverlay::new("Sync in progress", message).is_loading(true);
+        let blocked_overlay = InfoOverlay::new("Sync blocked", message);
+        let loading_lines = render_overlay_lines(&loading_overlay);
+        let blocked_lines = render_overlay_lines(&blocked_overlay);
         let header_text = "Project `agentty` on main branch `main`.";
+        let detail_text = "Synchronizing with its upstream.";
         let loader_text = "Sync in progress...";
 
         // Act
@@ -298,24 +356,27 @@ mod tests {
             line_start_column(&loading_lines, header_text).expect("missing loading header");
         let blocked_header_column =
             line_start_column(&blocked_lines, header_text).expect("missing blocked header");
+        let blocked_detail_column =
+            line_start_column(&blocked_lines, detail_text).expect("missing blocked detail");
         let loading_loader_column =
             line_start_column(&loading_lines, loader_text).expect("missing loader text");
 
         // Assert
-        assert!(loading_header_column > blocked_header_column);
+        assert_eq!(loading_header_column, blocked_header_column);
+        assert!(blocked_header_column > blocked_detail_column);
         assert!(loading_loader_column > blocked_header_column);
     }
 
     /// Renders one overlay and returns text rows for column-position
     /// assertions.
-    fn render_overlay_lines(overlay: InfoOverlay<'_>) -> Vec<String> {
+    fn render_overlay_lines(overlay: &InfoOverlay<'_>) -> Vec<String> {
         let backend = ratatui::backend::TestBackend::new(100, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Component::render(&overlay, frame, area);
+                crate::ui::Component::render(overlay, frame, area);
             })
             .expect("failed to draw");
 
