@@ -583,6 +583,58 @@ svg {
     margin-top: 0.28rem;
 }
 
+.docs-content table {
+    width: 100%;
+    margin: 1rem 0 1.25rem;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+
+.docs-content thead {
+    background: var(--color-surface);
+}
+
+.docs-content thead th {
+    color: var(--color-accent);
+    font-weight: 600;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    border-bottom: 1px solid var(--color-border);
+    white-space: nowrap;
+}
+
+.docs-content tbody tr {
+    transition: background var(--transition-fast);
+}
+
+.docs-content tbody tr:hover {
+    background: var(--color-surface);
+}
+
+.docs-content tbody td {
+    padding: 0.55rem 0.9rem;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-muted);
+    vertical-align: top;
+}
+
+.docs-content tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.docs-content tbody td:first-child {
+    color: var(--color-accent-dim);
+    font-weight: 500;
+}
+
 .docs-content .zola-anchor {
     font-size: 0.72em;
     margin-left: 0.45rem;
@@ -648,6 +700,12 @@ svg {
 
     .docs-layout {
         grid-template-columns: 1fr;
+    }
+
+    .docs-content table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
     }
 }
 
