@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wr
 
 use crate::ui::Component;
 use crate::ui::icon::Icon;
-use crate::ui::text_util::wrap_lines;
+use crate::ui::markdown::render_markdown;
 
 const BODY_HORIZONTAL_PADDING: u16 = 2;
 const BODY_VERTICAL_PADDING: u16 = 1;
@@ -39,14 +39,10 @@ impl<'a> InfoOverlay<'a> {
         self
     }
 
-    /// Splits the body message into styled lines and preserves explicit
-    /// newline breaks.
-    fn message_lines(&self) -> Vec<Line<'a>> {
-        let mut message_lines = self
-            .message
-            .lines()
-            .map(|message_line| Line::from(Span::styled(message_line, message_text_style())))
-            .collect::<Vec<_>>();
+    /// Renders the body message as markdown with inline highlight styles and
+    /// explicit line breaks.
+    fn message_lines(&self, message_width: usize) -> Vec<Line<'static>> {
+        let mut message_lines = render_markdown(self.message, message_width);
 
         if message_lines.is_empty() {
             message_lines.push(Line::from(""));
@@ -57,7 +53,7 @@ impl<'a> InfoOverlay<'a> {
 
     /// Centers the first body line when it matches the sync context header
     /// format (`Project ...` or `Main branch ...`).
-    fn center_sync_context_header(message_lines: &mut [Line<'a>]) {
+    fn center_sync_context_header(message_lines: &mut [Line<'static>]) {
         let Some(first_line) = message_lines.first_mut() else {
             return;
         };
@@ -71,18 +67,18 @@ impl<'a> InfoOverlay<'a> {
 
     /// Returns whether a message line is the generated sync context header.
     fn is_sync_context_header(line: &Line<'_>) -> bool {
-        let Some(first_span) = line.spans.first() else {
-            return false;
-        };
+        let line_text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
 
-        let line_text = first_span.content.as_ref();
-
-        line_text.starts_with("Project `") || line_text.starts_with("Main branch `")
+        line_text.starts_with("Project ") || line_text.starts_with("Main branch ")
     }
 
     /// Builds the styled body lines including the action row at the bottom.
-    fn body_lines(&self) -> Vec<Line<'a>> {
-        let mut lines = self.message_lines();
+    fn body_lines(&self, message_width: usize) -> Vec<Line<'static>> {
+        let mut lines = self.message_lines(message_width);
 
         if !self.is_loading {
             Self::center_sync_context_header(&mut lines);
@@ -96,7 +92,7 @@ impl<'a> InfoOverlay<'a> {
 
     /// Returns the bottom action row: a spinner during loading or an `OK`
     /// button when complete.
-    fn action_row(&self) -> Line<'a> {
+    fn action_row(&self) -> Line<'static> {
         if self.is_loading {
             let loading_text = format!("{} Sync in progress...", Icon::current_spinner());
 
@@ -134,22 +130,23 @@ impl<'a> InfoOverlay<'a> {
             .min(area.width)
     }
 
+    /// Returns the message rendering width after subtracting borders and
+    /// horizontal padding.
+    fn message_width(width: u16) -> usize {
+        let horizontal_chrome = 2 + (BODY_HORIZONTAL_PADDING * 2);
+
+        usize::from(width.saturating_sub(horizontal_chrome).max(1))
+    }
+
     /// Returns popup height sized to keep wrapped body content and the action
     /// row visible.
     fn popup_height(&self, area: Rect, width: u16) -> u16 {
-        let horizontal_chrome = 2 + (BODY_HORIZONTAL_PADDING * 2);
         let vertical_chrome = 2 + (BODY_VERTICAL_PADDING * 2);
-        let inner_width = width.saturating_sub(horizontal_chrome).max(1);
         let min_height = (area.height * OVERLAY_HEIGHT_PERCENT / 100)
             .max(MIN_OVERLAY_HEIGHT)
             .min(area.height);
-        let action_row = if self.is_loading {
-            format!("{} Sync in progress...", Icon::current_spinner())
-        } else {
-            "OK".to_string()
-        };
-        let body_with_action = format!("{}\n\n{action_row}", self.message);
-        let required_inner_lines = wrap_lines(&body_with_action, usize::from(inner_width)).len();
+        let message_width = Self::message_width(width);
+        let required_inner_lines = self.body_lines(message_width).len();
         let required_height =
             u16::try_from(required_inner_lines.saturating_add(usize::from(vertical_chrome)))
                 .unwrap_or(area.height)
@@ -162,9 +159,10 @@ impl<'a> InfoOverlay<'a> {
 impl Component for InfoOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let width = Self::popup_width(area);
+        let message_width = Self::message_width(width);
         let border_color = self.border_color();
         let title_text = format!(" {} ", self.title);
-        let paragraph = Paragraph::new(self.body_lines())
+        let paragraph = Paragraph::new(self.body_lines(message_width))
             .alignment(self.body_alignment())
             .wrap(Wrap { trim: true })
             .block(
@@ -215,11 +213,6 @@ fn loading_indicator_style() -> Style {
     Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD)
-}
-
-/// Style for body message text.
-fn message_text_style() -> Style {
-    Style::default().fg(Color::White)
 }
 
 #[cfg(test)]
@@ -324,17 +317,39 @@ mod tests {
         );
 
         // Act
-        let message_lines = overlay.message_lines();
+        let message_lines = overlay.message_lines(80);
 
         // Assert
         assert_eq!(message_lines.len(), 2);
         assert_eq!(
-            message_lines[0].spans[0].content.as_ref(),
+            rendered_line_text(&message_lines[0]),
             "Sync cannot run on this branch."
         );
         assert_eq!(
-            message_lines[1].spans[0].content.as_ref(),
+            rendered_line_text(&message_lines[1]),
             "Commit or stash, then retry."
+        );
+    }
+
+    #[test]
+    fn test_message_lines_highlight_inline_code_segments() {
+        // Arrange
+        let overlay = InfoOverlay::new("Sync blocked", "Run `gh auth login` then retry.");
+
+        // Act
+        let message_lines = overlay.message_lines(80);
+
+        // Assert
+        assert_eq!(message_lines.len(), 1);
+        assert_eq!(
+            rendered_line_text(&message_lines[0]),
+            "Run gh auth login then retry."
+        );
+        assert!(
+            message_lines[0]
+                .spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Yellow))
         );
     }
 
@@ -347,7 +362,7 @@ mod tests {
         let blocked_overlay = InfoOverlay::new("Sync blocked", message);
         let loading_lines = render_overlay_lines(&loading_overlay);
         let blocked_lines = render_overlay_lines(&blocked_overlay);
-        let header_text = "Project `agentty` on main branch `main`.";
+        let header_text = "Project";
         let detail_text = "Synchronizing with its upstream.";
         let loader_text = "Sync in progress...";
 
@@ -391,5 +406,13 @@ mod tests {
     /// Returns the left-most column index for `needle` within rendered rows.
     fn line_start_column(lines: &[String], needle: &str) -> Option<usize> {
         lines.iter().find_map(|line| line.find(needle))
+    }
+
+    /// Returns the concatenated plain text for one rendered `Line`.
+    fn rendered_line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 }
