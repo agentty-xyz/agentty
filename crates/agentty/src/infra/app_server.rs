@@ -708,6 +708,7 @@ mod tests {
         assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);
     }
 
+    /// Verifies restored-context retries keep the user prompt while avoiding transcript replay.
     #[tokio::test]
     async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context() {
         // Arrange
@@ -770,6 +771,8 @@ mod tests {
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        assert_eq!(captured_prompt, "Do work");
+        assert!(captured_prompt.contains("repository-root-relative POSIX paths"));
+        assert!(captured_prompt.ends_with("Do work"));
+        assert!(!captured_prompt.contains("previous output"));
     }
 }
