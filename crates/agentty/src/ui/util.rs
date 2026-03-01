@@ -12,8 +12,8 @@ pub use crate::ui::activity_heatmap::{
     current_day_key_utc, heatmap_intensity_level, heatmap_max_count, heatmap_month_markers,
 };
 pub use crate::ui::diff_util::{
-    DiffLine, DiffLineKind, max_diff_line_number, parse_diff_lines, parse_hunk_header,
-    wrap_diff_content,
+    DiffLine, DiffLineKind, diff_line_change_totals, max_diff_line_number, parse_diff_lines,
+    parse_hunk_header, wrap_diff_content,
 };
 pub use crate::ui::layout::{
     CHAT_INPUT_MAX_VISIBLE_LINES, calculate_input_height, calculate_input_viewport,

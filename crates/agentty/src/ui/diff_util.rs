@@ -106,6 +106,18 @@ pub fn max_diff_line_number(lines: &[DiffLine<'_>]) -> u32 {
         .unwrap_or(0)
 }
 
+/// Counts total added and removed lines across parsed diff content.
+pub fn diff_line_change_totals(lines: &[DiffLine<'_>]) -> (usize, usize) {
+    lines.iter().fold(
+        (0_usize, 0_usize),
+        |(added_count, removed_count), line| match line.kind {
+            DiffLineKind::Addition => (added_count.saturating_add(1), removed_count),
+            DiffLineKind::Deletion => (added_count, removed_count.saturating_add(1)),
+            _ => (added_count, removed_count),
+        },
+    )
+}
+
 /// Split a diff content string into chunks that fit within `max_width`
 /// characters. Returns at least one chunk (empty string if content is empty).
 pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
@@ -638,6 +650,42 @@ index abc..def 100644
 
         // Assert
         assert_eq!(max_num, 0);
+    }
+
+    #[test]
+    fn test_diff_line_change_totals() {
+        // Arrange
+        let diff = "\
+diff --git a/src/main.rs b/src/main.rs
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+-removed";
+        let lines = parse_diff_lines(diff);
+
+        // Act
+        let totals = diff_line_change_totals(&lines);
+
+        // Assert
+        assert_eq!(totals, (1, 1));
+    }
+
+    #[test]
+    fn test_diff_line_change_totals_ignores_headers() {
+        // Arrange
+        let diff = "\
+diff --git a/src/main.rs b/src/main.rs
+index abc..def 100644
+--- a/src/main.rs
++++ b/src/main.rs";
+        let lines = parse_diff_lines(diff);
+
+        // Act
+        let totals = diff_line_change_totals(&lines);
+
+        // Assert
+        assert_eq!(totals, (0, 0));
     }
 
     #[test]

@@ -8,7 +8,8 @@ use crate::domain::session::Session;
 use crate::ui::components::file_explorer::FileExplorer;
 use crate::ui::state::help_action;
 use crate::ui::util::{
-    DiffLine, DiffLineKind, max_diff_line_number, parse_diff_lines, wrap_diff_content,
+    DiffLine, DiffLineKind, diff_line_change_totals, max_diff_line_number, parse_diff_lines,
+    wrap_diff_content,
 };
 use crate::ui::{Component, Page};
 
@@ -46,8 +47,20 @@ impl<'a> DiffPage<'a> {
         }
     }
 
-    fn render_diff_content(&self, f: &mut Frame, area: Rect, parsed: &[DiffLine]) {
-        let title = format!(" Diff — {} ", self.session.display_title());
+    /// Renders the right-side diff panel with line-number gutters and change
+    /// totals in the title.
+    fn render_diff_content(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        parsed: &[DiffLine],
+        total_added_lines: usize,
+        total_removed_lines: usize,
+    ) {
+        let title = format!(
+            " Diff — {} (+{total_added_lines} -{total_removed_lines}) ",
+            self.session.display_title()
+        );
 
         let max_num = max_diff_line_number(parsed);
         let gutter_width = if max_num == 0 {
@@ -156,6 +169,7 @@ impl Page for DiffPage<'_> {
         let diff_area = content_layout[1];
 
         let parsed = parse_diff_lines(&self.diff);
+        let (total_added_lines, total_removed_lines) = diff_line_change_totals(&parsed);
         let tree_items = FileExplorer::file_tree_items(&parsed);
 
         FileExplorer::new(&parsed)
@@ -166,7 +180,13 @@ impl Page for DiffPage<'_> {
             .get(self.file_explorer_selected_index)
             .map(|item| FileExplorer::filter_diff_lines(&parsed, item))
             .unwrap_or_default();
-        self.render_diff_content(f, diff_area, &filtered);
+        self.render_diff_content(
+            f,
+            diff_area,
+            &filtered,
+            total_added_lines,
+            total_removed_lines,
+        );
 
         let help_text = help_action::footer_text(&help_action::diff_footer_actions());
         let help_message = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
@@ -232,6 +252,7 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("(+1 -0)"));
         assert!(text.contains("j/k: select file"));
         assert!(text.contains("Up/Down: scroll file"));
     }

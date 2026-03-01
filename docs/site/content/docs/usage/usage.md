@@ -149,6 +149,9 @@ worktree.
 | `Up` / `Down` | Scroll selected file |
 | `?` | Help |
 
+The diff panel title shows aggregate line-change totals as `+added` and
+`-removed` counts for the current session diff.
+
 ### Prompt Input
 
 | Key | Action |
