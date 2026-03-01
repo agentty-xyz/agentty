@@ -78,10 +78,11 @@ impl<'a> ProjectExplorerPage<'a> {
         }
 
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(Span::styled(
-                " Project Files ",
-                Style::default().fg(Color::Cyan),
-            )))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Span::styled(" Files ", Style::default().fg(Color::Cyan))),
+            )
             .highlight_style(Style::default().bg(Color::DarkGray));
         f.render_stateful_widget(list, area, &mut list_state);
     }
@@ -130,7 +131,7 @@ impl Page for ProjectExplorerPage<'_> {
 
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
             .split(content_area);
         self.render_file_list(f, content_layout[0]);
         self.render_preview(f, content_layout[1]);
