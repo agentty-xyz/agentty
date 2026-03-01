@@ -612,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_list_help_text_includes_explorer_for_selected_session() {
+    fn test_session_list_help_text_includes_nvim_for_selected_session() {
         // Arrange
         let session = test_session("session-1", Status::Review);
 
@@ -620,6 +620,6 @@ mod tests {
         let help_text = session_list_help_text(Some(&session));
 
         // Assert
-        assert!(help_text.contains("e: explorer"));
+        assert!(help_text.contains("e: nvim"));
     }
 }

@@ -69,7 +69,8 @@ Agentty classifies sessions by the number of changed lines in their diff:
 | `d` | Delete session |
 | `c` | Cancel session |
 | `Enter` | Open session |
-| `e` | Open project explorer (active project root) |
+| `e` | Open `nvim` (active project root) |
+| `E` | Open Project Explorer (active project root) |
 | `j` / `k` | Navigate sessions |
 | `Tab` | Switch tab |
 | `?` | Help |
@@ -105,7 +106,7 @@ state:
 | `q` | Back to list |
 | `Enter` | Reply to agent |
 | `o` | Open worktree in tmux |
-| `e` | Open project explorer (session worktree) |
+| `e` | Open `nvim` (session worktree) |
 | `d` | Show diff |
 | `f` | Show focused review (read-only) |
 | `m` | Queue merge |
@@ -136,9 +137,8 @@ Additional state-specific keys:
 | `Up` / `Down` | Scroll preview |
 | `?` | Help |
 
-When opened from the **Sessions** list, explorer rows come from the active
-project root. When opened from **Session View**, rows come from that session's
-worktree.
+When opened from the **Sessions** list with `E`, explorer rows come from the
+active project root.
 
 ### Diff Mode
 

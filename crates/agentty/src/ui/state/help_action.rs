@@ -68,7 +68,8 @@ pub(crate) fn session_list_actions(
     }
 
     if can_open_selected_session {
-        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
+        actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
+        actions.push(HelpAction::new("explorer", "E", "Open project explorer"));
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
@@ -113,7 +114,8 @@ pub(crate) fn session_list_footer_actions(can_open_selected_session: bool) -> Ve
 
     if can_open_selected_session {
         actions.push(HelpAction::new("view", "Enter", "Open session"));
-        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
+        actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
+        actions.push(HelpAction::new("explorer", "E", "Open project explorer"));
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
@@ -185,7 +187,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_open_worktree {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
-        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
+        actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
     }
 
     if can_show_diff {
@@ -246,7 +248,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_open_worktree {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
-        actions.push(HelpAction::new("explorer", "e", "Open project explorer"));
+        actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
     }
 
     if can_show_focused_review {
@@ -360,6 +362,7 @@ mod tests {
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "e"));
+        assert!(!actions.iter().any(|action| action.key == "E"));
         assert!(actions.iter().any(|action| action.key == "j/k"));
     }
 
@@ -373,6 +376,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "e"));
+        assert!(actions.iter().any(|action| action.key == "E"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "Tab"));

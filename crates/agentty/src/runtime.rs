@@ -33,12 +33,20 @@ pub async fn run(app: &mut App) -> io::Result<()> {
     // loop can yield to tokio between iterations.
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let shutdown = Arc::new(AtomicBool::new(false));
-    event::spawn_event_reader(event_tx, shutdown.clone());
+    let event_reader_pause = Arc::new(AtomicBool::new(false));
+    event::spawn_event_reader(event_tx, shutdown.clone(), event_reader_pause.clone());
 
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await?;
+    run_main_loop(
+        app,
+        &mut terminal,
+        &mut event_rx,
+        &mut tick,
+        &event_reader_pause,
+    )
+    .await?;
 
     shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     terminal.show_cursor()?;
@@ -51,13 +59,14 @@ async fn run_main_loop(
     terminal: &mut TuiTerminal,
     event_rx: &mut mpsc::UnboundedReceiver<crossterm::event::Event>,
     tick: &mut tokio::time::Interval,
+    event_reader_pause: &Arc<AtomicBool>,
 ) -> io::Result<()> {
     loop {
         app.sessions.sync_from_handles();
         render_frame(app, terminal)?;
 
         if matches!(
-            event::process_events(app, terminal, event_rx, tick).await?,
+            event::process_events(app, terminal, event_rx, tick, event_reader_pause).await?,
             EventResult::Quit
         ) {
             break;

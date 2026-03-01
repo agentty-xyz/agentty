@@ -1,5 +1,6 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 
@@ -29,6 +30,34 @@ struct ViewMetrics {
     view_height: u16,
 }
 
+/// Pending output-mode and scroll updates produced by one key event in
+/// session-view mode.
+struct ViewPendingUpdate {
+    done_session_output_mode: DoneSessionOutputMode,
+    focused_review_status_message: Option<String>,
+    focused_review_text: Option<String>,
+    scroll_offset: Option<u16>,
+}
+
+impl ViewPendingUpdate {
+    /// Builds update state seeded from the current view mode values.
+    fn from_context(view_context: &ViewContext) -> Self {
+        Self {
+            done_session_output_mode: view_context.done_session_output_mode,
+            focused_review_status_message: view_context.focused_review_status_message.clone(),
+            focused_review_text: view_context.focused_review_text.clone(),
+            scroll_offset: view_context.scroll_offset,
+        }
+    }
+}
+
+/// Borrowed per-key context used while processing one session-view key event.
+struct ViewKeyContext<'a> {
+    context: &'a ViewContext,
+    metrics: ViewMetrics,
+    session_snapshot: &'a ViewSessionSnapshot,
+}
+
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
     can_open_worktree: bool,
@@ -54,19 +83,62 @@ pub(crate) async fn handle(
     app: &mut App,
     terminal: &mut TuiTerminal,
     key: KeyEvent,
+    event_reader_pause: &AtomicBool,
 ) -> io::Result<EventResult> {
     let Some(view_context) = view_context(app) else {
         return Ok(EventResult::Continue);
     };
     let view_metrics = view_metrics(app, terminal, &view_context)?;
-    let mut next_scroll_offset = view_context.scroll_offset;
-    let mut next_done_session_output_mode = view_context.done_session_output_mode;
-    let mut next_focused_review_status_message = view_context.focused_review_status_message.clone();
-    let mut next_focused_review_text = view_context.focused_review_text.clone();
+    let mut pending_update = ViewPendingUpdate::from_context(&view_context);
 
     let Some(view_session_snapshot) = view_session_snapshot(app, &view_context) else {
         return Ok(EventResult::Continue);
     };
+    let view_key_context = ViewKeyContext {
+        context: &view_context,
+        metrics: view_metrics,
+        session_snapshot: &view_session_snapshot,
+    };
+
+    if !handle_view_key(
+        app,
+        terminal,
+        key,
+        event_reader_pause,
+        view_key_context,
+        &mut pending_update,
+    )
+    .await
+    {
+        return Ok(EventResult::Continue);
+    }
+
+    apply_view_scroll_and_output_mode(
+        app,
+        pending_update.done_session_output_mode,
+        pending_update.focused_review_status_message,
+        pending_update.focused_review_text,
+        pending_update.scroll_offset,
+    );
+
+    Ok(EventResult::Continue)
+}
+
+/// Applies one view-mode key press and updates pending output/scroll state.
+///
+/// Returns `false` when key handling already transitioned mode and should skip
+/// applying pending view updates.
+async fn handle_view_key(
+    app: &mut App,
+    terminal: &mut TuiTerminal,
+    key: KeyEvent,
+    event_reader_pause: &AtomicBool,
+    view_key_context: ViewKeyContext<'_>,
+    pending_update: &mut ViewPendingUpdate,
+) -> bool {
+    let view_context = view_key_context.context;
+    let view_metrics = view_key_context.metrics;
+    let view_session_snapshot = view_key_context.session_snapshot;
 
     match key.code {
         KeyCode::Char('q') => app.mode = AppMode::List,
@@ -74,26 +146,36 @@ pub(crate) async fn handle(
             app.open_session_worktree_in_tmux().await;
         }
         KeyCode::Char('e') if view_session_snapshot.can_open_worktree => {
-            open_project_explorer_for_view_session(app, &view_context).await;
+            open_external_editor_for_view_session(
+                terminal,
+                event_reader_pause,
+                &view_session_snapshot.session_folder,
+            )
+            .await;
         }
         KeyCode::Enter if view_session_snapshot.is_action_allowed => {
             switch_view_to_prompt(
                 app,
-                &view_context,
+                view_context,
                 PromptHistoryState::new(prompt_history_entries(
                     &view_session_snapshot.session_output,
                 )),
-                next_scroll_offset,
+                pending_update.scroll_offset,
             );
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            next_scroll_offset = scroll_offset_down(next_scroll_offset, view_metrics, 1);
+            pending_update.scroll_offset =
+                scroll_offset_down(pending_update.scroll_offset, view_metrics, 1);
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            next_scroll_offset = Some(scroll_offset_up(next_scroll_offset, view_metrics, 1));
+            pending_update.scroll_offset = Some(scroll_offset_up(
+                pending_update.scroll_offset,
+                view_metrics,
+                1,
+            ));
         }
-        KeyCode::Char('g') => next_scroll_offset = Some(0),
-        KeyCode::Char('G') => next_scroll_offset = None,
+        KeyCode::Char('g') => pending_update.scroll_offset = Some(0),
+        KeyCode::Char('G') => pending_update.scroll_offset = None,
         KeyCode::Char('c')
             if key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.is_in_progress =>
@@ -101,33 +183,33 @@ pub(crate) async fn handle(
             stop_view_session(app, &view_context.session_id).await;
         }
         KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            next_scroll_offset = scroll_offset_half_page_down(next_scroll_offset, view_metrics);
+            pending_update.scroll_offset =
+                scroll_offset_half_page_down(pending_update.scroll_offset, view_metrics);
         }
         KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-            next_scroll_offset = Some(scroll_offset_half_page_up(next_scroll_offset, view_metrics));
+            pending_update.scroll_offset = Some(scroll_offset_half_page_up(
+                pending_update.scroll_offset,
+                view_metrics,
+            ));
         }
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && is_view_diff_allowed(view_session_snapshot.session_status) =>
         {
-            show_diff_for_view_session(app, &view_context).await;
+            show_diff_for_view_session(app, view_context).await;
         }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'f')
                 && !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && is_view_focused_review_allowed(view_session_snapshot.session_status) =>
         {
-            toggle_focused_review_output_mode(
+            toggle_focused_review_for_pending(
                 app,
-                &view_context,
-                &view_session_snapshot,
-                &mut next_done_session_output_mode,
-                &mut next_focused_review_status_message,
-                &mut next_focused_review_text,
+                view_context,
+                view_session_snapshot,
+                pending_update,
             )
             .await;
-
-            next_scroll_offset = None;
         }
         KeyCode::Char('m') if view_session_snapshot.is_action_allowed => {
             merge_view_session(app, &view_context.session_id).await;
@@ -136,24 +218,60 @@ pub(crate) async fn handle(
             rebase_view_session(app, &view_context.session_id).await;
         }
         _ if is_done_output_toggle_key(view_session_snapshot.session_status, key) => {
-            next_done_session_output_mode = next_done_session_output_mode.toggled();
-            next_scroll_offset = None;
+            pending_update.done_session_output_mode =
+                pending_update.done_session_output_mode.toggled();
+            pending_update.scroll_offset = None;
         }
         KeyCode::Char('?') => {
-            open_view_help_overlay(app, &view_context, view_session_snapshot.session_state);
-            return Ok(EventResult::Continue);
+            open_view_help_overlay(app, view_context, view_session_snapshot.session_state);
+            return false;
         }
         _ => {}
     }
-    apply_view_scroll_and_output_mode(
+
+    true
+}
+
+/// Applies focused-review output toggles into the mutable pending view state.
+async fn toggle_focused_review_for_pending(
+    app: &mut App,
+    view_context: &ViewContext,
+    view_session_snapshot: &ViewSessionSnapshot,
+    pending_update: &mut ViewPendingUpdate,
+) {
+    toggle_focused_review(
         app,
+        view_context,
+        view_session_snapshot,
+        &mut pending_update.done_session_output_mode,
+        &mut pending_update.focused_review_status_message,
+        &mut pending_update.focused_review_text,
+        &mut pending_update.scroll_offset,
+    )
+    .await;
+}
+
+/// Toggles focused-review output and resets scroll to the bottom-aligned mode.
+async fn toggle_focused_review(
+    app: &mut App,
+    view_context: &ViewContext,
+    view_session_snapshot: &ViewSessionSnapshot,
+    next_done_session_output_mode: &mut DoneSessionOutputMode,
+    next_focused_review_status_message: &mut Option<String>,
+    next_focused_review_text: &mut Option<String>,
+    next_scroll_offset: &mut Option<u16>,
+) {
+    toggle_focused_review_output_mode(
+        app,
+        view_context,
+        view_session_snapshot,
         next_done_session_output_mode,
         next_focused_review_status_message,
         next_focused_review_text,
-        next_scroll_offset,
-    );
+    )
+    .await;
 
-    Ok(EventResult::Continue)
+    *next_scroll_offset = None;
 }
 
 /// Collects session-specific values used by `handle()` from the active view
@@ -232,10 +350,15 @@ fn is_view_focused_review_allowed(status: Status) -> bool {
     status == Status::Review
 }
 
-/// Opens project explorer mode for the currently viewed session.
-async fn open_project_explorer_for_view_session(app: &mut App, view_context: &ViewContext) {
-    crate::runtime::mode::project_explorer::open_for_session(app, &view_context.session_id, false)
-        .await;
+/// Opens `nvim` from the currently viewed session worktree root.
+///
+/// Editor launch failures are ignored here so view-mode state remains stable.
+async fn open_external_editor_for_view_session(
+    terminal: &mut TuiTerminal,
+    event_reader_pause: &AtomicBool,
+    session_folder: &std::path::Path,
+) {
+    let _ = crate::runtime::terminal::open_nvim(terminal, event_reader_pause, session_folder).await;
 }
 
 fn switch_view_to_prompt(
@@ -1065,33 +1188,6 @@ mod tests {
             AppMode::Diff {
                 ref session_id,
                 scroll_offset: 0,
-                ..
-            } if session_id == &context.session_id
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_open_project_explorer_for_view_session_sets_project_explorer_mode() {
-        // Arrange
-        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        let context = ViewContext {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
-            scroll_offset: Some(0),
-            session_id: session_id.clone(),
-            session_index: 0,
-        };
-
-        // Act
-        open_project_explorer_for_view_session(&mut app, &context).await;
-
-        // Assert
-        assert!(matches!(
-            app.mode,
-            AppMode::ProjectExplorer {
-                ref session_id,
-                return_to_list: false,
                 ..
             } if session_id == &context.session_id
         ));

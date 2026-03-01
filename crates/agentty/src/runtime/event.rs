@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::event::Event;
@@ -35,21 +35,28 @@ impl EventSource for CrosstermEventSource {
 pub(crate) fn spawn_event_reader(
     event_tx: mpsc::UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
+    event_reader_pause: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     let event_source: Arc<dyn EventSource> = Arc::new(CrosstermEventSource);
 
-    spawn_event_reader_with_source(event_source, event_tx, shutdown)
+    spawn_event_reader_with_source(event_source, event_tx, shutdown, event_reader_pause)
 }
 
 fn spawn_event_reader_with_source(
     event_source: Arc<dyn EventSource>,
     event_tx: mpsc::UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
+    event_reader_pause: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         loop {
-            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            if shutdown.load(Ordering::Relaxed) {
                 break;
+            }
+
+            if event_reader_pause.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
             }
 
             match event_source.poll(Duration::from_millis(50)) {
@@ -72,6 +79,7 @@ pub(crate) async fn process_events(
     terminal: &mut TuiTerminal,
     event_rx: &mut mpsc::UnboundedReceiver<Event>,
     tick: &mut tokio::time::Interval,
+    event_reader_pause: &Arc<AtomicBool>,
 ) -> io::Result<EventResult> {
     enum LoopSignal {
         AppEvent(Option<AppEvent>),
@@ -102,7 +110,7 @@ pub(crate) async fn process_events(
     };
 
     if matches!(
-        process_event(app, terminal, maybe_event).await?,
+        process_event(app, terminal, maybe_event, event_reader_pause).await?,
         EventResult::Quit
     ) {
         return Ok(EventResult::Quit);
@@ -112,7 +120,7 @@ pub(crate) async fn process_events(
     // presses are processed immediately instead of one-per-frame.
     while let Ok(event) = event_rx.try_recv() {
         if matches!(
-            process_event(app, terminal, Some(event)).await?,
+            process_event(app, terminal, Some(event), event_reader_pause).await?,
             EventResult::Quit
         ) {
             return Ok(EventResult::Quit);
@@ -130,11 +138,12 @@ async fn process_event(
     app: &mut App,
     terminal: &mut TuiTerminal,
     event: Option<Event>,
+    event_reader_pause: &AtomicBool,
 ) -> io::Result<EventResult> {
     if let Some(event) = event {
         match event {
             Event::Key(key) => {
-                return key_handler::handle_key_event(app, terminal, key).await;
+                return key_handler::handle_key_event(app, terminal, key, event_reader_pause).await;
             }
             Event::Paste(pasted_text) => {
                 if matches!(&app.mode, AppMode::Prompt { .. }) {
@@ -188,9 +197,11 @@ mod tests {
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let shutdown = Arc::new(AtomicBool::new(false));
+        let event_reader_pause = Arc::new(AtomicBool::new(false));
 
         // Act
-        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
+        let join_handle =
+            spawn_event_reader_with_source(event_source, event_tx, shutdown, event_reader_pause);
         let received_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
             .expect("timed out waiting for event")
@@ -222,9 +233,11 @@ mod tests {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         drop(event_rx);
         let shutdown = Arc::new(AtomicBool::new(false));
+        let event_reader_pause = Arc::new(AtomicBool::new(false));
 
         // Act
-        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
+        let join_handle =
+            spawn_event_reader_with_source(event_source, event_tx, shutdown, event_reader_pause);
         let join_result = join_handle.join();
 
         // Assert
@@ -252,14 +265,40 @@ mod tests {
         let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let shutdown = Arc::new(AtomicBool::new(false));
+        let event_reader_pause = Arc::new(AtomicBool::new(false));
 
         // Act
-        let join_handle = spawn_event_reader_with_source(event_source, event_tx, shutdown);
+        let join_handle =
+            spawn_event_reader_with_source(event_source, event_tx, shutdown, event_reader_pause);
         let join_result = join_handle.join();
         let queued_event = event_rx.try_recv();
 
         // Assert
         assert!(join_result.is_ok());
         assert!(queued_event.is_err());
+    }
+
+    #[test]
+    fn test_spawn_event_reader_with_source_skips_polling_when_paused() {
+        // Arrange
+        let mut mock_source = MockEventSource::new();
+        mock_source.expect_poll().times(0);
+        mock_source.expect_read().times(0);
+        let event_source: Arc<dyn EventSource> = Arc::new(mock_source);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        drop(event_rx);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let event_reader_pause = Arc::new(AtomicBool::new(true));
+        let shutdown_signal = Arc::clone(&shutdown);
+
+        // Act
+        let join_handle =
+            spawn_event_reader_with_source(event_source, event_tx, shutdown, event_reader_pause);
+        std::thread::sleep(Duration::from_millis(120));
+        shutdown_signal.store(true, Ordering::Relaxed);
+        let join_result = join_handle.join();
+
+        // Assert
+        assert!(join_result.is_ok());
     }
 }
