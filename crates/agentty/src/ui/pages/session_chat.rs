@@ -82,7 +82,6 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Prompt { .. }
             | AppMode::Diff { .. }
-            | AppMode::ProjectExplorer { .. }
             | AppMode::Help { .. } => DoneSessionOutputMode::Summary,
         }
     }
@@ -99,7 +98,6 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Prompt { .. }
             | AppMode::Diff { .. }
-            | AppMode::ProjectExplorer { .. }
             | AppMode::Help { .. } => None,
         }
     }
@@ -116,7 +114,6 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Prompt { .. }
             | AppMode::Diff { .. }
-            | AppMode::ProjectExplorer { .. }
             | AppMode::Help { .. } => None,
         }
     }

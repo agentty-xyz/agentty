@@ -159,10 +159,7 @@ fn render_list_or_overlay_mode(
             shared.list_background(),
             aux.session_progress_messages,
         ),
-        AppMode::View { .. }
-        | AppMode::Prompt { .. }
-        | AppMode::Diff { .. }
-        | AppMode::ProjectExplorer { .. } => {
+        AppMode::View { .. } | AppMode::Prompt { .. } | AppMode::Diff { .. } => {
             return false;
         }
     }
@@ -213,27 +210,6 @@ fn render_session_or_diff_mode(
             *scroll_offset,
             *file_explorer_selected_index,
         ),
-        AppMode::ProjectExplorer {
-            all_entries: _,
-            entries,
-            expanded_directories: _,
-            preview,
-            return_to_list: _,
-            scroll_offset,
-            selected_index,
-            session_id,
-        } => {
-            if let Some(session) = sessions.iter().find(|session| session.id == *session_id) {
-                pages::project_explorer::ProjectExplorerPage::new(
-                    entries,
-                    *selected_index,
-                    preview,
-                    *scroll_offset,
-                    session,
-                )
-                .render(f, area);
-            }
-        }
         AppMode::List
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }

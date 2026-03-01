@@ -43,7 +43,6 @@ pub(crate) async fn handle_key_event(
         }
         AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
         AppMode::Diff { .. } => Ok(mode::diff::handle(app, key)),
-        AppMode::ProjectExplorer { .. } => mode::project_explorer::handle(app, key).await,
         AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
     }
 }
@@ -51,8 +50,7 @@ pub(crate) async fn handle_key_event(
 /// Handles list-mode external open shortcuts for the sessions tab.
 ///
 /// The action is available only on the sessions tab when a session row is
-/// selected. Lowercase `e` opens `nvim` in the active project root. Uppercase
-/// `E` opens the in-app project explorer rooted to that same project.
+/// selected. Lowercase `e` opens `nvim` in the active project root.
 async fn handle_list_external_editor_key(
     app: &mut App,
     terminal: &mut TuiTerminal,
@@ -63,7 +61,7 @@ async fn handle_list_external_editor_key(
         return None;
     }
 
-    if !matches!(key.code, KeyCode::Char('e' | 'E')) || app.tabs.current() != Tab::Sessions {
+    if !matches!(key.code, KeyCode::Char('e')) || app.tabs.current() != Tab::Sessions {
         return None;
     }
 
@@ -72,13 +70,7 @@ async fn handle_list_external_editor_key(
         .table_state
         .selected()
         .and_then(|selected_index| app.session_id_for_index(selected_index));
-    let Some(session_id) = selected_session_id else {
-        return Some(EventResult::Continue);
-    };
-
-    if matches!(key.code, KeyCode::Char('E')) {
-        crate::runtime::mode::project_explorer::open_for_session(app, &session_id, true).await;
-
+    if selected_session_id.is_none() {
         return Some(EventResult::Continue);
     }
 

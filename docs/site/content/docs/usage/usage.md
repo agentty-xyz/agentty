@@ -70,7 +70,6 @@ Agentty classifies sessions by the number of changed lines in their diff:
 | `c` | Cancel session |
 | `Enter` | Open session |
 | `e` | Open `nvim` (active project root) |
-| `E` | Open Project Explorer (active project root) |
 | `j` / `k` | Navigate sessions |
 | `Tab` | Switch tab |
 | `?` | Help |
@@ -126,19 +125,6 @@ Additional state-specific keys:
 - **Focused review**: Runs in read-only review mode. It can use internet lookup
   and non-editing verification commands, but it should not edit files or
   mutate git/workspace state.
-
-### Project Explorer
-
-| Key | Action |
-|-----|--------|
-| `q` / `Esc` | Back |
-| `Enter` | Open file or toggle directory |
-| `j` / `k` | Select entry |
-| `Up` / `Down` | Scroll preview |
-| `?` | Help |
-
-When opened from the **Sessions** list with `E`, explorer rows come from the
-active project root.
 
 ### Diff Mode
 

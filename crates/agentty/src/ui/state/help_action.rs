@@ -69,7 +69,6 @@ pub(crate) fn session_list_actions(
 
     if can_open_selected_session {
         actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
-        actions.push(HelpAction::new("explorer", "E", "Open project explorer"));
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
@@ -115,7 +114,6 @@ pub(crate) fn session_list_footer_actions(can_open_selected_session: bool) -> Ve
     if can_open_selected_session {
         actions.push(HelpAction::new("view", "Enter", "Open session"));
         actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
-        actions.push(HelpAction::new("explorer", "E", "Open project explorer"));
     }
 
     actions.push(HelpAction::new("nav", "j/k", "Navigate sessions"));
@@ -295,31 +293,6 @@ pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
-/// Returns help entries for project-explorer actions.
-/// These entries are used by the help overlay and include all available
-/// actions.
-pub(crate) fn project_explorer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("back", "q/Esc", "Back"),
-        HelpAction::new("open/toggle", "Enter", "Open file or toggle directory"),
-        HelpAction::new("select entry", "j/k", "Select entry"),
-        HelpAction::new("scroll file", "Up/Down", "Scroll file"),
-        HelpAction::new("help", "?", "Help"),
-    ]
-}
-
-/// Returns compact project-explorer footer actions for the page-level hint
-/// line.
-pub(crate) fn project_explorer_footer_actions() -> Vec<HelpAction> {
-    vec![
-        HelpAction::new("back", "q/Esc", "Back"),
-        HelpAction::new("open/toggle", "Enter", "Open file or toggle directory"),
-        HelpAction::new("select entry", "j/k", "Select entry"),
-        HelpAction::new("scroll file", "Up/Down", "Scroll file"),
-        HelpAction::new("help", "?", "Help"),
-    ]
-}
-
 /// Renders one-line footer help text from projected actions.
 pub(crate) fn footer_text(actions: &[HelpAction]) -> String {
     let mut help_text = String::new();
@@ -362,7 +335,6 @@ mod tests {
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "e"));
-        assert!(!actions.iter().any(|action| action.key == "E"));
         assert!(actions.iter().any(|action| action.key == "j/k"));
     }
 
@@ -376,7 +348,6 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "e"));
-        assert!(actions.iter().any(|action| action.key == "E"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "Tab"));
@@ -485,35 +456,5 @@ mod tests {
 
         // Assert
         assert_eq!(help_text, "q: quit | ?: help");
-    }
-
-    #[test]
-    fn test_project_explorer_actions_include_navigation_and_help() {
-        // Arrange
-
-        // Act
-        let actions = project_explorer_actions();
-
-        // Assert
-        assert!(actions.iter().any(|action| action.key == "q/Esc"));
-        assert!(actions.iter().any(|action| action.key == "Enter"));
-        assert!(actions.iter().any(|action| action.key == "j/k"));
-        assert!(actions.iter().any(|action| action.key == "Up/Down"));
-        assert!(actions.iter().any(|action| action.key == "?"));
-    }
-
-    #[test]
-    fn test_project_explorer_footer_actions_include_navigation_and_help() {
-        // Arrange
-
-        // Act
-        let actions = project_explorer_footer_actions();
-
-        // Assert
-        assert!(actions.iter().any(|action| action.key == "q/Esc"));
-        assert!(actions.iter().any(|action| action.key == "Enter"));
-        assert!(actions.iter().any(|action| action.key == "j/k"));
-        assert!(actions.iter().any(|action| action.key == "Up/Down"));
-        assert!(actions.iter().any(|action| action.key == "?"));
     }
 }
