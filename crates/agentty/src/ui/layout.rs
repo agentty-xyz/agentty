@@ -6,6 +6,9 @@ use ratatui::text::{Line, Span};
 pub const CHAT_INPUT_MAX_VISIBLE_LINES: u16 = 10;
 
 const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;
+const CHAT_INPUT_INNER_OFFSET: u16 = 1;
+const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
+const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
 
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
@@ -79,6 +82,37 @@ pub fn calculate_input_viewport(
     let cursor_row = clamped_cursor_y.saturating_sub(scroll_offset);
 
     (scroll_offset, cursor_row)
+}
+
+/// Calculates the cursor position for an empty chat input with placeholder
+/// text.
+pub fn placeholder_cursor_position(area: Rect) -> (u16, u16) {
+    (
+        area.x
+            .saturating_add(CHAT_INPUT_INNER_OFFSET)
+            .saturating_add(CHAT_INPUT_PROMPT_PREFIX_WIDTH),
+        area.y.saturating_add(CHAT_INPUT_INNER_OFFSET),
+    )
+}
+
+/// Calculates the cursor position for chat input content rendered inside the
+/// bordered input block.
+pub fn input_cursor_position(area: Rect, cursor_x: u16, cursor_row: u16) -> (u16, u16) {
+    (
+        area.x
+            .saturating_add(CHAT_INPUT_INNER_OFFSET)
+            .saturating_add(cursor_x),
+        area.y
+            .saturating_add(CHAT_INPUT_INNER_OFFSET)
+            .saturating_add(cursor_row),
+    )
+}
+
+/// Calculates slash-command dropdown height, including top and bottom borders.
+pub fn slash_menu_dropdown_height(option_count: usize) -> u16 {
+    u16::try_from(option_count)
+        .unwrap_or(u16::MAX)
+        .saturating_add(SLASH_MENU_BORDER_HEIGHT)
 }
 
 /// Move the cursor one visual line up in the wrapped chat input layout.
@@ -339,6 +373,56 @@ mod tests {
         // Assert
         assert_eq!(scroll_offset, 1);
         assert_eq!(cursor_row, 1);
+    }
+
+    #[test]
+    fn test_placeholder_cursor_position_accounts_for_border_and_prompt_prefix() {
+        // Arrange
+        let area = Rect::new(10, 5, 40, 4);
+
+        // Act
+        let cursor_position = placeholder_cursor_position(area);
+
+        // Assert
+        assert_eq!(cursor_position, (14, 6));
+    }
+
+    #[test]
+    fn test_input_cursor_position_accounts_for_border_and_offsets() {
+        // Arrange
+        let area = Rect::new(10, 5, 40, 6);
+        let cursor_x = 7;
+        let cursor_row = 2;
+
+        // Act
+        let cursor_position = input_cursor_position(area, cursor_x, cursor_row);
+
+        // Assert
+        assert_eq!(cursor_position, (18, 8));
+    }
+
+    #[test]
+    fn test_slash_menu_dropdown_height_includes_border_lines() {
+        // Arrange
+        let option_count = 4;
+
+        // Act
+        let dropdown_height = slash_menu_dropdown_height(option_count);
+
+        // Assert
+        assert_eq!(dropdown_height, 6);
+    }
+
+    #[test]
+    fn test_slash_menu_dropdown_height_saturates_at_u16_max() {
+        // Arrange
+        let option_count = usize::MAX;
+
+        // Act
+        let dropdown_height = slash_menu_dropdown_height(option_count);
+
+        // Assert
+        assert_eq!(dropdown_height, u16::MAX);
     }
 
     #[test]

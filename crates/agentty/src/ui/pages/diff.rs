@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::domain::session::Session;
-use crate::ui::components::file_explorer::FileExplorer;
+use crate::ui::components::file_explorer::{FileExplorer, FileTreeItem};
 use crate::ui::state::help_action;
 use crate::ui::util::{
     DiffLine, DiffLineKind, diff_line_change_totals, max_diff_line_number, parse_diff_lines,
@@ -184,10 +184,7 @@ impl Page for DiffPage<'_> {
             .selected_index(self.file_explorer_selected_index)
             .render(f, file_list_area);
 
-        let filtered = tree_items
-            .get(self.file_explorer_selected_index)
-            .map(|item| FileExplorer::filter_diff_lines(&parsed, item))
-            .unwrap_or_default();
+        let filtered = selected_diff_lines(&parsed, &tree_items, self.file_explorer_selected_index);
         self.render_diff_content(
             f,
             diff_area,
@@ -202,6 +199,32 @@ impl Page for DiffPage<'_> {
     }
 }
 
+/// Returns diff lines for the selected file explorer item.
+///
+/// When `selected_index` is out of bounds, the full parsed diff is returned so
+/// the diff panel continues to show meaningful content.
+fn selected_diff_lines<'a>(
+    parsed_lines: &[DiffLine<'a>],
+    tree_items: &[FileTreeItem],
+    selected_index: usize,
+) -> Vec<DiffLine<'a>> {
+    let Some(selected_item) = tree_items.get(selected_index) else {
+        return parsed_lines.iter().map(clone_diff_line).collect();
+    };
+
+    FileExplorer::filter_diff_lines(parsed_lines, selected_item)
+}
+
+/// Clones a parsed diff line while preserving borrowed content.
+fn clone_diff_line<'a>(diff_line: &DiffLine<'a>) -> DiffLine<'a> {
+    DiffLine {
+        kind: diff_line.kind,
+        old_line: diff_line.old_line,
+        new_line: diff_line.new_line,
+        content: diff_line.content,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -209,6 +232,14 @@ mod tests {
     use super::*;
     use crate::agent::AgentModel;
     use crate::domain::session::{SessionSize, SessionStats, Status};
+    use crate::ui::util::parse_diff_lines;
+
+    const SAMPLE_DIFF: &str = concat!(
+        "diff --git a/src/main.rs b/src/main.rs\n",
+        "+added in main\n",
+        "diff --git a/README.md b/README.md\n",
+        "+added in readme\n"
+    );
 
     fn session_fixture() -> Session {
         Session {
@@ -263,5 +294,38 @@ mod tests {
         assert!(text.contains("(+1 -0) Diff — Diff Session"));
         assert!(text.contains("j/k: select file"));
         assert!(text.contains("Up/Down: scroll file"));
+    }
+
+    #[test]
+    fn test_selected_diff_lines_returns_filtered_section_for_selected_file() {
+        // Arrange
+        let parsed_lines = parse_diff_lines(SAMPLE_DIFF);
+        let tree_items = FileExplorer::file_tree_items(&parsed_lines);
+
+        // Act
+        let selected_lines = selected_diff_lines(&parsed_lines, &tree_items, 1);
+
+        // Assert
+        assert_eq!(selected_lines.len(), 2);
+        assert_eq!(
+            selected_lines[0].content,
+            "diff --git a/src/main.rs b/src/main.rs"
+        );
+        assert_eq!(selected_lines[1].content, "added in main");
+    }
+
+    #[test]
+    fn test_selected_diff_lines_returns_full_diff_when_index_is_out_of_bounds() {
+        // Arrange
+        let parsed_lines = parse_diff_lines(SAMPLE_DIFF);
+        let tree_items = FileExplorer::file_tree_items(&parsed_lines);
+
+        // Act
+        let selected_lines = selected_diff_lines(&parsed_lines, &tree_items, usize::MAX);
+
+        // Assert
+        assert_eq!(selected_lines.len(), parsed_lines.len());
+        assert_eq!(selected_lines[0].content, parsed_lines[0].content);
+        assert_eq!(selected_lines[3].content, parsed_lines[3].content);
     }
 }

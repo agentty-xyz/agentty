@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::ui::Component;
 use crate::ui::util::{
     CHAT_INPUT_MAX_VISIBLE_LINES, calculate_input_viewport, compute_input_layout,
+    input_cursor_position, placeholder_cursor_position, slash_menu_dropdown_height,
 };
 
 /// A single slash-command dropdown option.
@@ -122,8 +123,7 @@ impl<'a> ChatInput<'a> {
             let widget = Paragraph::new(display_lines).block(block);
             f.render_widget(Clear, area);
             f.render_widget(widget, area);
-
-            f.set_cursor_position((area.x.saturating_add(1 + 3), area.y.saturating_add(1)));
+            f.set_cursor_position(placeholder_cursor_position(area));
 
             return;
         }
@@ -142,19 +142,14 @@ impl<'a> ChatInput<'a> {
 
         f.render_widget(Clear, area);
         f.render_widget(widget, area);
-        f.set_cursor_position((
-            area.x.saturating_add(1).saturating_add(cursor_x),
-            area.y.saturating_add(1).saturating_add(cursor_row),
-        ));
+        f.set_cursor_position(input_cursor_position(area, cursor_x, cursor_row));
     }
 }
 
 impl Component for ChatInput<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         if let Some(slash_menu) = &self.slash_menu {
-            let dropdown_height = u16::try_from(slash_menu.options.len())
-                .unwrap_or(u16::MAX)
-                .saturating_add(2);
+            let dropdown_height = slash_menu_dropdown_height(slash_menu.options.len());
             let sections = Layout::default()
                 .constraints([Constraint::Length(dropdown_height), Constraint::Min(0)])
                 .split(area);
