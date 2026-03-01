@@ -1159,6 +1159,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Ensures title-generation prompt rendering includes commit-style,
+    /// high-level title guidance and the original user request.
     fn test_session_title_generation_prompt_includes_request() {
         // Arrange
         let request_prompt = "Refactor session lifecycle updates";
@@ -1168,7 +1170,9 @@ mod tests {
             .expect("title generation prompt should render");
 
         // Assert
-        assert!(title_prompt.contains("Generate a concise title"));
+        assert!(title_prompt.contains("Generate a concise, commit-style title"));
+        assert!(title_prompt.contains("Keep it high-level and intent-focused."));
+        assert!(title_prompt.contains("Do not include long file names"));
         assert!(title_prompt.contains(request_prompt));
     }
 
