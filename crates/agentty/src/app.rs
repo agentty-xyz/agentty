@@ -20,6 +20,7 @@ use crate::domain::session::{CodexUsageLimits, Session, Status};
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
+use crate::runtime::mode::sync_blocked;
 use crate::ui;
 use crate::ui::state::app_mode::AppMode;
 
@@ -1201,8 +1202,8 @@ impl App {
     }
 
     /// Builds success copy for sync completion with pull/push/conflict metrics
-    /// rendered on separate lines, including pulled and pushed commit titles
-    /// when available.
+    /// rendered as markdown sections with empty lines separating pull, push,
+    /// and conflict blocks.
     fn sync_success_message(sync_main_outcome: &SyncMainOutcome) -> String {
         let pulled_summary = Self::sync_commit_summary("pulled", sync_main_outcome.pulled_commits);
         let pulled_titles =
@@ -1213,16 +1214,13 @@ impl App {
         let conflict_summary =
             Self::sync_conflict_summary(&sync_main_outcome.resolved_conflict_files);
 
-        let pull_line = format!("{pulled_summary}{pulled_titles}");
-        let push_line = format!("{pushed_summary}{pushed_titles}");
-
-        [
-            "Successfully synchronized with its upstream.".to_string(),
-            pull_line,
-            push_line,
-            conflict_summary,
-        ]
-        .join("\n")
+        sync_blocked::format_sync_success_message(
+            &pulled_summary,
+            &pulled_titles,
+            &pushed_summary,
+            &pushed_titles,
+            &conflict_summary,
+        )
     }
 
     /// Returns pulled commit titles formatted as an indented list.
@@ -1237,7 +1235,7 @@ impl App {
             .collect::<Vec<String>>()
             .join("\n");
 
-        format!("\nnewly pulled commits:\n{pulled_title_lines}")
+        format!("newly pulled commits:\n{pulled_title_lines}")
     }
 
     /// Returns pushed commit titles formatted as an indented list.
@@ -1252,7 +1250,7 @@ impl App {
             .collect::<Vec<String>>()
             .join("\n");
 
-        format!("\nnewly pushed commits:\n{pushed_title_lines}")
+        format!("newly pushed commits:\n{pushed_title_lines}")
     }
 
     /// Returns sync failure copy with actionable guidance for auth failures.
@@ -1737,14 +1735,17 @@ mod tests {
         let mode = App::sync_main_popup_mode(Ok(sync_main_outcome), &sync_popup_context);
         let expected_message = concat!(
             "Successfully synchronized with its upstream.\n",
-            "2 commits pulled\n",
+            "\n",
+            "## 1. 2 commits pulled\n",
             "newly pulled commits:\n",
             "  - Add audit log indexing\n",
             "  - Fix merge conflict prompt wording\n",
-            "1 commit pushed\n",
+            "\n",
+            "## 2. 1 commit pushed\n",
             "newly pushed commits:\n",
             "  - Polish sync popup alignment\n",
-            "conflicts fixed: src/lib.rs"
+            "\n",
+            "## 3. conflicts fixed: src/lib.rs"
         );
 
         // Assert

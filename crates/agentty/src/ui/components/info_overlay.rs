@@ -42,13 +42,63 @@ impl<'a> InfoOverlay<'a> {
     /// Renders the body message as markdown with inline highlight styles and
     /// explicit line breaks.
     fn message_lines(&self, message_width: usize) -> Vec<Line<'static>> {
-        let mut message_lines = render_markdown(self.message, message_width);
+        let normalized_message = Self::markdown_message_with_block_headers(self.message);
+        let mut message_lines = render_markdown(&normalized_message, message_width);
 
         if message_lines.is_empty() {
             message_lines.push(Line::from(""));
         }
 
         message_lines
+    }
+
+    /// Adds markdown block headers for numbered sync sections and inserts blank
+    /// lines between each section.
+    fn markdown_message_with_block_headers(message: &str) -> String {
+        let mut normalized_lines: Vec<String> = Vec::new();
+
+        for raw_line in message.split('\n') {
+            if let Some(formatted_line) = Self::format_sync_block_title(raw_line) {
+                if let Some(previous_line) = normalized_lines.last()
+                    && !previous_line.is_empty()
+                {
+                    normalized_lines.push(String::new());
+                }
+
+                normalized_lines.push(formatted_line);
+                continue;
+            }
+
+            normalized_lines.push(raw_line.to_string());
+        }
+
+        normalized_lines.join("\n")
+    }
+
+    /// Converts known sync section title lines (e.g., `1. Pull`, `2. Push`) to
+    /// markdown heading text.
+    fn format_sync_block_title(raw_line: &str) -> Option<String> {
+        let trimmed_line = raw_line.trim();
+        if trimmed_line.is_empty() {
+            return None;
+        }
+
+        let heading_content = trimmed_line.strip_prefix("## ").unwrap_or(trimmed_line);
+
+        split_prefixed_title(heading_content)?;
+        let normalized_title = heading_content.to_ascii_lowercase();
+        if !normalized_title.contains("pull")
+            && !normalized_title.contains("push")
+            && !normalized_title.contains("conflict")
+        {
+            return None;
+        }
+
+        if trimmed_line.starts_with("## ") {
+            return Some(trimmed_line.to_string());
+        }
+
+        Some(format!("## {heading_content}"))
     }
 
     /// Centers the first body line when it matches the sync context header
@@ -215,6 +265,38 @@ fn loading_indicator_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Splits numbered section titles like `1. Pull` or `2) Push`.
+fn split_prefixed_title(line: &str) -> Option<&str> {
+    if let Some(dot_index) = line.find('.') {
+        if dot_index == 0 {
+            return None;
+        }
+
+        if !line[..dot_index]
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        {
+            return None;
+        }
+
+        return Some(line[dot_index + 1..].trim());
+    }
+
+    let parenthesis_index = line.find(')')?;
+    if parenthesis_index == 0 {
+        return None;
+    }
+
+    if !line[..parenthesis_index]
+        .chars()
+        .all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+
+    Some(line[parenthesis_index + 1..].trim())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,6 +432,53 @@ mod tests {
                 .spans
                 .iter()
                 .any(|span| span.style.fg == Some(Color::Yellow))
+        );
+    }
+
+    #[test]
+    fn test_markdown_message_with_block_headers_formats_sync_sections() {
+        // Arrange
+        let message = "1. Pull\n2 commits pulled\n\n2. Push\n1 commit pushed\n\n3. \
+                       Conflicts\nconflicts fixed: src/lib.rs";
+
+        // Act
+        let formatted_message = InfoOverlay::markdown_message_with_block_headers(message);
+
+        // Assert
+        assert_eq!(
+            formatted_message,
+            concat!(
+                "## 1. Pull\n",
+                "2 commits pulled\n",
+                "\n",
+                "## 2. Push\n",
+                "1 commit pushed\n",
+                "\n",
+                "## 3. Conflicts\n",
+                "conflicts fixed: src/lib.rs",
+            )
+        );
+    }
+
+    #[test]
+    fn test_markdown_message_with_block_headers_inserts_missing_section_spacing() {
+        // Arrange
+        let message = concat!(
+            "## 1. 2 commits pulled\n",
+            "2 commits pulled\n",
+            "## 2. 1 commit pushed\n",
+            "1 commit pushed\n",
+            "## 3. conflicts fixed: src/lib.rs\n",
+            "conflicts fixed: src/lib.rs",
+        );
+
+        // Act
+        let formatted_message = InfoOverlay::markdown_message_with_block_headers(message);
+
+        // Assert
+        assert!(formatted_message.contains("2 commits pulled\n\n## 2. 1 commit pushed"));
+        assert!(
+            formatted_message.contains("1 commit pushed\n\n## 3. conflicts fixed: src/lib.rs",)
         );
     }
 

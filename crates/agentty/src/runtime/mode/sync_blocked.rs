@@ -4,6 +4,43 @@ use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::state::app_mode::AppMode;
 
+const SYNC_SUCCESS_HEADER: &str = "Successfully synchronized with its upstream.";
+
+/// Builds a sync completion message using markdown headers and spacing between
+/// pull/push/conflict blocks.
+pub(crate) fn format_sync_success_message(
+    pulled_summary: &str,
+    pulled_titles: &str,
+    pushed_summary: &str,
+    pushed_titles: &str,
+    conflict_summary: &str,
+) -> String {
+    let pull_section = sync_success_section(&format!("## 1. {pulled_summary}"), pulled_titles);
+    let push_section = sync_success_section(&format!("## 2. {pushed_summary}"), pushed_titles);
+    let conflict_section = sync_success_section(&format!("## 3. {conflict_summary}"), "");
+
+    [
+        SYNC_SUCCESS_HEADER,
+        &pull_section,
+        &push_section,
+        &conflict_section,
+    ]
+    .join("\n\n")
+}
+
+/// Builds one markdown sync section with a title and optional details.
+fn sync_success_section(title: &str, details: &str) -> String {
+    let mut lines = Vec::with_capacity(2);
+
+    lines.push(title.to_string());
+
+    if !details.is_empty() {
+        lines.push(details.to_string());
+    }
+
+    lines.join("\n")
+}
+
 /// Handles key input while the sync informational popup is visible.
 pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     let AppMode::SyncBlockedPopup { is_loading, .. } = &app.mode else {
@@ -171,5 +208,36 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::SyncBlockedPopup { .. }));
+    }
+
+    #[test]
+    fn test_format_sync_success_message_includes_markdown_sections() {
+        // Arrange
+        let pulled_summary = "2 commits pulled";
+        let pulled_titles = "newly pulled commits:\n  - Add audit log indexing\n  - Fix merge \
+                             conflict prompt wording";
+        let pushed_summary = "1 commit pushed";
+        let pushed_titles = "newly pushed commits:\n  - Polish sync popup alignment";
+        let conflict_summary = "conflicts fixed: src/lib.rs";
+
+        // Act
+        let formatted_message = format_sync_success_message(
+            pulled_summary,
+            pulled_titles,
+            pushed_summary,
+            pushed_titles,
+            conflict_summary,
+        );
+
+        // Assert
+        assert!(formatted_message.starts_with(
+            "Successfully synchronized with its upstream.\n\n## 1. 2 commits pulled\nnewly pulled \
+             commits:\n",
+        ));
+        assert!(formatted_message.contains("newly pulled commits:\n  - Add audit log indexing"));
+        assert!(formatted_message.contains(
+            "\n\n## 2. 1 commit pushed\nnewly pushed commits:\n  - Polish sync popup alignment",
+        ));
+        assert!(formatted_message.contains("\n\n## 3. conflicts fixed: src/lib.rs"));
     }
 }
