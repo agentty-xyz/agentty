@@ -361,10 +361,12 @@ pub(crate) enum SyncSessionStartError {
 /// Summary of one completed main-branch sync run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SyncMainOutcome {
-    /// Number of commits rebased from upstream into the local branch.
-    pub(crate) pulled_commits: Option<u32>,
     /// Commit titles discovered upstream and pulled during sync.
     pub(crate) pulled_commit_titles: Vec<String>,
+    /// Number of commits rebased from upstream into the local branch.
+    pub(crate) pulled_commits: Option<u32>,
+    /// Commit titles discovered locally and pushed during sync.
+    pub(crate) pushed_commit_titles: Vec<String>,
     /// Number of local commits pushed to upstream during sync.
     pub(crate) pushed_commits: Option<u32>,
     /// Paths that were conflicted and resolved during assisted sync rebase.
@@ -846,6 +848,10 @@ impl SessionManager {
                 };
         }
         let ahead_behind_after_pull = git_client.get_ahead_behind(working_dir.clone()).await.ok();
+        let pushed_commit_titles = git_client
+            .list_local_commit_titles(working_dir.clone())
+            .await
+            .unwrap_or_default();
 
         git_client
             .push_current_branch(working_dir)
@@ -858,8 +864,9 @@ impl SessionManager {
         );
 
         Ok(SyncMainOutcome {
-            pulled_commits,
             pulled_commit_titles,
+            pulled_commits,
+            pushed_commit_titles,
             pushed_commits,
             resolved_conflict_files,
         })
@@ -1973,6 +1980,12 @@ mod tests {
             .times(1)
             .return_once(|_| Box::pin(async { Ok((1, 0)) }));
         mock_git_client
+            .expect_list_local_commit_titles()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Ok(vec!["Refine sync conflict messaging".to_string()]) })
+            });
+        mock_git_client
             .expect_pull_rebase()
             .times(1)
             .returning(|_| {
@@ -2028,11 +2041,12 @@ mod tests {
         assert_eq!(
             result,
             Ok(SyncMainOutcome {
-                pulled_commits: Some(2),
                 pulled_commit_titles: vec![
                     "Update changelog format".to_string(),
                     "Fix sync popup copy".to_string(),
                 ],
+                pulled_commits: Some(2),
+                pushed_commit_titles: vec!["Refine sync conflict messaging".to_string()],
                 pushed_commits: Some(1),
                 resolved_conflict_files: vec!["src/lib.rs".to_string()],
             }),

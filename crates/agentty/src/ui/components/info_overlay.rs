@@ -2,16 +2,18 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
 
 use crate::ui::Component;
 use crate::ui::icon::Icon;
 use crate::ui::text_util::wrap_lines;
 
-const MIN_OVERLAY_HEIGHT: u16 = 7;
-const MIN_OVERLAY_WIDTH: u16 = 38;
-const OVERLAY_HEIGHT_PERCENT: u16 = 20;
-const OVERLAY_WIDTH_PERCENT: u16 = 45;
+const BODY_HORIZONTAL_PADDING: u16 = 2;
+const BODY_VERTICAL_PADDING: u16 = 1;
+const MIN_OVERLAY_HEIGHT: u16 = 9;
+const MIN_OVERLAY_WIDTH: u16 = 44;
+const OVERLAY_HEIGHT_PERCENT: u16 = 26;
+const OVERLAY_WIDTH_PERCENT: u16 = 52;
 
 /// Centered informational popup used for non-destructive workflow guidance.
 pub struct InfoOverlay<'a> {
@@ -68,20 +70,26 @@ impl<'a> InfoOverlay<'a> {
     /// Returns popup height sized to keep wrapped body content and the action
     /// row visible.
     fn popup_height(&self, area: Rect, width: u16) -> u16 {
-        let inner_width = width.saturating_sub(2).max(1);
+        let horizontal_chrome = 2 + (BODY_HORIZONTAL_PADDING * 2);
+        let vertical_chrome = 2 + (BODY_VERTICAL_PADDING * 2);
+        let inner_width = width.saturating_sub(horizontal_chrome).max(1);
         let min_height = (area.height * OVERLAY_HEIGHT_PERCENT / 100)
             .max(MIN_OVERLAY_HEIGHT)
             .min(area.height);
         let action_row = if self.is_loading {
-            format!("{} Sync in progress...", Icon::current_spinner())
+            format!(
+                "{} Sync in progress...  Please wait.",
+                Icon::current_spinner()
+            )
         } else {
-            "OK".to_string()
+            "OK  Press Enter, Esc, or Q to close.".to_string()
         };
         let body_with_action = format!("{}\n\n{action_row}", self.message);
         let required_inner_lines = wrap_lines(&body_with_action, usize::from(inner_width)).len();
-        let required_height = u16::try_from(required_inner_lines.saturating_add(2))
-            .unwrap_or(area.height)
-            .min(area.height);
+        let required_height =
+            u16::try_from(required_inner_lines.saturating_add(usize::from(vertical_chrome)))
+                .unwrap_or(area.height)
+                .min(area.height);
 
         required_height.max(min_height)
     }
@@ -92,33 +100,66 @@ impl Component for InfoOverlay<'_> {
         let width = Self::popup_width(area);
         let title = format!(" {} ", self.title);
         let mut paragraph_lines = self.message_lines();
+        let border_color = if self.is_loading {
+            Color::Cyan
+        } else {
+            Color::Yellow
+        };
+        let title_style = Style::default()
+            .fg(border_color)
+            .add_modifier(Modifier::BOLD);
 
         if self.is_loading {
             let loading_line = format!("{} Sync in progress...", Icon::current_spinner());
 
             paragraph_lines.push(Line::from(""));
-            paragraph_lines.push(Line::from(Span::styled(
-                loading_line,
-                Style::default().fg(Color::Cyan),
-            )));
+            paragraph_lines.push(Line::from(vec![
+                Span::styled(
+                    loading_line,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  Please wait.", Style::default().fg(Color::Gray)),
+            ]));
         } else {
             let ok_style = Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD);
+            let key_style = Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD);
+            let hint_style = Style::default().fg(Color::Gray);
 
             paragraph_lines.push(Line::from(""));
-            paragraph_lines.push(Line::from(Span::styled(" OK ", ok_style)));
+            paragraph_lines.push(Line::from(vec![
+                Span::styled(" OK ", ok_style),
+                Span::styled("  Press ", hint_style),
+                Span::styled("Enter", key_style),
+                Span::styled(", ", hint_style),
+                Span::styled("Esc", key_style),
+                Span::styled(", or ", hint_style),
+                Span::styled("Q", key_style),
+                Span::styled(" to close.", hint_style),
+            ]));
         }
 
         let paragraph = Paragraph::new(paragraph_lines)
-            .alignment(Alignment::Center)
+            .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow))
-                    .title(Span::styled(title, Style::default().fg(Color::Yellow))),
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(border_color))
+                    .padding(Padding::new(
+                        BODY_HORIZONTAL_PADDING,
+                        BODY_HORIZONTAL_PADDING,
+                        BODY_VERTICAL_PADDING,
+                        BODY_VERTICAL_PADDING,
+                    ))
+                    .title(Span::styled(title, title_style)),
             );
         let height = self.popup_height(area, width);
         let popup_area = Rect::new(

@@ -482,6 +482,32 @@ pub async fn list_upstream_commit_titles(repo_path: PathBuf) -> Result<Vec<Strin
     Ok(parse_commit_titles(&git_output))
 }
 
+/// Returns local commit subjects that are not yet present in upstream.
+///
+/// The returned order is oldest to newest to match push application order.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository root
+///
+/// # Errors
+/// Returns an error when `git log` fails or upstream tracking refs are
+/// unavailable.
+pub async fn list_local_commit_titles(repo_path: PathBuf) -> Result<Vec<String>, String> {
+    let git_output = run_git_command(
+        repo_path,
+        vec![
+            "log".to_string(),
+            "--reverse".to_string(),
+            "--pretty=%s".to_string(),
+            "@{u}..HEAD".to_string(),
+        ],
+        "Git log failed".to_string(),
+    )
+    .await?;
+
+    Ok(parse_commit_titles(&git_output))
+}
+
 /// Parses newline-delimited commit subjects from `git log` output.
 fn parse_commit_titles(output: &str) -> Vec<String> {
     output

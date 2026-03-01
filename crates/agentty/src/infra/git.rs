@@ -26,7 +26,7 @@ pub use repo::{main_repo_root, repo_url};
 /// Re-exported commit/sync/diff APIs.
 pub use sync::{
     PullRebaseResult, commit_all, commit_all_preserving_single_commit, delete_branch, diff,
-    fetch_remote, get_ahead_behind, head_short_hash, is_worktree_clean,
+    fetch_remote, get_ahead_behind, head_short_hash, is_worktree_clean, list_local_commit_titles,
     list_upstream_commit_titles, pull_rebase, push_current_branch, stage_all,
 };
 /// Re-exported worktree and branch-detection APIs.
@@ -255,6 +255,16 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
     ) -> GitFuture<Result<Vec<String>, String>>;
 
+    /// Returns commit subjects that exist in local `HEAD` but not in upstream.
+    ///
+    /// # Errors
+    /// Returns an error when upstream tracking data or commit history cannot be
+    /// read.
+    fn list_local_commit_titles(
+        &self,
+        repo_path: PathBuf,
+    ) -> GitFuture<Result<Vec<String>, String>>;
+
     /// Reads the configured origin URL for `repo_path`.
     ///
     /// # Errors
@@ -422,6 +432,13 @@ impl GitClient for RealGitClient {
         repo_path: PathBuf,
     ) -> GitFuture<Result<Vec<String>, String>> {
         Box::pin(async move { list_upstream_commit_titles(repo_path).await })
+    }
+
+    fn list_local_commit_titles(
+        &self,
+        repo_path: PathBuf,
+    ) -> GitFuture<Result<Vec<String>, String>> {
+        Box::pin(async move { list_local_commit_titles(repo_path).await })
     }
 
     fn repo_url(&self, repo_path: PathBuf) -> GitFuture<Result<String, String>> {
@@ -988,6 +1005,56 @@ mod tests {
 
         // Assert
         assert_eq!(titles, vec!["Remote commit title".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_list_local_commit_titles_returns_error_without_upstream() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+
+        // Act
+        let result = list_local_commit_titles(dir.path().to_path_buf()).await;
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_local_commit_titles_returns_new_local_commit_titles() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(dir.path(), &["remote", "add", "origin", &remote_path]);
+        run_git_command(dir.path(), &["push", "-u", "origin", "main"]);
+
+        fs::write(dir.path().join("local_1.txt"), "local change 1")
+            .expect("failed to write local change 1");
+        run_git_command(dir.path(), &["add", "local_1.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Local commit title one"]);
+
+        fs::write(dir.path().join("local_2.txt"), "local change 2")
+            .expect("failed to write local change 2");
+        run_git_command(dir.path(), &["add", "local_2.txt"]);
+        run_git_command(dir.path(), &["commit", "-m", "Local commit title two"]);
+
+        // Act
+        let titles = list_local_commit_titles(dir.path().to_path_buf())
+            .await
+            .expect("failed to list local commit titles");
+
+        // Assert
+        assert_eq!(
+            titles,
+            vec![
+                "Local commit title one".to_string(),
+                "Local commit title two".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]
