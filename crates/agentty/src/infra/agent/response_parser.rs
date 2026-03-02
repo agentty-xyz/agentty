@@ -144,11 +144,12 @@ pub(super) fn parse_claude_stream_output_line(stdout_line: &str) -> Option<(Stri
         return None;
     }
 
-    if let Some(content) = extract_claude_stream_result(trimmed_line) {
+    let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
+
+    if let Some(content) = extract_claude_stream_assistant_content(&stream_event) {
         return Some((content, true));
     }
 
-    let stream_event = serde_json::from_str::<serde_json::Value>(trimmed_line).ok()?;
     let progress_message = compact_progress_message_from_json(&stream_event)?;
 
     Some((progress_message, false))
@@ -338,10 +339,59 @@ fn parse_gemini_response_payload(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse { content, stats })
 }
 
-fn extract_claude_stream_result(stdout_line: &str) -> Option<String> {
-    let response = serde_json::from_str::<ClaudeResponse>(stdout_line).ok()?;
+/// Extracts assistant text chunks from one Claude `stream-json` line.
+///
+/// Claude emits assistant updates as `{"type":"assistant","message":...}`
+/// events. This helper joins all text content blocks from `message.content`
+/// into one displayable chunk.
+fn extract_claude_stream_assistant_content(stream_event: &serde_json::Value) -> Option<String> {
+    if stream_event.get("type").and_then(serde_json::Value::as_str) != Some("assistant") {
+        return None;
+    }
 
-    response.result
+    let message = stream_event.get("message")?;
+    if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+        return None;
+    }
+
+    let content_blocks = message
+        .get("content")
+        .and_then(serde_json::Value::as_array)?;
+    let text = content_blocks
+        .iter()
+        .filter_map(extract_claude_stream_content_block_text)
+        .collect::<Vec<_>>()
+        .join("");
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(text)
+}
+
+/// Returns text from one Claude assistant content block when present.
+///
+/// Supports both direct text blocks and nested `delta.text` payloads used by
+/// partial streaming updates.
+fn extract_claude_stream_content_block_text(content_block: &serde_json::Value) -> Option<&str> {
+    let block_type = content_block
+        .get("type")
+        .and_then(serde_json::Value::as_str)?;
+    if block_type != "text" && block_type != "text_delta" {
+        return None;
+    }
+
+    if let Some(text) = content_block
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(text);
+    }
+
+    content_block
+        .get("delta")
+        .and_then(|delta| delta.get("text"))
+        .and_then(serde_json::Value::as_str)
 }
 
 fn extract_gemini_stream_response(stdout_line: &str) -> Option<String> {
@@ -389,6 +439,23 @@ fn extract_gemini_stream_stats(stdout_line: &str) -> Option<SessionStats> {
 }
 
 fn compact_progress_message_from_json(stream_event: &serde_json::Value) -> Option<String> {
+    let assistant_content_type = stream_event
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|content| {
+            content.iter().find_map(|content_block| {
+                content_block
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+            })
+        });
+    if let Some(progress_message) =
+        assistant_content_type.and_then(compact_progress_message_from_stream_label)
+    {
+        return Some(progress_message);
+    }
+
     let item_type = stream_event
         .get("item")
         .and_then(|item| item.get("type"))
@@ -548,6 +615,48 @@ mod tests {
         assert_eq!(parsed.content, "Planned response");
         assert_eq!(parsed.stats.input_tokens, 11);
         assert_eq!(parsed.stats.output_tokens, 7);
+    }
+
+    #[test]
+    fn test_parse_claude_stream_output_line_reads_assistant_message_content_blocks() {
+        // Arrange
+        let stdout_line = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":["#,
+            r#"{"type":"text","text":"Partial "},{"type":"text","text":"answer"}]}}"#
+        );
+
+        // Act
+        let parsed_line = parse_claude_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("Partial answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_parse_claude_stream_output_line_ignores_result_events_for_delta_streaming() {
+        // Arrange
+        let stdout_line = r#"{"type":"result","subtype":"success","result":"Final answer"}"#;
+
+        // Act
+        let parsed_line = parse_claude_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, None);
+    }
+
+    #[test]
+    fn test_parse_claude_stream_output_line_maps_tool_use_blocks_to_progress() {
+        // Arrange
+        let stdout_line = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":["#,
+            r#"{"type":"tool_use","name":"Bash"}]}}"#
+        );
+
+        // Act
+        let parsed_line = parse_claude_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("Running a command".to_string(), false)));
     }
 
     /// Ensures final NDJSON parsing keeps the real assistant reply when

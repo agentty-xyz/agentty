@@ -1440,9 +1440,11 @@ mod tests {
             output: Arc::clone(&output),
             streamed_response_seen: Arc::new(AtomicBool::new(false)),
         };
-        // Claude result JSON line: response content
-        let response_line = "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"hello \
-                             world\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}\n";
+        // Claude assistant stream line: response content chunk
+        let response_line = concat!(
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}]}}"#,
+            "\n"
+        );
         let cursor = Cursor::new(response_line.as_bytes().to_vec());
 
         // Act

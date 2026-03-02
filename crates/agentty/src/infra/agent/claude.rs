@@ -45,6 +45,7 @@ impl AgentBackend for ClaudeBackend {
             .arg("--verbose")
             .arg("--output-format")
             .arg("stream-json")
+            .arg("--include-partial-messages")
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -83,6 +84,7 @@ mod tests {
         // Assert
         assert!(debug_command.contains("--allowedTools"));
         assert!(debug_command.contains("Edit,Bash"));
+        assert!(debug_command.contains("--include-partial-messages"));
         assert!(!debug_command.contains("--permission-mode"));
     }
 

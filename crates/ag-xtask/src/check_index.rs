@@ -25,8 +25,14 @@ pub(crate) fn run() -> Result<(), String> {
 }
 
 fn run_with_runner(runner: &dyn CommandRunner) -> Result<(), String> {
-    let tracked_files = get_tracked_files(runner)?;
-    let agents_files = get_agents_files(runner)?;
+    let tracked_files = get_tracked_files(runner)?
+        .into_iter()
+        .filter(|path| !is_ignored_index_path(path))
+        .collect::<Vec<_>>();
+    let agents_files = get_agents_files(runner)?
+        .into_iter()
+        .filter(|path| !is_ignored_index_path(&normalize_path(path)))
+        .collect::<Vec<_>>();
 
     let mut success = true;
     let missing_agents_files = missing_agents_files(&tracked_files, &agents_files);
@@ -127,6 +133,15 @@ fn is_relative_git_path(path: &str) -> bool {
         && (path_bytes[2] == b'\\' || path_bytes[2] == b'/');
 
     !path.starts_with('/') && !has_windows_drive_prefix
+}
+
+/// Returns whether `path` should be excluded from directory-index checks.
+///
+/// `pre-commit` can create a transient `.tmp-home/` workspace while running
+/// hooks. Those files are not part of repository-owned documentation and must
+/// not require `AGENTS.md` indexing.
+fn is_ignored_index_path(path: &str) -> bool {
+    path == ".tmp-home" || path.starts_with(".tmp-home/")
 }
 
 fn get_tracked_files(runner: &dyn CommandRunner) -> Result<Vec<String>, String> {
@@ -643,5 +658,65 @@ mod tests {
 
         // Assert
         assert!(missing_files.is_empty());
+    }
+
+    #[test]
+    fn test_is_ignored_index_path_matches_tmp_home_entries() {
+        // Arrange
+        let root_path = ".tmp-home";
+        let nested_path = ".tmp-home/.claude/debug/output.txt";
+        let normal_path = "crates/agentty/src/main.rs";
+
+        // Act
+        let root_ignored = is_ignored_index_path(root_path);
+        let nested_ignored = is_ignored_index_path(nested_path);
+        let normal_ignored = is_ignored_index_path(normal_path);
+
+        // Assert
+        assert!(root_ignored);
+        assert!(nested_ignored);
+        assert!(!normal_ignored);
+    }
+
+    #[test]
+    fn test_run_with_runner_ignores_tmp_home_paths() {
+        // Arrange
+        let dir = tempdir().expect("Failed to create temp dir");
+        let agents_path = dir.path().join("AGENTS.md");
+        fs::write(
+            &agents_path,
+            "## Directory Index\n- [file1](file1) - desc\n",
+        )
+        .expect("Failed to write AGENTS.md");
+        let file1_path = dir.path().join("file1");
+
+        let tracked_files_output = format!(
+            "{}\n{}\n.tmp-home/.claude/debug/log.txt",
+            file1_path.to_string_lossy(),
+            agents_path.to_string_lossy()
+        );
+        let agents_files_output = agents_path.to_string_lossy().to_string();
+
+        let mut runner = MockCommandRunner::new();
+        runner
+            .expect_run()
+            .withf(|cmd| {
+                let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+                args.len() == 1 && args[0] == "ls-files"
+            })
+            .returning(move |_| Ok(mock_output(0, &tracked_files_output, "")));
+        runner
+            .expect_run()
+            .withf(|cmd| {
+                let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+                args.len() > 1
+            })
+            .returning(move |_| Ok(mock_output(0, &agents_files_output, "")));
+
+        // Act
+        let result = run_with_runner(&runner);
+
+        // Assert
+        assert!(result.is_ok());
     }
 }
