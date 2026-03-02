@@ -150,7 +150,11 @@ To ensure code quality, you must pass both automated and manual gates.
 
 ### Automated Checks
 
-Run these commands after making changes:
+Do not run manual quality-check commands during development. Rely on commit-time
+`pre-commit` hooks to surface formatting, lint, and validation issues.
+
+Run these commands only when explicitly requested by the user or when debugging
+a failing hook:
 
 1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
 1. **Validate:** `pre-commit run --all-files`
