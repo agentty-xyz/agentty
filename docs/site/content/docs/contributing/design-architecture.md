@@ -270,6 +270,7 @@ shell-heavy tests.
 1. Keep workflow/state transitions in `app/`, not in UI rendering modules.
 1. Keep external integrations in `infra/` behind traits.
 1. Keep business entities and enums in `domain/`.
+1. In `app/` and `runtime/` orchestration, avoid direct `Command::new`, `Instant::now`, `SystemTime::now`, and direct filesystem/process calls unless they run behind trait boundaries.
 1. New external boundaries should get a trait with `#[cfg_attr(test, mockall::automock)]`.
 1. Update docs in `docs/site/content/docs/` whenever user-facing behavior changes.
 1. Update this page when changing module boundaries, runtime flow, or trait boundaries.

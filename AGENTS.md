@@ -171,6 +171,7 @@ minimal output (errors only).
   - Combining `Arrange`, `Act`, and `Assert` is allowed when it improves clarity (for very small tests).
 - **Test Ordering:** Verify tests follow the same order as the functions they test.
 - **Dependencies:** Verify all dependencies (including dev/build) are defined in the root `Cargo.toml` and referenced via `workspace = true`.
+- **Boundary Governance:** In `app/` and `runtime/` orchestration code, reject direct `Command::new`, `Instant::now`, `SystemTime::now`, and direct filesystem/process calls unless they are routed behind an explicit trait boundary.
 
 ## Documentation Conventions
 
