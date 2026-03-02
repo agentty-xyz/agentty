@@ -30,6 +30,7 @@ pub enum AgentResponseKind {
     /// The agent needs clarification before proceeding.
     Question,
     /// The agent is presenting an implementation plan for approval.
+    // TODO: drive a plan-approval flow in the worker when this variant is received.
     Plan,
 }
 

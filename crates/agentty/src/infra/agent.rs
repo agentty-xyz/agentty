@@ -23,10 +23,10 @@ pub use backend::{
     create_backend, parse_response, transport_mode,
 };
 pub(crate) use backend::{
-    build_resume_prompt, parse_stream_output_line, prepend_question_instructions,
+    build_resume_prompt, parse_stream_output_line, prepend_protocol_instructions,
     prepend_repo_root_path_instructions,
 };
-pub use protocol::{AgentResponse, AgentResponseKind, AgentResponseMeta};
+pub(crate) use protocol::AgentResponse;
 pub use response_parser::ParsedResponse;
 pub(crate) use response_parser::{
     compact_codex_progress_message, is_codex_completion_status_message,

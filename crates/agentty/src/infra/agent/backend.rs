@@ -228,7 +228,7 @@ pub(crate) fn prepend_repo_root_path_instructions(
 ///
 /// # Errors
 /// Returns an error if Askama template rendering fails.
-pub(crate) fn prepend_question_instructions(prompt: &str) -> Result<String, AgentBackendError> {
+pub(crate) fn prepend_protocol_instructions(prompt: &str) -> Result<String, AgentBackendError> {
     if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER) {
         return Ok(prompt.to_string());
     }
@@ -357,12 +357,12 @@ mod tests {
 
     #[test]
     /// Ensures protocol instructions are prepended to plain prompts.
-    fn test_prepend_question_instructions_adds_protocol_instructions() {
+    fn test_prepend_protocol_instructions_adds_protocol_instructions() {
         // Arrange
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt = prepend_question_instructions(prompt)
+        let rendered_prompt = prepend_protocol_instructions(prompt)
             .expect("protocol instruction prompt should render");
 
         // Assert
@@ -373,13 +373,13 @@ mod tests {
 
     #[test]
     /// Ensures protocol instructions are not duplicated when already present.
-    fn test_prepend_question_instructions_is_idempotent() {
+    fn test_prepend_protocol_instructions_is_idempotent() {
         // Arrange
-        let prompt = prepend_question_instructions("Implement feature")
+        let prompt = prepend_protocol_instructions("Implement feature")
             .expect("protocol instruction prompt should render");
 
         // Act
-        let rendered_prompt = prepend_question_instructions(&prompt)
+        let rendered_prompt = prepend_protocol_instructions(&prompt)
             .expect("protocol instruction prompt should render");
 
         // Assert

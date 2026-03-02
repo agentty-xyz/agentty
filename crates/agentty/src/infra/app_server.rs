@@ -405,7 +405,7 @@ pub fn turn_prompt_for_runtime(
     let turn_prompt = crate::infra::agent::prepend_repo_root_path_instructions(&turn_prompt)
         .map_err(|error| error.to_string())?;
 
-    crate::infra::agent::prepend_question_instructions(&turn_prompt)
+    crate::infra::agent::prepend_protocol_instructions(&turn_prompt)
         .map_err(|error| error.to_string())
 }
 
