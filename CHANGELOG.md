@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.6] - 2026-03-02
+
+### Added
+
+- **UI:** Add structured question-answer flow between agents and users.
+- **UI:** Add stable paragraph anchor links and dual sidebars in docs.
+- **UI:** Colorize added/removed line counts in diff page title.
+- **UI:** Project list highlights active project.
+- **Docs:** Add design and architecture documentation page.
+- **Docs:** Add GitHub metadata badges and right-side anchor links.
+- **Docs:** Add tooling setup instructions for `uv` and `pre-commit`.
+- **Session:** Generate session titles once in background and refine generation instructions.
+- **Session:** Persist and resume provider-native conversation identifiers across restarts.
+- **Architecture:** Add structured agent response protocol with metadata delimiter.
+- **Architecture:** Unify session turn execution through agent channels.
+
+### Changed
+
+- **Codex:** Load usage limits lazily and remove usage panel/polling.
+- **Codex:** Update model defaults and remove `gpt-5.2-codex`.
+- **UI:** Open `nvim` in read-only mode.
+- **UI:** Refine info overlay and session list padding.
+- **Architecture:** Extract process boundaries (tmux, editor, sync) and inject dependencies (clock, sleeper, git) for better testability.
+- **Architecture:** Propagate assistant phase metadata in app-server streams.
+- **Sync:** Render sync success details as markdown sections.
+
+### Fixed
+
+- **Session:** Harden runtime shutdown I/O and handle Claude partial streaming.
+- **UI:** Harden diff selection fallback and simplify sync commit title formatting.
+
+### Contributors
+
+- @minev-dev
+- @andagaev
+
 ## [v0.4.5] - 2026-03-01
 
 ### Added
