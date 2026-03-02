@@ -8,9 +8,12 @@ use crate::app::App;
 use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
+use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::pages::session_chat::SessionChatPage;
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
+use crate::ui::state::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
+};
 use crate::ui::state::help_action::ViewSessionState;
 use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 
@@ -215,7 +218,7 @@ async fn handle_view_key(
             .await;
         }
         KeyCode::Char('m') if view_session_snapshot.is_action_allowed => {
-            merge_view_session(app, &view_context.session_id).await;
+            open_merge_confirmation(app, view_context);
         }
         KeyCode::Char('r') if view_session_snapshot.is_action_allowed => {
             rebase_view_session(app, &view_context.session_id).await;
@@ -233,6 +236,30 @@ async fn handle_view_key(
     }
 
     true
+}
+
+/// Opens a merge confirmation overlay for the active view session.
+fn open_merge_confirmation(app: &mut App, view_context: &ViewContext) {
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::MergeSession,
+        confirmation_message: "Queue merge for this session?".to_string(),
+        confirmation_title: "Confirm Merge".to_string(),
+        restore_view: Some(confirmation_view_mode(view_context)),
+        session_id: Some(view_context.session_id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
+}
+
+/// Builds the view-mode snapshot used to restore chat context when a merge
+/// confirmation is dismissed.
+fn confirmation_view_mode(view_context: &ViewContext) -> ConfirmationViewMode {
+    ConfirmationViewMode {
+        done_session_output_mode: view_context.done_session_output_mode,
+        focused_review_status_message: view_context.focused_review_status_message.clone(),
+        focused_review_text: view_context.focused_review_text.clone(),
+        scroll_offset: view_context.scroll_offset,
+        session_id: view_context.session_id.clone(),
+    }
 }
 
 /// Applies focused-review output toggles into the mutable pending view state.
@@ -726,13 +753,6 @@ async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String
         .diff(session_folder, base_branch)
         .await
         .unwrap_or_else(|error| format!("Failed to run git diff: {error}"))
-}
-
-async fn merge_view_session(app: &mut App, session_id: &str) {
-    if let Err(error) = app.merge_session(session_id).await {
-        app.append_output_for_session(session_id, &format!("\n[Merge Error] {error}\n"))
-            .await;
-    }
 }
 
 async fn rebase_view_session(app: &mut App, session_id: &str) {
@@ -1335,18 +1355,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_view_session_appends_error_output_without_git_repo() {
+    async fn test_open_merge_confirmation_sets_confirmation_mode_with_view_restore_state() {
         // Arrange
-        let (app, _base_dir, session_id) = new_test_app_with_session().await;
-        let mut app = app;
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+            focused_review_status_message: Some("Preparing focused review...".to_string()),
+            focused_review_text: Some("Critical finding".to_string()),
+            session_id: session_id.clone(),
+            scroll_offset: Some(5),
+        };
+        let context = view_context(&mut app).expect("expected view context");
 
         // Act
-        merge_view_session(&mut app, &session_id).await;
+        open_merge_confirmation(&mut app, &context);
 
         // Assert
-        app.sessions.sync_from_handles();
-        let output = app.sessions.sessions[0].output.clone();
-        assert!(output.contains("[Merge Error]"));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::MergeSession,
+                ref confirmation_message,
+                ref confirmation_title,
+                restore_view: Some(ConfirmationViewMode {
+                    done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                    focused_review_status_message: Some(ref status_message),
+                    focused_review_text: Some(ref review_text),
+                    scroll_offset: Some(5),
+                    session_id: ref restored_session_id,
+                }),
+                session_id: Some(ref mode_session_id),
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
+            } if confirmation_title == "Confirm Merge"
+                && confirmation_message == "Queue merge for this session?"
+                && restored_session_id == &session_id
+                && mode_session_id == &session_id
+                && status_message == "Preparing focused review..."
+                && review_text == "Critical finding"
+        ));
     }
 
     #[tokio::test]

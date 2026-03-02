@@ -8,7 +8,7 @@ use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
 use crate::ui::overlays::SyncBlockedPopupRenderContext;
-use crate::ui::state::app_mode::AppMode;
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::ui::{Component, Page, RenderContext, components, overlays, pages};
 
 /// Shared borrowed data required to render list-page backgrounds.
@@ -128,8 +128,30 @@ fn render_list_or_overlay_mode(
 ) -> bool {
     match mode {
         AppMode::List => render_list_background(f, area, shared.list_background()),
-        AppMode::Confirmation { .. } => {
-            overlays::render_confirmation_overlay(f, area, mode, shared.list_background());
+        AppMode::Confirmation {
+            confirmation_intent,
+            confirmation_message,
+            confirmation_title,
+            restore_view,
+            selected_confirmation_index,
+            ..
+        } => {
+            if *confirmation_intent == ConfirmationIntent::MergeSession
+                && let Some(view_mode) = restore_view
+            {
+                render_merge_confirmation_overlay(
+                    f,
+                    area,
+                    confirmation_message,
+                    confirmation_title,
+                    *selected_confirmation_index,
+                    view_mode,
+                    shared.sessions,
+                    aux.session_progress_messages,
+                );
+            } else {
+                overlays::render_confirmation_overlay(f, area, mode, shared.list_background());
+            }
         }
 
         AppMode::SyncBlockedPopup {
@@ -167,6 +189,39 @@ fn render_list_or_overlay_mode(
     }
 
     true
+}
+
+/// Renders merge confirmation above the originating session chat page.
+fn render_merge_confirmation_overlay(
+    f: &mut Frame,
+    area: Rect,
+    confirmation_message: &str,
+    confirmation_title: &str,
+    selected_confirmation_index: usize,
+    view_mode: &ConfirmationViewMode,
+    sessions: &[Session],
+    session_progress_messages: &HashMap<String, String>,
+) {
+    let background_mode = view_mode.clone().into_view_mode();
+
+    render_session_chat(
+        f,
+        area,
+        SessionChatRenderContext {
+            mode: &background_mode,
+            session_id: &view_mode.session_id,
+            session_progress_messages,
+            sessions,
+            scroll_offset: view_mode.scroll_offset,
+        },
+    );
+
+    components::confirmation_overlay::ConfirmationOverlay::new(
+        confirmation_title,
+        confirmation_message,
+    )
+    .selected_yes(selected_confirmation_index == 0)
+    .render(f, area);
 }
 
 /// Renders session-scoped modes tied to one selected session.

@@ -123,7 +123,7 @@ state:
 | `e` | Open `nvim` (session worktree) |
 | `d` | Show diff |
 | `f` | Show focused review (read-only) |
-| `m` | Queue merge |
+| `m` | Queue merge (confirmation popup) |
 | `r` | Rebase |
 | `Shift+Tab` | Toggle permission mode |
 | `j` / `k` | Scroll output |

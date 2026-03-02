@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::app::{App, Tab};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, TuiTerminal, mode};
-use crate::ui::state::app_mode::AppMode;
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent};
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
@@ -88,7 +88,7 @@ async fn handle_confirmation_decision(
     match decision {
         ConfirmationDecision::Confirm => handle_confirmation_confirm(app).await,
         ConfirmationDecision::Cancel => {
-            app.mode = AppMode::List;
+            app.mode = confirmation_cancel_mode(&app.mode);
 
             Ok(EventResult::Continue)
         }
@@ -96,28 +96,84 @@ async fn handle_confirmation_decision(
     }
 }
 
-/// Resolves a positive confirmation by deleting the selected session when a
-/// confirmation session context exists, or quitting otherwise.
-async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
-    let confirmation_session_id = match &app.mode {
-        AppMode::Confirmation {
-            session_id: Some(session_id),
-            ..
-        } => Some(session_id.clone()),
-        _ => None,
-    };
-    app.mode = AppMode::List;
-
-    if let Some(session_id) = confirmation_session_id {
-        if let Some(session_index) = app.session_index_for_id(&session_id) {
-            app.sessions.table_state.select(Some(session_index));
-            app.delete_selected_session().await;
-        }
-
-        return Ok(EventResult::Continue);
+/// Resolves target mode for `Cancel` in confirmation overlays.
+fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
+    if let AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::MergeSession,
+        restore_view: Some(restore_view),
+        ..
+    } = mode
+    {
+        return restore_view.clone().into_view_mode();
     }
 
-    Ok(EventResult::Quit)
+    AppMode::List
+}
+
+/// Resolves a positive confirmation by dispatching the configured action
+/// intent.
+async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
+    let (confirmation_intent, confirmation_session_id, restore_view) = match &app.mode {
+        AppMode::Confirmation {
+            confirmation_intent,
+            restore_view,
+            session_id,
+            ..
+        } => (*confirmation_intent, session_id.clone(), restore_view.clone()),
+        _ => return Ok(EventResult::Continue),
+    };
+
+    match confirmation_intent {
+        ConfirmationIntent::Quit => {
+            app.mode = AppMode::List;
+
+            Ok(EventResult::Quit)
+        }
+        ConfirmationIntent::DeleteSession => {
+            handle_delete_confirmation(app, confirmation_session_id).await
+        }
+        ConfirmationIntent::MergeSession => {
+            handle_merge_confirmation(app, confirmation_session_id, restore_view).await
+        }
+    }
+}
+
+/// Deletes the confirmed session, when still present, and returns to list
+/// mode.
+async fn handle_delete_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<String>,
+) -> io::Result<EventResult> {
+    app.mode = AppMode::List;
+
+    if let Some(session_id) = confirmation_session_id
+        && let Some(session_index) = app.session_index_for_id(&session_id)
+    {
+        app.sessions.table_state.select(Some(session_index));
+        app.delete_selected_session().await;
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Restores view mode and attempts to queue merge for the confirmed session.
+async fn handle_merge_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<String>,
+    restore_view: Option<crate::ui::state::app_mode::ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    app.mode = restore_view
+        .map(crate::ui::state::app_mode::ConfirmationViewMode::into_view_mode)
+        .unwrap_or(AppMode::List);
+
+    if let Some(session_id) = confirmation_session_id
+        && let Err(error) = app.merge_session(&session_id).await
+    {
+        app.append_output_for_session(&session_id, &format!("\n[Merge Error] {error}\n"))
+            .await;
+    }
+
+    Ok(EventResult::Continue)
 }
 
 #[cfg(test)]
@@ -129,6 +185,7 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::ui::state::app_mode::{ConfirmationViewMode, DoneSessionOutputMode};
 
     fn setup_test_git_repo(path: &Path) {
         Command::new("git")
@@ -211,8 +268,10 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::Quit,
             confirmation_message: "Quit agentty?".to_string(),
             confirmation_title: "Confirm Quit".to_string(),
+            restore_view: None,
             session_id: None,
             selected_confirmation_index: 0,
         };
@@ -235,8 +294,10 @@ mod tests {
             .await
             .expect("failed to create session");
         app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::DeleteSession,
             confirmation_message: "Delete session \"test\"?".to_string(),
             confirmation_title: "Confirm Delete".to_string(),
+            restore_view: None,
             session_id: Some(session_id),
             selected_confirmation_index: 0,
         };
@@ -256,8 +317,10 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::Quit,
             confirmation_message: "Quit agentty?".to_string(),
             confirmation_title: "Confirm Quit".to_string(),
+            restore_view: None,
             session_id: None,
             selected_confirmation_index: 0,
         };
@@ -269,5 +332,92 @@ mod tests {
         // Assert
         assert!(matches!(event_result, Ok(EventResult::Continue)));
         assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_confirmation_decision_cancel_restores_view_for_merge_confirmation() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeSession,
+            confirmation_message: "Queue merge for this session?".to_string(),
+            confirmation_title: "Confirm Merge".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                focused_review_status_message: Some("Preparing focused review".to_string()),
+                focused_review_text: Some("Review output".to_string()),
+                scroll_offset: Some(6),
+                session_id: session_id.clone(),
+            }),
+            session_id: Some(session_id.clone()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Cancel).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                focused_review_status_message: Some(ref focused_review_status_message),
+                focused_review_text: Some(ref focused_review_text),
+                ref session_id_in_mode,
+                scroll_offset: Some(6),
+            } if session_id_in_mode == &session_id
+                && focused_review_status_message == "Preparing focused review"
+                && focused_review_text == "Review output"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_confirmation_decision_confirm_queues_merge_with_view_restore() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::MergeSession,
+            confirmation_message: "Queue merge for this session?".to_string(),
+            confirmation_title: "Confirm Merge".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: Some(2),
+                session_id: session_id.clone(),
+            }),
+            session_id: Some(session_id.clone()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                ref session_id_in_mode,
+                scroll_offset: Some(2),
+            } if session_id_in_mode == &session_id
+        ));
+        app.sessions.sync_from_handles();
+        let output = app.sessions.sessions[0].output.clone();
+        assert!(output.contains("[Merge Error]"));
     }
 }

@@ -24,13 +24,53 @@ impl DoneSessionOutputMode {
     }
 }
 
+/// Semantic intent for a `Confirmation` overlay interaction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfirmationIntent {
+    /// Confirms quitting the application.
+    Quit,
+    /// Confirms deleting a selected session.
+    DeleteSession,
+    /// Confirms queueing merge for the active view session.
+    MergeSession,
+}
+
+/// Stored view-mode values used to restore session view after merge
+/// confirmation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfirmationViewMode {
+    pub done_session_output_mode: DoneSessionOutputMode,
+    pub focused_review_status_message: Option<String>,
+    pub focused_review_text: Option<String>,
+    pub scroll_offset: Option<u16>,
+    pub session_id: String,
+}
+
+impl ConfirmationViewMode {
+    /// Restores this snapshot as `AppMode::View`.
+    #[must_use]
+    pub fn into_view_mode(self) -> AppMode {
+        AppMode::View {
+            done_session_output_mode: self.done_session_output_mode,
+            focused_review_status_message: self.focused_review_status_message,
+            focused_review_text: self.focused_review_text,
+            session_id: self.session_id,
+            scroll_offset: self.scroll_offset,
+        }
+    }
+}
+
 /// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
     /// Displays a generic confirmation overlay with `Yes` and `No` options.
     Confirmation {
+        /// Semantic action to execute when users choose `Yes`.
+        confirmation_intent: ConfirmationIntent,
         confirmation_message: String,
         confirmation_title: String,
+        /// View state to restore when dismissing merge confirmation.
+        restore_view: Option<ConfirmationViewMode>,
         session_id: Option<String>,
         selected_confirmation_index: usize,
     },
@@ -170,6 +210,35 @@ mod tests {
         assert_eq!(toggled_from_summary, DoneSessionOutputMode::Output);
         assert_eq!(toggled_from_output, DoneSessionOutputMode::Summary);
         assert_eq!(toggled_from_focused_review, DoneSessionOutputMode::Summary);
+    }
+
+    #[test]
+    fn test_confirmation_view_mode_into_view_mode_restores_snapshot_values() {
+        // Arrange
+        let confirmation_view_mode = ConfirmationViewMode {
+            done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+            focused_review_status_message: Some("Preparing focused review".to_string()),
+            focused_review_text: Some("Critical finding".to_string()),
+            scroll_offset: Some(7),
+            session_id: "session-id".to_string(),
+        };
+
+        // Act
+        let mode = confirmation_view_mode.into_view_mode();
+
+        // Assert
+        assert!(matches!(
+            mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                focused_review_status_message: Some(ref focused_review_status_message),
+                focused_review_text: Some(ref focused_review_text),
+                ref session_id,
+                scroll_offset: Some(7),
+            } if session_id == "session-id"
+                && focused_review_status_message == "Preparing focused review"
+                && focused_review_text == "Critical finding"
+        ));
     }
 
     #[test]

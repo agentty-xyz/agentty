@@ -7,7 +7,9 @@ use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
+use crate::ui::state::app_mode::{
+    AppMode, ConfirmationIntent, DoneSessionOutputMode, HelpContext,
+};
 use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, stats_actions,
 };
@@ -27,8 +29,10 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     match key.code {
         KeyCode::Char('q') => {
             app.mode = AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::Quit,
                 confirmation_message: "Quit agentty?".to_string(),
                 confirmation_title: "Confirm Quit".to_string(),
+                restore_view: None,
                 session_id: None,
                 selected_confirmation_index: DEFAULT_OPTION_INDEX,
             };
@@ -66,8 +70,10 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 .map(|session| (session.id.clone(), session.display_title().to_string()));
             if let Some((session_id, session_title)) = selected_session {
                 app.mode = AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::DeleteSession,
                     confirmation_message: format!("Delete session \"{session_title}\"?"),
                     confirmation_title: "Confirm Delete".to_string(),
+                    restore_view: None,
                     session_id: Some(session_id),
                     selected_confirmation_index: DEFAULT_OPTION_INDEX,
                 };
@@ -358,8 +364,10 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::Quit,
                 ref confirmation_message,
                 ref confirmation_title,
+                restore_view: None,
                 session_id: None,
                 selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if confirmation_title == "Confirm Quit" && confirmation_message == "Quit agentty?"
@@ -760,8 +768,10 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::DeleteSession,
                 ref confirmation_message,
                 ref confirmation_title,
+                restore_view: None,
                 session_id: Some(ref mode_session_id),
                 selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if mode_session_id == &expected_session_id
