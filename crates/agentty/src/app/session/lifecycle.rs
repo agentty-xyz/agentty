@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use askama::Template;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use super::access::SESSION_NOT_FOUND_ERROR;
@@ -20,6 +21,8 @@ use crate::ui::pages::session_list::grouped_session_indexes;
 
 /// Maximum stored length for generated session titles.
 const GENERATED_SESSION_TITLE_MAX_CHARACTERS: usize = 72;
+/// Debounce window before running detached session-title generation.
+const SESSION_TITLE_REFRESH_DEBOUNCE_DELAY: Duration = Duration::from_secs(5);
 
 /// Input bag for constructing a queued session command.
 struct BuildSessionCommandInput {
@@ -888,7 +891,8 @@ impl SessionManager {
     ///
     /// The generated title is persisted when parsing succeeds, then a
     /// `RefreshSessions` event is emitted so list-mode snapshots pick up the
-    /// new title.
+    /// new title. A short debounce is applied before this detached turn runs
+    /// to reduce startup contention with the primary session turn.
     fn spawn_session_title_refresh_task(
         services: &AppServices,
         session_id: &str,
@@ -908,6 +912,8 @@ impl SessionManager {
         let persisted_session_id = session_id.to_string();
 
         tokio::spawn(async move {
+            sleep(SESSION_TITLE_REFRESH_DEBOUNCE_DELAY).await;
+
             let Ok(title_generation_prompt) =
                 SessionManager::session_title_generation_prompt(&prompt)
             else {
@@ -1113,6 +1119,19 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Ensures title generation uses a fixed five-second debounce window.
+    fn test_session_title_refresh_debounce_delay_is_five_seconds() {
+        // Arrange
+        let expected_delay = Duration::from_secs(5);
+
+        // Act
+        let actual_delay = SESSION_TITLE_REFRESH_DEBOUNCE_DELAY;
+
+        // Assert
+        assert_eq!(actual_delay, expected_delay);
+    }
 
     #[test]
     /// Ensures title-generation prompt rendering includes commit-style,
