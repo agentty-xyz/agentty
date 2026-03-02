@@ -200,26 +200,6 @@ pub struct AllTimeModelUsage {
     pub session_count: u64,
 }
 
-/// One Codex usage-limit window (for example, 5-hour or weekly).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CodexUsageLimitWindow {
-    /// Unix timestamp when the window resets. `None` when unavailable.
-    pub resets_at: Option<i64>,
-    /// Percent of the window already consumed in `[0, 100]`.
-    pub used_percent: u8,
-    /// Duration of the window in minutes. `None` when unavailable.
-    pub window_minutes: Option<u32>,
-}
-
-/// Snapshot of account-level Codex usage limits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CodexUsageLimits {
-    /// Primary window when provided by Codex.
-    pub primary: Option<CodexUsageLimitWindow>,
-    /// Secondary window when provided by Codex.
-    pub secondary: Option<CodexUsageLimitWindow>,
-}
-
 /// Aggregated activity count for one day key.
 ///
 /// `day_key` is the number of days since Unix epoch (`1970-01-01`).

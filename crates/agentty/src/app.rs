@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
-use crate::domain::session::{CodexUsageLimits, Session, Status};
+use crate::domain::session::{Session, Status};
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
@@ -77,10 +77,6 @@ pub(crate) enum AppEvent {
     },
     /// Indicates latest ahead/behind information from the git status worker.
     GitStatusUpdated { status: Option<(u32, u32)> },
-    /// Indicates latest account-level Codex usage limits from the poller.
-    CodexUsageLimitsUpdated {
-        codex_usage_limits: Option<CodexUsageLimits>,
-    },
     /// Indicates whether a newer stable `agentty` release is available.
     VersionAvailabilityUpdated {
         latest_available_version: Option<String>,
@@ -115,7 +111,6 @@ pub(crate) enum AppEvent {
 #[derive(Default)]
 struct AppEventBatch {
     at_mention_entries_updates: HashMap<String, Vec<FileEntry>>,
-    codex_usage_limits_update: CodexUsageLimitsBatchUpdate,
     focused_review_updates: HashMap<String, FocusedReviewUpdate>,
     git_status_update: Option<(u32, u32)>,
     has_git_status_update: bool,
@@ -126,14 +121,6 @@ struct AppEventBatch {
     session_ids: HashSet<String>,
     should_force_reload: bool,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum CodexUsageLimitsBatchUpdate {
-    #[default]
-    NotSet,
-    PreservePrevious,
-    Replace(CodexUsageLimits),
 }
 
 /// Immutable context displayed in sync-main popup content.
@@ -310,7 +297,6 @@ impl App {
         let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
         let sessions = SessionManager::new(
             all_time_model_usage,
-            None,
             session::SessionDefaults {
                 model: default_session_model,
             },
@@ -345,14 +331,12 @@ impl App {
         }
     }
 
-    /// Spawns background pollers for git status, Codex usage limits, and
-    /// version checks.
+    /// Spawns background pollers for git status and version checks.
     fn spawn_background_tasks(
         event_tx: &mpsc::UnboundedSender<AppEvent>,
         projects: &ProjectManager,
         services: &AppServices,
     ) {
-        task::TaskService::spawn_codex_usage_limits_task(event_tx);
         task::TaskService::spawn_version_check_task(event_tx);
         if projects.has_git_branch() {
             task::TaskService::spawn_git_status_task(
@@ -407,7 +391,6 @@ impl App {
             stats_activity,
             all_time_model_usage,
             longest_session_duration_seconds,
-            codex_usage_limits,
             table_state,
         ) = self.sessions.render_parts();
         let settings = &mut self.settings;
@@ -417,7 +400,6 @@ impl App {
             ui::RenderContext {
                 active_project_id,
                 all_time_model_usage,
-                codex_usage_limits,
                 current_tab,
                 git_branch: git_branch.as_deref(),
                 git_status,
@@ -806,9 +788,9 @@ impl App {
 
     /// Applies one or more queued app events through a single reducer path.
     ///
-    /// This method drains currently queued app events, coalesces refresh,
-    /// git-status, and Codex usage updates, then applies session-handle sync
-    /// for touched sessions.
+    /// This method drains currently queued app events, coalesces refresh and
+    /// git-status updates, then applies session-handle sync for touched
+    /// sessions.
     pub(crate) async fn apply_app_events(&mut self, first_event: AppEvent) {
         let drained_events = self.drain_app_events(first_event);
         let event_batch = Self::reduce_app_events(drained_events);
@@ -871,17 +853,6 @@ impl App {
 
         if event_batch.has_latest_available_version_update {
             self.latest_available_version = event_batch.latest_available_version_update;
-        }
-
-        match event_batch.codex_usage_limits_update {
-            CodexUsageLimitsBatchUpdate::NotSet => {}
-            CodexUsageLimitsBatchUpdate::PreservePrevious => {
-                self.sessions.apply_codex_usage_limits_update(None);
-            }
-            CodexUsageLimitsBatchUpdate::Replace(codex_usage_limits) => {
-                self.sessions
-                    .apply_codex_usage_limits_update(Some(codex_usage_limits));
-            }
         }
 
         for (session_id, session_model) in event_batch.session_model_updates {
@@ -1613,17 +1584,6 @@ impl AppEventBatch {
                 self.has_git_status_update = true;
                 self.git_status_update = status;
             }
-            AppEvent::CodexUsageLimitsUpdated { codex_usage_limits } => {
-                if let Some(codex_usage_limits) = codex_usage_limits {
-                    self.codex_usage_limits_update =
-                        CodexUsageLimitsBatchUpdate::Replace(codex_usage_limits);
-                } else if matches!(
-                    self.codex_usage_limits_update,
-                    CodexUsageLimitsBatchUpdate::NotSet
-                ) {
-                    self.codex_usage_limits_update = CodexUsageLimitsBatchUpdate::PreservePrevious;
-                }
-            }
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
             } => {
@@ -1683,7 +1643,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
-        CodexUsageLimitWindow, CodexUsageLimits, Session, SessionSize, SessionStats, Status,
+        Session, SessionSize, SessionStats, Status,
     };
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
@@ -1945,27 +1905,6 @@ mod tests {
     }
 
     #[test]
-    fn app_event_batch_collect_event_keeps_latest_successful_codex_usage_limits_update() {
-        // Arrange
-        let mut event_batch = AppEventBatch::default();
-        let initial_limits = limits_fixture(24, 33);
-
-        // Act
-        event_batch.collect_event(AppEvent::CodexUsageLimitsUpdated {
-            codex_usage_limits: Some(initial_limits),
-        });
-        event_batch.collect_event(AppEvent::CodexUsageLimitsUpdated {
-            codex_usage_limits: None,
-        });
-
-        // Assert
-        assert_eq!(
-            event_batch.codex_usage_limits_update,
-            CodexUsageLimitsBatchUpdate::Replace(initial_limits)
-        );
-    }
-
-    #[test]
     fn app_event_batch_collect_event_keeps_latest_at_mention_entries_update() {
         // Arrange
         let mut event_batch = AppEventBatch::default();
@@ -2086,21 +2025,5 @@ mod tests {
     fn create_git_repo_marker(repository_path: &Path) {
         fs::create_dir_all(repository_path.join(".git"))
             .expect("failed to create repository .git marker");
-    }
-
-    /// Builds deterministic Codex usage-limit snapshots for tests.
-    fn limits_fixture(primary_used_percent: u8, secondary_used_percent: u8) -> CodexUsageLimits {
-        CodexUsageLimits {
-            primary: Some(CodexUsageLimitWindow {
-                resets_at: Some(1),
-                used_percent: primary_used_percent,
-                window_minutes: Some(300),
-            }),
-            secondary: Some(CodexUsageLimitWindow {
-                resets_at: Some(2),
-                used_percent: secondary_used_percent,
-                window_minutes: Some(10_080),
-            }),
-        }
     }
 }

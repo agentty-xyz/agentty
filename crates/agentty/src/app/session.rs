@@ -12,10 +12,9 @@ use tokio::sync::mpsc;
 
 use crate::app::{AppServices, SessionState};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
+use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
 
 mod access;
-mod codex_usage;
 mod lifecycle;
 mod load;
 mod merge;
@@ -35,7 +34,6 @@ type SessionRenderParts<'a> = (
     &'a [DailyActivity],
     &'a [AllTimeModelUsage],
     u64,
-    Option<CodexUsageLimits>,
     &'a mut TableState,
 );
 
@@ -76,7 +74,6 @@ impl Clock for RealClock {
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
     all_time_model_usage: Vec<AllTimeModelUsage>,
-    codex_usage_limits: Option<CodexUsageLimits>,
     default_session_model: AgentModel,
     git_client: Arc<dyn crate::infra::git::GitClient>,
     longest_session_duration_seconds: u64,
@@ -101,7 +98,6 @@ impl SessionManager {
     /// reply can rehydrate provider context after app restart.
     pub(crate) fn new(
         all_time_model_usage: Vec<AllTimeModelUsage>,
-        codex_usage_limits: Option<CodexUsageLimits>,
         defaults: SessionDefaults,
         git_client: Arc<dyn crate::infra::git::GitClient>,
         longest_session_duration_seconds: u64,
@@ -112,7 +108,6 @@ impl SessionManager {
 
         Self {
             all_time_model_usage,
-            codex_usage_limits,
             default_session_model: defaults.model,
             git_client,
             longest_session_duration_seconds,
@@ -147,15 +142,13 @@ impl SessionManager {
     /// Returns session snapshots and stats payloads required for rendering.
     ///
     /// The tuple contains live sessions, activity heatmap data, all-time model
-    /// usage, persisted longest session duration, Codex usage limits, and list
-    /// table state.
+    /// usage, persisted longest session duration, and list table state.
     pub(crate) fn render_parts(&mut self) -> SessionRenderParts<'_> {
         (
             &self.state.sessions,
             &self.stats_activity,
             &self.all_time_model_usage,
             self.longest_session_duration_seconds,
-            self.codex_usage_limits,
             &mut self.state.table_state,
         )
     }
@@ -224,8 +217,8 @@ mod tests {
     use crate::app::{App, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel};
     use crate::domain::session::{
-        CodexUsageLimitWindow, CodexUsageLimits, DailyActivity, SESSION_DATA_DIR, Session,
-        SessionHandles, SessionSize, SessionStats, Status,
+        DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats,
+        Status,
     };
     use crate::infra::agent::AgentCommandMode;
     use crate::infra::agent::tests::MockAgentBackend;
@@ -251,18 +244,6 @@ mod tests {
             Ok(cmd)
         });
         mock
-    }
-
-    /// Builds a deterministic Codex usage-limit snapshot for refresh tests.
-    fn codex_usage_limits_fixture(used_percent: u8) -> CodexUsageLimits {
-        CodexUsageLimits {
-            primary: Some(CodexUsageLimitWindow {
-                resets_at: Some(1),
-                used_percent,
-                window_minutes: Some(300),
-            }),
-            secondary: None,
-        }
     }
 
     /// Builds a merge-focused mock git client for no-op merge scenarios.
@@ -1880,46 +1861,6 @@ mod tests {
         if let AppMode::View { session_id, .. } = app.mode {
             assert_eq!(session_id, selected_session_id);
         }
-    }
-
-    #[tokio::test]
-    async fn test_refresh_sessions_now_keeps_existing_codex_usage_limits_snapshot() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = db
-            .upsert_project("/tmp/test", None)
-            .await
-            .expect("failed to upsert project");
-        db.insert_session(
-            "alpha000",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert alpha000");
-        let session_dir = session_folder(dir.path(), "alpha000");
-        let data_dir = session_dir.join(SESSION_DATA_DIR);
-        std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
-        let mut app = new_test_app_with_db(
-            dir.path().to_path_buf(),
-            PathBuf::from("/tmp/test"),
-            None,
-            db,
-        )
-        .await;
-        let existing_limits = codex_usage_limits_fixture(42);
-        app.sessions.codex_usage_limits = Some(existing_limits);
-
-        // Act
-        app.refresh_sessions_now().await;
-
-        // Assert
-        assert_eq!(app.sessions.codex_usage_limits, Some(existing_limits));
     }
 
     #[tokio::test]

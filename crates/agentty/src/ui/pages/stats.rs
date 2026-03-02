@@ -1,14 +1,10 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
-use crate::domain::session::{
-    AllTimeModelUsage, CodexUsageLimitWindow, CodexUsageLimits, DailyActivity, Session,
-};
+use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
 use crate::ui::state::help_action;
@@ -25,14 +21,11 @@ const HEATMAP_SECTION_HEIGHT: u16 = 11;
 const MIN_HEATMAP_PANEL_WIDTH: u16 = 20;
 const MIN_SUMMARY_SECTION_WIDTH: u16 = 26;
 const SUMMARY_SECTION_WIDTH: u16 = 44;
-const USAGE_BAR_WIDTH: usize = 20;
-const USAGE_SECTION_HEIGHT: u16 = 5;
 
 /// Stats dashboard showing activity heatmap, all-time summaries, and
 /// per-session token statistics.
 pub struct StatsPage<'a> {
     all_time_model_usage: &'a [AllTimeModelUsage],
-    codex_usage_limits: Option<CodexUsageLimits>,
     longest_session_duration_seconds: u64,
     sessions: &'a [Session],
     stats_activity: &'a [DailyActivity],
@@ -46,11 +39,9 @@ impl<'a> StatsPage<'a> {
         stats_activity: &'a [DailyActivity],
         all_time_model_usage: &'a [AllTimeModelUsage],
         longest_session_duration_seconds: u64,
-        codex_usage_limits: Option<CodexUsageLimits>,
     ) -> Self {
         Self {
             all_time_model_usage,
-            codex_usage_limits,
             longest_session_duration_seconds,
             sessions,
             stats_activity,
@@ -73,7 +64,6 @@ impl Page for StatsPage<'_> {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(HEATMAP_SECTION_HEIGHT),
-                Constraint::Length(USAGE_SECTION_HEIGHT),
                 Constraint::Min(0),
             ])
             .split(main_area);
@@ -91,8 +81,7 @@ impl Page for StatsPage<'_> {
             self.render_summary(f, top_chunks[1]);
         }
 
-        self.render_usage(f, main_chunks[1]);
-        self.render_table(f, main_chunks[2]);
+        self.render_table(f, main_chunks[1]);
         self.render_footer(f, footer_area);
     }
 }
@@ -131,14 +120,6 @@ impl StatsPage<'_> {
         );
 
         f.render_widget(summary, area);
-    }
-
-    /// Renders account-level Codex usage windows and reset countdowns.
-    fn render_usage(&self, f: &mut Frame, area: Rect) {
-        let usage = Paragraph::new(self.build_usage_lines())
-            .block(Block::default().borders(Borders::ALL).title("Usage"));
-
-        f.render_widget(usage, area);
     }
 
     fn render_table(&self, f: &mut Frame, area: Rect) {
@@ -219,39 +200,6 @@ impl StatsPage<'_> {
         f.render_widget(stats, footer_chunks[1]);
     }
 
-    /// Builds per-window Codex usage lines for the usage panel.
-    fn build_usage_lines(&self) -> Vec<Line<'static>> {
-        let Some(codex_usage_limits) = self.codex_usage_limits else {
-            return vec![
-                Line::from("Codex usage unavailable."),
-                Line::from(Span::styled(
-                    "Run `codex login` and refresh.",
-                    Style::default().fg(Color::Gray),
-                )),
-            ];
-        };
-        let now = Self::current_unix_timestamp();
-        let mut usage_lines: Vec<Line<'static>> = Vec::new();
-
-        if let Some(primary_window) = codex_usage_limits.primary {
-            usage_lines.push(Self::usage_line(primary_window, now));
-        }
-        if let Some(secondary_window) = codex_usage_limits.secondary {
-            usage_lines.push(Self::usage_line(secondary_window, now));
-        }
-        if usage_lines.is_empty() {
-            return vec![
-                Line::from("Codex usage unavailable."),
-                Line::from(Span::styled(
-                    "Refresh stats to retry loading limits.",
-                    Style::default().fg(Color::Gray),
-                )),
-            ];
-        }
-
-        usage_lines
-    }
-
     /// Builds heatmap lines and trims visible week columns for narrow widths.
     fn build_heatmap_lines(&self, available_width: u16) -> Vec<Line<'static>> {
         let content_width = usize::from(available_width.saturating_sub(2));
@@ -325,8 +273,8 @@ impl StatsPage<'_> {
     /// Builds summary lines for favorite model, longest `agentty` session
     /// duration, and all-time per-model combined token totals.
     fn build_summary_lines(&self) -> Vec<Line<'static>> {
-        let favorite_model = Self::favorite_model_name(self.all_time_model_usage)
-            .unwrap_or_else(|| "n/a".to_string());
+        let favorite_model =
+            Self::favorite_model_name(self.all_time_model_usage).unwrap_or_else(|| "n/a".to_string());
         let longest_session = self.longest_session_summary();
         let longest_label = longest_session.unwrap_or_else(|| "n/a".to_string());
         let mut lines = vec![
@@ -346,11 +294,8 @@ impl StatsPage<'_> {
         }
 
         for model_usage in self.all_time_model_usage {
-            let combined_tokens = format_token_count(
-                model_usage
-                    .input_tokens
-                    .saturating_add(model_usage.output_tokens),
-            );
+            let combined_tokens =
+                format_token_count(model_usage.input_tokens.saturating_add(model_usage.output_tokens));
             lines.push(Line::from(format!(
                 "{}: {combined_tokens}",
                 model_usage.model.as_str()
@@ -367,9 +312,7 @@ impl StatsPage<'_> {
         for summary in all_time_model_usage {
             favorite = match favorite {
                 None => Some(summary),
-                Some(favorite_summary)
-                    if summary.session_count > favorite_summary.session_count =>
-                {
+                Some(favorite_summary) if summary.session_count > favorite_summary.session_count => {
                     Some(summary)
                 }
                 Some(favorite_summary)
@@ -426,70 +369,6 @@ impl StatsPage<'_> {
             4 => Color::Rgb(57, 211, 83),
             _ => Color::Rgb(33, 38, 45),
         }
-    }
-
-    /// Builds a single usage row with progress bar and reset countdown.
-    fn usage_line(window: CodexUsageLimitWindow, now: i64) -> Line<'static> {
-        let percent_left = 100_u8.saturating_sub(window.used_percent);
-        let label = Self::usage_window_label(window.window_minutes);
-        let progress = Self::usage_progress_bar(percent_left);
-        let reset_display = Self::format_reset_eta(window.resets_at, now);
-
-        Line::from(format!(
-            "{label:<12} {progress} {percent_left:>3}% left ({reset_display})"
-        ))
-    }
-
-    /// Converts a usage window duration to a short label.
-    fn usage_window_label(window_minutes: Option<u32>) -> String {
-        match window_minutes {
-            Some(300) => "5h limit".to_string(),
-            Some(10_080) => "Weekly limit".to_string(),
-            Some(window_minutes) => format!("{window_minutes}m limit"),
-            None => "Limit".to_string(),
-        }
-    }
-
-    /// Renders a fixed-width ASCII progress bar for percentage-left values.
-    fn usage_progress_bar(percent_left: u8) -> String {
-        let filled_cells = usize::from(percent_left).saturating_mul(USAGE_BAR_WIDTH) / 100;
-        let empty_cells = USAGE_BAR_WIDTH.saturating_sub(filled_cells);
-
-        format!("[{}{}]", "#".repeat(filled_cells), ".".repeat(empty_cells))
-    }
-
-    /// Returns a compact reset countdown for a Unix timestamp.
-    fn format_reset_eta(resets_at: Option<i64>, now: i64) -> String {
-        let Some(resets_at) = resets_at else {
-            return "reset unavailable".to_string();
-        };
-        if resets_at <= now {
-            return "resets now".to_string();
-        }
-
-        let remaining_seconds = resets_at.saturating_sub(now);
-        let remaining_days = remaining_seconds / 86_400;
-        let remaining_hours = (remaining_seconds % 86_400) / 3_600;
-        let remaining_minutes = (remaining_seconds % 3_600) / 60;
-
-        if remaining_days > 0 {
-            return format!("resets in {remaining_days}d {remaining_hours}h");
-        }
-
-        if remaining_hours > 0 {
-            return format!("resets in {remaining_hours}h {remaining_minutes}m");
-        }
-
-        format!("resets in {}m", remaining_minutes.max(1))
-    }
-
-    /// Returns the current Unix timestamp in seconds.
-    fn current_unix_timestamp() -> i64 {
-        let now_duration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-
-        i64::try_from(now_duration.as_secs()).unwrap_or(i64::MAX)
     }
 }
 
@@ -577,7 +456,7 @@ mod tests {
             session_count: 3,
         }];
         let all_time_usage: Vec<AllTimeModelUsage> = Vec::new();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, None);
+        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
         let backend = ratatui::backend::TestBackend::new(160, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -599,22 +478,21 @@ mod tests {
     #[test]
     fn test_build_heatmap_lines_uses_persisted_activity_for_max_count() {
         // Arrange
-        let now_seconds = StatsPage::current_unix_timestamp();
         let sessions = vec![session_fixture_with(
             "session-1",
             "Active Session",
             AgentModel::Gpt53Codex,
             10,
             10,
-            now_seconds,
-            now_seconds,
+            0,
+            0,
         )];
         let activity = vec![DailyActivity {
             day_key: current_day_key_local(),
             session_count: 50,
         }];
         let all_time_usage: Vec<AllTimeModelUsage> = Vec::new();
-        let page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, None);
+        let page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(160);
@@ -637,7 +515,7 @@ mod tests {
             session_count: 1,
         }];
         let all_time_usage: Vec<AllTimeModelUsage> = Vec::new();
-        let page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, None);
+        let page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(28);
@@ -681,7 +559,7 @@ mod tests {
         ];
         let activity: Vec<DailyActivity> = Vec::new();
         let all_time_usage = all_time_usage_fixture();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, None);
+        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
         let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -709,7 +587,7 @@ mod tests {
         let sessions = vec![session_fixture()];
         let activity: Vec<DailyActivity> = Vec::new();
         let all_time_usage = all_time_usage_fixture();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, None);
+        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
         let backend = ratatui::backend::TestBackend::new(40, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -728,86 +606,12 @@ mod tests {
     }
 
     #[test]
-    fn test_render_preserves_table_rows_and_footer_summary() {
-        // Arrange
-        let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
-        let all_time_usage = all_time_usage_fixture();
-        let usage_limits = Some(CodexUsageLimits {
-            primary: Some(CodexUsageLimitWindow {
-                resets_at: Some(i64::MAX),
-                used_percent: 26,
-                window_minutes: Some(300),
-            }),
-            secondary: Some(CodexUsageLimitWindow {
-                resets_at: Some(i64::MAX),
-                used_percent: 24,
-                window_minutes: Some(10_080),
-            }),
-        });
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, usage_limits);
-        let backend = ratatui::backend::TestBackend::new(160, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                crate::ui::Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw stats page");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Token Stats"));
-        assert!(text.contains("Usage"));
-        assert!(text.contains("5h limit"));
-        assert!(text.contains("Weekly limit"));
-        assert!(text.contains("Stats Session"));
-        assert!(text.contains("Sessions: 1"));
-        assert!(text.contains("Input: 1.5k"));
-        assert!(text.contains("Output: 700"));
-    }
-
-    #[test]
-    fn test_render_shows_single_usage_window_when_secondary_is_missing() {
-        // Arrange
-        let sessions = vec![session_fixture()];
-        let activity: Vec<DailyActivity> = Vec::new();
-        let all_time_usage = all_time_usage_fixture();
-        let usage_limits = Some(CodexUsageLimits {
-            primary: Some(CodexUsageLimitWindow {
-                resets_at: None,
-                used_percent: 26,
-                window_minutes: Some(300),
-            }),
-            secondary: None,
-        });
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0, usage_limits);
-        let backend = ratatui::backend::TestBackend::new(160, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                crate::ui::Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw stats page");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("5h limit"));
-        assert!(text.contains("reset unavailable"));
-    }
-
-    #[test]
     fn test_render_uses_persisted_longest_session_when_live_list_is_empty() {
         // Arrange
         let sessions: Vec<Session> = Vec::new();
         let activity: Vec<DailyActivity> = Vec::new();
         let all_time_usage = all_time_usage_fixture();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 18_000, None);
+        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 18_000);
         let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 

@@ -6,7 +6,7 @@ use ratatui::widgets::TableState;
 
 use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
-use crate::domain::session::{AllTimeModelUsage, CodexUsageLimits, DailyActivity, Session};
+use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
 use crate::ui::overlays::SyncBlockedPopupRenderContext;
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::{Component, Page, RenderContext, components, overlays, pages};
@@ -16,7 +16,6 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
     /// Identifier for the currently active project in the project list tab.
     pub(crate) active_project_id: i64,
     pub(crate) all_time_model_usage: &'a [AllTimeModelUsage],
-    pub(crate) codex_usage_limits: Option<CodexUsageLimits>,
     pub(crate) current_tab: Tab,
     pub(crate) longest_session_duration_seconds: u64,
     pub(crate) project_table_state: &'a mut TableState,
@@ -32,7 +31,6 @@ struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
     all_time_model_usage: &'a [AllTimeModelUsage],
-    codex_usage_limits: Option<CodexUsageLimits>,
     current_tab: Tab,
     longest_session_duration_seconds: u64,
     project_table_state: &'a mut TableState,
@@ -50,7 +48,6 @@ impl RouteSharedContext<'_> {
         ListBackgroundRenderContext {
             active_project_id: self.active_project_id,
             all_time_model_usage: self.all_time_model_usage,
-            codex_usage_limits: self.codex_usage_limits,
             current_tab: self.current_tab,
             longest_session_duration_seconds: self.longest_session_duration_seconds,
             project_table_state: self.project_table_state,
@@ -84,7 +81,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     let RenderContext {
         active_project_id,
         all_time_model_usage,
-        codex_usage_limits,
         current_tab,
         longest_session_duration_seconds,
         mode,
@@ -101,7 +97,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     let mut shared = RouteSharedContext {
         active_project_id,
         all_time_model_usage,
-        codex_usage_limits,
         current_tab,
         longest_session_duration_seconds,
         project_table_state,
@@ -282,7 +277,6 @@ pub(crate) fn render_list_background(
     let ListBackgroundRenderContext {
         active_project_id,
         all_time_model_usage,
-        codex_usage_limits,
         current_tab,
         longest_session_duration_seconds,
         project_table_state,
@@ -317,7 +311,6 @@ pub(crate) fn render_list_background(
                 stats_activity,
                 all_time_model_usage,
                 longest_session_duration_seconds,
-                codex_usage_limits,
             )
             .render(f, chunks[1]);
         }

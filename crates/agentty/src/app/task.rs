@@ -13,10 +13,6 @@ use crate::app::AppEvent;
 use crate::domain::agent::AgentModel;
 use crate::infra::git::GitClient;
 
-/// Poll interval for account-level Codex usage limits snapshots.
-#[cfg(not(test))]
-const CODEX_USAGE_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
-
 /// Stateless helpers for app-scoped background pollers and app-server
 /// session execution.
 pub(super) struct TaskService;
@@ -80,39 +76,6 @@ impl TaskService {
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-            }
-        });
-    }
-
-    /// Spawns a background loop that periodically refreshes Codex usage
-    /// limits.
-    ///
-    /// The task emits [`AppEvent::CodexUsageLimitsUpdated`] snapshots instead
-    /// of mutating app state directly.
-    ///
-    /// In tests, this function is a no-op so test runs stay deterministic and
-    /// offline.
-    pub(super) fn spawn_codex_usage_limits_task(app_event_tx: &mpsc::UnboundedSender<AppEvent>) {
-        #[cfg(test)]
-        {
-            let _ = app_event_tx;
-        }
-
-        #[cfg(not(test))]
-        let app_event_tx = app_event_tx.clone();
-
-        #[cfg(not(test))]
-        tokio::spawn(async move {
-            let mut refresh_tick = tokio::time::interval(CODEX_USAGE_LIMITS_REFRESH_INTERVAL);
-            refresh_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            refresh_tick.tick().await;
-
-            loop {
-                let codex_usage_limits =
-                    crate::app::SessionManager::load_codex_usage_limits().await;
-                let _ = app_event_tx.send(AppEvent::CodexUsageLimitsUpdated { codex_usage_limits });
-
-                refresh_tick.tick().await;
             }
         });
     }
@@ -310,16 +273,4 @@ mod tests {
         assert!(prompt.contains("You may run non-editing CLI commands"));
     }
 
-    #[test]
-    /// Verifies Codex usage refresh is disabled in test builds.
-    fn test_spawn_codex_usage_limits_task_is_noop_in_tests() {
-        // Arrange
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-
-        // Act
-        TaskService::spawn_codex_usage_limits_task(&app_event_tx);
-
-        // Assert
-        assert!(app_event_rx.try_recv().is_err());
-    }
 }

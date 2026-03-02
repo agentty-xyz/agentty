@@ -109,11 +109,11 @@ instead of replaying the full transcript.
 | `crates/agentty/src/app/task.rs` | App-scoped background tasks (git status polling, version checks, focused review assists, app-server turns). |
 | `crates/agentty/src/app/session/` | Session-specific orchestration split by concern: |
 | — `access.rs` | Session lookup helpers. |
-| — `codex_usage.rs` | Codex app-server usage-limit loading. |
 | — `lifecycle.rs` | Session creation, prompt/reply workflows. |
 | — `load.rs` | Session snapshot loading. |
 | — `merge.rs` | Merge/rebase workflows. |
 | — `refresh.rs` | Periodic refresh scheduling. |
+| — `review.rs` | Review transcript replay and review-mode restoration helpers. |
 | — `task.rs` | Session process execution and status persistence. |
 | — `worker.rs` | Per-session command queue orchestration, `AgentChannel` turn dispatch. |
 

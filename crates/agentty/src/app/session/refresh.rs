@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use super::SESSION_REFRESH_INTERVAL;
 use crate::app::{AppServices, ProjectManager, SessionManager};
-use crate::domain::session::CodexUsageLimits;
 use crate::ui::state::app_mode::AppMode;
 
 impl SessionManager {
@@ -50,23 +49,8 @@ impl SessionManager {
         self.refresh_deadline = self.next_refresh_deadline();
     }
 
-    /// Applies a newly loaded Codex usage-limit snapshot.
-    ///
-    /// When refresh data is unavailable (`None`), the previous snapshot is
-    /// preserved so usage bars do not disappear on transient failures.
-    pub(crate) fn apply_codex_usage_limits_update(
-        &mut self,
-        codex_usage_limits: Option<CodexUsageLimits>,
-    ) {
-        self.codex_usage_limits =
-            merged_codex_usage_limits(self.codex_usage_limits, codex_usage_limits);
-    }
-
     /// Reloads sessions and derived statistics, then restores UI state.
     ///
-    /// Codex usage limits are intentionally not fetched here because they are
-    /// refreshed by a dedicated background task that emits
-    /// `AppEvent::CodexUsageLimitsUpdated`.
     async fn reload_sessions(
         &mut self,
         mode: &mut AppMode,
@@ -181,18 +165,6 @@ impl SessionManager {
     }
 }
 
-/// Merges previous and freshly loaded Codex usage limits for UI rendering.
-///
-/// Refresh calls can fail transiently (for example due app-server timeouts). In
-/// that case, the previously loaded snapshot is preserved so usage bars do not
-/// disappear between replies.
-fn merged_codex_usage_limits(
-    previous_limits: Option<CodexUsageLimits>,
-    refreshed_limits: Option<CodexUsageLimits>,
-) -> Option<CodexUsageLimits> {
-    refreshed_limits.or(previous_limits)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -204,8 +176,6 @@ mod tests {
     use super::*;
     use crate::app::SessionState;
     use crate::domain::agent::AgentKind;
-    use crate::domain::session::CodexUsageLimitWindow;
-
     #[test]
     fn test_is_session_refresh_due_returns_false_before_deadline() {
         // Arrange
@@ -239,45 +209,6 @@ mod tests {
         assert!(refresh_due);
     }
 
-    #[test]
-    fn test_merged_codex_usage_limits_keeps_previous_snapshot_when_refresh_fails() {
-        // Arrange
-        let previous_limits = limits_fixture(24, 33);
-
-        // Act
-        let merged_limits = merged_codex_usage_limits(Some(previous_limits), None);
-
-        // Assert
-        assert_eq!(merged_limits, Some(previous_limits));
-    }
-
-    #[test]
-    fn test_merged_codex_usage_limits_replaces_previous_snapshot_when_refresh_succeeds() {
-        // Arrange
-        let previous_limits = limits_fixture(24, 33);
-        let refreshed_limits = limits_fixture(60, 70);
-
-        // Act
-        let merged_limits =
-            merged_codex_usage_limits(Some(previous_limits), Some(refreshed_limits));
-
-        // Assert
-        assert_eq!(merged_limits, Some(refreshed_limits));
-    }
-
-    #[test]
-    fn test_merged_codex_usage_limits_returns_none_when_no_snapshot_exists() {
-        // Arrange
-        let previous_limits = None;
-        let refreshed_limits = None;
-
-        // Act
-        let merged_limits = merged_codex_usage_limits(previous_limits, refreshed_limits);
-
-        // Assert
-        assert_eq!(merged_limits, None);
-    }
-
     /// Builds a session manager with deterministic time and empty state.
     fn session_manager_fixture(clock: Arc<dyn crate::app::session::Clock>) -> SessionManager {
         let git_client: Arc<dyn crate::infra::git::GitClient> =
@@ -285,7 +216,6 @@ mod tests {
 
         SessionManager::new(
             Vec::new(),
-            None,
             crate::app::session::SessionDefaults {
                 model: AgentKind::Gemini.default_model(),
             },
@@ -301,22 +231,6 @@ mod tests {
             ),
             Vec::new(),
         )
-    }
-
-    /// Builds deterministic Codex usage-limit snapshots for tests.
-    fn limits_fixture(primary_used_percent: u8, secondary_used_percent: u8) -> CodexUsageLimits {
-        CodexUsageLimits {
-            primary: Some(CodexUsageLimitWindow {
-                resets_at: Some(1),
-                used_percent: primary_used_percent,
-                window_minutes: Some(300),
-            }),
-            secondary: Some(CodexUsageLimitWindow {
-                resets_at: Some(2),
-                used_percent: secondary_used_percent,
-                window_minutes: Some(10_080),
-            }),
-        }
     }
 
     /// Test clock implementation with mutable `Instant` and `SystemTime`.
