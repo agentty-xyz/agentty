@@ -15,7 +15,7 @@ use crate::infra::git::GitClient;
 
 /// Poll interval for account-level Codex usage limits snapshots.
 #[cfg(not(test))]
-const CODEX_USAGE_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const CODEX_USAGE_LIMITS_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Stateless helpers for app-scoped background pollers and app-server
 /// session execution.

@@ -303,6 +303,15 @@ mod tests {
 
     use super::*;
 
+    /// Keeps production-only helpers alive in test builds so they are not
+    /// flagged as dead code. These items are only called from background
+    /// tasks gated behind `#[cfg(not(test))]` in `task.rs`.
+    const _: () = {
+        _ = INITIALIZE_REQUEST_ID;
+        _ = SessionManager::load_codex_usage_limits;
+        _ = write_codex_app_server_stdin;
+    };
+
     #[test]
     fn test_parse_codex_usage_limits_response_extracts_primary_and_secondary_windows() {
         // Arrange

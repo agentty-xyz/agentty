@@ -211,7 +211,6 @@ impl App {
         )
         .await;
         let all_time_model_usage = SessionManager::load_all_time_model_usage(&db).await;
-        let codex_usage_limits = SessionManager::load_codex_usage_limits().await;
         let longest_session_duration_seconds =
             SessionManager::load_longest_session_duration_seconds(&db).await;
         let (sessions_row_count, sessions_updated_at_max) =
@@ -244,7 +243,7 @@ impl App {
         let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
         let sessions = SessionManager::new(
             all_time_model_usage,
-            codex_usage_limits,
+            None,
             session::SessionDefaults {
                 model: default_session_model,
             },
