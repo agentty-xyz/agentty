@@ -339,7 +339,7 @@ impl SettingsManager {
     /// Returns the text displayed for a row value.
     fn display_value_for_row(&self, row: SettingRow) -> String {
         match row {
-            SettingRow::ReasoningLevel => self.reasoning_level.as_str().to_string(),
+            SettingRow::ReasoningLevel => self.reasoning_level.codex().to_string(),
             SettingRow::DefaultSmartModel => {
                 if self.use_last_used_model_as_default {
                     "Last used model as default".to_string()

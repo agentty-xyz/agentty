@@ -1269,7 +1269,7 @@ WHERE name = ?
         &self,
         reasoning_level: ReasoningLevel,
     ) -> Result<(), String> {
-        self.upsert_setting(SettingName::ReasoningLevel.as_str(), reasoning_level.as_str())
+        self.upsert_setting(SettingName::ReasoningLevel.as_str(), reasoning_level.codex())
             .await
     }
 

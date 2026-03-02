@@ -621,7 +621,7 @@ impl RealCodexAppServerClient {
                 "approvalPolicy": Self::approval_policy(),
                 "sandboxPolicy": Self::turn_sandbox_policy(),
                 "model": model,
-                "effort": reasoning_level.as_str(),
+                "effort": reasoning_level.codex(),
                 "summary": Value::Null,
                 "personality": Value::Null,
                 "outputSchema": Value::Null
@@ -832,7 +832,7 @@ impl RealCodexAppServerClient {
     fn thread_config(reasoning_level: ReasoningLevel) -> Value {
         serde_json::json!({
             "web_search": Self::web_search_mode(),
-            "model_reasoning_effort": reasoning_level.as_str(),
+            "model_reasoning_effort": reasoning_level.codex(),
         })
     }
 

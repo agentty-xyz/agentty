@@ -84,8 +84,8 @@ impl ReasoningLevel {
     /// All selectable reasoning-effort levels in UI cycle order.
     pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::XHigh];
 
-    /// Returns the stable persisted/wire identifier for this level.
-    pub fn as_str(self) -> &'static str {
+    /// Returns the Codex reasoning-effort identifier for this level.
+    pub fn codex(self) -> &'static str {
         match self {
             Self::Low => "low",
             Self::Medium => "medium",

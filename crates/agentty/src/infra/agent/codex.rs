@@ -98,7 +98,7 @@ fn load_root_agents_instructions(folder: &Path) -> Option<String> {
 fn model_reasoning_effort_config(reasoning_level: ReasoningLevel) -> String {
     format!(
         r#"model_reasoning_effort="{}""#,
-        reasoning_level.as_str()
+        reasoning_level.codex()
     )
 }
 
