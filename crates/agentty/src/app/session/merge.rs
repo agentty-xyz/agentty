@@ -1032,17 +1032,42 @@ impl SessionManager {
     /// # Errors
     /// Returns an error when pre-rebase auto-commit fails or assisted rebase
     /// cannot be completed.
+    ///
+    /// Emits user-visible commit output before rebase starts so users can see
+    /// whether pending changes were committed or there was nothing to commit.
     async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, String> {
         // Auto-commit any pending changes before rebasing to avoid
         // "cannot rebase: You have unstaged changes".
-        if let Err(error) =
-            Self::commit_changes_with_git_client(input.git_client.as_ref(), &input.folder, true)
-                .await
-            && !error.contains("Nothing to commit")
+        match Self::commit_changes_with_git_client(input.git_client.as_ref(), &input.folder, true)
+            .await
         {
-            return Err(format!(
-                "Failed to commit pending changes before rebase: {error}"
-            ));
+            Ok(hash) => {
+                let commit_message = format!("\n[Commit] committed with hash `{hash}`\n");
+                SessionTaskService::append_session_output(
+                    &input.output,
+                    &input.db,
+                    &input.app_event_tx,
+                    &input.id,
+                    &commit_message,
+                )
+                .await;
+            }
+            Err(error) if error.contains("Nothing to commit") => {
+                let commit_message = "\n[Commit] No changes to commit.\n";
+                SessionTaskService::append_session_output(
+                    &input.output,
+                    &input.db,
+                    &input.app_event_tx,
+                    &input.id,
+                    commit_message,
+                )
+                .await;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to commit pending changes before rebase: {error}"
+                ));
+            }
         }
 
         if let Err(error) = Self::run_rebase_assist_loop(input.clone()).await {
