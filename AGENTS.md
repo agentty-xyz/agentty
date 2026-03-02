@@ -158,7 +158,7 @@ a failing hook:
 
 1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
 1. **Validate:** `pre-commit run --all-files`
-1. **Test:** `cargo test -q`
+1. **Test:** `cargo test -q -- --test-threads=1`
 
 The manual-stage autofix hooks apply formatting and fixable clippy lints. The
 validation command then runs non-mutating checks (including formatting and clippy
