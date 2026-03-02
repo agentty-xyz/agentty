@@ -64,7 +64,7 @@ pub(crate) fn session_list_actions(
     }
 
     if can_open_selected_session {
-        actions.push(HelpAction::new("view", "Enter", "Open session"));
+        actions.push(HelpAction::new("open session", "Enter", "Open session"));
     }
 
     if can_open_selected_session {
@@ -112,7 +112,7 @@ pub(crate) fn session_list_footer_actions(can_open_selected_session: bool) -> Ve
     let mut actions = list_base_actions();
 
     if can_open_selected_session {
-        actions.push(HelpAction::new("view", "Enter", "Open session"));
+        actions.push(HelpAction::new("open session", "Enter", "Open session"));
         actions.push(HelpAction::new("nvim", "e", "Open nvim editor"));
     }
 

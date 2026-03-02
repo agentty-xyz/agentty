@@ -641,7 +641,7 @@ mod tests {
         let help_text = session_list_help_text(Some(&session));
 
         // Assert
-        assert!(help_text.contains("Enter: view"));
+        assert!(help_text.contains("Enter: open session"));
     }
 
     #[test]
