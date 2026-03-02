@@ -445,6 +445,7 @@ impl SessionManager {
         let handles = self
             .session_handles_or_err(session_id)
             .map_err(|_| SESSION_HANDLES_NOT_FOUND_ERROR.to_string())?;
+        let child_pid = Arc::clone(&handles.child_pid);
         let output = Arc::clone(&handles.output);
         let status = Arc::clone(&handles.status);
 
@@ -494,6 +495,7 @@ impl SessionManager {
         let merge_task_input = MergeTaskInput {
             app_event_tx,
             base_branch,
+            child_pid,
             db,
             folder,
             git_client,
@@ -532,6 +534,7 @@ impl SessionManager {
         let MergeTaskInput {
             app_event_tx,
             base_branch,
+            child_pid,
             db,
             folder,
             git_client,
@@ -549,6 +552,7 @@ impl SessionManager {
         let rebase_input = RebaseAssistInput {
             app_event_tx: app_event_tx.clone(),
             base_branch: base_branch.clone(),
+            child_pid: Arc::clone(&child_pid),
             db: db.clone(),
             folder: folder.clone(),
             git_client: Arc::clone(&git_client),
@@ -718,6 +722,7 @@ impl SessionManager {
         let handles = self
             .session_handles_or_err(session_id)
             .map_err(|_| SESSION_HANDLES_NOT_FOUND_ERROR.to_string())?;
+        let child_pid = Arc::clone(&handles.child_pid);
         let output = Arc::clone(&handles.output);
 
         let status = Arc::clone(&handles.status);
@@ -743,6 +748,7 @@ impl SessionManager {
         let rebase_task_input = RebaseTaskInput {
             app_event_tx,
             base_branch,
+            child_pid,
             db,
             folder: session.folder.clone(),
             git_client,
@@ -999,6 +1005,7 @@ impl SessionManager {
         let RebaseTaskInput {
             app_event_tx,
             base_branch,
+            child_pid,
             db,
             folder,
             git_client,
@@ -1012,6 +1019,7 @@ impl SessionManager {
             let rebase_input = RebaseAssistInput {
                 app_event_tx: app_event_tx.clone(),
                 base_branch: base_branch.clone(),
+                child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
                 folder: folder.clone(),
                 git_client: Arc::clone(&git_client),
@@ -1522,9 +1530,11 @@ impl SessionManager {
         format!("{:016x}", hasher.finish())
     }
 
+    /// Builds shared assistance context from rebase input state.
     fn assist_context(input: &RebaseAssistInput) -> AssistContext {
         AssistContext {
             app_event_tx: input.app_event_tx.clone(),
+            child_pid: Arc::clone(&input.child_pid),
             db: input.db.clone(),
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
@@ -1709,6 +1719,7 @@ mod tests {
         RebaseAssistInput {
             app_event_tx,
             base_branch: "main".to_string(),
+            child_pid: Arc::new(Mutex::new(None)),
             db,
             folder: PathBuf::from("/tmp/rebase-start-test"),
             git_client,
@@ -1796,6 +1807,7 @@ mod tests {
         let input = RebaseAssistInput {
             app_event_tx: tx,
             base_branch: "main".to_string(),
+            child_pid: Arc::new(Mutex::new(None)),
             db,
             folder: PathBuf::from("/tmp/test"),
             git_client: Arc::new(git::RealGitClient),
