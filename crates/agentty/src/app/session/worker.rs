@@ -418,6 +418,7 @@ async fn apply_turn_result(
 
             SessionTaskService::handle_auto_commit(AssistContext {
                 app_event_tx: context.app_event_tx.clone(),
+                child_pid: Arc::clone(&context.child_pid),
                 db: context.db.clone(),
                 folder: context.folder.clone(),
                 git_client: Arc::clone(&context.git_client),

@@ -287,7 +287,10 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         can_open_worktree: is_view_worktree_open_allowed(session_status)
             && can_open_session_worktree(session_status),
         is_action_allowed: is_view_action_allowed(session_status),
-        is_in_progress: session_status == Status::InProgress,
+        is_in_progress: matches!(
+            session_status,
+            Status::InProgress | Status::Rebasing | Status::Merging | Status::Queued
+        ),
         session_folder: session.folder.clone(),
         session_output: session.output.clone(),
         session_summary: session.summary.clone(),
@@ -339,7 +342,15 @@ fn is_view_worktree_open_allowed(status: Status) -> bool {
 ///
 /// This covers `Enter`, `m`, `r`, and `S-Tab`.
 fn is_view_action_allowed(status: Status) -> bool {
-    !matches!(status, Status::Done | Status::InProgress | Status::Canceled)
+    !matches!(
+        status,
+        Status::Done
+            | Status::InProgress
+            | Status::Rebasing
+            | Status::Merging
+            | Status::Queued
+            | Status::Canceled
+    )
 }
 
 /// Returns whether the `d` shortcut can open the diff view.
@@ -416,7 +427,9 @@ fn can_open_session_worktree(status: Status) -> bool {
 fn view_session_state(status: Status) -> ViewSessionState {
     match status {
         Status::Done => ViewSessionState::Done,
-        Status::InProgress => ViewSessionState::InProgress,
+        Status::InProgress | Status::Rebasing | Status::Merging | Status::Queued => {
+            ViewSessionState::InProgress
+        }
         Status::Review => ViewSessionState::Review,
         _ => ViewSessionState::Interactive,
     }

@@ -24,6 +24,8 @@ pub(super) struct AssistPolicy {
 pub(super) struct AssistContext {
     /// App event sender used to update UI progress/output state.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Shared process identifier slot used for cancellation.
+    pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Database handle used for session persistence updates.
     pub(super) db: Database,
     /// Session worktree folder where git/agent commands run.
@@ -132,6 +134,7 @@ pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> R
     SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
         agent: context.session_model.kind(),
         app_event_tx: context.app_event_tx.clone(),
+        child_pid: Arc::clone(&context.child_pid),
         cmd: command,
         db: context.db.clone(),
         id: context.id.clone(),

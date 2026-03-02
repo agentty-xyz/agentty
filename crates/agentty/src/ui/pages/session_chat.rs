@@ -341,11 +341,11 @@ impl<'a> SessionChatPage<'a> {
     /// Returns the static help text shown in the bottom panel for a given
     /// session in view mode.
     ///
-    /// `InProgress` sessions keep worktree access but hide edit and diff
-    /// shortcuts, `Review` sessions expose focused-review shortcuts with
-    /// read-only assist generation, and `Done` sessions expose only read-only
-    /// shortcuts. `Canceled` sessions expose only `back`, `scroll`, and
-    /// `help`.
+    /// `InProgress`, `Rebasing`, `Merging`, and `Queued` sessions keep
+    /// worktree access but hide edit and diff shortcuts, `Review` sessions
+    /// expose focused-review shortcuts with read-only assist generation, and
+    /// `Done` sessions expose only read-only shortcuts. `Canceled` sessions
+    /// expose only `back`, `scroll`, and `help`.
     fn view_help_text(
         session: &Session,
         done_session_output_mode: DoneSessionOutputMode,
@@ -362,7 +362,9 @@ impl<'a> SessionChatPage<'a> {
 
         let session_state = match session.status {
             Status::Done => ViewSessionState::Done,
-            Status::InProgress => ViewSessionState::InProgress,
+            Status::InProgress | Status::Rebasing | Status::Merging | Status::Queued => {
+                ViewSessionState::InProgress
+            }
             Status::Review => ViewSessionState::Review,
             _ => ViewSessionState::Interactive,
         };
@@ -717,6 +719,24 @@ mod tests {
         assert!(help_text.contains("o: open"));
         assert!(!help_text.contains("d: diff"));
         assert!(!help_text.contains("Enter: reply"));
+    }
+
+    #[test]
+    fn test_view_help_text_rebasing_matches_in_progress_actions() {
+        // Arrange
+        let mut in_progress_session = session_fixture();
+        in_progress_session.status = Status::InProgress;
+        let mut rebasing_session = session_fixture();
+        rebasing_session.status = Status::Rebasing;
+
+        // Act
+        let in_progress_help_text =
+            SessionChatPage::view_help_text(&in_progress_session, DoneSessionOutputMode::Summary);
+        let rebasing_help_text =
+            SessionChatPage::view_help_text(&rebasing_session, DoneSessionOutputMode::Summary);
+
+        // Assert
+        assert_eq!(rebasing_help_text, in_progress_help_text);
     }
 
     #[test]

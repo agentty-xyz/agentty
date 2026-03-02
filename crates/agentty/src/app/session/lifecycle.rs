@@ -322,7 +322,10 @@ impl SessionManager {
         session_id: &str,
     ) -> Result<(), String> {
         let session = self.session_or_err(session_id)?;
-        if session.status != Status::InProgress {
+        if !matches!(
+            session.status,
+            Status::InProgress | Status::Rebasing | Status::Merging | Status::Queued
+        ) {
             return Err("Session is not in progress".to_string());
         }
 
@@ -331,16 +334,17 @@ impl SessionManager {
             .child_pid
             .lock()
             .ok()
-            .and_then(|guard| *guard)
-            .ok_or_else(|| "No running agent process".to_string())?;
+            .and_then(|guard| *guard);
 
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(
-                i32::try_from(pid).map_err(|error| format!("Invalid PID: {error}"))?,
-            ),
-            nix::sys::signal::Signal::SIGINT,
-        )
-        .map_err(|error| format!("Failed to send SIGINT: {error}"))?;
+        if let Some(pid) = pid {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(
+                    i32::try_from(pid).map_err(|error| format!("Invalid PID: {error}"))?,
+                ),
+                nix::sys::signal::Signal::SIGINT,
+            )
+            .map_err(|error| format!("Failed to send SIGINT: {error}"))?;
+        }
 
         let _ = services
             .db()

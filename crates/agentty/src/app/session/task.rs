@@ -48,6 +48,8 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) agent: AgentKind,
     /// App event sender used for progress and status updates.
     pub(crate) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Shared process identifier slot used for cancellation.
+    pub(crate) child_pid: Arc<Mutex<Option<u32>>>,
     /// Prepared assist command to execute.
     pub(crate) cmd: Command,
     /// Database handle used for output/status persistence.
@@ -247,6 +249,7 @@ impl SessionTaskService {
         let prompt = Self::auto_commit_assist_prompt(commit_error)?;
         let assist_context = AssistContext {
             app_event_tx: context.app_event_tx.clone(),
+            child_pid: Arc::clone(&context.child_pid),
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
@@ -288,6 +291,7 @@ impl SessionTaskService {
         let RunAgentAssistTaskInput {
             agent,
             app_event_tx,
+            child_pid,
             cmd,
             db,
             id,
@@ -309,6 +313,12 @@ impl SessionTaskService {
             }
         };
 
+        if let Some(pid) = child.id() {
+            if let Ok(mut guard) = child_pid.lock() {
+                *guard = Some(pid);
+            }
+        }
+
         let captured =
             Self::capture_child_output(&mut child, agent, &app_event_tx, &db, &id, &output).await;
 
@@ -316,6 +326,11 @@ impl SessionTaskService {
             .wait()
             .await
             .map_err(|error| format!("Failed to wait for agent assistance process: {error}"))?;
+
+        if let Ok(mut guard) = child_pid.lock() {
+            *guard = None;
+        }
+
         Self::clear_session_progress(&app_event_tx, &id);
 
         if exit_status.signal().is_some() {

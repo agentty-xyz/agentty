@@ -65,6 +65,7 @@ pub(crate) struct ModelMergeCommitMessageResponse {
 struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
+    child_pid: Arc<Mutex<Option<u32>>>,
     db: Database,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
@@ -80,6 +81,7 @@ struct MergeTaskInput {
 struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
+    child_pid: Arc<Mutex<Option<u32>>>,
     db: Database,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
@@ -91,6 +93,7 @@ struct RebaseAssistInput {
 struct RebaseTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
+    child_pid: Arc<Mutex<Option<u32>>>,
     db: Database,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
