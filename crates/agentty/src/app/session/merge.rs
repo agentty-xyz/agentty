@@ -21,7 +21,7 @@ use crate::app::assist::{
 };
 use crate::app::session::SessionTaskService;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::Status;
 use crate::infra::db::Database;
 use crate::infra::git::{self, GitClient};
@@ -290,6 +290,7 @@ impl RealSyncAssistClient {
             let backend = crate::infra::agent::create_backend(session_model.kind());
             let mut command = backend
                 .build_command(crate::infra::agent::BuildCommandRequest {
+                    reasoning_level: ReasoningLevel::default(),
                     folder: &folder,
                     mode: crate::infra::agent::AgentCommandMode::Start { prompt: &prompt },
                     model: session_model.as_str(),
@@ -1579,6 +1580,7 @@ impl SessionManager {
         let backend = crate::infra::agent::create_backend(session_model.kind());
         let mut command = backend
             .build_command(crate::infra::agent::BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
                 folder,
                 mode: crate::infra::agent::AgentCommandMode::Start { prompt },
                 model: session_model.as_str(),

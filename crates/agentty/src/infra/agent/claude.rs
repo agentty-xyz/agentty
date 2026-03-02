@@ -20,6 +20,7 @@ impl AgentBackend for ClaudeBackend {
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
         let BuildCommandRequest {
+            reasoning_level: _reasoning_level,
             folder,
             mode,
             model,
@@ -60,6 +61,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::domain::agent::ReasoningLevel;
 
     #[test]
     fn test_claude_auto_edit_mode_uses_allowed_tools_edit() {
@@ -71,6 +73,7 @@ mod tests {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
                 folder: temp_directory.path(),
                 mode: AgentCommandMode::Start {
                     prompt: "Plan prompt",
@@ -99,6 +102,7 @@ mod tests {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
                 folder: temp_directory.path(),
                 mode: AgentCommandMode::Start {
                     prompt: "Plan prompt",

@@ -10,7 +10,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::infra::git::GitClient;
 
 /// Stateless helpers for app-scoped background pollers and app-server
@@ -163,6 +163,7 @@ impl TaskService {
         let backend = crate::infra::agent::create_backend(review_model.kind());
         let command = backend
             .build_command(crate::infra::agent::BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
                 folder: session_folder,
                 mode: crate::infra::agent::AgentCommandMode::Resume {
                     prompt: &focused_review_prompt,

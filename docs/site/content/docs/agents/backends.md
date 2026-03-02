@@ -64,6 +64,11 @@ For persistent defaults, choose a default model in the **Settings** tab
 (`Tab` to navigate, `Enter` to edit). The selected model determines which
 backend is used for new sessions.
 
+<a id="backends-codex-reasoning-level"></a>
+For Codex sessions, the **Settings** tab also exposes `Reasoning Level`
+(`low`, `medium`, `high`, `xhigh`). The selected level is persisted and sent
+with Codex turns.
+
 ## Available Models
 
 <a id="backends-available-models"></a>

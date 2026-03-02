@@ -5,7 +5,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::sync::mpsc;
 
-use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::permission::PermissionMode;
 use crate::infra::app_server::{
     self, AppServerClient, AppServerFuture, AppServerSessionRegistry, AppServerStreamEvent,
@@ -77,6 +77,7 @@ impl RealCodexAppServerClient {
         stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> Result<AppServerTurnResponse, String> {
         let stream_tx = stream_tx.clone();
+        let reasoning_level = request.reasoning_level;
 
         app_server::run_turn_with_restart_retry(
             sessions,
@@ -95,7 +96,12 @@ impl RealCodexAppServerClient {
             move |runtime, prompt| {
                 let stream_tx = stream_tx.clone();
 
-                Box::pin(Self::run_turn_with_runtime(runtime, prompt, stream_tx))
+                Box::pin(Self::run_turn_with_runtime(
+                    runtime,
+                    prompt,
+                    reasoning_level,
+                    stream_tx,
+                ))
             },
             |runtime| Box::pin(Self::shutdown_runtime(runtime)),
         )
@@ -142,12 +148,24 @@ impl RealCodexAppServerClient {
         Self::initialize_runtime(&mut session).await?;
         let (thread_id, restored_context) =
             if let Some(provider_conversation_id) = request.provider_conversation_id.as_deref() {
-                match Self::resume_thread(&mut session, provider_conversation_id).await {
+                match Self::resume_thread(
+                    &mut session,
+                    provider_conversation_id,
+                    request.reasoning_level,
+                )
+                .await
+                {
                     Ok(thread_id) => (thread_id, true),
-                    Err(_) => (Self::start_thread(&mut session).await?, false),
+                    Err(_) => (
+                        Self::start_thread(&mut session, request.reasoning_level).await?,
+                        false,
+                    ),
                 }
             } else {
-                (Self::start_thread(&mut session).await?, false)
+                (
+                    Self::start_thread(&mut session, request.reasoning_level).await?,
+                    false,
+                )
             };
         session.thread_id = thread_id;
         session.restored_context = restored_context;
@@ -187,10 +205,17 @@ impl RealCodexAppServerClient {
     }
 
     /// Starts one Codex thread and returns its identifier.
-    async fn start_thread(session: &mut CodexSessionRuntime) -> Result<String, String> {
+    async fn start_thread(
+        session: &mut CodexSessionRuntime,
+        reasoning_level: ReasoningLevel,
+    ) -> Result<String, String> {
         let thread_start_id = format!("thread-start-{}", uuid::Uuid::new_v4());
-        let thread_start_payload =
-            Self::build_thread_start_payload(&session.folder, &session.model, &thread_start_id);
+        let thread_start_payload = Self::build_thread_start_payload(
+            &session.folder,
+            &session.model,
+            reasoning_level,
+            &thread_start_id,
+        );
 
         write_json_line(Self::runtime_stdin(session)?, &thread_start_payload).await?;
         let response_line = app_server_transport::wait_for_response_line(
@@ -216,10 +241,15 @@ impl RealCodexAppServerClient {
     async fn resume_thread(
         session: &mut CodexSessionRuntime,
         thread_id: &str,
+        reasoning_level: ReasoningLevel,
     ) -> Result<String, String> {
         let thread_resume_request_id = format!("thread-resume-{}", uuid::Uuid::new_v4());
-        let thread_resume_payload =
-            Self::build_thread_resume_payload(&thread_resume_request_id, thread_id, &session.model);
+        let thread_resume_payload = Self::build_thread_resume_payload(
+            &thread_resume_request_id,
+            thread_id,
+            &session.model,
+            reasoning_level,
+        );
 
         write_json_line(Self::runtime_stdin(session)?, &thread_resume_payload).await?;
         let response_line = app_server_transport::wait_for_response_line(
@@ -247,7 +277,12 @@ impl RealCodexAppServerClient {
     /// app-server instruction fields. The payload only applies a minimal
     /// `config` override to enable `web_search`, preserving other runtime
     /// defaults (including configured MCP servers).
-    fn build_thread_start_payload(folder: &Path, model: &str, thread_start_id: &str) -> Value {
+    fn build_thread_start_payload(
+        folder: &Path,
+        model: &str,
+        reasoning_level: ReasoningLevel,
+        thread_start_id: &str,
+    ) -> Value {
         serde_json::json!({
             "method": "thread/start",
             "id": thread_start_id,
@@ -256,7 +291,7 @@ impl RealCodexAppServerClient {
                 "cwd": folder.to_string_lossy(),
                 "approvalPolicy": Self::approval_policy(),
                 "sandbox": Self::thread_sandbox_mode(),
-                "config": Self::thread_config(),
+                "config": Self::thread_config(reasoning_level),
                 "experimentalRawEvents": false,
                 "persistExtendedHistory": false
             }
@@ -268,6 +303,7 @@ impl RealCodexAppServerClient {
         thread_resume_request_id: &str,
         thread_id: &str,
         model: &str,
+        reasoning_level: ReasoningLevel,
     ) -> Value {
         serde_json::json!({
             "method": "thread/resume",
@@ -277,7 +313,7 @@ impl RealCodexAppServerClient {
                 "model": model,
                 "approvalPolicy": Self::approval_policy(),
                 "sandbox": Self::thread_sandbox_mode(),
-                "config": Self::thread_config(),
+                "config": Self::thread_config(reasoning_level),
                 "experimentalRawEvents": false,
                 "persistExtendedHistory": false
             }
@@ -296,6 +332,7 @@ impl RealCodexAppServerClient {
     async fn run_turn_with_runtime(
         session: &mut CodexSessionRuntime,
         prompt: &str,
+        reasoning_level: ReasoningLevel,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> Result<(String, u64, u64), String> {
         let auto_compact_threshold = Self::auto_compact_input_token_threshold(&session.model);
@@ -307,7 +344,13 @@ impl RealCodexAppServerClient {
             Self::send_compact_request(session).await?;
         }
 
-        let result = Self::execute_turn_event_loop(session, prompt, stream_tx.clone()).await;
+        let result = Self::execute_turn_event_loop(
+            session,
+            prompt,
+            reasoning_level,
+            stream_tx.clone(),
+        )
+        .await;
 
         match result {
             Ok((message, input_tokens, output_tokens)) => {
@@ -322,7 +365,13 @@ impl RealCodexAppServerClient {
                 Self::send_compact_request(session).await?;
 
                 let (message, input_tokens, output_tokens) =
-                    Self::execute_turn_event_loop(session, prompt, stream_tx).await?;
+                    Self::execute_turn_event_loop(
+                        session,
+                        prompt,
+                        reasoning_level,
+                        stream_tx,
+                    )
+                    .await?;
                 session.latest_input_tokens = input_tokens;
 
                 Ok((message, input_tokens, output_tokens))
@@ -433,12 +482,14 @@ impl RealCodexAppServerClient {
     async fn execute_turn_event_loop(
         session: &mut CodexSessionRuntime,
         prompt: &str,
+        reasoning_level: ReasoningLevel,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> Result<(String, u64, u64), String> {
         let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
         let turn_start_payload = Self::build_turn_start_payload(
             &session.folder,
             &session.model,
+            reasoning_level,
             &session.thread_id,
             prompt,
             &turn_start_id,
@@ -551,6 +602,7 @@ impl RealCodexAppServerClient {
     fn build_turn_start_payload(
         folder: &Path,
         model: &str,
+        reasoning_level: ReasoningLevel,
         thread_id: &str,
         prompt: &str,
         turn_start_id: &str,
@@ -569,7 +621,7 @@ impl RealCodexAppServerClient {
                 "approvalPolicy": Self::approval_policy(),
                 "sandboxPolicy": Self::turn_sandbox_policy(),
                 "model": model,
-                "effort": Value::Null,
+                "effort": reasoning_level.as_str(),
                 "summary": Value::Null,
                 "personality": Value::Null,
                 "outputSchema": Value::Null
@@ -775,10 +827,12 @@ impl RealCodexAppServerClient {
 
     /// Returns per-thread config overrides for one permission mode.
     ///
-    /// This keeps overrides minimal and only enables live `web_search`.
-    fn thread_config() -> Value {
+    /// This keeps overrides minimal while enabling live `web_search` and
+    /// applying the selected Codex reasoning effort.
+    fn thread_config(reasoning_level: ReasoningLevel) -> Value {
         serde_json::json!({
             "web_search": Self::web_search_mode(),
+            "model_reasoning_effort": reasoning_level.as_str(),
         })
     }
 
@@ -1961,6 +2015,7 @@ mod tests {
         let payload = RealCodexAppServerClient::build_thread_start_payload(
             temp_directory.path(),
             "gpt-5.3-codex",
+            ReasoningLevel::High,
             thread_start_id,
         );
         let payload_cwd = payload
@@ -1994,6 +2049,7 @@ mod tests {
             thread_resume_request_id,
             thread_id,
             "gpt-5.3-codex",
+            ReasoningLevel::High,
         );
 
         // Assert
@@ -2029,6 +2085,7 @@ mod tests {
         let payload = RealCodexAppServerClient::build_turn_start_payload(
             temp_directory.path(),
             "gpt-5.3-codex",
+            ReasoningLevel::High,
             thread_id,
             prompt,
             turn_start_id,
@@ -2050,6 +2107,13 @@ mod tests {
                 .and_then(|params| params.get("model"))
                 .and_then(Value::as_str),
             Some("gpt-5.3-codex")
+        );
+        assert_eq!(
+            payload
+                .get("params")
+                .and_then(|params| params.get("effort"))
+                .and_then(Value::as_str),
+            Some("high")
         );
     }
 
@@ -2690,6 +2754,7 @@ mod tests {
         let payload = RealCodexAppServerClient::build_thread_start_payload(
             temp_directory.path(),
             "gpt-5.3-codex",
+            ReasoningLevel::High,
             thread_start_id,
         );
 
@@ -2715,6 +2780,7 @@ mod tests {
         let payload = RealCodexAppServerClient::build_thread_start_payload(
             temp_directory.path(),
             "gpt-5.3-codex",
+            ReasoningLevel::Low,
             thread_start_id,
         );
         let params = payload.get("params").unwrap_or(&Value::Null);
@@ -2726,6 +2792,13 @@ mod tests {
                 .and_then(|config| config.get("web_search"))
                 .and_then(Value::as_str),
             Some("live")
+        );
+        assert_eq!(
+            params
+                .get("config")
+                .and_then(|config| config.get("model_reasoning_effort"))
+                .and_then(Value::as_str),
+            Some("low")
         );
         assert!(params.get("dynamicTools").is_none());
     }

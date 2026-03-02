@@ -5,7 +5,7 @@ use std::process::Command;
 
 use askama::Template;
 
-use crate::domain::agent::AgentKind;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::infra::agent::response_parser::ParsedResponse;
 
 /// Marker used to detect whether protocol instructions are already included
@@ -35,6 +35,10 @@ impl AgentTransport {
 /// Request payload used to build provider commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildCommandRequest<'a> {
+    /// Reasoning effort preference for this turn.
+    ///
+    /// Ignored by backends/models that do not support reasoning effort.
+    pub reasoning_level: ReasoningLevel,
     /// Working directory where the command will run.
     pub folder: &'a Path,
     /// Prompt mode and optional replay payload.

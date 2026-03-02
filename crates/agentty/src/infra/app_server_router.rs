@@ -83,6 +83,7 @@ impl AppServerClient for RoutingAppServerClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::ReasoningLevel;
     use crate::infra::app_server::MockAppServerClient;
 
     #[tokio::test]
@@ -109,6 +110,7 @@ mod tests {
         );
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: std::env::temp_dir(),
             model: AgentModel::Gpt53Codex.as_str().to_string(),
@@ -152,6 +154,7 @@ mod tests {
         );
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: std::env::temp_dir(),
             model: AgentModel::Gemini3FlashPreview.as_str().to_string(),
@@ -184,6 +187,7 @@ mod tests {
         );
         let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: std::env::temp_dir(),
             model: "unknown-model".to_string(),

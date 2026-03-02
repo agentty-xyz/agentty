@@ -31,6 +31,19 @@ pub enum AgentModel {
     ClaudeHaiku4520251001,
 }
 
+/// Supported reasoning-effort levels for task execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningLevel {
+    /// Low reasoning effort for faster responses.
+    Low,
+    /// Medium reasoning effort.
+    Medium,
+    /// High reasoning effort for deeper reasoning.
+    High,
+    /// Extra-high reasoning effort for deeper analysis.
+    XHigh,
+}
+
 /// Human-readable metadata for slash-menu selectable items.
 pub trait AgentSelectionMetadata {
     /// Returns a stable item name shown in menus.
@@ -63,6 +76,41 @@ impl AgentModel {
             Self::ClaudeOpus46 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
             }
+        }
+    }
+}
+
+impl ReasoningLevel {
+    /// All selectable reasoning-effort levels in UI cycle order.
+    pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::XHigh];
+
+    /// Returns the stable persisted/wire identifier for this level.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+}
+
+impl Default for ReasoningLevel {
+    fn default() -> Self {
+        Self::High
+    }
+}
+
+impl FromStr for ReasoningLevel {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::XHigh),
+            other => Err(format!("unknown reasoning level: {other}")),
         }
     }
 }
@@ -222,5 +270,35 @@ mod tests {
 
         // Assert
         assert_eq!(parsed_model, Some(AgentModel::Gpt53CodexSpark));
+    }
+
+    #[test]
+    /// Ensures reasoning-level parsing accepts all supported persisted values.
+    fn test_reasoning_level_from_str_parses_supported_values() {
+        // Arrange
+
+        // Act
+        let low_level = "low".parse::<ReasoningLevel>();
+        let medium_level = "medium".parse::<ReasoningLevel>();
+        let high_level = "high".parse::<ReasoningLevel>();
+        let xhigh_level = "xhigh".parse::<ReasoningLevel>();
+
+        // Assert
+        assert_eq!(low_level, Ok(ReasoningLevel::Low));
+        assert_eq!(medium_level, Ok(ReasoningLevel::Medium));
+        assert_eq!(high_level, Ok(ReasoningLevel::High));
+        assert_eq!(xhigh_level, Ok(ReasoningLevel::XHigh));
+    }
+
+    #[test]
+    /// Ensures unsupported reasoning values return a parse error.
+    fn test_reasoning_level_from_str_rejects_unknown_values() {
+        // Arrange
+
+        // Act
+        let parse_result = "minimal".parse::<ReasoningLevel>();
+
+        // Assert
+        assert!(parse_result.is_err());
     }
 }

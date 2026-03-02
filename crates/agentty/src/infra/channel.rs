@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use crate::domain::agent::AgentKind;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::infra::agent::AgentResponse;
 use crate::infra::app_server::AppServerClient;
 use crate::infra::channel::app_server::AppServerAgentChannel;
@@ -39,6 +39,10 @@ pub enum TurnMode {
 /// Input payload for one provider-agnostic agent turn.
 #[derive(Debug, Clone)]
 pub struct TurnRequest {
+    /// Reasoning effort preference for the turn.
+    ///
+    /// Ignored by providers/models that do not support reasoning effort.
+    pub reasoning_level: ReasoningLevel,
     /// Session worktree folder where the agent runs.
     pub folder: PathBuf,
     /// Live session output buffer for app-server context reconstruction.

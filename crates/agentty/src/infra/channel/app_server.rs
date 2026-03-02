@@ -68,6 +68,7 @@ impl AgentChannel for AppServerAgentChannel {
             };
 
             let request = AppServerTurnRequest {
+                reasoning_level: req.reasoning_level,
                 live_session_output: req.live_session_output,
                 folder: req.folder,
                 model: req.model,
@@ -151,11 +152,13 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::domain::agent::ReasoningLevel;
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
     use crate::infra::channel::TurnMode;
 
     fn make_turn_request() -> TurnRequest {
         TurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
             model: "gemini-3-flash-preview".to_string(),
@@ -390,6 +393,11 @@ mod tests {
                     Some("thread-abc".to_string()),
                     "request should carry the provider conversation id"
                 );
+                assert_eq!(
+                    request.reasoning_level,
+                    ReasoningLevel::Medium,
+                    "request should carry the codex reasoning level"
+                );
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
@@ -407,6 +415,7 @@ mod tests {
         };
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
         let mut request = make_turn_request();
+        request.reasoning_level = ReasoningLevel::Medium;
         request.provider_conversation_id = Some("thread-abc".to_string());
 
         // Act

@@ -12,7 +12,7 @@ use super::{SessionTaskService, session_branch, session_folder};
 use crate::app::session::worker::SessionCommand;
 use crate::app::settings::SettingName;
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::infra::agent::{AgentCommandMode, BuildCommandRequest};
 use crate::infra::channel::TurnMode;
@@ -953,6 +953,7 @@ impl SessionManager {
         let backend = crate::infra::agent::create_backend(model.kind());
         let command = backend
             .build_command(BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
                 folder,
                 mode: AgentCommandMode::Start { prompt },
                 model: model.as_str(),

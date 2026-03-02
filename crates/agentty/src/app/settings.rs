@@ -1,11 +1,12 @@
 use ratatui::widgets::TableState;
 
-use crate::agent::{AgentKind, AgentModel};
+use crate::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::app::AppServices;
 
 /// Names of persisted application settings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SettingName {
+    ReasoningLevel,
     DefaultFastModel,
     DefaultReviewModel,
     DefaultSmartModel,
@@ -18,6 +19,7 @@ impl SettingName {
     /// Returns the persisted key name for this setting.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::ReasoningLevel => "ReasoningLevel",
             Self::DefaultFastModel => "DefaultFastModel",
             Self::DefaultReviewModel => "DefaultReviewModel",
             Self::DefaultSmartModel => "DefaultSmartModel",
@@ -73,6 +75,7 @@ enum SettingControl {
 /// Backing table rows for the settings page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
+    ReasoningLevel,
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
@@ -80,7 +83,8 @@ enum SettingRow {
 }
 
 impl SettingRow {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
+        Self::ReasoningLevel,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -93,12 +97,13 @@ impl SettingRow {
         Self::ALL
             .get(index)
             .copied()
-            .unwrap_or(Self::DefaultSmartModel)
+            .unwrap_or(Self::ReasoningLevel)
     }
 
     /// Returns the display label for the row.
     fn label(self) -> &'static str {
         match self {
+            Self::ReasoningLevel => "Reasoning Level",
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
@@ -109,9 +114,10 @@ impl SettingRow {
     /// Returns how this row is edited.
     fn control(self) -> SettingControl {
         match self {
-            Self::DefaultSmartModel | Self::DefaultFastModel | Self::DefaultReviewModel => {
-                SettingControl::Selector
-            }
+            Self::ReasoningLevel
+            | Self::DefaultSmartModel
+            | Self::DefaultFastModel
+            | Self::DefaultReviewModel => SettingControl::Selector,
             Self::OpenCommand => SettingControl::TextInput,
         }
     }
@@ -119,6 +125,7 @@ impl SettingRow {
     /// Returns the persisted setting name represented by this row.
     fn setting_name(self) -> SettingName {
         match self {
+            Self::ReasoningLevel => SettingName::ReasoningLevel,
             Self::DefaultSmartModel => SettingName::DefaultSmartModel,
             Self::DefaultFastModel => SettingName::DefaultFastModel,
             Self::DefaultReviewModel => SettingName::DefaultReviewModel,
@@ -129,6 +136,10 @@ impl SettingRow {
 
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
+    /// Reasoning effort preference for models that support this setting.
+    ///
+    /// Currently applied to Codex turns.
+    pub reasoning_level: ReasoningLevel,
     /// Default fast model used by fast-path workflows.
     pub default_fast_model: AgentModel,
     /// Default model used by review workflows.
@@ -155,6 +166,7 @@ impl SettingsManager {
         let default_review_model = load_model_setting(services, SettingName::DefaultReviewModel)
             .await
             .unwrap_or(default_smart_model);
+        let reasoning_level = load_reasoning_level_setting(services).await;
 
         let open_command = services
             .db()
@@ -175,6 +187,7 @@ impl SettingsManager {
         table_state.select(Some(0));
 
         Self {
+            reasoning_level,
             default_fast_model,
             default_review_model,
             default_smart_model,
@@ -326,6 +339,7 @@ impl SettingsManager {
     /// Returns the text displayed for a row value.
     fn display_value_for_row(&self, row: SettingRow) -> String {
         match row {
+            SettingRow::ReasoningLevel => self.reasoning_level.as_str().to_string(),
             SettingRow::DefaultSmartModel => {
                 if self.use_last_used_model_as_default {
                     "Last used model as default".to_string()
@@ -354,6 +368,9 @@ impl SettingsManager {
         }
 
         match row.setting_name() {
+            SettingName::ReasoningLevel => {
+                self.cycle_reasoning_level_selector(services).await;
+            }
             SettingName::DefaultSmartModel => {
                 self.cycle_default_smart_model_selector(services).await;
             }
@@ -382,12 +399,25 @@ impl SettingsManager {
                     .upsert_setting(SettingName::OpenCommand.as_str(), &self.open_command)
                     .await;
             }
-            SettingName::DefaultFastModel
+            SettingName::ReasoningLevel
+            | SettingName::DefaultFastModel
             | SettingName::DefaultReviewModel
             | SettingName::DefaultSmartModel
             | SettingName::LastUsedModelAsDefault
             | SettingName::LongestSessionDurationSeconds => {}
         }
+    }
+
+    /// Cycles the reasoning-level selector through all supported values.
+    async fn cycle_reasoning_level_selector(&mut self, services: &AppServices) {
+        let current_index = ReasoningLevel::ALL
+            .iter()
+            .position(|level| *level == self.reasoning_level)
+            .unwrap_or(0);
+        let next_index = (current_index + 1) % ReasoningLevel::ALL.len();
+        self.reasoning_level = ReasoningLevel::ALL[next_index];
+
+        self.persist_reasoning_level_setting(services).await;
     }
 
     /// Cycles the smart-model selector through all explicit models and the
@@ -450,6 +480,14 @@ impl SettingsManager {
             .await;
     }
 
+    /// Persists the reasoning-level selector value (`ReasoningLevel`).
+    async fn persist_reasoning_level_setting(&self, services: &AppServices) {
+        let _ = services
+            .db()
+            .set_reasoning_level(self.reasoning_level)
+            .await;
+    }
+
     /// Persists the fast-model selector value (`DefaultFastModel`).
     async fn persist_default_fast_model_setting(&self, services: &AppServices) {
         let _ = services
@@ -507,6 +545,18 @@ async fn load_model_setting(
         .and_then(|setting_value| setting_value.parse().ok())
 }
 
+/// Loads the persisted reasoning-level setting.
+///
+/// Falls back to [`ReasoningLevel::default`] when the setting is missing
+/// or cannot be parsed.
+async fn load_reasoning_level_setting(services: &AppServices) -> ReasoningLevel {
+    services
+        .db()
+        .load_reasoning_level()
+        .await
+        .unwrap_or_default()
+}
+
 /// Loads the legacy smart-model setting from the previous key name.
 async fn load_legacy_default_smart_model_setting(services: &AppServices) -> Option<AgentModel> {
     services
@@ -528,6 +578,7 @@ mod tests {
         table_state.select(Some(0));
 
         SettingsManager {
+            reasoning_level: ReasoningLevel::High,
             default_fast_model: AgentKind::Gemini.default_model(),
             default_review_model: AgentKind::Gemini.default_model(),
             default_smart_model: AgentKind::Gemini.default_model(),
@@ -547,6 +598,17 @@ mod tests {
 
         // Assert
         assert_eq!(setting_name, "DefaultFastModel");
+    }
+
+    #[test]
+    fn setting_name_as_str_returns_reasoning_level() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::ReasoningLevel.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "ReasoningLevel");
     }
 
     #[test]
@@ -594,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn next_moves_selection_to_default_fast_model_row() {
+    fn next_moves_selection_to_default_smart_model_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -606,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_open_command_row_from_default_smart_model_row() {
+    fn previous_wraps_to_open_command_row_from_reasoning_level_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -614,7 +676,7 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(3));
+        assert_eq!(manager.table_state.selected(), Some(4));
     }
 
     #[test]
@@ -630,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_include_smart_fast_review_model_and_open_command() {
+    fn settings_rows_include_reasoning_smart_fast_review_model_and_open_command() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -638,11 +700,12 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0].0, "Default Smart Model");
-        assert_eq!(rows[1].0, "Default Fast Model");
-        assert_eq!(rows[2].0, "Default Review Model");
-        assert_eq!(rows[3].0, "Open Command");
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].0, "Reasoning Level");
+        assert_eq!(rows[1].0, "Default Smart Model");
+        assert_eq!(rows[2].0, "Default Fast Model");
+        assert_eq!(rows[3].0, "Default Review Model");
+        assert_eq!(rows[4].0, "Open Command");
     }
 
     #[test]
@@ -670,7 +733,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "<empty>");
+        assert_eq!(rows[4].1, "<empty>");
     }
 
     #[test]
@@ -684,7 +747,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, "http://localhost:5173|");
+        assert_eq!(rows[4].1, "http://localhost:5173|");
     }
 
     #[test]
@@ -697,7 +760,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[0].1, "Last used model as default");
+        assert_eq!(rows[1].1, "Last used model as default");
     }
 
     #[test]
@@ -710,7 +773,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[1].1, AgentModel::Gpt53Codex.as_str());
+        assert_eq!(rows[2].1, AgentModel::Gpt53Codex.as_str());
     }
 
     #[test]
@@ -723,6 +786,19 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, AgentModel::ClaudeOpus46.as_str());
+        assert_eq!(rows[3].1, AgentModel::ClaudeOpus46.as_str());
+    }
+
+    #[test]
+    fn settings_rows_show_reasoning_level_value() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.reasoning_level = ReasoningLevel::XHigh;
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[0].1, "xhigh");
     }
 }

@@ -82,6 +82,7 @@ impl AgentChannel for CliAgentChannel {
         events: mpsc::UnboundedSender<TurnEvent>,
     ) -> AgentFuture<Result<TurnResult, AgentError>> {
         let build_result = self.backend.build_command(BuildCommandRequest {
+            reasoning_level: req.reasoning_level,
             folder: &req.folder,
             mode: match &req.mode {
                 TurnMode::Start => AgentCommandMode::Start {
@@ -233,12 +234,13 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::domain::agent::AgentKind;
+    use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::TurnMode;
 
     fn make_turn_request(folder: PathBuf) -> TurnRequest {
         TurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             folder,
             live_session_output: None,
             model: "claude-sonnet-4-6".to_string(),

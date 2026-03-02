@@ -6,9 +6,7 @@ use super::backend::{
     AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
     prepend_protocol_instructions, prepend_repo_root_path_instructions,
 };
-
-/// Codex config override that forces high reasoning effort per invocation.
-const CODEX_REASONING_EFFORT_CONFIG: &str = r#"model_reasoning_effort="high""#;
+use crate::domain::agent::ReasoningLevel;
 
 /// Uses non-interactive Codex commands so Agentty can capture piped output.
 ///
@@ -29,6 +27,7 @@ impl AgentBackend for CodexBackend {
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
         let BuildCommandRequest {
+            reasoning_level,
             folder,
             mode,
             model,
@@ -60,7 +59,7 @@ impl AgentBackend for CodexBackend {
 
         command
             .arg("-c")
-            .arg(CODEX_REASONING_EFFORT_CONFIG)
+            .arg(model_reasoning_effort_config(reasoning_level))
             .arg("--model")
             .arg(model)
             .arg("--full-auto")
@@ -95,6 +94,14 @@ fn load_root_agents_instructions(folder: &Path) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Renders the Codex CLI `model_reasoning_effort` override value.
+fn model_reasoning_effort_config(reasoning_level: ReasoningLevel) -> String {
+    format!(
+        r#"model_reasoning_effort="{}""#,
+        reasoning_level.as_str()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -114,6 +121,7 @@ mod tests {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                reasoning_level: ReasoningLevel::High,
                 folder: temp_directory.path(),
                 mode: AgentCommandMode::Start {
                     prompt: "Run checks",
@@ -151,6 +159,7 @@ mod tests {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                reasoning_level: ReasoningLevel::High,
                 folder: temp_directory.path(),
                 mode: AgentCommandMode::Resume {
                     prompt: "Continue edits",
@@ -187,6 +196,7 @@ mod tests {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                reasoning_level: ReasoningLevel::High,
                 folder: temp_directory.path(),
                 mode: AgentCommandMode::Resume {
                     prompt: "Continue edits",
@@ -225,6 +235,7 @@ mod tests {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                reasoning_level: ReasoningLevel::Low,
                 folder: temp_directory.path(),
                 mode: AgentCommandMode::Start {
                     prompt: "Run checks",
@@ -238,5 +249,6 @@ mod tests {
         // Assert
         assert!(debug_command.contains("repository-root-relative POSIX paths"));
         assert!(debug_command.contains("Paths must be relative to the repository root."));
+        assert!(debug_command.contains(r#"model_reasoning_effort=\"low\""#));
     }
 }

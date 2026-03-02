@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
+use crate::domain::agent::ReasoningLevel;
+
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -42,19 +44,28 @@ pub enum AppServerStreamEvent {
 /// Input payload for one app-server turn execution.
 #[derive(Clone)]
 pub struct AppServerTurnRequest {
+    /// Reasoning effort preference for this turn.
+    ///
+    /// Ignored by providers/models that do not support reasoning effort.
+    pub reasoning_level: ReasoningLevel,
+    /// Session worktree folder where the provider runtime executes.
+    pub folder: PathBuf,
     /// Live in-memory session output buffer updated by the streaming consumer.
     ///
     /// When set, restart-and-retry reads the latest accumulated output from
     /// this buffer instead of the stale `session_output` snapshot, ensuring
     /// content streamed before the crash is included in the replay prompt.
     pub live_session_output: Option<Arc<Mutex<String>>>,
-    pub folder: PathBuf,
+    /// Provider-specific model identifier.
     pub model: String,
+    /// User prompt text for this turn.
     pub prompt: String,
     /// Provider-native thread/session id used to resume context in a newly
     /// started runtime.
     pub provider_conversation_id: Option<String>,
+    /// Stable agentty session id.
     pub session_id: String,
+    /// Snapshot of prior session output used for replay prompts.
     pub session_output: Option<String>,
 }
 
@@ -487,6 +498,7 @@ mod tests {
         // Arrange
         let live_output = Arc::new(Mutex::new("live content from stream".to_string()));
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: Some(live_output),
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),
@@ -508,6 +520,7 @@ mod tests {
         // Arrange
         let live_output = Arc::new(Mutex::new(String::new()));
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: Some(live_output),
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),
@@ -528,6 +541,7 @@ mod tests {
     fn read_latest_session_output_falls_back_to_snapshot_when_no_live_buffer() {
         // Arrange
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),
@@ -548,6 +562,7 @@ mod tests {
     fn read_latest_session_output_returns_none_when_both_are_absent() {
         // Arrange
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),
@@ -570,6 +585,7 @@ mod tests {
         let sessions = AppServerSessionRegistry::new("Test");
         let live_output = Arc::new(Mutex::new("streamed before crash".to_string()));
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: Some(live_output),
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),
@@ -643,6 +659,7 @@ mod tests {
         // Arrange
         let sessions = AppServerSessionRegistry::new("Test");
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),
@@ -724,6 +741,7 @@ mod tests {
         // Arrange
         let sessions = AppServerSessionRegistry::new("Test");
         let request = AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
             live_session_output: None,
             folder: PathBuf::from("/tmp"),
             model: "model-a".to_string(),

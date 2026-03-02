@@ -20,7 +20,7 @@ Agentty organizes its interface into four tabs, accessible with `Tab`:
 | **Sessions** | List, create, and manage agent sessions. |
 | **Projects** | Switch between projects (git repositories). |
 | **Stats** | View usage statistics. |
-| **Settings** | Configure default smart/fast/review models and other preferences. |
+| **Settings** | Configure Codex reasoning level, default models, and other preferences. |
 
 ## Session Lifecycle
 
@@ -108,6 +108,13 @@ accented row text, even while cursor selection moves to other rows.
 | `Enter` | Edit setting |
 | `Tab` | Switch tab |
 | `?` | Help |
+
+<a id="usage-settings-options"></a>
+The Settings tab includes:
+
+- `Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex turns.
+- `Default Smart Model`, `Default Fast Model`, and `Default Review Model`.
+- `Open Command` for launching session worktrees.
 
 ### Session View
 

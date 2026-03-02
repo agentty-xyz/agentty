@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+use crate::app::settings::SettingName;
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::SessionStats;
 
 /// Subdirectory under the agentty home where the database file is stored.
@@ -1259,6 +1261,37 @@ WHERE name = ?
         Ok(row.map(|row| row.get("value")))
     }
 
+    /// Persists the reasoning-effort setting.
+    ///
+    /// # Errors
+    /// Returns an error if settings persistence fails.
+    pub async fn set_reasoning_level(
+        &self,
+        reasoning_level: ReasoningLevel,
+    ) -> Result<(), String> {
+        self.upsert_setting(SettingName::ReasoningLevel.as_str(), reasoning_level.as_str())
+            .await
+    }
+
+    /// Loads the persisted reasoning-effort setting.
+    ///
+    /// Missing or unparsable values fall back to [`ReasoningLevel::default`].
+    ///
+    /// # Errors
+    /// Returns an error if settings lookup fails.
+    pub async fn load_reasoning_level(&self) -> Result<ReasoningLevel, String> {
+        let setting_value = self
+            .get_setting(SettingName::ReasoningLevel.as_str())
+            .await?;
+
+        let reasoning_level = setting_value
+            .as_deref()
+            .and_then(|value| value.parse::<ReasoningLevel>().ok())
+            .unwrap_or_default();
+
+        Ok(reasoning_level)
+    }
+
     /// Persists the active project identifier in application settings.
     ///
     /// # Errors
@@ -1493,6 +1526,53 @@ mod tests {
             default_review_model,
             Some(AgentModel::ClaudeOpus46.as_str().to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_level_round_trip_uses_typed_setting_helpers() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        database
+            .set_reasoning_level(ReasoningLevel::Low)
+            .await
+            .expect("failed to persist reasoning level");
+        let reasoning_level = database
+            .load_reasoning_level()
+            .await
+            .expect("failed to load reasoning level");
+
+        // Assert
+        assert_eq!(reasoning_level, ReasoningLevel::Low);
+    }
+
+    #[tokio::test]
+    async fn test_load_reasoning_level_defaults_when_setting_is_missing_or_invalid() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        let missing_setting_level = database
+            .load_reasoning_level()
+            .await
+            .expect("failed to load default reasoning level");
+        database
+            .upsert_setting(SettingName::ReasoningLevel.as_str(), "unsupported")
+            .await
+            .expect("failed to insert unsupported reasoning level");
+        let invalid_setting_level = database
+            .load_reasoning_level()
+            .await
+            .expect("failed to load fallback reasoning level");
+
+        // Assert
+        assert_eq!(missing_setting_level, ReasoningLevel::High);
+        assert_eq!(invalid_setting_level, ReasoningLevel::High);
     }
 
     #[tokio::test]

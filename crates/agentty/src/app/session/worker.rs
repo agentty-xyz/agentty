@@ -276,6 +276,7 @@ impl SessionManager {
             .await;
         }
 
+        let reasoning_level = context.db.load_reasoning_level().await.unwrap_or_default();
         let provider_conversation_id = context
             .db
             .get_session_provider_conversation_id(&context.session_id)
@@ -284,6 +285,7 @@ impl SessionManager {
             .flatten();
 
         let req = TurnRequest {
+            reasoning_level,
             folder: context.folder.clone(),
             live_session_output: Some(Arc::clone(&context.output)),
             model: session_model.as_str().to_string(),
