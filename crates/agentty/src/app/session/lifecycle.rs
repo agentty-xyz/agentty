@@ -965,6 +965,10 @@ impl SessionManager {
     }
 
     /// Parses model output into a normalized one-line session title.
+    ///
+    /// Accepts a strict JSON object (`{"title":"..."}`) or an embedded JSON
+    /// object inside surrounding text. Returns [`None`] for freeform output to
+    /// avoid persisting conversational assistant lines as session titles.
     fn parse_generated_session_title(content: &str) -> Option<String> {
         let content = content.trim();
         if content.is_empty() {
@@ -982,12 +986,7 @@ impl SessionManager {
             return Self::normalize_generated_session_title(&parsed_response.title);
         }
 
-        let first_line = content
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or(content);
-
-        Self::normalize_generated_session_title(first_line)
+        None
     }
 
     /// Returns the first embedded JSON object slice in a mixed model response.
@@ -1130,6 +1129,7 @@ mod tests {
         assert!(title_prompt.contains("Generate a concise, commit-style title"));
         assert!(title_prompt.contains("Keep it high-level and intent-focused."));
         assert!(title_prompt.contains("Do not include long file names"));
+        assert!(title_prompt.contains(r#"Return only valid JSON: {"title":"..."}"#));
         assert!(title_prompt.contains(request_prompt));
     }
 
@@ -1164,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_generated_session_title_falls_back_to_first_line() {
+    fn test_parse_generated_session_title_returns_none_for_freeform_response() {
         // Arrange
         let response_content = "Title: \"Polish merge queue behavior\"\nextra details";
 
@@ -1172,10 +1172,7 @@ mod tests {
         let parsed_title = SessionManager::parse_generated_session_title(response_content);
 
         // Assert
-        assert_eq!(
-            parsed_title,
-            Some("Polish merge queue behavior".to_string())
-        );
+        assert_eq!(parsed_title, None);
     }
 
     #[test]
