@@ -241,6 +241,7 @@ impl App {
             AgentKind::Gemini.default_model(),
         )
         .await;
+        let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
         let sessions = SessionManager::new(
             all_time_model_usage,
             codex_usage_limits,
@@ -253,6 +254,7 @@ impl App {
                 handles,
                 sessions,
                 table_state,
+                clock,
                 sessions_row_count,
                 sessions_updated_at_max,
             ),

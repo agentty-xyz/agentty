@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use ratatui::widgets::TableState;
 
-use crate::app::session::SESSION_REFRESH_INTERVAL;
+use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::session::{Session, SessionHandles};
 
 /// Holds all in-memory state related to session listing and refresh tracking.
@@ -11,6 +12,7 @@ pub struct SessionState {
     pub handles: HashMap<String, SessionHandles>,
     pub sessions: Vec<Session>,
     pub table_state: TableState,
+    pub(crate) clock: Arc<dyn Clock>,
     pub(crate) refresh_deadline: Instant,
     pub(crate) row_count: i64,
     pub(crate) updated_at_max: i64,
@@ -18,18 +20,26 @@ pub struct SessionState {
 
 impl SessionState {
     /// Creates a new [`SessionState`] with initial refresh metadata.
-    pub fn new(
+    ///
+    /// Time values are provided by an injected clock so refresh scheduling can
+    /// be deterministic in tests.
+    pub(crate) fn new(
         handles: HashMap<String, SessionHandles>,
         sessions: Vec<Session>,
         table_state: TableState,
+        clock: Arc<dyn Clock>,
         row_count: i64,
         updated_at_max: i64,
     ) -> Self {
+        let _state_created_at = clock.now_system_time();
+        let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
+
         Self {
             handles,
             sessions,
             table_state,
-            refresh_deadline: Instant::now() + SESSION_REFRESH_INTERVAL,
+            clock,
+            refresh_deadline,
             row_count,
             updated_at_max,
         }

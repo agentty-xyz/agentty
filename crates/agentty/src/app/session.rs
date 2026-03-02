@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
@@ -49,6 +49,28 @@ pub(super) const COMMIT_MESSAGE: &str = "Beautiful commit (made by Agentty)";
 pub(crate) struct SessionDefaults {
     /// Default model selected for newly created sessions.
     pub(crate) model: AgentModel,
+}
+
+/// Provides wall-clock values for session refresh decision logic.
+pub(crate) trait Clock: Send + Sync {
+    /// Returns the current monotonic instant.
+    fn now_instant(&self) -> Instant;
+
+    /// Returns the current wall-clock system time.
+    fn now_system_time(&self) -> SystemTime;
+}
+
+/// Production clock backed by `std::time`.
+pub(crate) struct RealClock;
+
+impl Clock for RealClock {
+    fn now_instant(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn now_system_time(&self) -> SystemTime {
+        SystemTime::now()
+    }
 }
 
 /// Session domain state and worker orchestration state.

@@ -23,7 +23,7 @@ impl SessionManager {
             return;
         }
 
-        self.refresh_deadline = Instant::now() + SESSION_REFRESH_INTERVAL;
+        self.refresh_deadline = self.next_refresh_deadline();
 
         let Ok(sessions_metadata) = services.db().load_sessions_metadata().await else {
             return;
@@ -47,7 +47,7 @@ impl SessionManager {
         let sessions_metadata = services.db().load_sessions_metadata().await.ok();
         self.reload_sessions(mode, projects, services, sessions_metadata)
             .await;
-        self.refresh_deadline = Instant::now() + SESSION_REFRESH_INTERVAL;
+        self.refresh_deadline = self.next_refresh_deadline();
     }
 
     /// Applies a newly loaded Codex usage-limit snapshot.
@@ -115,7 +115,12 @@ impl SessionManager {
 
     /// Returns `true` when periodic session refresh should run.
     fn is_session_refresh_due(&self) -> bool {
-        Instant::now() >= self.refresh_deadline
+        self.clock.now_instant() >= self.refresh_deadline
+    }
+
+    /// Computes the next refresh deadline from the injected clock.
+    fn next_refresh_deadline(&self) -> Instant {
+        self.clock.now_instant() + SESSION_REFRESH_INTERVAL
     }
 
     /// Restores table selection after session list reload.
@@ -190,8 +195,49 @@ fn merged_codex_usage_limits(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Instant, SystemTime};
+
+    use ratatui::widgets::TableState;
+
     use super::*;
+    use crate::app::SessionState;
+    use crate::domain::agent::AgentKind;
     use crate::domain::session::CodexUsageLimitWindow;
+
+    #[test]
+    fn test_is_session_refresh_due_returns_false_before_deadline() {
+        // Arrange
+        let now = Instant::now();
+        let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
+        let clock: Arc<dyn crate::app::session::Clock> = fake_clock;
+        let session_manager = session_manager_fixture(clock);
+
+        // Act
+        let refresh_due = session_manager.is_session_refresh_due();
+        let wall_clock = session_manager.clock.now_system_time();
+
+        // Assert
+        assert!(!refresh_due);
+        assert_eq!(wall_clock, SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn test_is_session_refresh_due_returns_true_at_deadline() {
+        // Arrange
+        let now = Instant::now();
+        let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
+        let clock: Arc<dyn crate::app::session::Clock> = fake_clock.clone();
+        let session_manager = session_manager_fixture(clock);
+        fake_clock.set_now_instant(now + SESSION_REFRESH_INTERVAL);
+
+        // Act
+        let refresh_due = session_manager.is_session_refresh_due();
+
+        // Assert
+        assert!(refresh_due);
+    }
 
     #[test]
     fn test_merged_codex_usage_limits_keeps_previous_snapshot_when_refresh_fails() {
@@ -232,6 +278,31 @@ mod tests {
         assert_eq!(merged_limits, None);
     }
 
+    /// Builds a session manager with deterministic time and empty state.
+    fn session_manager_fixture(clock: Arc<dyn crate::app::session::Clock>) -> SessionManager {
+        let git_client: Arc<dyn crate::infra::git::GitClient> =
+            Arc::new(crate::infra::git::MockGitClient::new());
+
+        SessionManager::new(
+            Vec::new(),
+            None,
+            crate::app::session::SessionDefaults {
+                model: AgentKind::Gemini.default_model(),
+            },
+            git_client,
+            0,
+            SessionState::new(
+                HashMap::new(),
+                Vec::new(),
+                TableState::default(),
+                clock,
+                0,
+                0,
+            ),
+            Vec::new(),
+        )
+    }
+
     /// Builds deterministic Codex usage-limit snapshots for tests.
     fn limits_fixture(primary_used_percent: u8, secondary_used_percent: u8) -> CodexUsageLimits {
         CodexUsageLimits {
@@ -245,6 +316,47 @@ mod tests {
                 used_percent: secondary_used_percent,
                 window_minutes: Some(10_080),
             }),
+        }
+    }
+
+    /// Test clock implementation with mutable `Instant` and `SystemTime`.
+    struct FakeClock {
+        instant: Mutex<Instant>,
+        system_time: Mutex<SystemTime>,
+    }
+
+    impl FakeClock {
+        /// Creates a fake clock seeded with deterministic wall-clock values.
+        fn new(instant: Instant, system_time: SystemTime) -> Self {
+            Self {
+                instant: Mutex::new(instant),
+                system_time: Mutex::new(system_time),
+            }
+        }
+
+        /// Overrides the fake monotonic instant used by refresh checks.
+        fn set_now_instant(&self, instant: Instant) {
+            let mut current_instant = self
+                .instant
+                .lock()
+                .expect("fake clock instant lock should not be poisoned");
+            *current_instant = instant;
+        }
+    }
+
+    impl crate::app::session::Clock for FakeClock {
+        fn now_instant(&self) -> Instant {
+            *self
+                .instant
+                .lock()
+                .expect("fake clock instant lock should not be poisoned")
+        }
+
+        fn now_system_time(&self) -> SystemTime {
+            *self
+                .system_time
+                .lock()
+                .expect("fake clock system-time lock should not be poisoned")
         }
     }
 }
