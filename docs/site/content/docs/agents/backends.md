@@ -43,6 +43,12 @@ backends and uses them to restore context after runtime restarts.
 - Gemini ACP: currently creates a fresh ACP `session/new` on runtime restart,
   so Agentty falls back to transcript replay when needed.
 
+## Codex Turn Timeout
+
+<a id="backends-codex-turn-timeout"></a>
+Codex app-server turns can run for a long time. Agentty waits up to 4 hours
+for Codex `turn/completed` by default.
+
 ## Selecting a Backend
 
 <a id="backends-selecting-a-backend"></a>

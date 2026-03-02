@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
@@ -48,6 +49,12 @@ const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT: u64 = 300_000;
 /// Proactive compaction threshold for Codex Spark models with a 128k context
 /// window.
 const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT: u64 = 120_000;
+
+/// Fixed timeout for Codex app-server turn waits.
+///
+/// Codex turns can legitimately run for long periods while planning and
+/// executing tools, so the value is intentionally measured in hours.
+const CODEX_TURN_TIMEOUT: Duration = Duration::from_secs(14_400);
 
 /// Production [`AppServerClient`] backed by `codex app-server` process
 /// instances.
@@ -362,7 +369,9 @@ impl RealCodexAppServerClient {
         app_server_transport::wait_for_response_line(&mut session.stdout_lines, &compact_id)
             .await?;
 
-        tokio::time::timeout(app_server_transport::TURN_TIMEOUT, async {
+        let turn_timeout = CODEX_TURN_TIMEOUT;
+
+        tokio::time::timeout(turn_timeout, async {
             loop {
                 let stdout_line = session
                     .stdout_lines
@@ -403,7 +412,7 @@ impl RealCodexAppServerClient {
             }
         })
         .await
-        .map_err(|_| "Timed out waiting for Codex app-server compaction to complete".to_string())?
+        .map_err(|_| Self::compaction_timeout_error(turn_timeout))?
     }
 
     /// Sends one `turn/start` request and processes the event stream until
@@ -442,8 +451,9 @@ impl RealCodexAppServerClient {
         let mut waiting_for_handoff_turn_completion = false;
         let mut latest_stream_usage: Option<(u64, u64)> = None;
         let mut completed_turn_usage: Option<(u64, u64)> = None;
+        let turn_timeout = CODEX_TURN_TIMEOUT;
 
-        tokio::time::timeout(app_server_transport::TURN_TIMEOUT, async {
+        tokio::time::timeout(turn_timeout, async {
             loop {
                 let stdout_line = session
                     .stdout_lines
@@ -534,7 +544,7 @@ impl RealCodexAppServerClient {
             }
         })
         .await
-        .map_err(|_| Self::turn_completed_timeout_error())?
+        .map_err(|_| Self::turn_completed_timeout_error(turn_timeout))?
     }
 
     /// Builds one `turn/start` request payload for the active thread.
@@ -567,11 +577,20 @@ impl RealCodexAppServerClient {
         })
     }
 
+    /// Builds a stable timeout error string for compaction completion waits.
+    fn compaction_timeout_error(turn_timeout: Duration) -> String {
+        format!(
+            "Timed out waiting for Codex app-server compaction to complete \
+             after {} seconds",
+            turn_timeout.as_secs()
+        )
+    }
+
     /// Builds a stable timeout error string for turn completion waits.
-    fn turn_completed_timeout_error() -> String {
+    fn turn_completed_timeout_error(turn_timeout: Duration) -> String {
         format!(
             "Timed out waiting for Codex app-server `turn/completed` after {} seconds",
-            app_server_transport::TURN_TIMEOUT.as_secs()
+            turn_timeout.as_secs()
         )
     }
 
@@ -1367,6 +1386,32 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn turn_completed_timeout_error_includes_timeout_seconds() {
+        // Arrange
+        let timeout = Duration::from_secs(9_001);
+
+        // Act
+        let error_message = RealCodexAppServerClient::turn_completed_timeout_error(timeout);
+
+        // Assert
+        assert!(error_message.contains("9001"));
+        assert!(error_message.contains("turn/completed"));
+    }
+
+    #[test]
+    fn compaction_timeout_error_includes_timeout_seconds() {
+        // Arrange
+        let timeout = Duration::from_secs(4_200);
+
+        // Act
+        let error_message = RealCodexAppServerClient::compaction_timeout_error(timeout);
+
+        // Assert
+        assert!(error_message.contains("4200"));
+        assert!(error_message.contains("compaction"));
+    }
 
     #[test]
     fn auto_compact_input_token_threshold_uses_400k_limit_for_codex_models() {
