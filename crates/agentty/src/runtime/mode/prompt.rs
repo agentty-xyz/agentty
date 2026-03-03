@@ -104,6 +104,9 @@ pub(crate) async fn handle(
                 input.insert_newline();
             }
         }
+        KeyCode::Char('u') if is_control_line_delete_key(key) => {
+            handle_prompt_line_delete(app);
+        }
         KeyCode::Char(character) => {
             handle_prompt_char(app, character, &prompt_context);
         }
@@ -229,6 +232,15 @@ fn is_word_delete_backspace(key: KeyEvent) -> bool {
 /// On macOS terminals this is produced by pressing `Cmd`+`Backspace`.
 fn is_line_delete_backspace(key: KeyEvent) -> bool {
     key.modifiers.contains(event::KeyModifiers::SUPER)
+}
+
+/// Returns true when `Ctrl+u` is pressed to delete the current line.
+///
+/// macOS terminals send `Ctrl+u` (`\x15`) for `Cmd`+`Backspace` because the
+/// legacy terminal protocol cannot encode the Super/Cmd modifier. `Ctrl+u` is
+/// also the standard Unix "kill line" binding.
+fn is_control_line_delete_key(key: KeyEvent) -> bool {
+    key.modifiers == event::KeyModifiers::CONTROL
 }
 
 /// Normalizes pasted text line-endings to `\n`.
@@ -753,6 +765,29 @@ fn move_prompt_cursor_word_right(input: &mut InputState) {
     }
 
     input.cursor = cursor;
+}
+
+/// Handles `Ctrl+u` line deletion by clearing the current line content.
+///
+/// This is the standard Unix "kill line" binding and also the sequence macOS
+/// terminals send for `Cmd`+`Backspace`.
+fn handle_prompt_line_delete(app: &mut App) {
+    if let AppMode::Prompt {
+        input,
+        history_state,
+        slash_state,
+        at_mention_state,
+        ..
+    } = &mut app.mode
+    {
+        input.delete_current_line();
+
+        history_state.reset_navigation();
+        slash_state.reset();
+        if at_mention_state.is_some() && input.at_mention_query().is_none() {
+            *at_mention_state = None;
+        }
+    }
 }
 
 /// Handles prompt backspace by deleting one character or one whole word when
@@ -1360,6 +1395,30 @@ mod tests {
     }
 
     #[test]
+    fn test_is_control_line_delete_key_accepts_ctrl_u() {
+        // Arrange
+        let key = KeyEvent::new(KeyCode::Char('u'), event::KeyModifiers::CONTROL);
+
+        // Act
+        let result = is_control_line_delete_key(key);
+
+        // Assert
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_control_line_delete_key_rejects_plain_u() {
+        // Arrange
+        let key = KeyEvent::new(KeyCode::Char('u'), event::KeyModifiers::NONE);
+
+        // Act
+        let result = is_control_line_delete_key(key);
+
+        // Assert
+        assert!(!result);
+    }
+
+    #[test]
     fn test_normalize_pasted_text_replaces_carriage_returns() {
         // Arrange
         let pasted_text = "line 1\r\nline 2\rline 3\nline 4";
@@ -1644,6 +1703,35 @@ mod tests {
         // Act
         let key = KeyEvent::new(KeyCode::Backspace, event::KeyModifiers::SUPER);
         handle_prompt_backspace(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt {
+            history_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "first line");
+            assert_eq!(history_state.selected_index, None);
+            assert_eq!(history_state.draft_text, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_line_delete_with_ctrl_u_deletes_full_line() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("first line\nsecond line", None).await;
+        if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+            history_state.draft_text = Some("draft".to_string());
+            history_state.entries = vec!["first".to_string(), "second".to_string()];
+            history_state.selected_index = Some(1);
+        }
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = "first line\nsecond".chars().count();
+        }
+
+        // Act
+        handle_prompt_line_delete(&mut app);
 
         // Assert
         if let AppMode::Prompt {
