@@ -150,8 +150,7 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
-const DEFAULT_REVIEW_COMMENT: &str =
-    "Agent summary unavailable; review the highlighted changes.";
+const DEFAULT_REVIEW_COMMENT: &str = "Agent summary unavailable; review the highlighted changes.";
 const MAX_AGENT_COMMENT_COUNT: usize = 3;
 const MAX_REVIEW_HIGHLIGHT_COUNT: usize = 8;
 const MAX_REVIEW_FALLBACK_COUNT: usize = 5;

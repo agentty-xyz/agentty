@@ -205,11 +205,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     }
 
     if can_show_focused_review {
-        actions.push(HelpAction::new(
-            "review",
-            "f",
-            "Show review",
-        ));
+        actions.push(HelpAction::new("review", "f", "Show review"));
     }
 
     if can_edit_session {
@@ -268,11 +264,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     }
 
     if can_show_focused_review {
-        actions.push(HelpAction::new(
-            "review",
-            "f",
-            "Show review",
-        ));
+        actions.push(HelpAction::new("review", "f", "Show review"));
     }
 
     if state.session_state == ViewSessionState::InProgress {

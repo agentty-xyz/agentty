@@ -273,8 +273,8 @@ impl StatsPage<'_> {
     /// Builds summary lines for favorite model, longest `agentty` session
     /// duration, and all-time per-model combined token totals.
     fn build_summary_lines(&self) -> Vec<Line<'static>> {
-        let favorite_model =
-            Self::favorite_model_name(self.all_time_model_usage).unwrap_or_else(|| "n/a".to_string());
+        let favorite_model = Self::favorite_model_name(self.all_time_model_usage)
+            .unwrap_or_else(|| "n/a".to_string());
         let longest_session = self.longest_session_summary();
         let longest_label = longest_session.unwrap_or_else(|| "n/a".to_string());
         let mut lines = vec![
@@ -294,8 +294,11 @@ impl StatsPage<'_> {
         }
 
         for model_usage in self.all_time_model_usage {
-            let combined_tokens =
-                format_token_count(model_usage.input_tokens.saturating_add(model_usage.output_tokens));
+            let combined_tokens = format_token_count(
+                model_usage
+                    .input_tokens
+                    .saturating_add(model_usage.output_tokens),
+            );
             lines.push(Line::from(format!(
                 "{}: {combined_tokens}",
                 model_usage.model.as_str()
@@ -312,7 +315,9 @@ impl StatsPage<'_> {
         for summary in all_time_model_usage {
             favorite = match favorite {
                 None => Some(summary),
-                Some(favorite_summary) if summary.session_count > favorite_summary.session_count => {
+                Some(favorite_summary)
+                    if summary.session_count > favorite_summary.session_count =>
+                {
                     Some(summary)
                 }
                 Some(favorite_summary)

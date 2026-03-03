@@ -50,7 +50,6 @@ impl SessionManager {
     }
 
     /// Reloads sessions and derived statistics, then restores UI state.
-    ///
     async fn reload_sessions(
         &mut self,
         mode: &mut AppMode,

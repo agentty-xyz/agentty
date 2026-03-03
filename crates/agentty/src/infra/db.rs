@@ -1265,12 +1265,12 @@ WHERE name = ?
     ///
     /// # Errors
     /// Returns an error if settings persistence fails.
-    pub async fn set_reasoning_level(
-        &self,
-        reasoning_level: ReasoningLevel,
-    ) -> Result<(), String> {
-        self.upsert_setting(SettingName::ReasoningLevel.as_str(), reasoning_level.codex())
-            .await
+    pub async fn set_reasoning_level(&self, reasoning_level: ReasoningLevel) -> Result<(), String> {
+        self.upsert_setting(
+            SettingName::ReasoningLevel.as_str(),
+            reasoning_level.codex(),
+        )
+        .await
     }
 
     /// Loads the persisted reasoning-effort setting.

@@ -142,9 +142,11 @@ fn render_list_or_overlay_mode(
                 render_merge_confirmation_overlay(
                     f,
                     area,
-                    confirmation_message,
-                    confirmation_title,
-                    *selected_confirmation_index,
+                    &MergeConfirmationContext {
+                        confirmation_message,
+                        confirmation_title,
+                        selected_confirmation_index: *selected_confirmation_index,
+                    },
                     view_mode,
                     shared.sessions,
                     aux.session_progress_messages,
@@ -191,13 +193,22 @@ fn render_list_or_overlay_mode(
     true
 }
 
+/// Borrowed context for the confirmation overlay portion of a merge
+/// confirmation render.
+struct MergeConfirmationContext<'a> {
+    /// The body text displayed inside the confirmation dialog.
+    confirmation_message: &'a str,
+    /// The header title of the confirmation dialog.
+    confirmation_title: &'a str,
+    /// Index of the currently highlighted confirmation option.
+    selected_confirmation_index: usize,
+}
+
 /// Renders merge confirmation above the originating session chat page.
 fn render_merge_confirmation_overlay(
     f: &mut Frame,
     area: Rect,
-    confirmation_message: &str,
-    confirmation_title: &str,
-    selected_confirmation_index: usize,
+    context: &MergeConfirmationContext<'_>,
     view_mode: &ConfirmationViewMode,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
@@ -217,10 +228,10 @@ fn render_merge_confirmation_overlay(
     );
 
     components::confirmation_overlay::ConfirmationOverlay::new(
-        confirmation_title,
-        confirmation_message,
+        context.confirmation_title,
+        context.confirmation_message,
     )
-    .selected_yes(selected_confirmation_index == 0)
+    .selected_yes(context.selected_confirmation_index == 0)
     .render(f, area);
 }
 

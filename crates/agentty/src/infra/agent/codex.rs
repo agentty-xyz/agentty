@@ -96,10 +96,7 @@ fn load_root_agents_instructions(folder: &Path) -> Option<String> {
 
 /// Renders the Codex CLI `model_reasoning_effort` override value.
 fn model_reasoning_effort_config(reasoning_level: ReasoningLevel) -> String {
-    format!(
-        r#"model_reasoning_effort="{}""#,
-        reasoning_level.codex()
-    )
+    format!(r#"model_reasoning_effort="{}""#, reasoning_level.codex())
 }
 
 #[cfg(test)]

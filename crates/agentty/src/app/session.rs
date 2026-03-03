@@ -217,8 +217,7 @@ mod tests {
     use crate::app::{App, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel};
     use crate::domain::session::{
-        DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats,
-        Status,
+        DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
     use crate::infra::agent::AgentCommandMode;
     use crate::infra::agent::tests::MockAgentBackend;

@@ -465,9 +465,7 @@ fn view_session_state(status: Status) -> ViewSessionState {
         Status::Done => ViewSessionState::Done,
         Status::InProgress => ViewSessionState::InProgress,
         Status::Rebasing => ViewSessionState::Rebasing,
-        Status::Merging | Status::Queued => {
-            ViewSessionState::MergeQueue
-        }
+        Status::Merging | Status::Queued => ViewSessionState::MergeQueue,
         Status::Review => ViewSessionState::Review,
         _ => ViewSessionState::Interactive,
     }
@@ -1365,11 +1363,8 @@ mod tests {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
         let session_folder = app.sessions.sessions[0].folder.clone();
-        std::fs::write(
-            session_folder.join("README.md"),
-            "review test content\n",
-        )
-        .expect("failed to update readme");
+        std::fs::write(session_folder.join("README.md"), "review test content\n")
+            .expect("failed to update readme");
         let context = ViewContext {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: None,

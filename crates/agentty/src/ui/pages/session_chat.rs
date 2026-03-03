@@ -367,9 +367,7 @@ impl<'a> SessionChatPage<'a> {
             Status::Done => ViewSessionState::Done,
             Status::InProgress => ViewSessionState::InProgress,
             Status::Rebasing => ViewSessionState::Rebasing,
-            Status::Merging | Status::Queued => {
-                ViewSessionState::MergeQueue
-            }
+            Status::Merging | Status::Queued => ViewSessionState::MergeQueue,
             Status::Review => ViewSessionState::Review,
             _ => ViewSessionState::Interactive,
         };

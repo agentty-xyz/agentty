@@ -313,10 +313,10 @@ impl SessionTaskService {
             }
         };
 
-        if let Some(pid) = child.id() {
-            if let Ok(mut guard) = child_pid.lock() {
-                *guard = Some(pid);
-            }
+        if let Some(pid) = child.id()
+            && let Ok(mut guard) = child_pid.lock()
+        {
+            *guard = Some(pid);
         }
 
         let captured =

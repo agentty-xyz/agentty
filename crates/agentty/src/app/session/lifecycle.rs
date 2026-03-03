@@ -330,11 +330,7 @@ impl SessionManager {
         }
 
         let handles = self.session_handles_or_err(session_id)?;
-        let pid = handles
-            .child_pid
-            .lock()
-            .ok()
-            .and_then(|guard| *guard);
+        let pid = handles.child_pid.lock().ok().and_then(|guard| *guard);
 
         if let Some(pid) = pid {
             nix::sys::signal::kill(
@@ -797,7 +793,13 @@ impl SessionManager {
 
         let title_model =
             crate::app::settings::load_default_fast_model_setting(services, session_model).await;
-        Self::spawn_session_title_generation_task(services, session_id, folder, prompt, title_model);
+        Self::spawn_session_title_generation_task(
+            services,
+            session_id,
+            folder,
+            prompt,
+            title_model,
+        );
     }
 
     /// Appends the user reply marker line to session output.
@@ -1173,12 +1175,7 @@ mod tests {
     }
 
     /// Builds a minimal in-memory session snapshot for lifecycle unit tests.
-    fn test_session(
-        prompt: &str,
-        status: Status,
-        title: Option<&str>,
-        output: &str,
-    ) -> Session {
+    fn test_session(prompt: &str, status: Status, title: Option<&str>, output: &str) -> Session {
         Session {
             base_branch: "main".to_string(),
             created_at: 0,
@@ -1235,12 +1232,7 @@ mod tests {
 
         // Act
         let context = session_manager
-            .prepare_reply_context(
-                0,
-                "Follow-up prompt",
-                AgentModel::ClaudeSonnet46,
-                false,
-            )
+            .prepare_reply_context(0, "Follow-up prompt", AgentModel::ClaudeSonnet46, false)
             .expect("reply context should be available")
             .expect("session should produce reply context");
 

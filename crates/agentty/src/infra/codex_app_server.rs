@@ -344,13 +344,9 @@ impl RealCodexAppServerClient {
             Self::send_compact_request(session).await?;
         }
 
-        let result = Self::execute_turn_event_loop(
-            session,
-            prompt,
-            reasoning_level,
-            stream_tx.clone(),
-        )
-        .await;
+        let result =
+            Self::execute_turn_event_loop(session, prompt, reasoning_level, stream_tx.clone())
+                .await;
 
         match result {
             Ok((message, input_tokens, output_tokens)) => {
@@ -365,13 +361,8 @@ impl RealCodexAppServerClient {
                 Self::send_compact_request(session).await?;
 
                 let (message, input_tokens, output_tokens) =
-                    Self::execute_turn_event_loop(
-                        session,
-                        prompt,
-                        reasoning_level,
-                        stream_tx,
-                    )
-                    .await?;
+                    Self::execute_turn_event_loop(session, prompt, reasoning_level, stream_tx)
+                        .await?;
                 session.latest_input_tokens = input_tokens;
 
                 Ok((message, input_tokens, output_tokens))
@@ -632,8 +623,7 @@ impl RealCodexAppServerClient {
     /// Builds a stable timeout error string for compaction completion waits.
     fn compaction_timeout_error(turn_timeout: Duration) -> String {
         format!(
-            "Timed out waiting for Codex app-server compaction to complete \
-             after {} seconds",
+            "Timed out waiting for Codex app-server compaction to complete after {} seconds",
             turn_timeout.as_secs()
         )
     }

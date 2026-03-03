@@ -119,7 +119,11 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             restore_view,
             session_id,
             ..
-        } => (*confirmation_intent, session_id.clone(), restore_view.clone()),
+        } => (
+            *confirmation_intent,
+            session_id.clone(),
+            restore_view.clone(),
+        ),
         _ => return Ok(EventResult::Continue),
     };
 
@@ -162,9 +166,10 @@ async fn handle_merge_confirmation(
     confirmation_session_id: Option<String>,
     restore_view: Option<crate::ui::state::app_mode::ConfirmationViewMode>,
 ) -> io::Result<EventResult> {
-    app.mode = restore_view
-        .map(crate::ui::state::app_mode::ConfirmationViewMode::into_view_mode)
-        .unwrap_or(AppMode::List);
+    app.mode = restore_view.map_or(
+        AppMode::List,
+        crate::ui::state::app_mode::ConfirmationViewMode::into_view_mode,
+    );
 
     if let Some(session_id) = confirmation_session_id
         && let Err(error) = app.merge_session(&session_id).await
@@ -369,7 +374,7 @@ mod tests {
                 done_session_output_mode: DoneSessionOutputMode::FocusedReview,
                 focused_review_status_message: Some(ref focused_review_status_message),
                 focused_review_text: Some(ref focused_review_text),
-                ref session_id_in_mode,
+                session_id: ref session_id_in_mode,
                 scroll_offset: Some(6),
             } if session_id_in_mode == &session_id
                 && focused_review_status_message == "Preparing focused review"
@@ -412,7 +417,7 @@ mod tests {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 focused_review_status_message: None,
                 focused_review_text: None,
-                ref session_id_in_mode,
+                session_id: ref session_id_in_mode,
                 scroll_offset: Some(2),
             } if session_id_in_mode == &session_id
         ));

@@ -271,5 +271,4 @@ mod tests {
         assert!(prompt.contains("You may browse the internet when needed."));
         assert!(prompt.contains("You may run non-editing CLI commands"));
     }
-
 }

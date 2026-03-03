@@ -7,9 +7,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, DoneSessionOutputMode, HelpContext,
-};
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, DoneSessionOutputMode, HelpContext};
 use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, stats_actions,
 };

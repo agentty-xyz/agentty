@@ -1629,7 +1629,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_prompt_backspace_with_super_deletes_current_line_content() {
+    async fn test_handle_prompt_backspace_with_super_deletes_full_line() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("first line\nsecond line", None).await;
         if let AppMode::Prompt { history_state, .. } = &mut app.mode {
@@ -1652,7 +1652,7 @@ mod tests {
             ..
         } = &app.mode
         {
-            assert_eq!(input.text(), "first line\n");
+            assert_eq!(input.text(), "first line");
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }

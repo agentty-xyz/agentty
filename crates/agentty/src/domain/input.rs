@@ -74,22 +74,37 @@ impl InputState {
         self.cursor -= 1;
     }
 
-    /// Deletes all text in the current line without removing newline
-    /// separators around that line.
+    /// Deletes the entire current line including one adjacent newline
+    /// separator.
+    ///
+    /// When the line has a preceding newline, removes it so the cursor
+    /// lands at the end of the previous line. When the line is the first
+    /// line and has a following newline, removes that instead so the
+    /// cursor lands at position `0`. For a single-line buffer, clears
+    /// all text.
     pub fn delete_current_line(&mut self) {
         let characters: Vec<char> = self.text.chars().collect();
-        let mut start = self.cursor.min(characters.len());
-        let mut end = self.cursor.min(characters.len());
+        let cursor_pos = self.cursor.min(characters.len());
 
-        while start > 0 && characters[start - 1] != '\n' {
-            start -= 1;
+        let mut line_start = cursor_pos;
+        while line_start > 0 && characters[line_start - 1] != '\n' {
+            line_start -= 1;
         }
 
-        while end < characters.len() && characters[end] != '\n' {
-            end += 1;
+        let mut line_end = cursor_pos;
+        while line_end < characters.len() && characters[line_end] != '\n' {
+            line_end += 1;
         }
 
-        self.replace_range(start, end, "");
+        let (delete_start, delete_end) = if line_start > 0 {
+            (line_start - 1, line_end)
+        } else if line_end < characters.len() {
+            (line_start, line_end + 1)
+        } else {
+            (line_start, line_end)
+        };
+
+        self.replace_range(delete_start, delete_end, "");
     }
 
     /// Deletes the character at the cursor position.
@@ -328,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_current_line_clears_current_multiline_content() {
+    fn test_delete_current_line_removes_last_line_and_preceding_newline() {
         // Arrange
         let mut state = InputState::with_text("first line\nsecond line".to_string());
         state.cursor = "first line\nsecond".chars().count();
@@ -337,12 +352,12 @@ mod tests {
         state.delete_current_line();
 
         // Assert
-        assert_eq!(state.text(), "first line\n");
-        assert_eq!(state.cursor, "first line\n".chars().count());
+        assert_eq!(state.text(), "first line");
+        assert_eq!(state.cursor, "first line".chars().count());
     }
 
     #[test]
-    fn test_delete_current_line_preserves_surrounding_newlines() {
+    fn test_delete_current_line_removes_middle_line_and_preceding_newline() {
         // Arrange
         let mut state = InputState::with_text("first line\nsecond line\nthird line".to_string());
         state.cursor = "first line\nsecond".chars().count();
@@ -351,7 +366,21 @@ mod tests {
         state.delete_current_line();
 
         // Assert
-        assert_eq!(state.text(), "first line\n\nthird line");
-        assert_eq!(state.cursor, "first line\n".chars().count());
+        assert_eq!(state.text(), "first line\nthird line");
+        assert_eq!(state.cursor, "first line".chars().count());
+    }
+
+    #[test]
+    fn test_delete_current_line_removes_first_line_and_following_newline() {
+        // Arrange
+        let mut state = InputState::with_text("first line\nsecond line".to_string());
+        state.cursor = "first".chars().count();
+
+        // Act
+        state.delete_current_line();
+
+        // Assert
+        assert_eq!(state.text(), "second line");
+        assert_eq!(state.cursor, 0);
     }
 }

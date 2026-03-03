@@ -1017,10 +1017,8 @@ impl App {
                 *focused_review_text = Some(review_text);
             }
             Err(error) => {
-                *focused_review_status_message = Some(format!(
-                    "Review assist unavailable: {}",
-                    error.trim()
-                ));
+                *focused_review_status_message =
+                    Some(format!("Review assist unavailable: {}", error.trim()));
                 *focused_review_text = None;
             }
         }
@@ -1674,9 +1672,7 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session::{
-        Session, SessionSize, SessionStats, Status,
-    };
+    use crate::domain::session::{Session, SessionSize, SessionStats, Status};
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
     use crate::infra::tmux::MockTmuxClient;
