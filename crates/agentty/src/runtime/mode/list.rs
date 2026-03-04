@@ -17,7 +17,7 @@ use crate::ui::state::prompt::{PromptHistoryState, PromptSlashState};
 ///
 /// Pressing `q` opens a confirmation overlay instead of quitting immediately,
 /// with `No` selected by default. Pressing `Enter` on the `Projects` tab
-/// switches the active project and then moves focus to `Tab::Sessions`.
+/// selects the active project and then moves focus to `Tab::Sessions`.
 /// `Tab` cycles tabs forward and `Shift+Tab` cycles tabs backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
@@ -59,9 +59,6 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Enter => return handle_enter_key(app).await,
-        KeyCode::Char('b') if app.tabs.current() == Tab::Projects => {
-            let _ = app.switch_to_previous_project().await;
-        }
         KeyCode::Char('d') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app
                 .selected_session()

@@ -53,7 +53,7 @@ when you delete a session.
 |---------|-------------|
 | **Agent** | An external AI CLI backend (Gemini, Claude, or Codex) that performs coding work. See [Agents & Models](@/docs/agents/backends.md). |
 | **Session** | An isolated unit of work: one prompt, one worktree branch, one reviewable diff. See [Workflow](@/docs/usage/workflow.md) and [Keybindings](@/docs/usage/keybindings.md). |
-| **Project** | A git repository registered in Agentty. Switch between projects with the Projects tab. |
+| **Project** | A git repository registered in Agentty. Select between projects with the Projects tab. |
 | **Diff view** | Press `d` in a review-state session to see exactly what the agent changed. |
 
 ## Next Steps

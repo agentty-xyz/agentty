@@ -438,7 +438,7 @@ impl App {
         self.projects.previous_project();
     }
 
-    /// Switches to the currently selected project in the projects list.
+    /// Selects the currently selected project in the projects list.
     ///
     /// # Errors
     /// Returns an error if there is no selected project or project switching
@@ -450,20 +450,6 @@ impl App {
             .ok_or_else(|| "No project selected".to_string())?;
 
         self.switch_project(selected_project_id).await
-    }
-
-    /// Switches to the previously active project when available.
-    ///
-    /// # Errors
-    /// Returns an error if there is no previous project or project switching
-    /// fails.
-    pub async fn switch_to_previous_project(&mut self) -> Result<(), String> {
-        let previous_project_id = self
-            .projects
-            .previous_project_id()
-            .ok_or_else(|| "No previous project available".to_string())?;
-
-        self.switch_project(previous_project_id).await
     }
 
     /// Switches app context to one persisted project id.

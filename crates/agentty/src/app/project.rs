@@ -1,4 +1,4 @@
-//! Active-project state, project discovery snapshots, and quick-switch helpers.
+//! Active-project state, project discovery snapshots, and quick-select helpers.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,7 +15,6 @@ pub struct ProjectManager {
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
     git_status_cancel: Arc<AtomicBool>,
-    previous_project_id: Option<i64>,
     project_items: Vec<ProjectListItem>,
     table_state: TableState,
     working_dir: PathBuf,
@@ -37,7 +36,6 @@ impl ProjectManager {
             git_branch,
             git_status: None,
             git_status_cancel,
-            previous_project_id: None,
             project_items,
             table_state: TableState::default(),
             working_dir,
@@ -115,11 +113,6 @@ impl ProjectManager {
             .map(|project_item| project_item.project.id)
     }
 
-    /// Returns the previously active project identifier, when known.
-    pub(crate) fn previous_project_id(&self) -> Option<i64> {
-        self.previous_project_id
-    }
-
     /// Selects the next project row.
     pub(crate) fn next_project(&mut self) {
         if self.project_items.is_empty() {
@@ -164,9 +157,6 @@ impl ProjectManager {
         git_branch: Option<String>,
         working_dir: PathBuf,
     ) {
-        if self.active_project_id != active_project_id {
-            self.previous_project_id = Some(self.active_project_id);
-        }
         self.active_project_id = active_project_id;
         self.active_project_name = active_project_name;
         self.git_branch = git_branch;

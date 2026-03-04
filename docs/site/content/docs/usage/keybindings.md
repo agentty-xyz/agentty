@@ -31,8 +31,7 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
-| `Enter` | Switch active project |
-| `b` | Switch to previous project |
+| `Enter` | Select active project |
 | `j` / `k` | Navigate projects |
 | `Tab` | Switch tab |
 | `?` | Help |
