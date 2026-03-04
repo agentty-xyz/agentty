@@ -5,6 +5,13 @@
 {% block canonical %}
     {{ config.base_url }}
 {% endblock canonical %}
+{# Keep homepage nav and content container sizing aligned with the docs landing page. #}
+{% block page_width_class %}
+    site-container-wide
+{% endblock page_width_class %}
+{% block main_width_class %}
+    site-container
+{% endblock main_width_class %}
 {% block content %}
     <section class="hero-section">
         <pre class="logo">    _    ____ _____ _   _ _____ _____ __   __
