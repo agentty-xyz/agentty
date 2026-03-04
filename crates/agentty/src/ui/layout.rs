@@ -9,6 +9,8 @@ const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;
 const CHAT_INPUT_INNER_OFFSET: u16 = 1;
 const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
 const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
+/// Foreground color used for chat input `@` lookup tokens.
+const CHAT_INPUT_AT_MENTION_COLOR: Color = Color::LightBlue;
 
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
@@ -41,7 +43,9 @@ pub fn calculate_input_height(width: u16, input: &str) -> u16 {
 ///
 /// The first line starts with the visible prompt prefix (` › `). Continuation
 /// lines (from wrapping or explicit newlines) keep the same horizontal padding
-/// as spaces, so text never appears under the prompt icon.
+/// as spaces, so text never appears under the prompt icon. Tokens that start
+/// with `@` at a word boundary are highlighted to make file lookup references
+/// easy to spot while typing.
 pub fn compute_input_layout(
     input: &str,
     width: u16,
@@ -180,6 +184,7 @@ fn move_input_cursor_vertical(
     )
 }
 
+/// Build wrapped chat input lines with cursor mapping and token-level styling.
 fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
     let inner_width = width.saturating_sub(2) as usize;
     let prefix = " › ";
@@ -198,18 +203,35 @@ fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
     let mut current_width = prefix_width;
     let mut line_index: usize = 0;
 
+    let mut in_mention = false;
+    let mut last_ch = None;
+
     for ch in input.chars() {
         if ch == '\n' {
+            in_mention = false;
             cursor_positions.push((current_width, line_index));
             display_lines.push(Line::from(std::mem::take(&mut current_line_spans)));
             current_line_spans = vec![Span::raw(continuation_padding.clone())];
             current_width = prefix_width;
             line_index += 1;
+            last_ch = Some(ch);
 
             continue;
         }
 
-        let char_span = Span::raw(ch.to_string());
+        if ch == '@' && last_ch.is_none_or(char::is_whitespace) {
+            in_mention = true;
+        } else if ch.is_whitespace() {
+            in_mention = false;
+        }
+
+        let style = if in_mention {
+            Style::default().fg(CHAT_INPUT_AT_MENTION_COLOR)
+        } else {
+            Style::default()
+        };
+
+        let char_span = Span::styled(ch.to_string(), style);
         let char_width = char_span.width();
 
         if current_width + char_width > inner_width {
@@ -222,6 +244,7 @@ fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
         cursor_positions.push((current_width, line_index));
         current_line_spans.push(char_span);
         current_width += char_width;
+        last_ch = Some(ch);
     }
 
     if current_width >= inner_width {
@@ -645,5 +668,55 @@ mod tests {
 
         // Assert
         assert_eq!(width, 21);
+    }
+
+    #[test]
+    fn test_compute_input_layout_at_mention_highlighting() {
+        // Arrange
+        let input = "hello @file world";
+        let width = 40;
+
+        // Act
+        let (lines, _, _) = compute_input_layout(input, width, 0);
+
+        // Assert
+        let line = &lines[0];
+        let spans = &line.spans;
+
+        // Prefix is at index 0: " › "
+        assert_eq!(spans[0].content, " › ");
+
+        // "hello " (indices 1..7) should be normal style
+        for span in spans.iter().take(7).skip(1) {
+            assert_eq!(span.style.fg, None);
+        }
+
+        // "@file" (indices 7..12) should be highlighted
+        for span in spans.iter().take(12).skip(7) {
+            assert_eq!(span.style.fg, Some(CHAT_INPUT_AT_MENTION_COLOR));
+        }
+
+        // " world" (indices 12..18) should be normal style
+        for span in spans.iter().take(18).skip(12) {
+            assert_eq!(span.style.fg, None);
+        }
+    }
+
+    #[test]
+    fn test_compute_input_layout_no_highlight_for_email() {
+        // Arrange
+        let input = "email@example.com";
+        let width = 40;
+
+        // Act
+        let (lines, _, _) = compute_input_layout(input, width, 0);
+
+        // Assert
+        let line = &lines[0];
+        let spans = &line.spans;
+
+        for span in spans.iter().skip(1) {
+            assert_eq!(span.style.fg, None);
+        }
     }
 }
