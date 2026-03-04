@@ -207,6 +207,11 @@ impl AgentChannel for CliAgentChannel {
 /// empty-after-trim results are silently skipped. The raw bytes are also
 /// accumulated in `raw_buffer` for final response parsing after the process
 /// exits.
+///
+/// Response content is streamed live through the best-effort heuristic
+/// normalizer. Partial protocol JSON fragments may leak through, but the
+/// worker layer always appends the clean final parsed response at turn
+/// completion so the authoritative output is present regardless.
 async fn stream_stdout(
     stdout: tokio::process::ChildStdout,
     kind: AgentKind,
@@ -530,6 +535,55 @@ mod tests {
             "Recovered output"
         );
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    /// Verifies strict protocol providers stream assistant deltas live and
+    /// forward progress events alongside them. The worker layer appends
+    /// the clean final parsed response at turn completion.
+    async fn test_run_turn_streams_deltas_and_progress_for_strict_protocol_provider() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut mock_backend = MockAgentBackend::new();
+        mock_backend.expect_build_command().returning(|_| {
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg(concat!(
+                r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash"}]}}';"#,
+                r#"echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"streamed fragment"}]}}';"#,
+                r#"echo '{"result":"{\"messages\":[{\"type\":\"answer\",\"text\":\"final answer\"}]}","usage":{"input_tokens":5,"output_tokens":3}}'"#,
+            ));
+
+            Ok(command)
+        });
+        let channel = CliAgentChannel {
+            backend: Arc::new(mock_backend),
+            kind: AgentKind::Claude,
+        };
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        let req = make_turn_request(dir.path().to_path_buf());
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), req, events_tx)
+            .await
+            .expect("turn should succeed");
+
+        // Assert
+        let mut saw_progress = false;
+        let mut saw_delta = false;
+        while let Ok(event) = events_rx.try_recv() {
+            match event {
+                TurnEvent::AssistantDelta(_) => saw_delta = true,
+                TurnEvent::Progress(label) => {
+                    saw_progress = true;
+                    assert_eq!(label, "Running a command");
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_progress, "progress events should be forwarded");
+        assert!(saw_delta, "assistant deltas should be streamed live");
+        assert_eq!(result.assistant_message.to_display_text(), "final answer");
     }
 
     #[test]

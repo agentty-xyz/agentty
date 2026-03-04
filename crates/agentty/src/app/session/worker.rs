@@ -311,11 +311,10 @@ impl SessionManager {
             .run_turn(context.session_id.clone(), req, event_tx)
             .await;
 
-        let streamed_any_content = consumer.await.unwrap_or(false);
+        let _ = consumer.await;
         SessionTaskService::clear_session_progress(&context.app_event_tx, &context.session_id);
 
-        let result =
-            apply_turn_result(context, session_model, turn_result, streamed_any_content).await;
+        let result = apply_turn_result(context, session_model, turn_result).await;
 
         SessionTaskService::refresh_persisted_session_size(
             &context.db,
@@ -368,19 +367,22 @@ impl SessionManager {
     }
 }
 
-/// Applies the turn result: appends un-streamed content, updates stats, and
+/// Applies the turn result: appends the final response, updates stats, and
 /// runs auto-commit. Returns `Ok(())` on success or `Err(description)` on
 /// turn failure after appending the error to session output.
+///
+/// The final parsed response is always appended regardless of whether content
+/// was streamed during the turn. Streamed content (including any partial
+/// protocol JSON fragments) remains visible in the session output.
 async fn apply_turn_result(
     context: &SessionWorkerContext,
     session_model: AgentModel,
     turn_result: Result<TurnResult, AgentError>,
-    streamed_any_content: bool,
 ) -> Result<(), String> {
     match turn_result {
         Ok(result) => {
             let assistant_message_text = result.assistant_message.to_display_text();
-            if !streamed_any_content && !assistant_message_text.trim().is_empty() {
+            if !assistant_message_text.trim().is_empty() {
                 let message = format!("{}\n\n", assistant_message_text.trim_end());
                 SessionTaskService::append_session_output(
                     &context.output,
