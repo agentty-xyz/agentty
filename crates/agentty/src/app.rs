@@ -264,9 +264,6 @@ impl App {
             &mut handles,
         )
         .await;
-        let all_time_model_usage = SessionManager::load_all_time_model_usage(&db).await;
-        let longest_session_duration_seconds =
-            SessionManager::load_longest_session_duration_seconds(&db).await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
         table_state.select((!sessions.is_empty()).then_some(0));
@@ -296,12 +293,10 @@ impl App {
         .await;
         let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
         let sessions = SessionManager::new(
-            all_time_model_usage,
             session::SessionDefaults {
                 model: default_session_model,
             },
             services.git_client(),
-            longest_session_duration_seconds,
             SessionState::new(
                 handles,
                 sessions,
@@ -386,25 +381,17 @@ impl App {
         let session_progress_messages = self.session_progress_messages.clone();
         let mode = &self.mode;
         let project_table_state = self.projects.project_table_state_mut();
-        let (
-            sessions,
-            stats_activity,
-            all_time_model_usage,
-            longest_session_duration_seconds,
-            table_state,
-        ) = self.sessions.render_parts();
+        let (sessions, stats_activity, table_state) = self.sessions.render_parts();
         let settings = &mut self.settings;
 
         ui::render(
             frame,
             ui::RenderContext {
                 active_project_id,
-                all_time_model_usage,
                 current_tab,
                 git_branch: git_branch.as_deref(),
                 git_status,
                 latest_available_version: latest_available_version.as_deref(),
-                longest_session_duration_seconds,
                 mode,
                 project_table_state,
                 projects: &projects,

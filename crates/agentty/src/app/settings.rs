@@ -12,7 +12,6 @@ pub(crate) enum SettingName {
     DefaultSmartModel,
     OpenCommand,
     LastUsedModelAsDefault,
-    LongestSessionDurationSeconds,
 }
 
 impl SettingName {
@@ -25,7 +24,6 @@ impl SettingName {
             Self::DefaultSmartModel => "DefaultSmartModel",
             Self::OpenCommand => "OpenCommand",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
-            Self::LongestSessionDurationSeconds => "LongestSessionDurationSeconds",
         }
     }
 }
@@ -380,9 +378,7 @@ impl SettingsManager {
             SettingName::DefaultReviewModel => {
                 self.cycle_default_review_model_selector(services).await;
             }
-            SettingName::OpenCommand
-            | SettingName::LastUsedModelAsDefault
-            | SettingName::LongestSessionDurationSeconds => {}
+            SettingName::OpenCommand | SettingName::LastUsedModelAsDefault => {}
         }
     }
 
@@ -403,8 +399,7 @@ impl SettingsManager {
             | SettingName::DefaultFastModel
             | SettingName::DefaultReviewModel
             | SettingName::DefaultSmartModel
-            | SettingName::LastUsedModelAsDefault
-            | SettingName::LongestSessionDurationSeconds => {}
+            | SettingName::LastUsedModelAsDefault => {}
         }
     }
 

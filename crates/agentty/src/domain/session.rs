@@ -187,19 +187,6 @@ pub struct SessionStats {
     pub output_tokens: u64,
 }
 
-/// All-time token usage and session count grouped by model name.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct AllTimeModelUsage {
-    /// Aggregate input tokens consumed by this model across all sessions.
-    pub input_tokens: u64,
-    /// Stable model identifier string.
-    pub model: String,
-    /// Aggregate output tokens produced by this model across all sessions.
-    pub output_tokens: u64,
-    /// Number of sessions that used this model.
-    pub session_count: u64,
-}
-
 /// Aggregated activity count for one day key.
 ///
 /// `day_key` is the number of days since Unix epoch (`1970-01-01`).

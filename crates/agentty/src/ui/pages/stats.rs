@@ -4,45 +4,31 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
-use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
+use crate::domain::session::{DailyActivity, Session};
 use crate::ui::Page;
 use crate::ui::pages::session_list::{model_column_width, project_column_width};
 use crate::ui::state::help_action;
 use crate::ui::util::{
     build_activity_heatmap_grid, build_visible_heatmap_month_row, current_day_key_local,
-    format_duration_compact, format_token_count, heatmap_intensity_level, heatmap_max_count,
-    visible_heatmap_week_count,
+    format_token_count, heatmap_intensity_level, heatmap_max_count, visible_heatmap_week_count,
 };
 
 const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HEATMAP_CELL_WIDTH: usize = 2;
 const HEATMAP_DAY_LABEL_WIDTH: usize = 4;
 const HEATMAP_SECTION_HEIGHT: u16 = 11;
-const MIN_HEATMAP_PANEL_WIDTH: u16 = 20;
-const MIN_SUMMARY_SECTION_WIDTH: u16 = 26;
-const SUMMARY_SECTION_WIDTH: u16 = 44;
 
-/// Stats dashboard showing activity heatmap, all-time summaries, and
-/// per-session token statistics.
+/// Stats dashboard showing activity heatmap and per-session token statistics.
 pub struct StatsPage<'a> {
-    all_time_model_usage: &'a [AllTimeModelUsage],
-    longest_session_duration_seconds: u64,
     sessions: &'a [Session],
     stats_activity: &'a [DailyActivity],
 }
 
 impl<'a> StatsPage<'a> {
     /// Creates a stats page renderer from live sessions and persisted
-    /// historical aggregates.
-    pub fn new(
-        sessions: &'a [Session],
-        stats_activity: &'a [DailyActivity],
-        all_time_model_usage: &'a [AllTimeModelUsage],
-        longest_session_duration_seconds: u64,
-    ) -> Self {
+    /// activity aggregates.
+    pub fn new(sessions: &'a [Session], stats_activity: &'a [DailyActivity]) -> Self {
         Self {
-            all_time_model_usage,
-            longest_session_duration_seconds,
             sessions,
             stats_activity,
         }
@@ -50,8 +36,7 @@ impl<'a> StatsPage<'a> {
 }
 
 impl Page for StatsPage<'_> {
-    /// Renders the dashboard with a responsive top row that hides the summary
-    /// panel when the terminal is too narrow.
+    /// Renders the dashboard with activity heatmap, token table, and footer.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -68,38 +53,13 @@ impl Page for StatsPage<'_> {
             ])
             .split(main_area);
 
-        let summary_width = Self::summary_section_width(main_chunks[0].width);
-        if summary_width == 0 {
-            self.render_heatmap(f, main_chunks[0]);
-        } else {
-            let top_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Min(0), Constraint::Length(summary_width)])
-                .split(main_chunks[0]);
-
-            self.render_heatmap(f, top_chunks[0]);
-            self.render_summary(f, top_chunks[1]);
-        }
-
+        self.render_heatmap(f, main_chunks[0]);
         self.render_table(f, main_chunks[1]);
         self.render_footer(f, footer_area);
     }
 }
 
 impl StatsPage<'_> {
-    /// Returns summary-panel width for the current terminal width.
-    ///
-    /// The summary is hidden when preserving a minimum heatmap width would
-    /// leave less than the summary minimum.
-    fn summary_section_width(total_width: u16) -> u16 {
-        let max_summary_width = total_width.saturating_sub(MIN_HEATMAP_PANEL_WIDTH);
-        if max_summary_width < MIN_SUMMARY_SECTION_WIDTH {
-            return 0;
-        }
-
-        SUMMARY_SECTION_WIDTH.min(max_summary_width)
-    }
-
     /// Renders the activity heatmap with a width-aware week count.
     fn render_heatmap(&self, f: &mut Frame, area: Rect) {
         let heatmap = Paragraph::new(self.build_heatmap_lines(area.width)).block(
@@ -109,17 +69,6 @@ impl StatsPage<'_> {
         );
 
         f.render_widget(heatmap, area);
-    }
-
-    /// Renders aggregate session metrics beside the heatmap.
-    fn render_summary(&self, f: &mut Frame, area: Rect) {
-        let summary = Paragraph::new(self.build_summary_lines()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Session Stats"),
-        );
-
-        f.render_widget(summary, area);
     }
 
     fn render_table(&self, f: &mut Frame, area: Rect) {
@@ -270,102 +219,6 @@ impl StatsPage<'_> {
         self.stats_activity.to_vec()
     }
 
-    /// Builds summary lines for favorite model, longest `agentty` session
-    /// duration, and all-time per-model combined token totals.
-    fn build_summary_lines(&self) -> Vec<Line<'static>> {
-        let favorite_model = Self::favorite_model_name(self.all_time_model_usage)
-            .unwrap_or_else(|| "n/a".to_string());
-        let longest_session = self.longest_session_summary();
-        let longest_label = longest_session.unwrap_or_else(|| "n/a".to_string());
-        let mut lines = vec![
-            Line::from(format!("Favorite model: {favorite_model}")),
-            Line::from(format!("Longest Agentty session: {longest_label}")),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Model stats (All time)",
-                Style::default().fg(Color::Gray),
-            )),
-        ];
-
-        if self.all_time_model_usage.is_empty() {
-            lines.push(Line::from("No sessions yet"));
-
-            return lines;
-        }
-
-        for model_usage in self.all_time_model_usage {
-            let combined_tokens = format_token_count(
-                model_usage
-                    .input_tokens
-                    .saturating_add(model_usage.output_tokens),
-            );
-            lines.push(Line::from(format!(
-                "{}: {combined_tokens}",
-                model_usage.model.as_str()
-            )));
-        }
-
-        lines
-    }
-
-    /// Returns the model with the highest session count.
-    fn favorite_model_name(all_time_model_usage: &[AllTimeModelUsage]) -> Option<String> {
-        let mut favorite: Option<&AllTimeModelUsage> = None;
-
-        for summary in all_time_model_usage {
-            favorite = match favorite {
-                None => Some(summary),
-                Some(favorite_summary)
-                    if summary.session_count > favorite_summary.session_count =>
-                {
-                    Some(summary)
-                }
-                Some(favorite_summary)
-                    if summary.session_count == favorite_summary.session_count
-                        && summary.model.as_str() < favorite_summary.model.as_str() =>
-                {
-                    Some(summary)
-                }
-                _ => favorite,
-            };
-        }
-
-        favorite.map(|summary| format!("{} ({})", summary.model.as_str(), summary.session_count))
-    }
-
-    /// Returns a compact duration label for the longest `agentty` session
-    /// across both live and persisted historical sessions.
-    fn longest_session_summary(&self) -> Option<String> {
-        let longest_duration = self
-            .live_longest_session_duration_seconds()
-            .max(self.longest_session_duration_seconds);
-        if longest_duration == 0 {
-            return None;
-        }
-
-        let duration_seconds = i64::try_from(longest_duration).unwrap_or(i64::MAX);
-
-        Some(format_duration_compact(duration_seconds))
-    }
-
-    /// Returns the longest live session duration from currently loaded
-    /// sessions.
-    fn live_longest_session_duration_seconds(&self) -> u64 {
-        let mut longest_duration = 0_u64;
-
-        for session in self.sessions {
-            let duration_seconds = session.updated_at.saturating_sub(session.created_at).max(0);
-            let duration_seconds = u64::try_from(duration_seconds).unwrap_or_default();
-            if duration_seconds <= longest_duration {
-                continue;
-            }
-
-            longest_duration = duration_seconds;
-        }
-
-        longest_duration
-    }
-
     fn heatmap_color(intensity: u8) -> Color {
         match intensity {
             1 => Color::Rgb(14, 68, 41),
@@ -383,7 +236,7 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::session::{AllTimeModelUsage, SessionSize, SessionStats, Status};
+    use crate::domain::session::{SessionSize, SessionStats, Status};
 
     fn session_fixture() -> Session {
         session_fixture_with(
@@ -435,23 +288,6 @@ mod tests {
             .collect()
     }
 
-    fn all_time_usage_fixture() -> Vec<AllTimeModelUsage> {
-        vec![
-            AllTimeModelUsage {
-                input_tokens: 3_000,
-                model: AgentModel::Gpt53Codex.as_str().to_string(),
-                output_tokens: 1_200,
-                session_count: 2,
-            },
-            AllTimeModelUsage {
-                input_tokens: 300,
-                model: AgentModel::ClaudeOpus46.as_str().to_string(),
-                output_tokens: 200,
-                session_count: 1,
-            },
-        ]
-    }
-
     #[test]
     fn test_render_shows_activity_heatmap_legend() {
         // Arrange
@@ -460,8 +296,7 @@ mod tests {
             day_key: current_day_key_local(),
             session_count: 3,
         }];
-        let all_time_usage: Vec<AllTimeModelUsage> = Vec::new();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
+        let mut page = StatsPage::new(&sessions, &activity);
         let backend = ratatui::backend::TestBackend::new(160, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -496,8 +331,7 @@ mod tests {
             day_key: current_day_key_local(),
             session_count: 50,
         }];
-        let all_time_usage: Vec<AllTimeModelUsage> = Vec::new();
-        let page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
+        let page = StatsPage::new(&sessions, &activity);
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(160);
@@ -519,8 +353,7 @@ mod tests {
             day_key: current_day_key_local(),
             session_count: 1,
         }];
-        let all_time_usage: Vec<AllTimeModelUsage> = Vec::new();
-        let page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
+        let page = StatsPage::new(&sessions, &activity);
 
         // Act
         let heatmap_lines = page.build_heatmap_lines(28);
@@ -531,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_shows_session_summary_panel_metrics() {
+    fn test_render_shows_session_token_table() {
         // Arrange
         let sessions = vec![
             session_fixture_with(
@@ -563,8 +396,7 @@ mod tests {
             ),
         ];
         let activity: Vec<DailyActivity> = Vec::new();
-        let all_time_usage = all_time_usage_fixture();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
+        let mut page = StatsPage::new(&sessions, &activity);
         let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -578,22 +410,18 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Session Stats"));
-        assert!(text.contains("Favorite model: gpt-5.3-codex (2)"));
-        assert!(text.contains("Longest Agentty session: 2h 0m"));
-        assert!(text.contains("Model stats (All time)"));
-        assert!(text.contains("gpt-5.3-codex: 4.2k"));
-        assert!(text.contains("claude-opus-4-6: 500"));
+        assert!(text.contains("Token Stats"));
+        assert!(text.contains("gpt-5.3-codex"));
+        assert!(text.contains("claude-opus-4-6"));
     }
 
     #[test]
-    fn test_render_hides_summary_panel_on_narrow_terminal() {
+    fn test_render_does_not_show_session_summary_panel() {
         // Arrange
         let sessions = vec![session_fixture()];
         let activity: Vec<DailyActivity> = Vec::new();
-        let all_time_usage = all_time_usage_fixture();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 0);
-        let backend = ratatui::backend::TestBackend::new(40, 30);
+        let mut page = StatsPage::new(&sessions, &activity);
+        let backend = ratatui::backend::TestBackend::new(220, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
         // Act
@@ -608,29 +436,8 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Activity Heatmap"));
         assert!(!text.contains("Session Stats"));
-    }
-
-    #[test]
-    fn test_render_uses_persisted_longest_session_when_live_list_is_empty() {
-        // Arrange
-        let sessions: Vec<Session> = Vec::new();
-        let activity: Vec<DailyActivity> = Vec::new();
-        let all_time_usage = all_time_usage_fixture();
-        let mut page = StatsPage::new(&sessions, &activity, &all_time_usage, 18_000);
-        let backend = ratatui::backend::TestBackend::new(220, 30);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                crate::ui::Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw stats page");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("Longest Agentty session: 5h 0m"));
-        assert!(text.contains("gpt-5.3-codex: 4.2k"));
+        assert!(!text.contains("Favorite model:"));
+        assert!(!text.contains("Longest Agentty session:"));
+        assert!(!text.contains("Model stats (All time)"));
     }
 }

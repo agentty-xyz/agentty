@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::app::{AppServices, SessionState};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
+use crate::domain::session::{DailyActivity, Session};
 
 mod access;
 mod lifecycle;
@@ -29,13 +29,7 @@ pub(crate) use merge::{SyncMainOutcome, SyncSessionStartError};
 pub(crate) use task::{RunAgentAssistTaskInput, SessionTaskService};
 
 /// Render payload tuple returned by [`SessionManager::render_parts`].
-type SessionRenderParts<'a> = (
-    &'a [Session],
-    &'a [DailyActivity],
-    &'a [AllTimeModelUsage],
-    u64,
-    &'a mut TableState,
-);
+type SessionRenderParts<'a> = (&'a [Session], &'a [DailyActivity], &'a mut TableState);
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -73,10 +67,8 @@ impl Clock for RealClock {
 
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
-    all_time_model_usage: Vec<AllTimeModelUsage>,
     default_session_model: AgentModel,
     git_client: Arc<dyn crate::infra::git::GitClient>,
-    longest_session_duration_seconds: u64,
     pending_history_replay: HashSet<String>,
     state: SessionState,
     stats_activity: Vec<DailyActivity>,
@@ -97,20 +89,16 @@ impl SessionManager {
     /// Review sessions are marked for one-time transcript replay so the next
     /// reply can rehydrate provider context after app restart.
     pub(crate) fn new(
-        all_time_model_usage: Vec<AllTimeModelUsage>,
         defaults: SessionDefaults,
         git_client: Arc<dyn crate::infra::git::GitClient>,
-        longest_session_duration_seconds: u64,
         state: SessionState,
         stats_activity: Vec<DailyActivity>,
     ) -> Self {
         let pending_history_replay = Self::startup_history_replay_set(&state.sessions);
 
         Self {
-            all_time_model_usage,
             default_session_model: defaults.model,
             git_client,
-            longest_session_duration_seconds,
             pending_history_replay,
             state,
             stats_activity,
@@ -141,16 +129,10 @@ impl SessionManager {
 
     /// Returns session snapshots and stats payloads required for rendering.
     ///
-    /// The tuple contains live sessions, activity heatmap data, all-time model
-    /// usage, persisted longest session duration, and list table state.
+    /// The tuple contains live sessions, activity heatmap data, and list table
+    /// state.
     pub(crate) fn render_parts(&mut self) -> SessionRenderParts<'_> {
-        (
-            &self.state.sessions,
-            &self.stats_activity,
-            &self.all_time_model_usage,
-            self.longest_session_duration_seconds,
-            &mut self.state.table_state,
-        )
+        (&self.state.sessions, &self.stats_activity, &mut self.state.table_state)
     }
 
     /// Applies reducer updates after session agent/model changes are
@@ -1392,31 +1374,6 @@ mod tests {
             .await
             .expect("failed to load");
         assert!(db_sessions.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_delete_session_persists_longest_duration_setting() {
-        // Arrange
-        let dir = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app_with_git(dir.path()).await;
-        let _session_id = app
-            .create_session()
-            .await
-            .expect("failed to create session");
-        app.sessions.sessions[0].created_at = 0;
-        app.sessions.sessions[0].updated_at = 18_000;
-
-        // Act
-        app.delete_selected_session().await;
-
-        // Assert
-        let longest_duration_setting = app
-            .services
-            .db()
-            .get_setting(SettingName::LongestSessionDurationSeconds.as_str())
-            .await
-            .expect("failed to load longest session duration setting");
-        assert_eq!(longest_duration_setting, Some("18000".to_string()));
     }
 
     #[tokio::test]

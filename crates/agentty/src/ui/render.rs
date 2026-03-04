@@ -8,7 +8,7 @@ use ratatui::widgets::TableState;
 use crate::app::session::session_branch;
 use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
-use crate::domain::session::{AllTimeModelUsage, DailyActivity, Session};
+use crate::domain::session::{DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::{components, router};
 
@@ -28,12 +28,10 @@ pub trait Component {
 pub struct RenderContext<'a> {
     /// Identifier of the currently active project.
     pub active_project_id: i64,
-    pub all_time_model_usage: &'a [AllTimeModelUsage],
     pub current_tab: Tab,
     pub git_branch: Option<&'a str>,
     pub git_status: Option<(u32, u32)>,
     pub latest_available_version: Option<&'a str>,
-    pub longest_session_duration_seconds: u64,
     pub mode: &'a AppMode,
     pub project_table_state: &'a mut TableState,
     pub projects: &'a [ProjectListItem],

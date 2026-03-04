@@ -70,12 +70,7 @@ impl SessionManager {
             &mut self.handles,
         )
         .await;
-        let all_time_model_usage = Self::load_all_time_model_usage(services.db()).await;
-        let longest_session_duration_seconds =
-            Self::load_longest_session_duration_seconds(services.db()).await;
         self.sessions = sessions;
-        self.all_time_model_usage = all_time_model_usage;
-        self.longest_session_duration_seconds = longest_session_duration_seconds;
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);
