@@ -159,14 +159,50 @@ svg {
     gap: 0.3rem;
 }
 
-/* Use a subtle frame so external Shields badges fit the local nav style. */
 .github-badge {
-    display: block;
-    height: 20px;
-    width: auto;
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
     border: 1px solid var(--color-border);
     border-radius: 2px;
     background: var(--color-surface);
+    overflow: hidden;
+}
+
+.github-badge-label,
+.github-badge-value {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 0 0.38rem;
+    font-size: 0.66rem;
+}
+
+.github-badge-label {
+    color: var(--color-muted);
+    border-right: 1px solid var(--color-border);
+}
+
+.github-badge-value {
+    color: var(--color-accent);
+}
+
+.github-badge-stars .github-badge-value {
+    min-width: 3.5ch;
+    justify-content: flex-end;
+}
+
+.github-badge-release .github-badge-value {
+    min-width: 5.8ch;
+    justify-content: center;
+}
+
+.github-link:hover .github-badge {
+    border-color: var(--color-accent-dim);
+}
+
+.github-link:hover .github-badge-label {
+    color: var(--color-accent-dim);
 }
 
 .site-theme-switch {

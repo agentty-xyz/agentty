@@ -45,6 +45,7 @@
                         {% set github_repo_slug = config.extra.github_repo_slug | default(value="agentty-xyz/agentty") %}
                         <a class="github-link github-link-rich"
                            href="{{ config.extra.github_repo }}"
+                           data-github-repo-slug="{{ github_repo_slug }}"
                            aria-label="GitHub"
                            target="_blank"
                            rel="noopener">
@@ -58,17 +59,14 @@
                                 </svg>
                             </span>
                             <span class="github-link-badges" aria-hidden="true">
-                                <!-- Keep repository metadata current without build-time API calls. -->
-                                <img class="github-badge github-badge-stars"
-                                     src="https://img.shields.io/github/stars/{{ github_repo_slug }}?style=flat-square&label=stars"
-                                     alt=""
-                                     loading="lazy"
-                                     decoding="async">
-                                <img class="github-badge github-badge-release"
-                                     src="https://img.shields.io/github/v/release/{{ github_repo_slug }}?style=flat-square&label=release"
-                                     alt=""
-                                     loading="lazy"
-                                     decoding="async">
+                                <span class="github-badge github-badge-stars">
+                                    <span class="github-badge-label">stars</span>
+                                    <span class="github-badge-value" data-github-stars>...</span>
+                                </span>
+                                <span class="github-badge github-badge-release">
+                                    <span class="github-badge-label">release</span>
+                                    <span class="github-badge-value" data-github-release>latest</span>
+                                </span>
                             </span>
                         </a>
                     {% endblock extra_nav %}
@@ -93,6 +91,9 @@
       var STORAGE_KEY = 'agentty-theme';
       var root = document.documentElement;
       var themeBtns = document.querySelectorAll('.theme-btn');
+      var githubLink = document.querySelector('.github-link-rich');
+      var githubStars = document.querySelector('[data-github-stars]');
+      var githubRelease = document.querySelector('[data-github-release]');
 
       /** Apply a theme by name ('hacker' or 'dark'), update button states, and persist. */
       function applyTheme(theme) {
@@ -106,8 +107,59 @@
         localStorage.setItem(STORAGE_KEY, theme);
       }
 
+      /** Format large star counts into compact values suitable for nav badges. */
+      function formatStarCount(starCount) {
+        if (starCount >= 1000000) {
+          return (starCount / 1000000).toFixed(1).replace(/\.0$/, '') + 'm';
+        }
+
+        if (starCount >= 1000) {
+          return (starCount / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+        }
+
+        return String(starCount);
+      }
+
+      /** Hydrate GitHub stars and latest release badges without build-time API calls. */
+      async function loadGithubMetadata() {
+        if (!githubLink || !githubStars || !githubRelease) {
+          return;
+        }
+
+        var repoSlug = githubLink.dataset.githubRepoSlug;
+        if (!repoSlug) {
+          return;
+        }
+
+        try {
+          var responses = await Promise.all([
+            fetch('https://api.github.com/repos/' + repoSlug),
+            fetch('https://api.github.com/repos/' + repoSlug + '/releases/latest'),
+          ]);
+          var repoResponse = responses[0];
+          var releaseResponse = responses[1];
+
+          if (repoResponse.ok) {
+            var repoData = await repoResponse.json();
+            if (typeof repoData.stargazers_count === 'number') {
+              githubStars.textContent = formatStarCount(repoData.stargazers_count);
+            }
+          }
+
+          if (releaseResponse.ok) {
+            var releaseData = await releaseResponse.json();
+            if (typeof releaseData.tag_name === 'string' && releaseData.tag_name.length > 0) {
+              githubRelease.textContent = releaseData.tag_name;
+            }
+          }
+        } catch (error) {
+          // Keep default badge text when GitHub API requests fail.
+        }
+      }
+
       // Sync button states with the theme already applied by the <head> script.
       applyTheme(localStorage.getItem(STORAGE_KEY) || 'hacker');
+      void loadGithubMetadata();
 
       themeBtns.forEach(function (btn) {
         btn.addEventListener('click', function () { applyTheme(btn.dataset.theme); });
