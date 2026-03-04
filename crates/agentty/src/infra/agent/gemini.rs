@@ -29,14 +29,20 @@ impl AgentBackend for GeminiBackend {
             .session_output()
             .is_some_and(|session_output| !session_output.trim().is_empty());
         let prompt = match mode {
-            AgentCommandMode::Start { prompt } => prompt.to_string(),
+            AgentCommandMode::Start { prompt } | AgentCommandMode::StartPlain { prompt } => {
+                prompt.to_string()
+            }
             AgentCommandMode::Resume {
                 prompt,
                 session_output,
             } => build_resume_prompt(prompt, session_output)?,
         };
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
-        let prompt = prepend_protocol_instructions(&prompt)?;
+        let prompt = if mode.uses_structured_protocol() {
+            prepend_protocol_instructions(&prompt)?
+        } else {
+            prompt
+        };
         let mut command = Command::new("gemini");
         command
             .arg("--prompt")
@@ -109,5 +115,32 @@ mod tests {
         // Assert
         assert!(debug_command.contains("repository-root-relative POSIX paths"));
         assert!(debug_command.contains("Paths must be relative to the repository root."));
+    }
+
+    #[test]
+    /// Verifies plain-start Gemini prompts skip structured protocol
+    /// instructions.
+    fn test_gemini_start_plain_command_skips_protocol_instructions() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = GeminiBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
+                folder: temp_directory.path(),
+                mode: AgentCommandMode::StartPlain {
+                    prompt: "Generate title",
+                },
+                model: "gemini-3-flash-preview",
+            },
+        )
+        .expect("command should build");
+        let debug_command = format!("{command:?}");
+
+        // Assert
+        assert!(!debug_command.contains("Structured response protocol:"));
     }
 }

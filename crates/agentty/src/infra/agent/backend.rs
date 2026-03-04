@@ -55,6 +55,12 @@ pub enum AgentCommandMode<'a> {
         /// User prompt to send.
         prompt: &'a str,
     },
+    /// Starts one plain-text utility command without structured protocol
+    /// instructions.
+    StartPlain {
+        /// User prompt to send.
+        prompt: &'a str,
+    },
     /// Resumes a prior turn, optionally replaying transcript output.
     Resume {
         /// User prompt to send.
@@ -68,16 +74,23 @@ impl<'a> AgentCommandMode<'a> {
     /// Returns the user prompt for this command mode.
     pub fn prompt(self) -> &'a str {
         match self {
-            Self::Start { prompt } | Self::Resume { prompt, .. } => prompt,
+            Self::Start { prompt } | Self::StartPlain { prompt } | Self::Resume { prompt, .. } => {
+                prompt
+            }
         }
     }
 
     /// Returns transcript output used for resume replay, when present.
     pub fn session_output(self) -> Option<&'a str> {
         match self {
-            Self::Start { .. } => None,
+            Self::Start { .. } | Self::StartPlain { .. } => None,
             Self::Resume { session_output, .. } => session_output,
         }
+    }
+
+    /// Returns whether this mode requires structured protocol instructions.
+    pub fn uses_structured_protocol(self) -> bool {
+        !matches!(self, Self::StartPlain { .. })
     }
 }
 
@@ -399,6 +412,36 @@ mod tests {
 
         // Assert
         assert_eq!(rendered_prompt, prompt);
+    }
+
+    #[test]
+    /// Ensures plain-start mode disables structured protocol instructions.
+    fn test_agent_command_mode_start_plain_disables_structured_protocol() {
+        // Arrange
+        let mode = AgentCommandMode::StartPlain {
+            prompt: "Generate title",
+        };
+
+        // Act
+        let uses_structured_protocol = mode.uses_structured_protocol();
+
+        // Assert
+        assert!(!uses_structured_protocol);
+    }
+
+    #[test]
+    /// Ensures regular start mode keeps structured protocol instructions.
+    fn test_agent_command_mode_start_uses_structured_protocol() {
+        // Arrange
+        let mode = AgentCommandMode::Start {
+            prompt: "Generate answer",
+        };
+
+        // Act
+        let uses_structured_protocol = mode.uses_structured_protocol();
+
+        // Assert
+        assert!(uses_structured_protocol);
     }
 
     #[test]

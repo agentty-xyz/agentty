@@ -40,12 +40,6 @@ struct DeletedSessionCleanup {
     working_dir: PathBuf,
 }
 
-/// JSON response shape used by one-shot model-generated session titles.
-#[derive(serde::Deserialize)]
-struct GeneratedSessionTitleResponse {
-    title: String,
-}
-
 /// Askama view model for rendering one-shot title-generation prompts.
 #[derive(Template)]
 #[template(path = "session_title_generation_prompt.md", escape = "none")]
@@ -824,7 +818,7 @@ impl SessionManager {
             .build_command(BuildCommandRequest {
                 reasoning_level: ReasoningLevel::default(),
                 folder,
-                mode: AgentCommandMode::Start { prompt },
+                mode: AgentCommandMode::StartPlain { prompt },
                 model: model.as_str(),
             })
             .ok()?;
@@ -857,38 +851,53 @@ impl SessionManager {
 
     /// Parses model output into a normalized one-line session title.
     ///
-    /// Accepts a strict JSON object (`{"title":"..."}`) or an embedded JSON
-    /// object inside surrounding text. Returns [`None`] for freeform output to
-    /// avoid persisting conversational assistant lines as session titles.
+    /// Accepts either a plain-text title line or a protocol-wrapped response
+    /// (`{"messages":[...]}`) whose first `answer` line contains the title.
+    ///
+    /// Returns [`None`] when no usable title line is present.
     fn parse_generated_session_title(content: &str) -> Option<String> {
         let content = content.trim();
         if content.is_empty() {
             return None;
         }
 
-        if let Ok(parsed_response) = serde_json::from_str::<GeneratedSessionTitleResponse>(content)
+        if let Ok(protocol_response) =
+            crate::infra::agent::protocol::parse_agent_response_strict(content)
         {
-            return Self::normalize_generated_session_title(&parsed_response.title);
+            return Self::parse_generated_session_title_from_protocol_response(&protocol_response);
         }
 
-        if let Some(json) = Self::embedded_json_object(content)
-            && let Ok(parsed_response) = serde_json::from_str::<GeneratedSessionTitleResponse>(json)
-        {
-            return Self::normalize_generated_session_title(&parsed_response.title);
+        let first_line = Self::first_nonempty_line(content)?;
+
+        Self::normalize_generated_session_title(first_line)
+    }
+
+    /// Extracts the first usable title candidate from protocol `answer`
+    /// messages.
+    fn parse_generated_session_title_from_protocol_response(
+        protocol_response: &crate::infra::agent::protocol::AgentResponse,
+    ) -> Option<String> {
+        for answer in protocol_response.answers() {
+            if let Some(first_line) = Self::first_nonempty_line(&answer)
+                && let Some(parsed_title) = Self::normalize_generated_session_title(first_line)
+            {
+                return Some(parsed_title);
+            }
         }
 
         None
     }
 
-    /// Returns the first embedded JSON object slice in a mixed model response.
-    fn embedded_json_object(content: &str) -> Option<&str> {
-        let json_start = content.find('{')?;
-        let json_end = content.rfind('}')?;
-        if json_end < json_start {
-            return None;
-        }
+    /// Returns the first non-empty line from model output content.
+    fn first_nonempty_line(content: &str) -> Option<&str> {
+        content.lines().find_map(|line| {
+            let trimmed_line = line.trim();
+            if trimmed_line.is_empty() {
+                return None;
+            }
 
-        Some(&content[json_start..=json_end])
+            Some(trimmed_line)
+        })
     }
 
     /// Normalizes one candidate title and applies storage-safe constraints.
@@ -1127,15 +1136,15 @@ mod tests {
         assert!(title_prompt.contains("Generate a concise, commit-style title"));
         assert!(title_prompt.contains("Keep it high-level and intent-focused."));
         assert!(title_prompt.contains("Do not include long file names"));
-        assert!(title_prompt.contains(r#"Return only valid JSON: {"title":"..."}"#));
+        assert!(title_prompt.contains("Return only the title text."));
         assert!(title_prompt.contains(request_prompt));
     }
 
     #[test]
-    /// Ensures strict JSON responses are parsed into normalized titles.
-    fn test_parse_generated_session_title_prefers_json_title() {
+    /// Ensures single-line title responses are normalized and accepted.
+    fn test_parse_generated_session_title_accepts_plain_title() {
         // Arrange
-        let response_content = r#"{"title":"Refine session startup flow"}"#;
+        let response_content = "Refine session startup flow";
 
         // Act
         let parsed_title = SessionManager::parse_generated_session_title(response_content);
@@ -1148,15 +1157,66 @@ mod tests {
     }
 
     #[test]
-    /// Ensures non-JSON freeform responses are ignored for title updates.
-    fn test_parse_generated_session_title_returns_none_for_freeform_response() {
+    /// Ensures protocol-wrapped plain answer lines are accepted.
+    fn test_parse_generated_session_title_accepts_protocol_answer_plain_text() {
         // Arrange
-        let response_content = "Title: \"Polish merge queue behavior\"\nextra details";
+        let response_content =
+            r#"{"messages":[{"type":"answer","text":"Polish Gemini title parsing"}]}"#;
+
+        // Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
+
+        // Assert
+        assert_eq!(
+            parsed_title,
+            Some("Polish Gemini title parsing".to_string())
+        );
+    }
+
+    #[test]
+    /// Ensures plain-text responses with extra lines keep only the first
+    /// non-empty title line.
+    fn test_parse_generated_session_title_uses_first_nonempty_line_for_multiline_response() {
+        // Arrange
+        let response_content = "Polish Gemini title parsing\nExtra detail that should be ignored";
+
+        // Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
+
+        // Assert
+        assert_eq!(
+            parsed_title,
+            Some("Polish Gemini title parsing".to_string())
+        );
+    }
+
+    #[test]
+    /// Ensures protocol payloads without `answer` messages do not update
+    /// titles.
+    fn test_parse_generated_session_title_returns_none_for_question_only_protocol_payload() {
+        // Arrange
+        let response_content = r#"{"messages":[{"type":"question","text":"Need confirmation?"}]}"#;
 
         // Act
         let parsed_title = SessionManager::parse_generated_session_title(response_content);
 
         // Assert
         assert_eq!(parsed_title, None);
+    }
+
+    #[test]
+    /// Ensures `Title:` prefixes are normalized before persistence.
+    fn test_parse_generated_session_title_normalizes_title_prefix() {
+        // Arrange
+        let response_content = "Title: \"Polish merge queue behavior\"";
+
+        // Act
+        let parsed_title = SessionManager::parse_generated_session_title(response_content);
+
+        // Assert
+        assert_eq!(
+            parsed_title,
+            Some("Polish merge queue behavior".to_string())
+        );
     }
 }
