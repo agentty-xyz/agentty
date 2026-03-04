@@ -55,7 +55,7 @@ impl Page for SessionListPage<'_> {
 
         let selected_style = Style::default().bg(Color::DarkGray);
         let normal_style = Style::default().bg(Color::Gray).fg(Color::Black);
-        let header_cells = ["Session", "Project", "Model", "Size", "Status"]
+        let header_cells = ["Session", "Model", "Size", "Status"]
             .iter()
             .map(|h| Cell::from(*h));
         let header = Row::new(header_cells)
@@ -66,7 +66,6 @@ impl Page for SessionListPage<'_> {
         let block = Block::default().borders(Borders::ALL).title("Sessions");
         let column_constraints = [
             Constraint::Fill(1),
-            project_column_width(self.sessions),
             model_column_width(self.sessions),
             size_column_width(),
             status_column_width(),
@@ -255,7 +254,6 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
-        Cell::from(""),
     ];
 
     Row::new(cells).height(1)
@@ -265,7 +263,6 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
 fn render_empty_group_placeholder_row() -> Row<'static> {
     let cells = vec![
         Cell::from(GROUP_EMPTY_PLACEHOLDER).style(Style::default().fg(Color::DarkGray)),
-        Cell::from(""),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -280,7 +277,6 @@ fn render_session_row(session: &Session, title_column_width: usize) -> Row<'stat
     let display_title = truncate_with_ellipsis(session.display_title(), title_column_width);
     let cells = vec![
         Cell::from(display_title),
-        Cell::from(session.project_name.clone()),
         Cell::from(session.model.as_str()),
         Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
         Cell::from(format!("{status}")).style(Style::default().fg(status.color())),
@@ -289,6 +285,7 @@ fn render_session_row(session: &Session, title_column_width: usize) -> Row<'stat
     Row::new(cells).height(1)
 }
 
+/// Calculates the width of the project column from known session values.
 pub(crate) fn project_column_width(sessions: &[Session]) -> Constraint {
     text_column_width(
         "Project",
@@ -296,6 +293,7 @@ pub(crate) fn project_column_width(sessions: &[Session]) -> Constraint {
     )
 }
 
+/// Calculates the width of the model column from known session values.
 pub(crate) fn model_column_width(sessions: &[Session]) -> Constraint {
     text_column_width(
         "Model",
