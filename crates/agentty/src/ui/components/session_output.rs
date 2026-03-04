@@ -104,7 +104,8 @@ impl<'a> SessionOutput<'a> {
     /// current session state.
     ///
     /// `Status::Done` includes an inline `t` toggle hint that switches between
-    /// summary and full output views.
+    /// summary and full output views. Wrapping width follows the configured
+    /// output panel borders so line metrics stay in sync with rendered content.
     fn output_lines(
         session: &Session,
         output_area: Rect,
@@ -122,7 +123,10 @@ impl<'a> SessionOutput<'a> {
             focused_review_text,
         );
         let output_text = Self::output_text_with_spaced_user_input(&output_text);
-        let inner_width = output_area.width.saturating_sub(2) as usize;
+        let inner_width = output_area
+            .width
+            .saturating_sub(Self::output_horizontal_border_width())
+            as usize;
         let mut lines = render_markdown(&output_text, inner_width);
 
         if matches!(
@@ -150,6 +154,23 @@ impl<'a> SessionOutput<'a> {
         }
 
         lines
+    }
+
+    /// Returns horizontal width consumed by the output panel border.
+    fn output_horizontal_border_width() -> u16 {
+        let output_panel_borders = Self::output_panel_borders();
+        let left_border_width = u16::from(output_panel_borders.intersects(Borders::LEFT));
+        let right_border_width = u16::from(output_panel_borders.intersects(Borders::RIGHT));
+
+        left_border_width + right_border_width
+    }
+
+    /// Returns borders used for the session output panel.
+    ///
+    /// Vertical borders are intentionally hidden so copying terminal
+    /// selections does not include `|` gutter characters.
+    fn output_panel_borders() -> Borders {
+        Borders::TOP | Borders::BOTTOM
     }
 
     /// Returns the inline shortcut hint for toggling done-session content.
@@ -369,7 +390,7 @@ impl Component for SessionOutput<'_> {
         let paragraph = Paragraph::new(lines)
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
+                    .borders(Self::output_panel_borders())
                     .border_style(Style::default().fg(status.color()))
                     .title(Span::styled(title, Style::default().fg(status.color()))),
             )
@@ -707,6 +728,42 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn test_output_lines_use_full_panel_width_without_vertical_borders() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "abcdef".to_string();
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 6, 5),
+            session.status,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+            None,
+        );
+
+        // Assert
+        assert_eq!(
+            lines.first().expect("expected output line").to_string(),
+            "abcdef"
+        );
+    }
+
+    #[test]
+    fn test_output_horizontal_border_width_is_zero_without_vertical_borders() {
+        // Arrange & Act
+        let horizontal_border_width = SessionOutput::output_horizontal_border_width();
+        let output_panel_borders = SessionOutput::output_panel_borders();
+
+        // Assert
+        assert_eq!(horizontal_border_width, 0);
+        assert!(!output_panel_borders.intersects(Borders::LEFT));
+        assert!(!output_panel_borders.intersects(Borders::RIGHT));
     }
 
     #[test]
