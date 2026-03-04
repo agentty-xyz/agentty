@@ -738,14 +738,14 @@ mod tests {
         assert!(help_text.contains("q: back"));
         assert!(help_text.contains("j/k: scroll"));
         assert!(help_text.contains("o: open"));
-        assert!(help_text.contains("e: nvim"));
+        assert!(help_text.contains("e: open editor"));
         assert!(!help_text.contains("Ctrl+c: stop"));
         assert!(!help_text.contains("Enter: reply"));
         assert!(!help_text.contains("d: diff"));
     }
 
     #[test]
-    fn test_view_help_text_merge_queue_statuses_hide_open_nvim_and_stop() {
+    fn test_view_help_text_merge_queue_statuses_hide_open_editor_and_stop() {
         // Arrange
         let merge_queue_statuses = [Status::Queued, Status::Merging];
 
@@ -765,7 +765,7 @@ mod tests {
             assert!(help_text.contains("q: back"));
             assert!(help_text.contains("j/k: scroll"));
             assert!(!help_text.contains("o: open"));
-            assert!(!help_text.contains("e: nvim"));
+            assert!(!help_text.contains("e: open editor"));
             assert!(!help_text.contains("Ctrl+c: stop"));
         }
     }

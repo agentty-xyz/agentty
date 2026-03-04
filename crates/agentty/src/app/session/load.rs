@@ -245,7 +245,7 @@ mod tests {
             .await
             .expect("failed to append persisted output");
 
-        let session_dir = dir.path().join(session_id);
+        let session_dir = session_folder(dir.path(), session_id);
         std::fs::create_dir_all(session_dir.join(SESSION_DATA_DIR))
             .expect("failed to create session data dir");
 
@@ -313,7 +313,7 @@ mod tests {
         .await
         .expect("failed to insert session");
 
-        let session_dir = dir.path().join(session_id);
+        let session_dir = session_folder(dir.path(), session_id);
         std::fs::create_dir_all(session_dir.join(SESSION_DATA_DIR))
             .expect("failed to create session data dir");
 

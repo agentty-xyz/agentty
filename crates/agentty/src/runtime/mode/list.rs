@@ -317,9 +317,15 @@ mod tests {
             .await
             .expect("failed to create session for settings tests");
         app.tabs.set(Tab::Settings);
-        app.settings.next();
-        app.settings.next();
-        app.settings.next();
+        let open_command_row_index = app
+            .settings
+            .settings_rows()
+            .iter()
+            .position(|(setting_name, _)| *setting_name == "Open Command")
+            .expect("missing Open Command setting row");
+        app.settings
+            .table_state
+            .select(Some(open_command_row_index));
 
         (app, base_dir)
     }
