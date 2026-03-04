@@ -410,14 +410,14 @@ impl<'a> SessionChatPage<'a> {
     /// Returns the static help text shown in the bottom panel for a given
     /// session in view mode.
     ///
-    /// `InProgress` sessions keep worktree access and expose the stop shortcut
-    /// while hiding edit and diff actions. `Rebasing` sessions keep worktree
-    /// access but hide stop, edit, and diff shortcuts. `Merging` and `Queued`
-    /// sessions hide worktree and stop shortcuts while the merge queue is
-    /// active. `Review` sessions expose review shortcuts with read-only assist
-    /// generation (`m` opens merge confirmation before queueing), and `Done`
-    /// sessions expose only read-only shortcuts. `Canceled` sessions expose
-    /// only `back`, `scroll`, and `help`.
+    /// `InProgress` sessions keep worktree access while hiding edit and diff
+    /// actions. `Rebasing` sessions keep worktree access but hide edit and
+    /// diff shortcuts. `Merging` and `Queued` sessions hide worktree shortcuts
+    /// while the merge queue is active. `Review` sessions expose review
+    /// shortcuts with read-only assist generation (`m` opens merge
+    /// confirmation before queueing), and `Done` sessions expose only
+    /// read-only shortcuts. `Canceled` sessions expose only `back`, `scroll`,
+    /// and `help`.
     fn view_help_text(
         session: &Session,
         done_session_output_mode: DoneSessionOutputMode,
@@ -787,7 +787,7 @@ mod tests {
 
         // Assert
         assert!(help_text.contains("q: back"));
-        assert!(help_text.contains("Ctrl+c: stop"));
+        assert!(!help_text.contains("Ctrl+c: stop"));
         assert!(help_text.contains("j/k: scroll"));
         assert!(help_text.contains("o: open"));
         assert!(help_text.contains("e: open editor"));
@@ -796,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_rebasing_hides_stop_and_keeps_open() {
+    fn test_view_help_text_rebasing_keeps_open() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Rebasing;
@@ -815,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_merge_queue_statuses_hide_open_editor_and_stop() {
+    fn test_view_help_text_merge_queue_statuses_hide_open_editor() {
         // Arrange
         let merge_queue_statuses = [Status::Queued, Status::Merging];
 

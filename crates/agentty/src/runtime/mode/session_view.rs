@@ -65,7 +65,6 @@ struct ViewKeyContext<'a> {
 struct ViewSessionSnapshot {
     can_open_worktree: bool,
     is_action_allowed: bool,
-    can_stop_session: bool,
     session_folder: PathBuf,
     session_output: String,
     session_summary: Option<String>,
@@ -81,8 +80,7 @@ const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
 /// Processes view-mode key presses and keeps shortcut availability aligned with
 /// session status (`o`/`e` disabled for `Done`/`Canceled`/`Merging`/`Queued`,
-/// `Ctrl+c` enabled only for `InProgress`, and diff/review only for
-/// `Review`).
+/// and diff/review only for `Review`).
 pub(crate) async fn handle(
     app: &mut App,
     terminal: &mut TuiTerminal,
@@ -180,12 +178,6 @@ async fn handle_view_key(
         }
         KeyCode::Char('g') => pending_update.scroll_offset = Some(0),
         KeyCode::Char('G') => pending_update.scroll_offset = None,
-        KeyCode::Char('c')
-            if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.can_stop_session =>
-        {
-            stop_view_session(app, &view_context.session_id).await;
-        }
         KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
             pending_update.scroll_offset =
                 scroll_offset_half_page_down(pending_update.scroll_offset, view_metrics);
@@ -315,7 +307,6 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         can_open_worktree: is_view_worktree_open_allowed(session_status)
             && can_open_session_worktree(session_status),
         is_action_allowed: is_view_action_allowed(session_status),
-        can_stop_session: is_view_stop_allowed(session_status),
         session_folder: session.folder.clone(),
         session_output: session.output.clone(),
         session_summary: session.summary.clone(),
@@ -379,11 +370,6 @@ fn is_view_action_allowed(status: Status) -> bool {
             | Status::Queued
             | Status::Canceled
     )
-}
-
-/// Returns whether `Ctrl+c` can stop session execution in view mode.
-fn is_view_stop_allowed(status: Status) -> bool {
-    status == Status::InProgress
 }
 
 /// Returns whether the `d` shortcut can open the diff view.
@@ -745,13 +731,6 @@ async fn rebase_view_session(app: &mut App, session_id: &str) {
     }
 }
 
-async fn stop_view_session(app: &mut App, session_id: &str) {
-    if let Err(error) = app.stop_session(session_id).await {
-        app.append_output_for_session(session_id, &format!("\n[Stop Error] {error}\n"))
-            .await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -907,27 +886,6 @@ mod tests {
         assert!(review_allowed);
         assert!(!in_progress_allowed);
         assert!(!done_allowed);
-    }
-
-    #[test]
-    fn test_is_view_stop_allowed_only_for_in_progress() {
-        // Arrange
-        let in_progress_status = Status::InProgress;
-        let rebasing_status = Status::Rebasing;
-        let queued_status = Status::Queued;
-        let merging_status = Status::Merging;
-
-        // Act
-        let in_progress_allowed = is_view_stop_allowed(in_progress_status);
-        let rebasing_allowed = is_view_stop_allowed(rebasing_status);
-        let queued_allowed = is_view_stop_allowed(queued_status);
-        let merging_allowed = is_view_stop_allowed(merging_status);
-
-        // Assert
-        assert!(in_progress_allowed);
-        assert!(!rebasing_allowed);
-        assert!(!queued_allowed);
-        assert!(!merging_allowed);
     }
 
     #[test]
@@ -1424,20 +1382,6 @@ mod tests {
         app.sessions.sync_from_handles();
         let output = app.sessions.sessions[0].output.clone();
         assert!(output.contains("[Rebase Error]"));
-    }
-
-    #[tokio::test]
-    async fn test_stop_view_session_appends_error_when_not_in_progress() {
-        // Arrange
-        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-
-        // Act
-        stop_view_session(&mut app, &session_id).await;
-
-        // Assert
-        app.sessions.sync_from_handles();
-        let output = app.sessions.sessions[0].output.clone();
-        assert!(output.contains("[Stop Error]"));
     }
 
     #[tokio::test]

@@ -538,14 +538,6 @@ impl App {
             .await
     }
 
-    /// Sends SIGINT to the running session process.
-    ///
-    /// # Errors
-    /// Returns an error if the session is not currently running.
-    pub async fn stop_session(&self, session_id: &str) -> Result<(), String> {
-        self.sessions.stop_session(&self.services, session_id).await
-    }
-
     /// Recomputes one session's diff-based size and persists it.
     pub async fn refresh_session_size(&mut self, session_id: &str) {
         self.sessions

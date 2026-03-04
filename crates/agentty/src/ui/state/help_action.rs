@@ -28,11 +28,11 @@ pub enum ViewSessionState {
     /// Session is completed; only read-only view actions and output toggling
     /// remain available.
     Done,
-    /// Session is currently running; open-worktree and stop are available but
+    /// Session is currently running; open-worktree remains available, while
     /// edit and diff shortcuts are hidden.
     InProgress,
-    /// Session is rebasing; open-worktree remains available, while edit, diff,
-    /// and stop shortcuts are hidden.
+    /// Session is rebasing; open-worktree remains available, while edit and
+    /// diff shortcuts are hidden.
     Rebasing,
     /// Session is in merge-queue processing; only read-only navigation
     /// shortcuts are available.
@@ -212,10 +212,6 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("mode", "S-Tab", "Toggle permission mode"));
     }
 
-    if state.session_state == ViewSessionState::InProgress {
-        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop agent"));
-    }
-
     if can_toggle_done_output {
         actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
     }
@@ -267,10 +263,6 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_show_focused_review {
         actions.push(HelpAction::new("review", "f", "Show review"));
-    }
-
-    if state.session_state == ViewSessionState::InProgress {
-        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop agent"));
     }
 
     if state.session_state == ViewSessionState::Done {
@@ -366,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_in_progress_shows_open_and_stop_and_hides_edit_actions() {
+    fn test_view_actions_in_progress_shows_open_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             session_state: ViewSessionState::InProgress,
@@ -376,7 +368,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
+        assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "e"));
