@@ -382,11 +382,13 @@ impl SessionManager {
 /// runs auto-commit. Returns `Ok(Status)` on success or `Err(description)` on
 /// turn failure after appending the error to session output.
 ///
-/// The final parsed response appends only non-empty protocol `answer` message
-/// text regardless of whether content was streamed during the turn. Streamed
-/// content (including any partial protocol JSON fragments) remains visible in
-/// the session output. `question` messages are persisted to the session row
-/// and trigger `Status::Question`; all responses are emitted through
+/// The final parsed response appends non-empty protocol `answer` text when
+/// present. When no `answer` messages exist, worker output falls back to the
+/// full display text so users can still see `plan`/`question`-only responses
+/// in the transcript. Streamed content (including any partial protocol JSON
+/// fragments) remains visible in the session output. `question` messages are
+/// persisted to the session row and trigger `Status::Question`; all responses
+/// are emitted through
 /// `AppEvent::AgentResponseReceived` for reducer-level routing.
 async fn apply_turn_result(
     context: &SessionWorkerContext,
@@ -403,15 +405,13 @@ async fn apply_turn_result(
                 ..
             } = result;
 
-            let assistant_message_text = assistant_message.to_answer_display_text();
-            if !assistant_message_text.trim().is_empty() {
-                let message = format!("{}\n\n", assistant_message_text.trim_end());
+            if let Some(message) = build_assistant_transcript_output(&assistant_message) {
                 SessionTaskService::append_session_output(
                     &context.output,
                     &context.db,
                     &context.app_event_tx,
                     &context.session_id,
-                    &message,
+                    message.as_str(),
                 )
                 .await;
             }
@@ -487,6 +487,28 @@ async fn apply_turn_result(
             Err(error.0)
         }
     }
+}
+
+/// Builds the persisted transcript chunk for one parsed assistant response.
+///
+/// Prefers joined `answer` messages so normal chat output stays concise.
+/// Falls back to full display text when the response contains only `plan` and
+/// `question` messages, ensuring users still see visible output for those
+/// turns.
+fn build_assistant_transcript_output(
+    assistant_message: &crate::infra::agent::AgentResponse,
+) -> Option<String> {
+    let answer_text = assistant_message.to_answer_display_text();
+    if !answer_text.trim().is_empty() {
+        return Some(format!("{}\n\n", answer_text.trim_end()));
+    }
+
+    let display_text = assistant_message.to_display_text();
+    if display_text.trim().is_empty() {
+        return None;
+    }
+
+    Some(format!("{}\n\n", display_text.trim_end()))
 }
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
@@ -664,6 +686,68 @@ mod tests {
 
         // Assert
         assert_eq!(questions, vec![numbered_questions.to_string()]);
+    }
+
+    #[test]
+    /// Ensures transcript output prefers `answer` messages when available.
+    fn test_build_assistant_transcript_output_prefers_answer_messages() {
+        // Arrange
+        let response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::plan("Drafting implementation."),
+                AgentResponseMessage::answer("Implemented the fix."),
+                AgentResponseMessage::question("Need me to run tests?"),
+            ],
+        };
+
+        // Act
+        let transcript_output = build_assistant_transcript_output(&response);
+
+        // Assert
+        assert_eq!(
+            transcript_output,
+            Some("Implemented the fix.\n\n".to_string())
+        );
+    }
+
+    #[test]
+    /// Ensures transcript output falls back to non-answer display text.
+    fn test_build_assistant_transcript_output_falls_back_to_plan_and_question_text() {
+        // Arrange
+        let response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::plan("Plan: inspect parser behavior."),
+                AgentResponseMessage::question("Should I apply the patch?"),
+            ],
+        };
+
+        // Act
+        let transcript_output = build_assistant_transcript_output(&response);
+
+        // Assert
+        assert_eq!(
+            transcript_output,
+            Some("Plan: inspect parser behavior.\n\nShould I apply the patch?\n\n".to_string())
+        );
+    }
+
+    #[test]
+    /// Ensures blank protocol messages do not append empty transcript output.
+    fn test_build_assistant_transcript_output_returns_none_for_blank_messages() {
+        // Arrange
+        let response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::answer(""),
+                AgentResponseMessage::plan("   "),
+                AgentResponseMessage::question("\n"),
+            ],
+        };
+
+        // Act
+        let transcript_output = build_assistant_transcript_output(&response);
+
+        // Assert
+        assert_eq!(transcript_output, None);
     }
 
     #[tokio::test]
