@@ -54,10 +54,11 @@ svg {
     border-bottom: 1px solid var(--color-border);
 }
 
+/* Use fluid horizontal padding so the top navigation scales cleanly on small screens. */
 .site-nav-inner {
     width: min(100%, var(--content-width));
     margin: 0 auto;
-    padding: 0.75rem 1.5rem;
+    padding: 0.75rem clamp(0.9rem, 3vw, 1.5rem);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -109,6 +110,7 @@ svg {
     align-items: center;
     white-space: nowrap;
     gap: 1rem;
+    min-width: 0;
 }
 
 .site-nav-link,
@@ -232,9 +234,10 @@ svg {
     color: var(--color-dim);
 }
 
+/* Keep page spacing proportional across phone, tablet, and desktop breakpoints. */
 .site-main {
     margin: 0 auto;
-    padding: 4rem 1.5rem 5rem;
+    padding: clamp(2.6rem, 8vw, 4rem) clamp(0.9rem, 3vw, 1.5rem) clamp(3.4rem, 10vw, 5rem);
 }
 
 .site-main.site-container,
@@ -265,10 +268,11 @@ svg {
     margin-bottom: 4rem;
 }
 
+/* Allow the ASCII logo to scale down enough to avoid horizontal scrolling on phones. */
 .logo {
     color: var(--color-accent);
     text-shadow: 0 0 12px rgba(61, 221, 106, 0.4);
-    font-size: clamp(0.55rem, 1.5vw, 0.85rem);
+    font-size: clamp(0.48rem, 1.6vw, 0.85rem);
     line-height: 1.25;
     margin: 0 0 2rem;
     display: inline-block;
@@ -857,12 +861,7 @@ svg {
 }
 
 @media (max-width: 860px) {
-    .site-nav-inner,
-    .site-main {
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
-
+    /* Keep docs sidebars compact on phones so content is reachable without long scrolling. */
     .docs-layout {
         gap: 1.25rem;
         grid-template-areas:
@@ -873,7 +872,10 @@ svg {
     }
 
     .docs-sidebar {
-        max-height: none;
+        max-height: min(45vh, 24rem);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
         position: static;
     }
 
@@ -888,6 +890,27 @@ svg {
         display: block;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
+    }
+
+    .docs-content-wrapper {
+        max-width: 100%;
+    }
+
+    .docs-content {
+        font-size: 0.92rem;
+        line-height: 1.7;
+    }
+
+    .docs-content pre {
+        padding-right: 1rem;
+    }
+
+    .docs-copy-btn {
+        position: static;
+        display: block;
+        width: fit-content;
+        margin-top: 0.55rem;
+        margin-left: auto;
     }
 }
 
@@ -918,6 +941,52 @@ svg {
     }
 }
 
+@media (max-width: 680px) {
+    .github-link-badges {
+        display: none;
+    }
+}
+
+@media (max-width: 640px) {
+    /* Convert command tabs into touch-friendly rows and prevent command text truncation. */
+    .install-tabs {
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-bottom: 0.6rem;
+    }
+
+    .install-tab {
+        flex: 1 1 44%;
+        border-radius: 0.3rem;
+        border-bottom-color: var(--color-border);
+    }
+
+    .install-tab.is-active {
+        border-bottom-color: var(--color-border);
+    }
+
+    .install-command {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        border-top-left-radius: 0.3rem;
+        border-top-right-radius: 0.3rem;
+        overflow: visible;
+    }
+
+    .install-cmd-text {
+        flex-basis: 100%;
+        order: 2;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+    }
+
+    .copy-btn {
+        order: 3;
+        margin-left: auto;
+    }
+}
+
 @media (max-width: 560px) {
     .site-nav-inner {
         flex-wrap: wrap;
@@ -927,6 +996,14 @@ svg {
     .site-nav-left {
         width: 100%;
         flex: 1 1 auto;
+        flex-wrap: wrap;
+        row-gap: 0.35rem;
+    }
+
+    .site-nav-links {
+        width: 100%;
+        flex-wrap: wrap;
+        row-gap: 0.35rem;
     }
 
     .site-nav-actions {
@@ -935,7 +1012,13 @@ svg {
         flex-wrap: wrap;
     }
 
-    .github-link-badges {
-        flex-wrap: wrap;
+    .site-theme-switch {
+        margin-left: auto;
+    }
+}
+
+@media (max-width: 420px) {
+    .logo {
+        font-size: 0.46rem;
     }
 }
