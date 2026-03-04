@@ -207,6 +207,7 @@ impl<'a> SessionOutput<'a> {
             }
             Status::New
             | Status::Review
+            | Status::Question
             | Status::InProgress
             | Status::Queued
             | Status::Rebasing
@@ -298,7 +299,9 @@ impl<'a> SessionOutput<'a> {
             Status::Queued => "Waiting in merge queue...".to_string(),
             Status::Rebasing => "Rebasing...".to_string(),
             Status::Merging => "Merging...".to_string(),
-            Status::New | Status::Review | Status::Done | Status::Canceled => String::new(),
+            Status::New | Status::Review | Status::Question | Status::Done | Status::Canceled => {
+                String::new()
+            }
         }
     }
 
@@ -306,9 +309,12 @@ impl<'a> SessionOutput<'a> {
     fn status_icon(status: Status) -> Icon {
         match status {
             Status::InProgress | Status::Rebasing | Status::Merging => Icon::current_spinner(),
-            Status::Queued | Status::New | Status::Review | Status::Done | Status::Canceled => {
-                Icon::Pending
-            }
+            Status::Queued
+            | Status::New
+            | Status::Review
+            | Status::Question
+            | Status::Done
+            | Status::Canceled => Icon::Pending,
         }
     }
 
@@ -393,6 +399,7 @@ mod tests {
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            questions: Vec::new(),
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::New,

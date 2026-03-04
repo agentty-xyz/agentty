@@ -18,6 +18,7 @@ use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::session::{Session, Status};
+use crate::infra::agent::AgentResponse;
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
@@ -121,10 +122,10 @@ pub(crate) enum AppEvent {
     FocusedReviewPreparationFailed { error: String, session_id: String },
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
-    /// Indicates that the agent response contains questions that need user
-    /// answers.
-    AgentQuestionsReceived {
-        questions: Vec<String>,
+    /// Indicates that an agent turn completed with one structured response
+    /// payload to be routed by the app reducer.
+    AgentResponseReceived {
+        response: AgentResponse,
         session_id: String,
     },
 }
@@ -142,7 +143,7 @@ struct AppEventBatch {
     session_ids: HashSet<String>,
     should_force_reload: bool,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
-    agent_questions_received: HashMap<String, Vec<String>>,
+    agent_responses: HashMap<String, AgentResponse>,
 }
 
 /// Immutable context displayed in sync-main popup content.
@@ -902,8 +903,8 @@ impl App {
             }
         }
 
-        for (session_id, questions) in event_batch.agent_questions_received {
-            self.apply_agent_questions_received(&session_id, questions);
+        for (session_id, response) in event_batch.agent_responses {
+            self.apply_agent_response_received(&session_id, &response);
         }
 
         for session_id in &event_batch.session_ids {
@@ -921,11 +922,25 @@ impl App {
         self.retain_valid_session_progress_messages();
     }
 
-    /// Transitions the active mode to `Question` when an agent turn returns
-    /// clarification requests for the focused session.
-    fn apply_agent_questions_received(&mut self, session_id: &str, questions: Vec<String>) {
+    /// Routes one structured agent response to the currently focused session
+    /// UI.
+    ///
+    /// At the app layer, only `question` messages require explicit mode
+    /// routing. `answer` messages are already appended to transcript output by
+    /// the session worker before this event is handled.
+    fn apply_agent_response_received(&mut self, session_id: &str, response: &AgentResponse) {
+        let questions = response.questions();
         if questions.is_empty() {
             return;
+        }
+
+        if let Some(session) = self
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.questions.clone_from(&questions);
         }
 
         let is_viewing_session = match &self.mode {
@@ -1698,11 +1713,11 @@ impl AppEventBatch {
             AppEvent::SessionUpdated { session_id } => {
                 self.session_ids.insert(session_id);
             }
-            AppEvent::AgentQuestionsReceived {
-                questions,
+            AppEvent::AgentResponseReceived {
+                response,
                 session_id,
             } => {
-                self.agent_questions_received.insert(session_id, questions);
+                self.agent_responses.insert(session_id, response);
             }
         }
     }
@@ -1720,6 +1735,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
+    use crate::infra::agent::protocol::AgentResponseMessage;
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
     use crate::infra::tmux::MockTmuxClient;
@@ -1741,6 +1757,7 @@ mod tests {
             output: String::new(),
             project_name: "test-project".to_string(),
             prompt: "test prompt".to_string(),
+            questions: Vec::new(),
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status: Status::Review,
@@ -2020,33 +2037,37 @@ mod tests {
     }
 
     #[test]
-    fn app_event_batch_collect_event_keeps_latest_agent_questions_update() {
+    fn app_event_batch_collect_event_keeps_latest_agent_response_update() {
         // Arrange
         let mut event_batch = AppEventBatch::default();
-        let latest_questions = vec!["Need branch?".to_string(), "Need tests?".to_string()];
+        let latest_response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::question("Need branch?"),
+                AgentResponseMessage::question("Need tests?"),
+            ],
+        };
 
         // Act
-        event_batch.collect_event(AppEvent::AgentQuestionsReceived {
-            questions: vec!["Old question".to_string()],
+        event_batch.collect_event(AppEvent::AgentResponseReceived {
+            response: AgentResponse {
+                messages: vec![AgentResponseMessage::question("Old question")],
+            },
             session_id: "session-1".to_string(),
         });
-        event_batch.collect_event(AppEvent::AgentQuestionsReceived {
-            questions: latest_questions.clone(),
+        event_batch.collect_event(AppEvent::AgentResponseReceived {
+            response: latest_response.clone(),
             session_id: "session-1".to_string(),
         });
 
         // Assert
         assert_eq!(
-            event_batch
-                .agent_questions_received
-                .get("session-1")
-                .cloned(),
-            Some(latest_questions)
+            event_batch.agent_responses.get("session-1").cloned(),
+            Some(latest_response)
         );
     }
 
     #[tokio::test]
-    async fn apply_app_events_agent_questions_switches_view_mode_to_question_mode() {
+    async fn apply_app_events_agent_response_switches_view_mode_to_question_mode() {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
@@ -2063,10 +2084,16 @@ mod tests {
             "Need a target branch?".to_string(),
             "Need integration tests?".to_string(),
         ];
+        let response = AgentResponse {
+            messages: expected_questions
+                .iter()
+                .map(|question| AgentResponseMessage::question(question.as_str()))
+                .collect(),
+        };
 
         // Act
-        app.apply_app_events(AppEvent::AgentQuestionsReceived {
-            questions: expected_questions.clone(),
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            response,
             session_id: "session-1".to_string(),
         })
         .await;
@@ -2088,14 +2115,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_app_events_agent_questions_keeps_list_mode_when_not_viewing_session() {
+    async fn apply_app_events_agent_response_keeps_list_mode_when_not_viewing_session() {
         // Arrange
         let mut app = new_test_app().await;
         app.mode = AppMode::List;
+        let response = AgentResponse {
+            messages: vec![AgentResponseMessage::question("Need context?")],
+        };
 
         // Act
-        app.apply_app_events(AppEvent::AgentQuestionsReceived {
-            questions: vec!["Need context?".to_string()],
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            response,
             session_id: "session-1".to_string(),
         })
         .await;

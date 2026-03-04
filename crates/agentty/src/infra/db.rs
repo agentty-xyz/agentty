@@ -65,6 +65,7 @@ pub struct SessionRow {
     pub output_tokens: i64,
     pub project_id: Option<i64>,
     pub prompt: String,
+    pub questions: Option<String>,
     pub size: String,
     pub status: String,
     pub summary: Option<String>,
@@ -405,7 +406,7 @@ ON CONFLICT(session_id) DO NOTHING
         let rows = sqlx::query(
             r"
 SELECT id, model, base_branch, status, title, project_id, prompt, output,
-       created_at, updated_at, input_tokens, output_tokens, size, summary
+       created_at, updated_at, input_tokens, output_tokens, size, summary, questions
 FROM session
 WHERE project_id = ?
 ORDER BY updated_at DESC, id
@@ -428,6 +429,7 @@ ORDER BY updated_at DESC, id
                 output_tokens: row.get("output_tokens"),
                 project_id: row.get("project_id"),
                 prompt: row.get("prompt"),
+                questions: row.get("questions"),
                 size: row.get("size"),
                 status: row.get("status"),
                 summary: row.get("summary"),
@@ -445,7 +447,7 @@ ORDER BY updated_at DESC, id
         let rows = sqlx::query(
             r"
 SELECT id, model, base_branch, status, title, project_id, prompt, output,
-       created_at, updated_at, input_tokens, output_tokens, size, summary
+       created_at, updated_at, input_tokens, output_tokens, size, summary, questions
 FROM session
 ORDER BY updated_at DESC, id
 ",
@@ -466,6 +468,7 @@ ORDER BY updated_at DESC, id
                 output_tokens: row.get("output_tokens"),
                 project_id: row.get("project_id"),
                 prompt: row.get("prompt"),
+                questions: row.get("questions"),
                 size: row.get("size"),
                 status: row.get("status"),
                 summary: row.get("summary"),
@@ -663,6 +666,27 @@ WHERE id = ?
         .execute(&self.pool)
         .await
         .map_err(|err| format!("Failed to update session size: {err}"))?;
+
+        Ok(())
+    }
+
+    /// Updates the model clarification questions for a session row.
+    ///
+    /// # Errors
+    /// Returns an error if the questions update fails.
+    pub async fn update_session_questions(&self, id: &str, questions: &str) -> Result<(), String> {
+        sqlx::query(
+            r"
+UPDATE session
+SET questions = ?
+WHERE id = ?
+",
+        )
+        .bind(questions)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to update session questions: {err}"))?;
 
         Ok(())
     }

@@ -268,6 +268,7 @@ mod tests {
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            questions: Vec::new(),
             size: SessionSize::Xs,
             stats: SessionStats {
                 input_tokens,

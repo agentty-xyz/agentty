@@ -543,6 +543,7 @@ mod tests {
             output: String::new(),
             project_name: String::new(),
             prompt: prompt.to_string(),
+            questions: Vec::new(),
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status,

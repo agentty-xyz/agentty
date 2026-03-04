@@ -98,6 +98,11 @@ impl SessionManager {
                 (row.output.clone(), persisted_status)
             };
 
+            let questions = row
+                .questions
+                .and_then(|q| serde_json::from_str::<Vec<String>>(&q).ok())
+                .unwrap_or_default();
+
             sessions.push(Session {
                 base_branch: row.base_branch,
                 created_at: row.created_at,
@@ -107,6 +112,7 @@ impl SessionManager {
                 output: session_output,
                 project_name: project_name.clone(),
                 prompt: row.prompt,
+                questions,
                 size: persisted_size,
                 stats: SessionStats {
                     input_tokens: row.input_tokens.cast_unsigned(),

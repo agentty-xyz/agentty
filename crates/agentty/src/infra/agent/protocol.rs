@@ -25,9 +25,6 @@ pub enum AgentResponseMessageKind {
     /// Plan text awaiting approval.
     Plan,
     /// Clarification request text.
-    ///
-    /// Question-specific handling is intentionally not wired yet; this variant
-    /// is preserved for future agentty-level flows.
     Question,
 }
 
@@ -134,6 +131,30 @@ impl AgentResponse {
         }
 
         display_messages.join("\n\n")
+    }
+
+    /// Returns all `answer` messages in response order.
+    pub fn answers(&self) -> Vec<String> {
+        self.messages_by_kind(AgentResponseMessageKind::Answer)
+    }
+
+    /// Returns all `plan` messages in response order.
+    pub fn plans(&self) -> Vec<String> {
+        self.messages_by_kind(AgentResponseMessageKind::Plan)
+    }
+
+    /// Returns all `question` messages in response order.
+    pub fn questions(&self) -> Vec<String> {
+        self.messages_by_kind(AgentResponseMessageKind::Question)
+    }
+
+    /// Collects all messages matching one kind while preserving order.
+    fn messages_by_kind(&self, kind: AgentResponseMessageKind) -> Vec<String> {
+        self.messages
+            .iter()
+            .filter(|message| message.kind == kind)
+            .map(|message| message.text.clone())
+            .collect()
     }
 }
 
@@ -582,6 +603,81 @@ mod tests {
         assert_eq!(
             display_text,
             "Completed implementation.\n\nApplied updates."
+        );
+    }
+
+    #[test]
+    /// Returns ordered `answer` messages for routing to session output.
+    fn test_answers_returns_only_answer_messages_in_order() {
+        // Arrange
+        let response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::question("Need one decision."),
+                AgentResponseMessage::answer("Completed implementation."),
+                AgentResponseMessage::plan("Run checks."),
+                AgentResponseMessage::answer("Applied updates."),
+            ],
+        };
+
+        // Act
+        let answers = response.answers();
+
+        // Assert
+        assert_eq!(
+            answers,
+            vec![
+                "Completed implementation.".to_string(),
+                "Applied updates.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    /// Returns ordered `plan` messages for plan-review UI flows.
+    fn test_plans_returns_only_plan_messages_in_order() {
+        // Arrange
+        let response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::answer("Completed implementation."),
+                AgentResponseMessage::plan("Run checks."),
+                AgentResponseMessage::plan("Open PR."),
+                AgentResponseMessage::question("Need one decision."),
+            ],
+        };
+
+        // Act
+        let plans = response.plans();
+
+        // Assert
+        assert_eq!(
+            plans,
+            vec!["Run checks.".to_string(), "Open PR.".to_string(),]
+        );
+    }
+
+    #[test]
+    /// Returns ordered `question` messages for question-mode routing.
+    fn test_questions_returns_only_question_messages_in_order() {
+        // Arrange
+        let response = AgentResponse {
+            messages: vec![
+                AgentResponseMessage::answer("Completed implementation."),
+                AgentResponseMessage::question("Need one decision."),
+                AgentResponseMessage::plan("Run checks."),
+                AgentResponseMessage::question("Need migration details?"),
+            ],
+        };
+
+        // Act
+        let questions = response.questions();
+
+        // Assert
+        assert_eq!(
+            questions,
+            vec![
+                "Need one decision.".to_string(),
+                "Need migration details?".to_string(),
+            ]
         );
     }
 

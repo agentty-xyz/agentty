@@ -105,16 +105,28 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         }
         Tab::Sessions => {
             if let Some(session_index) = app.sessions.table_state.selected()
-                && let Some(session_id) = app.session_id_for_index(session_index)
+                && let Some(session) = app.sessions.sessions.get(session_index)
             {
+                let session_id = session.id.clone();
                 app.refresh_session_size_in_background(&session_id);
-                app.mode = AppMode::View {
-                    done_session_output_mode: DoneSessionOutputMode::Summary,
-                    focused_review_status_message: None,
-                    focused_review_text: None,
-                    session_id,
-                    scroll_offset: None,
-                };
+
+                if session.status == Status::Question {
+                    app.mode = AppMode::Question {
+                        session_id,
+                        questions: session.questions.clone(),
+                        responses: Vec::new(),
+                        current_index: 0,
+                        input: crate::domain::input::InputState::default(),
+                    };
+                } else {
+                    app.mode = AppMode::View {
+                        done_session_output_mode: DoneSessionOutputMode::Summary,
+                        focused_review_status_message: None,
+                        focused_review_text: None,
+                        session_id,
+                        scroll_offset: None,
+                    };
+                }
             }
         }
         Tab::Settings => {
@@ -446,6 +458,48 @@ mod tests {
                 scroll_offset: None,
                 ..
             } if session_id == &expected_session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_key_opens_selected_question_session_in_question_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let expected_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        let expected_questions = vec![
+            "Need a target branch?".to_string(),
+            "Need migration notes?".to_string(),
+        ];
+        if let Some(session) = app.sessions.sessions.first_mut() {
+            session.status = Status::Question;
+            session.questions = expected_questions.clone();
+        }
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(Some(0));
+        app.mode = AppMode::List;
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                ref session_id,
+                ref questions,
+                current_index: 0,
+                ref responses,
+                ref input,
+            } if session_id == &expected_session_id
+                && questions == &expected_questions
+                && responses.is_empty()
+                && input.text().is_empty()
         ));
     }
 

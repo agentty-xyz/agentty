@@ -88,6 +88,7 @@ Additional notes:
   `exec <command>` unless it already starts with `exec`, so the tmux window
   exits when that command ends.
 - **InProgress**: `Ctrl+c` stops the agent.
+- **Question**: opening the session enters Question Input mode until all prompts are answered or skipped.
 - **Done**: `t` toggles between summary and full output.
 - **Review**: Runs in read-only review mode. It can use internet lookup
   and non-editing verification commands, but it should not edit files or

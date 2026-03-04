@@ -261,6 +261,11 @@ impl SessionManager {
         session_model: AgentModel,
     ) -> Result<(), String> {
         if matches!(mode, TurnMode::Resume { .. }) {
+            let _ = context
+                .db
+                .update_session_questions(&context.session_id, "")
+                .await;
+
             let _ = SessionTaskService::update_status(
                 &context.status,
                 &context.db,
@@ -323,16 +328,22 @@ impl SessionManager {
             &context.folder,
         )
         .await;
+
+        let target_status = match &result {
+            Ok(status) => *status,
+            Err(_) => Status::Review,
+        };
+
         let _ = SessionTaskService::update_status(
             &context.status,
             &context.db,
             &context.app_event_tx,
             &context.session_id,
-            Status::Review,
+            target_status,
         )
         .await;
 
-        result
+        result.map(|_| ())
     }
 
     /// Returns whether a queued command should be skipped before execution.
@@ -368,21 +379,31 @@ impl SessionManager {
 }
 
 /// Applies the turn result: appends the final response, updates stats, and
-/// runs auto-commit. Returns `Ok(())` on success or `Err(description)` on
+/// runs auto-commit. Returns `Ok(Status)` on success or `Err(description)` on
 /// turn failure after appending the error to session output.
 ///
 /// The final parsed response appends only non-empty protocol `answer` message
 /// text regardless of whether content was streamed during the turn. Streamed
 /// content (including any partial protocol JSON fragments) remains visible in
-/// the session output.
+/// the session output. `question` messages are persisted to the session row
+/// and trigger `Status::Question`; all responses are emitted through
+/// `AppEvent::AgentResponseReceived` for reducer-level routing.
 async fn apply_turn_result(
     context: &SessionWorkerContext,
     session_model: AgentModel,
     turn_result: Result<TurnResult, AgentError>,
-) -> Result<(), String> {
+) -> Result<Status, String> {
     match turn_result {
         Ok(result) => {
-            let assistant_message_text = result.assistant_message.to_answer_display_text();
+            let TurnResult {
+                assistant_message,
+                input_tokens,
+                output_tokens,
+                provider_conversation_id,
+                ..
+            } = result;
+
+            let assistant_message_text = assistant_message.to_answer_display_text();
             if !assistant_message_text.trim().is_empty() {
                 let message = format!("{}\n\n", assistant_message_text.trim_end());
                 SessionTaskService::append_session_output(
@@ -395,18 +416,32 @@ async fn apply_turn_result(
                 .await;
             }
 
-            let questions = extract_agent_questions(&result.assistant_message);
+            let questions = assistant_message.questions();
+            let target_status = if questions.is_empty() {
+                let _ = context
+                    .db
+                    .update_session_questions(&context.session_id, "")
+                    .await;
 
-            if !questions.is_empty() {
-                let _ = context.app_event_tx.send(AppEvent::AgentQuestionsReceived {
-                    questions,
-                    session_id: context.session_id.clone(),
-                });
-            }
+                Status::Review
+            } else {
+                if let Ok(questions_json) = serde_json::to_string(&questions) {
+                    let _ = context
+                        .db
+                        .update_session_questions(&context.session_id, &questions_json)
+                        .await;
+                }
+
+                Status::Question
+            };
+            let _ = context.app_event_tx.send(AppEvent::AgentResponseReceived {
+                response: assistant_message,
+                session_id: context.session_id.clone(),
+            });
 
             let stats = SessionStats {
-                input_tokens: result.input_tokens,
-                output_tokens: result.output_tokens,
+                input_tokens,
+                output_tokens,
             };
             let _ = context
                 .db
@@ -420,7 +455,7 @@ async fn apply_turn_result(
                 .db
                 .update_session_provider_conversation_id(
                     &context.session_id,
-                    result.provider_conversation_id.as_deref(),
+                    provider_conversation_id.as_deref(),
                 )
                 .await;
 
@@ -436,7 +471,7 @@ async fn apply_turn_result(
             })
             .await;
 
-            Ok(())
+            Ok(target_status)
         }
         Err(error) => {
             let message = format!("\n{}\n", error.0.trim());
@@ -452,18 +487,6 @@ async fn apply_turn_result(
             Err(error.0)
         }
     }
-}
-
-/// Extracts model clarification questions from one structured response.
-fn extract_agent_questions(agent_response: &crate::infra::agent::AgentResponse) -> Vec<String> {
-    agent_response
-        .messages
-        .iter()
-        .filter(|message| {
-            message.kind == crate::infra::agent::protocol::AgentResponseMessageKind::Question
-        })
-        .map(|message| message.text.clone())
-        .collect()
 }
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
@@ -583,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_agent_questions_returns_only_question_messages() {
+    fn test_agent_response_questions_returns_only_question_messages() {
         // Arrange
         let agent_response = AgentResponse {
             messages: vec![
@@ -595,7 +618,7 @@ mod tests {
         };
 
         // Act
-        let questions = extract_agent_questions(&agent_response);
+        let questions = agent_response.questions();
 
         // Assert
         assert_eq!(
@@ -608,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_agent_questions_preserves_ordered_list_as_single_question_text() {
+    fn test_agent_response_questions_preserves_ordered_list_as_single_question_text() {
         // Arrange
         let numbered_questions =
             "1) Is this repository intentionally incomplete (docs-only), or should it include the \
@@ -622,7 +645,7 @@ mod tests {
         };
 
         // Act
-        let questions = extract_agent_questions(&agent_response);
+        let questions = agent_response.questions();
 
         // Assert
         assert_eq!(questions, vec![numbered_questions.to_string()]);

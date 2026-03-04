@@ -684,8 +684,9 @@ impl SessionManager {
         };
 
         let is_first_message = session.prompt.is_empty();
-        let allowed =
-            session.status == Status::Review || (is_first_message && session.status == Status::New);
+        let allowed = session.status == Status::Review
+            || session.status == Status::Question
+            || (is_first_message && session.status == Status::New);
         if !allowed {
             return Err(session.id.clone());
         }
@@ -1127,6 +1128,7 @@ mod tests {
             output: output.to_string(),
             project_name: "project".to_string(),
             prompt: prompt.to_string(),
+            questions: Vec::new(),
             size: SessionSize::Xs,
             stats: SessionStats::default(),
             status,

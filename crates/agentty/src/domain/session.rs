@@ -16,6 +16,8 @@ pub enum Status {
     New,
     InProgress,
     Review,
+    /// Session is waiting for model clarification responses.
+    Question,
     /// Session is waiting in the merge queue for its turn to merge.
     Queued,
     Rebasing,
@@ -31,6 +33,7 @@ impl Status {
             Status::New => Color::DarkGray,
             Status::InProgress => Color::Yellow,
             Status::Review => Color::LightBlue,
+            Status::Question => Color::LightMagenta,
             Status::Queued => Color::LightCyan,
             Status::Rebasing | Status::Merging => Color::Cyan,
             Status::Done => Color::Green,
@@ -49,7 +52,7 @@ impl Status {
             (Status::New, Status::InProgress)
                 | (Status::New | Status::InProgress, Status::Rebasing)
                 | (
-                    Status::Review,
+                    Status::Review | Status::Question,
                     Status::InProgress
                         | Status::Queued
                         | Status::Rebasing
@@ -57,7 +60,10 @@ impl Status {
                         | Status::Canceled
                 )
                 | (Status::Queued, Status::Merging | Status::Review)
-                | (Status::InProgress | Status::Rebasing, Status::Review)
+                | (
+                    Status::InProgress | Status::Rebasing,
+                    Status::Review | Status::Question
+                )
                 | (Status::Merging, Status::Done | Status::Review)
         )
     }
@@ -69,6 +75,7 @@ impl fmt::Display for Status {
             Status::New => write!(f, "New"),
             Status::InProgress => write!(f, "InProgress"),
             Status::Review => write!(f, "Review"),
+            Status::Question => write!(f, "Question"),
             Status::Queued => write!(f, "Queued"),
             Status::Rebasing => write!(f, "Rebasing"),
             Status::Merging => write!(f, "Merging"),
@@ -86,6 +93,7 @@ impl FromStr for Status {
             "New" => Ok(Status::New),
             "InProgress" | "Committing" => Ok(Status::InProgress),
             "Review" => Ok(Status::Review),
+            "Question" => Ok(Status::Question),
             "Queued" => Ok(Status::Queued),
             "Rebasing" => Ok(Status::Rebasing),
             "Merging" => Ok(Status::Merging),
@@ -220,6 +228,8 @@ pub struct Session {
     pub project_name: String,
     /// Initial user prompt used to create the session.
     pub prompt: String,
+    /// Model clarification questions emitted by the agent.
+    pub questions: Vec<String>,
     /// Derived size bucket computed from diff size.
     pub size: SessionSize,
     /// Token usage statistics associated with this session.
