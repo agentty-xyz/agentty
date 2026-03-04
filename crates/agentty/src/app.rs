@@ -4,6 +4,7 @@
 //! handlers.
 
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -55,13 +56,27 @@ const HOME_PROJECT_SCAN_MAX_DEPTH: usize = 4;
 /// Maximum number of repositories discovered from one home-directory scan.
 const HOME_PROJECT_SCAN_MAX_RESULTS: usize = 200;
 
-/// Returns the agentty home directory (`~/.agentty`).
+/// Returns the agentty home directory.
+///
+/// By default, this is `~/.agentty`, but it can be overridden by setting the
+/// `AGENTTY_ROOT` environment variable.
 pub fn agentty_home() -> PathBuf {
-    if let Some(home_dir) = dirs::home_dir() {
-        return home_dir.join(".agentty");
-    }
+    let agentty_root = env::var_os("AGENTTY_ROOT").map(PathBuf::from);
+    let home_dir = dirs::home_dir();
 
-    PathBuf::from(".agentty")
+    resolve_agentty_home(agentty_root, home_dir)
+}
+
+/// Resolves the agentty home directory from optional root and home paths.
+///
+/// When `agentty_root` is present and non-empty, it takes precedence. When no
+/// override is available, the resolver falls back to `home_dir/.agentty`, then
+/// finally to a relative `.agentty` directory.
+fn resolve_agentty_home(agentty_root: Option<PathBuf>, home_dir: Option<PathBuf>) -> PathBuf {
+    agentty_root
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| home_dir.map(|path| path.join(".agentty")))
+        .unwrap_or_else(|| PathBuf::from(".agentty"))
 }
 
 /// Internal app events emitted by background workers and workflows.
@@ -1991,6 +2006,45 @@ mod tests {
             discovered_project_paths.len(),
             HOME_PROJECT_SCAN_MAX_RESULTS
         );
+    }
+
+    #[test]
+    fn resolve_agentty_home_returns_env_override_when_set() {
+        // Arrange
+        let agentty_root = Some(PathBuf::from("/tmp/custom-agentty"));
+        let home_dir = Some(PathBuf::from("/home/test-user"));
+
+        // Act
+        let home = resolve_agentty_home(agentty_root, home_dir);
+
+        // Assert
+        assert_eq!(home, PathBuf::from("/tmp/custom-agentty"));
+    }
+
+    #[test]
+    fn resolve_agentty_home_falls_back_to_home_directory_when_override_is_empty() {
+        // Arrange
+        let agentty_root = Some(PathBuf::new());
+        let home_dir = Some(PathBuf::from("/home/test-user"));
+
+        // Act
+        let home = resolve_agentty_home(agentty_root, home_dir);
+
+        // Assert
+        assert_eq!(home, PathBuf::from("/home/test-user/.agentty"));
+    }
+
+    #[test]
+    fn resolve_agentty_home_falls_back_to_relative_directory_without_home_dir() {
+        // Arrange
+        let agentty_root = None;
+        let home_dir = None;
+
+        // Act
+        let home = resolve_agentty_home(agentty_root, home_dir);
+
+        // Assert
+        assert_eq!(home, PathBuf::from(".agentty"));
     }
 
     #[test]

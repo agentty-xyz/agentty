@@ -82,5 +82,13 @@ Type these in the prompt input to access special actions:
 ## Data Location
 
 <a id="usage-data-location"></a>
-Agentty stores its data in `~/.agentty/`. This includes the SQLite database,
-session logs, and worktree checkouts (under `~/.agentty/wt/`).
+Agentty stores its data in `~/.agentty/` by default. This includes the
+SQLite database, session logs, and worktree checkouts (under `~/.agentty/wt/`).
+
+You can override this location by setting the `AGENTTY_ROOT` environment
+variable:
+
+```bash
+# Run agentty with a custom root directory
+AGENTTY_ROOT=/tmp/agentty-test agentty
+```
