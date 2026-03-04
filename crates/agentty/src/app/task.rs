@@ -191,7 +191,9 @@ impl TaskService {
 
         let parsed =
             crate::infra::agent::parse_response(review_model.kind(), &stdout_text, &stderr_text);
-        let focused_review_text = parsed.content.trim();
+        let agent_response = crate::infra::agent::protocol::parse_agent_response(&parsed.content);
+        let focused_review_text = agent_response.to_display_text();
+        let focused_review_text = focused_review_text.trim();
         if focused_review_text.is_empty() {
             return Err("Review assist returned empty output".to_string());
         }
@@ -270,5 +272,36 @@ mod tests {
         assert!(prompt.contains("Do not create, modify, rename, or delete files."));
         assert!(prompt.contains("You may browse the internet when needed."));
         assert!(prompt.contains("You may run non-editing CLI commands"));
+    }
+
+    #[test]
+    /// Verifies that structured `AgentResponse` JSON is unwrapped to plain
+    /// display text, matching the parsing chain used by
+    /// [`TaskService::focused_review_assist_text`].
+    fn test_structured_agent_response_is_unwrapped_to_display_text() {
+        // Arrange
+        let structured_json = r#"{"messages":[{"type":"answer","text":"Review looks good."}]}"#;
+
+        // Act
+        let agent_response = crate::infra::agent::protocol::parse_agent_response(structured_json);
+        let display_text = agent_response.to_display_text();
+
+        // Assert
+        assert_eq!(display_text.trim(), "Review looks good.");
+    }
+
+    #[test]
+    /// Verifies that plain text content (non-JSON) passes through the parsing
+    /// chain unchanged.
+    fn test_plain_text_response_passes_through_unchanged() {
+        // Arrange
+        let plain_text = "This is a plain review response.";
+
+        // Act
+        let agent_response = crate::infra::agent::protocol::parse_agent_response(plain_text);
+        let display_text = agent_response.to_display_text();
+
+        // Assert
+        assert_eq!(display_text.trim(), "This is a plain review response.");
     }
 }
