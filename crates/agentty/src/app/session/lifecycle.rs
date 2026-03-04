@@ -16,6 +16,7 @@ use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::agent::{AgentCommandMode, BuildCommandRequest};
 use crate::infra::channel::TurnMode;
+use crate::infra::fs::FsClient;
 use crate::ui::pages::session_list::grouped_session_indexes;
 
 /// Maximum stored length for generated session titles.
@@ -150,7 +151,7 @@ impl SessionManager {
         }
 
         let data_dir = folder.join(SESSION_DATA_DIR);
-        if let Err(error) = tokio::fs::create_dir_all(&data_dir).await {
+        if let Err(error) = services.fs_client().create_dir_all(data_dir).await {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -432,7 +433,12 @@ impl SessionManager {
             return;
         };
 
-        Self::cleanup_deleted_session_resources(services.git_client(), cleanup).await;
+        Self::cleanup_deleted_session_resources(
+            services.fs_client(),
+            services.git_client(),
+            cleanup,
+        )
+        .await;
     }
 
     /// Deletes the selected session while deferring filesystem cleanup to a
@@ -449,9 +455,10 @@ impl SessionManager {
             return;
         };
 
+        let fs_client = services.fs_client();
         let git_client = services.git_client();
         tokio::spawn(async move {
-            SessionManager::cleanup_deleted_session_resources(git_client, cleanup).await;
+            SessionManager::cleanup_deleted_session_resources(fs_client, git_client, cleanup).await;
         });
     }
 
@@ -489,6 +496,7 @@ impl SessionManager {
 
     /// Deletes worktree resources for a previously removed session.
     async fn cleanup_deleted_session_resources(
+        fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn crate::infra::git::GitClient>,
         cleanup: DeletedSessionCleanup,
     ) {
@@ -503,7 +511,7 @@ impl SessionManager {
             }
         }
 
-        let _ = tokio::fs::remove_dir_all(cleanup.folder).await;
+        let _ = fs_client.remove_dir_all(cleanup.folder).await;
     }
 
     /// Validates and queues a follow-up prompt for an existing session.
@@ -954,7 +962,10 @@ impl SessionManager {
             let _ = git_client.delete_branch(repo_root, worktree_branch).await;
         }
 
-        let _ = tokio::fs::remove_dir_all(folder).await;
+        let _ = services
+            .fs_client()
+            .remove_dir_all(folder.to_path_buf())
+            .await;
     }
 
     /// Appends text to a specific session output stream.

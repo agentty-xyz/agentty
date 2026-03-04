@@ -8,14 +8,16 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::db::Database;
 use crate::infra::app_server::AppServerClient;
+use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
 /// Shared app dependencies used by managers and background workflows.
 pub struct AppServices {
-    base_path: PathBuf,
     app_server_client: Arc<dyn AppServerClient>,
+    base_path: PathBuf,
     db: Database,
     event_tx: mpsc::UnboundedSender<AppEvent>,
+    fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
 }
 
@@ -26,14 +28,16 @@ impl AppServices {
         base_path: PathBuf,
         db: Database,
         event_tx: mpsc::UnboundedSender<AppEvent>,
+        fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
         app_server_client: Arc<dyn AppServerClient>,
     ) -> Self {
         Self {
-            base_path,
             app_server_client,
+            base_path,
             db,
             event_tx,
+            fs_client,
             git_client,
         }
     }
@@ -56,6 +60,11 @@ impl AppServices {
     /// Returns a clone of the app event sender.
     pub(crate) fn event_sender(&self) -> mpsc::UnboundedSender<AppEvent> {
         self.event_tx.clone()
+    }
+
+    /// Returns the shared filesystem client for async filesystem operations.
+    pub(crate) fn fs_client(&self) -> Arc<dyn FsClient> {
+        Arc::clone(&self.fs_client)
     }
 
     /// Returns the shared git client for async git operations.

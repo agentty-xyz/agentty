@@ -21,6 +21,7 @@ use crate::domain::session::{Session, Status};
 use crate::infra::agent::AgentResponse;
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
+use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::runtime::mode::sync_blocked;
@@ -217,6 +218,7 @@ impl SyncMainRunner for TokioSyncMainRunner {
 /// External clients used to compose [`App`] startup dependencies.
 struct AppClients {
     app_server_client: Arc<dyn crate::infra::app_server::AppServerClient>,
+    fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     sync_main_runner: Arc<dyn SyncMainRunner>,
     tmux_client: Arc<dyn TmuxClient>,
@@ -253,6 +255,7 @@ impl App {
     ) -> Self {
         let clients = AppClients {
             app_server_client,
+            fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
             sync_main_runner: Arc::new(TokioSyncMainRunner),
             tmux_client: Arc::new(RealTmuxClient),
@@ -312,6 +315,7 @@ impl App {
             base_path,
             db.clone(),
             event_tx.clone(),
+            Arc::clone(&clients.fs_client),
             Arc::clone(&clients.git_client),
             Arc::clone(&clients.app_server_client),
         );

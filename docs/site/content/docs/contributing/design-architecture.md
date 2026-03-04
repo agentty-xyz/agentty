@@ -102,7 +102,7 @@ instead of replaying the full transcript.
 | `crates/agentty/src/app/assist.rs` | Shared assistance helpers for commit and rebase recovery loops. |
 | `crates/agentty/src/app/merge_queue.rs` | Merge queue state machine (`Queued`/`Merging` progression rules). |
 | `crates/agentty/src/app/project.rs` | `ProjectManager` — project CRUD and selection orchestration. |
-| `crates/agentty/src/app/service.rs` | `AppServices` dependency container (`Database`, `GitClient`, app-server client, event sender). |
+| `crates/agentty/src/app/service.rs` | `AppServices` dependency container (`Database`, `FsClient`, `GitClient`, app-server client, event sender). |
 | `crates/agentty/src/app/session_state.rs` | `SessionState` — per-session runtime state container. |
 | `crates/agentty/src/app/settings.rs` | `SettingsManager` — settings management and persistence. |
 | `crates/agentty/src/app/tab.rs` | `TabManager` — top-level tab definitions and tab selection state. |
@@ -133,6 +133,7 @@ instead of replaying the full transcript.
 | Path | What lives here |
 |------|------------------|
 | `crates/agentty/src/infra/db.rs` | SQLite persistence and queries; database open config enables `WAL` and foreign keys. |
+| `crates/agentty/src/infra/fs.rs` | `FsClient` trait and production async filesystem adapter used by app orchestration. |
 | `crates/agentty/src/infra/git.rs` + `infra/git/` | `GitClient` trait and async git workflow commands (`merge.rs`, `rebase.rs`, `repo.rs`, `sync.rs`, `worktree.rs`). |
 | `crates/agentty/src/infra/channel.rs` + `infra/channel/` | `AgentChannel` trait and provider-agnostic turn execution: |
 | — `cli.rs` | `CliAgentChannel` — CLI subprocess adapter (Claude). |
@@ -254,6 +255,7 @@ orchestration can be unit-tested with mocks. All traits below use
 | Trait | Module | Boundary |
 |-------|--------|----------|
 | `GitClient` | `infra/git.rs` | Git/process operations (worktree, merge, rebase, diff, push, pull). |
+| `FsClient` | `infra/fs.rs` | Filesystem operations used by app orchestration (create/remove/read workflow files). |
 | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and dispatching open commands. |
 | `AgentChannel` | `infra/channel.rs` | Provider-agnostic turn execution (session init, run turn, shutdown). |
 | `AgentBackend` | `infra/agent/backend.rs` | Per-provider CLI command construction and one-time setup. |

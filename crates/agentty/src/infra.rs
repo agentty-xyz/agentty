@@ -13,6 +13,8 @@ pub mod codex_app_server;
 pub mod db;
 /// Gitignore-aware file indexing and fuzzy path filtering.
 pub mod file_index;
+/// Filesystem trait boundary used by app orchestration.
+pub mod fs;
 /// Gemini ACP-backed app-server client implementation.
 pub mod gemini_acp;
 pub mod git;

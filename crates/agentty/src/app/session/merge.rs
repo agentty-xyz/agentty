@@ -24,6 +24,7 @@ use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::Status;
 use crate::infra::db::Database;
+use crate::infra::fs::FsClient;
 use crate::infra::git::{self, GitClient};
 
 const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
@@ -70,6 +71,7 @@ struct MergeTaskInput {
     clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
+    fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
@@ -88,6 +90,7 @@ struct RebaseAssistInput {
     clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
+    fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
@@ -102,6 +105,7 @@ struct RebaseTaskInput {
     clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
+    fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     id: String,
     output: Arc<Mutex<String>>,
@@ -113,6 +117,7 @@ struct RebaseTaskInput {
 struct SyncRebaseAssistInput {
     base_branch: String,
     folder: PathBuf,
+    fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     session_model: AgentModel,
     sync_assist_client: Arc<dyn SyncAssistClient>,
@@ -130,6 +135,14 @@ impl RebaseAssistLoopInput {
         match self {
             Self::Session(input) => &input.folder,
             Self::Project(input) => &input.folder,
+        }
+    }
+
+    /// Returns the filesystem boundary used by assist fingerprinting.
+    fn fs_client(&self) -> &dyn FsClient {
+        match self {
+            Self::Session(input) => input.fs_client.as_ref(),
+            Self::Project(input) => input.fs_client.as_ref(),
         }
     }
 
@@ -447,6 +460,7 @@ impl SessionManager {
         let id = session.id.clone();
         let session_model = session.model;
         let app_event_tx = services.event_sender();
+        let fs_client = services.fs_client();
         let git_client = self.git_client();
 
         let handles = self
@@ -506,6 +520,7 @@ impl SessionManager {
             clock: Arc::clone(&self.clock),
             db,
             folder,
+            fs_client,
             git_client,
             id: id.clone(),
             output,
@@ -539,52 +554,37 @@ impl SessionManager {
     /// Returns an error when the rebase step fails, squash-merge git commands
     /// fail, status transitions are invalid, or worktree cleanup fails.
     async fn execute_merge_workflow(input: MergeTaskInput) -> Result<String, String> {
+        let rebase_input = Self::merge_rebase_input(&input);
         let MergeTaskInput {
             app_event_tx,
             base_branch,
-            child_pid,
-            clock,
             db,
             folder,
+            fs_client,
             git_client,
             id,
-            output,
+            output: _,
             repo_root,
             session_model,
             source_branch,
             status,
+            ..
         } = input;
 
         // Rebase onto the base branch first to ensure the merge is clean and
         // includes all recent changes. This also handles auto-commit and
         // conflict resolution via the agent.
-        let rebase_input = RebaseAssistInput {
-            app_event_tx: app_event_tx.clone(),
-            base_branch: base_branch.clone(),
-            child_pid: Arc::clone(&child_pid),
-            clock: Arc::clone(&clock),
-            db: db.clone(),
-            folder: folder.clone(),
-            git_client: Arc::clone(&git_client),
-            id: id.clone(),
-            output: Arc::clone(&output),
-            session_model,
-        };
         if let Err(error) = Self::execute_rebase_workflow(rebase_input).await {
             return Err(format!("Merge failed during rebase step: {error}"));
         }
 
-        let squash_diff = {
-            let repo_root = repo_root.clone();
-            let source_branch = source_branch.clone();
-            let base_branch = base_branch.clone();
-
-            git_client
-                .squash_merge_diff(repo_root, source_branch, base_branch)
-                .await
-                .map_err(|error| format!("Failed to inspect merge diff: {error}"))?
-        };
-
+        let squash_diff = Self::load_squash_diff(
+            git_client.as_ref(),
+            repo_root.clone(),
+            source_branch.clone(),
+            base_branch.clone(),
+        )
+        .await?;
         let (merge_outcome, commit_message) = if squash_diff.trim().is_empty() {
             (git::SquashMergeOutcome::AlreadyPresentInTarget, None)
         } else {
@@ -629,6 +629,7 @@ impl SessionManager {
 
         Self::cleanup_merged_session_worktree(
             folder.clone(),
+            Arc::clone(&fs_client),
             Arc::clone(&git_client),
             source_branch.clone(),
             Some(repo_root),
@@ -651,6 +652,39 @@ impl SessionManager {
             &base_branch,
             merge_outcome,
         ))
+    }
+
+    /// Builds rebase input used by merge workflows.
+    fn merge_rebase_input(input: &MergeTaskInput) -> RebaseAssistInput {
+        RebaseAssistInput {
+            app_event_tx: input.app_event_tx.clone(),
+            base_branch: input.base_branch.clone(),
+            child_pid: Arc::clone(&input.child_pid),
+            clock: Arc::clone(&input.clock),
+            db: input.db.clone(),
+            folder: input.folder.clone(),
+            fs_client: Arc::clone(&input.fs_client),
+            git_client: Arc::clone(&input.git_client),
+            id: input.id.clone(),
+            output: Arc::clone(&input.output),
+            session_model: input.session_model,
+        }
+    }
+
+    /// Loads the squash-diff preview for one merge candidate.
+    ///
+    /// # Errors
+    /// Returns an error when the diff cannot be generated.
+    async fn load_squash_diff(
+        git_client: &dyn GitClient,
+        repo_root: PathBuf,
+        source_branch: String,
+        base_branch: String,
+    ) -> Result<String, String> {
+        git_client
+            .squash_merge_diff(repo_root, source_branch, base_branch)
+            .await
+            .map_err(|error| format!("Failed to inspect merge diff: {error}"))
     }
 
     async fn finalize_merge_task(
@@ -738,6 +772,7 @@ impl SessionManager {
         let status = Arc::clone(&handles.status);
         let db = services.db().clone();
         let app_event_tx = services.event_sender();
+        let fs_client = services.fs_client();
         let git_client = self.git_client();
 
         if !SessionTaskService::update_status(
@@ -762,6 +797,7 @@ impl SessionManager {
             clock: Arc::clone(&self.clock),
             db,
             folder: session.folder.clone(),
+            fs_client,
             git_client,
             id,
             output,
@@ -790,11 +826,13 @@ impl SessionManager {
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
+        let fs_client: Arc<dyn FsClient> = Arc::new(crate::infra::fs::RealFsClient);
         let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
 
         Self::sync_main_for_project_with_assist_client(
             default_branch,
             working_dir,
+            fs_client,
             git_client,
             session_model,
             sync_assist_client,
@@ -812,6 +850,7 @@ impl SessionManager {
     async fn sync_main_for_project_with_assist_client(
         default_branch: Option<String>,
         working_dir: PathBuf,
+        fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
         sync_assist_client: Arc<dyn SyncAssistClient>,
@@ -852,6 +891,7 @@ impl SessionManager {
             let sync_rebase_input = SyncRebaseAssistInput {
                 base_branch: default_branch.clone(),
                 folder: working_dir.clone(),
+                fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
                 session_model,
                 sync_assist_client,
@@ -1020,6 +1060,7 @@ impl SessionManager {
             clock,
             db,
             folder,
+            fs_client,
             git_client,
             id,
             output,
@@ -1035,6 +1076,7 @@ impl SessionManager {
                 clock: Arc::clone(&clock),
                 db: db.clone(),
                 folder: folder.clone(),
+                fs_client: Arc::clone(&fs_client),
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
                 output: Arc::clone(&output),
@@ -1246,8 +1288,11 @@ impl SessionManager {
                     continue;
                 }
 
-                let conflict_fingerprint =
-                    Self::conflicted_file_fingerprint(assist_input.folder(), &conflicted_files);
+                let conflict_fingerprint = Self::conflicted_file_fingerprint(
+                    assist_input.fs_client(),
+                    assist_input.folder(),
+                    &conflicted_files,
+                );
                 if failure_tracker.observe(&conflict_fingerprint) {
                     return Err(assist_input.unchanged_conflict_files_error());
                 }
@@ -1527,7 +1572,11 @@ impl SessionManager {
     /// but not all conflict markers) changes the fingerprint and prevents the
     /// [`FailureTracker`] from firing prematurely. The fingerprint is
     /// order-independent because paths are sorted before hashing.
-    fn conflicted_file_fingerprint(folder: &Path, conflicted_files: &[String]) -> String {
+    fn conflicted_file_fingerprint(
+        fs_client: &dyn FsClient,
+        folder: &Path,
+        conflicted_files: &[String],
+    ) -> String {
         let mut sorted_files = conflicted_files.to_vec();
         sorted_files.sort_unstable();
 
@@ -1535,7 +1584,7 @@ impl SessionManager {
         for file in &sorted_files {
             file.hash(&mut hasher);
             let file_path = folder.join(file);
-            if let Ok(content) = std::fs::read(&file_path) {
+            if let Ok(content) = fs_client.read_file(file_path) {
                 content.hash(&mut hasher);
             }
         }
@@ -1662,6 +1711,7 @@ impl SessionManager {
     /// Returns an error if worktree or branch cleanup fails.
     pub(crate) async fn cleanup_merged_session_worktree(
         folder: PathBuf,
+        fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
         source_branch: String,
         repo_root: Option<PathBuf>,
@@ -1677,7 +1727,7 @@ impl SessionManager {
             git_client.delete_branch(repo_root, source_branch).await?;
         }
 
-        let _ = tokio::fs::remove_dir_all(&folder).await;
+        let _ = fs_client.remove_dir_all(folder).await;
 
         Ok(())
     }
@@ -1728,6 +1778,42 @@ mod tests {
         Arc::new(crate::app::session::RealClock)
     }
 
+    /// Builds a filesystem mock that delegates operations to local disk.
+    fn create_passthrough_mock_fs_client() -> crate::infra::fs::MockFsClient {
+        let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+        mock_fs_client
+            .expect_create_dir_all()
+            .times(0..)
+            .returning(|path| {
+                Box::pin(async move {
+                    tokio::fs::create_dir_all(path)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            });
+        mock_fs_client
+            .expect_remove_dir_all()
+            .times(0..)
+            .returning(|path| {
+                Box::pin(async move {
+                    tokio::fs::remove_dir_all(path)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            });
+        mock_fs_client
+            .expect_read_file()
+            .times(0..)
+            .returning(|path| std::fs::read(path).map_err(|error| error.to_string()));
+
+        mock_fs_client
+    }
+
+    /// Returns a fresh mocked filesystem client trait object for tests.
+    fn test_fs_client() -> Arc<dyn FsClient> {
+        Arc::new(create_passthrough_mock_fs_client())
+    }
+
     /// Builds rebase assistance input with the provided git client for unit
     /// tests.
     async fn build_rebase_assist_input_for_test(
@@ -1743,6 +1829,7 @@ mod tests {
             clock: test_clock(),
             db,
             folder: PathBuf::from("/tmp/rebase-start-test"),
+            fs_client: test_fs_client(),
             git_client,
             id: "session-123".to_string(),
             output: Arc::new(Mutex::new(String::new())),
@@ -1832,6 +1919,7 @@ mod tests {
             clock: test_clock(),
             db,
             folder: PathBuf::from("/tmp/test"),
+            fs_client: test_fs_client(),
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".to_string(),
             output: Arc::new(Mutex::new(String::new())),
@@ -2089,6 +2177,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
+            test_fs_client(),
             Arc::new(mock_git_client),
             AgentModel::Gemini3FlashPreview,
             Arc::new(mock_sync_assist_client),
@@ -2176,6 +2265,7 @@ mod tests {
         let result = SessionManager::sync_main_for_project_with_assist_client(
             Some("main".to_string()),
             working_dir,
+            test_fs_client(),
             Arc::new(mock_git_client),
             AgentModel::Gemini3FlashPreview,
             Arc::new(mock_sync_assist_client),
@@ -2196,6 +2286,7 @@ mod tests {
     #[test]
     fn test_conflicted_file_fingerprint_changes_with_file_content() {
         // Arrange
+        let fs_client = create_passthrough_mock_fs_client();
         let temp_dir = std::env::temp_dir().join(format!(
             "agentty_fp_content_{}",
             std::time::SystemTime::now()
@@ -2210,13 +2301,15 @@ mod tests {
         // Act
         std::fs::write(&file_path, "<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>>")
             .expect("write initial content");
-        let fingerprint_before = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        let fingerprint_before =
+            SessionManager::conflicted_file_fingerprint(&fs_client, &temp_dir, &files);
         std::fs::write(
             &file_path,
             "<<<<<<< HEAD\nfoo_patched\n=======\nbar\n>>>>>>>",
         )
         .expect("write patched content");
-        let fingerprint_after = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        let fingerprint_after =
+            SessionManager::conflicted_file_fingerprint(&fs_client, &temp_dir, &files);
 
         // Assert — partial progress changes the fingerprint
         assert_ne!(fingerprint_before, fingerprint_after);
@@ -2227,6 +2320,7 @@ mod tests {
     #[test]
     fn test_conflicted_file_fingerprint_stable_for_unchanged_content() {
         // Arrange
+        let fs_client = create_passthrough_mock_fs_client();
         let temp_dir = std::env::temp_dir().join(format!(
             "agentty_fp_stable_{}",
             std::time::SystemTime::now()
@@ -2239,8 +2333,10 @@ mod tests {
         let files = vec!["conflict.rs".to_string()];
 
         // Act
-        let fingerprint_a = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
-        let fingerprint_b = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        let fingerprint_a =
+            SessionManager::conflicted_file_fingerprint(&fs_client, &temp_dir, &files);
+        let fingerprint_b =
+            SessionManager::conflicted_file_fingerprint(&fs_client, &temp_dir, &files);
 
         // Assert — identical content produces identical fingerprint
         assert_eq!(fingerprint_a, fingerprint_b);
@@ -2251,6 +2347,7 @@ mod tests {
     #[test]
     fn test_conflicted_file_fingerprint_order_independent() {
         // Arrange
+        let fs_client = create_passthrough_mock_fs_client();
         let temp_dir = std::env::temp_dir().join(format!(
             "agentty_fp_order_{}",
             std::time::SystemTime::now()
@@ -2264,10 +2361,12 @@ mod tests {
 
         // Act
         let fingerprint_ab = SessionManager::conflicted_file_fingerprint(
+            &fs_client,
             &temp_dir,
             &["a.rs".to_string(), "b.rs".to_string()],
         );
         let fingerprint_ba = SessionManager::conflicted_file_fingerprint(
+            &fs_client,
             &temp_dir,
             &["b.rs".to_string(), "a.rs".to_string()],
         );
@@ -2281,6 +2380,7 @@ mod tests {
     #[test]
     fn test_conflicted_file_fingerprint_missing_file_is_stable() {
         // Arrange — reference a file that does not exist on disk
+        let fs_client = create_passthrough_mock_fs_client();
         let temp_dir = std::env::temp_dir().join(format!(
             "agentty_fp_missing_{}",
             std::time::SystemTime::now()
@@ -2292,8 +2392,10 @@ mod tests {
         let files = vec!["nonexistent.rs".to_string()];
 
         // Act — should not panic; missing files are silently skipped
-        let fingerprint_a = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
-        let fingerprint_b = SessionManager::conflicted_file_fingerprint(&temp_dir, &files);
+        let fingerprint_a =
+            SessionManager::conflicted_file_fingerprint(&fs_client, &temp_dir, &files);
+        let fingerprint_b =
+            SessionManager::conflicted_file_fingerprint(&fs_client, &temp_dir, &files);
 
         // Assert — deterministic even when file is absent
         assert_eq!(fingerprint_a, fingerprint_b);

@@ -210,12 +210,44 @@ mod tests {
     use crate::infra::app_server::MockAppServerClient;
     use crate::infra::channel::{MockAgentChannel, TurnEvent, TurnMode, TurnResult};
     use crate::infra::db::Database;
+    use crate::infra::fs::FsClient;
     use crate::infra::git;
     use crate::ui::state::app_mode::AppMode;
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
     fn mock_app_server() -> Arc<dyn crate::infra::app_server::AppServerClient> {
         Arc::new(MockAppServerClient::new())
+    }
+
+    /// Builds a filesystem mock that delegates operations to local disk.
+    fn create_passthrough_mock_fs_client() -> crate::infra::fs::MockFsClient {
+        let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+        mock_fs_client
+            .expect_create_dir_all()
+            .times(0..)
+            .returning(|path| {
+                Box::pin(async move {
+                    tokio::fs::create_dir_all(path)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            });
+        mock_fs_client
+            .expect_remove_dir_all()
+            .times(0..)
+            .returning(|path| {
+                Box::pin(async move {
+                    tokio::fs::remove_dir_all(path)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            });
+        mock_fs_client
+            .expect_read_file()
+            .times(0..)
+            .returning(|path| std::fs::read(path).map_err(|error| error.to_string()));
+
+        mock_fs_client
     }
 
     fn create_mock_backend() -> MockAgentBackend {
@@ -262,7 +294,8 @@ mod tests {
             .times(expected_merge_count)
             .returning(|worktree_path| {
                 Box::pin(async move {
-                    let _ = tokio::fs::remove_dir_all(worktree_path).await;
+                    let fs_client = create_passthrough_mock_fs_client();
+                    let _ = fs_client.remove_dir_all(worktree_path).await;
 
                     Ok(())
                 })
@@ -305,12 +338,15 @@ mod tests {
             .times(0..)
             .returning(|_, worktree_path, _, _| {
                 Box::pin(async move {
-                    tokio::fs::create_dir_all(&worktree_path)
+                    let fs_client = create_passthrough_mock_fs_client();
+                    fs_client
+                        .create_dir_all(worktree_path.clone())
                         .await
                         .map_err(|error| {
                             format!("Failed to create mock worktree directory: {error}")
                         })?;
-                    tokio::fs::create_dir_all(worktree_path.join(SESSION_DATA_DIR))
+                    fs_client
+                        .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
                         .await
                         .map_err(|error| {
                             format!("Failed to create mock session data directory: {error}")
@@ -323,7 +359,8 @@ mod tests {
             .times(0..)
             .returning(|worktree_path| {
                 Box::pin(async move {
-                    let _ = tokio::fs::remove_dir_all(worktree_path).await;
+                    let fs_client = create_passthrough_mock_fs_client();
+                    let _ = fs_client.remove_dir_all(worktree_path).await;
 
                     Ok(())
                 })
@@ -395,9 +432,16 @@ mod tests {
     /// This helper counts lines in non-metadata files so mocked git clients
     /// can still drive size-related assertions without invoking shell `git`.
     fn synthetic_diff_from_session_folder(folder: &Path) -> String {
-        fn count_lines_recursively(entry: &Path) -> usize {
+        fn count_lines_recursively(
+            fs_client: &dyn crate::infra::fs::FsClient,
+            entry: &Path,
+        ) -> usize {
             if !entry.is_dir() {
-                return std::fs::read_to_string(entry).map_or(0, |content| content.lines().count());
+                return fs_client
+                    .read_file(entry.to_path_buf())
+                    .map_or(0, |content| {
+                        String::from_utf8_lossy(&content).lines().count()
+                    });
             }
 
             if entry
@@ -410,13 +454,14 @@ mod tests {
             match std::fs::read_dir(entry) {
                 Ok(entries) => entries
                     .filter_map(Result::ok)
-                    .map(|entry| count_lines_recursively(&entry.path()))
+                    .map(|entry| count_lines_recursively(fs_client, &entry.path()))
                     .sum(),
                 Err(_) => 0,
             }
         }
 
-        let line_count = count_lines_recursively(folder);
+        let fs_client = create_passthrough_mock_fs_client();
+        let line_count = count_lines_recursively(&fs_client, folder);
 
         if line_count == 0 {
             String::new()
@@ -459,11 +504,13 @@ mod tests {
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let app_server_client = app.services.app_server_client();
+        let fs_client = app.services.fs_client();
 
         app.services = crate::app::AppServices::new(
             base_path,
             db,
             event_sender,
+            fs_client,
             Arc::clone(&mock_git_client),
             app_server_client,
         );
@@ -2592,10 +2639,13 @@ mod tests {
             .times(1)
             .returning(|_, worktree_path, _, _| {
                 Box::pin(async move {
-                    tokio::fs::create_dir_all(&worktree_path)
+                    let fs_client = create_passthrough_mock_fs_client();
+                    fs_client
+                        .create_dir_all(worktree_path.clone())
                         .await
                         .map_err(|error| format!("Failed to create mock worktree: {error}"))?;
-                    tokio::fs::create_dir_all(worktree_path.join(SESSION_DATA_DIR))
+                    fs_client
+                        .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
                         .await
                         .map_err(|error| {
                             format!("Failed to create mock worktree data dir: {error}")
@@ -3050,10 +3100,13 @@ mod tests {
             .times(1)
             .returning(|_, worktree_path, _, _| {
                 Box::pin(async move {
-                    tokio::fs::create_dir_all(&worktree_path)
+                    let fs_client = create_passthrough_mock_fs_client();
+                    fs_client
+                        .create_dir_all(worktree_path.clone())
                         .await
                         .map_err(|error| format!("Failed to create mock worktree: {error}"))?;
-                    tokio::fs::create_dir_all(worktree_path.join(SESSION_DATA_DIR))
+                    fs_client
+                        .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
                         .await
                         .map_err(|error| {
                             format!("Failed to create mock worktree data dir: {error}")
@@ -3116,10 +3169,13 @@ mod tests {
             .times(1)
             .returning(|_, worktree_path, _, _| {
                 Box::pin(async move {
-                    tokio::fs::create_dir_all(&worktree_path)
+                    let fs_client = create_passthrough_mock_fs_client();
+                    fs_client
+                        .create_dir_all(worktree_path.clone())
                         .await
                         .map_err(|error| format!("Failed to create mock worktree: {error}"))?;
-                    tokio::fs::create_dir_all(worktree_path.join(SESSION_DATA_DIR))
+                    fs_client
+                        .create_dir_all(worktree_path.join(SESSION_DATA_DIR))
                         .await
                         .map_err(|error| {
                             format!("Failed to create mock worktree data dir: {error}")
@@ -3463,7 +3519,8 @@ mod tests {
             .times(1)
             .returning(|worktree_path| {
                 Box::pin(async move {
-                    let _ = tokio::fs::remove_dir_all(worktree_path).await;
+                    let fs_client = create_passthrough_mock_fs_client();
+                    let _ = fs_client.remove_dir_all(worktree_path).await;
 
                     Ok(())
                 })
@@ -3477,6 +3534,7 @@ mod tests {
         // Act
         let result = SessionManager::cleanup_merged_session_worktree(
             worktree_folder.clone(),
+            Arc::new(create_passthrough_mock_fs_client()),
             Arc::new(mock_git_client),
             branch_name.to_string(),
             None,
