@@ -681,11 +681,16 @@ impl RealCodexAppServerClient {
         }
     }
 
-    /// Streams progress updates and assistant message items for one response.
+    /// Streams progress updates plus assistant delta/completed items from one
+    /// response.
+    ///
+    /// Delta notifications from [`extract_agent_message_delta`] are forwarded
+    /// as `is_delta: true` events. Completed assistant items are forwarded
+    /// as `is_delta: false` events and accumulated for final turn assembly.
     ///
     /// When an assistant message includes an optional `phase` label, the phase
-    /// is forwarded to stream consumers and surfaced as a progress update when
-    /// it changes from the previous value.
+    /// is surfaced as a progress update when it changes from the previous
+    /// value.
     fn stream_turn_content_from_response(
         response_value: &Value,
         stream_tx: &mpsc::UnboundedSender<AppServerStreamEvent>,
@@ -694,6 +699,18 @@ impl RealCodexAppServerClient {
     ) {
         if let Some(progress) = extract_item_started_progress(response_value) {
             let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
+        }
+
+        if let Some(agent_message) = extract_agent_message_delta(response_value) {
+            if let Some(phase) = agent_message.phase.as_deref() {
+                Self::emit_phase_progress_update(stream_tx, active_phase, phase);
+            }
+
+            let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                is_delta: true,
+                message: agent_message.message,
+                phase: agent_message.phase,
+            });
         }
 
         if let Some(agent_message) = extract_agent_message(response_value) {
@@ -1063,6 +1080,72 @@ struct ExtractedAgentMessage {
     phase: Option<String>,
 }
 
+/// Extracts incremental assistant message text from delta notifications.
+///
+/// Supports both legacy `item/updated` payloads and current v2 thought-delta
+/// notifications:
+/// - `item/plan/delta`
+/// - `item/reasoning/textDelta`
+/// - `item/reasoning/summaryTextDelta`
+///
+/// When a legacy `item/updated` delta includes a `phase` label, it is
+/// preserved so callers can propagate phase transitions before the item is
+/// complete.
+fn extract_agent_message_delta(response_value: &Value) -> Option<ExtractedAgentMessage> {
+    let method = response_value.get("method").and_then(Value::as_str)?;
+    if matches!(
+        method,
+        "item/plan/delta"
+            | "item/reasoning/textDelta"
+            | "item/reasoning/text_delta"
+            | "item/reasoning/summaryTextDelta"
+            | "item/reasoning/summary_text_delta"
+    ) {
+        let delta = response_value
+            .get("params")?
+            .get("delta")
+            .and_then(Value::as_str)?;
+        if delta.trim().is_empty() {
+            return None;
+        }
+        let phase = if method == "item/plan/delta" {
+            Some("plan".to_string())
+        } else {
+            Some("thinking".to_string())
+        };
+
+        return Some(ExtractedAgentMessage {
+            message: delta.to_string(),
+            phase,
+        });
+    }
+
+    if method != "item/updated" {
+        return None;
+    }
+
+    let item = response_value.get("params")?.get("item")?;
+    let phase = item
+        .get("phase")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let item_type = item.get("type")?.as_str()?.to_ascii_lowercase();
+    if item_type != "reasoning" && item_type != "thought" {
+        return None;
+    }
+
+    let delta = item.get("delta").and_then(Value::as_str)?;
+
+    if delta.trim().is_empty() {
+        return None;
+    }
+
+    Some(ExtractedAgentMessage {
+        message: delta.to_string(),
+        phase: phase.or(Some("thinking".to_string())),
+    })
+}
+
 /// Extracts completed assistant message text from an `item/completed` line.
 ///
 /// Synthetic completion status lines (for example `Command completed`) are
@@ -1081,7 +1164,11 @@ fn extract_agent_message(response_value: &Value) -> Option<ExtractedAgentMessage
         .and_then(Value::as_str)
         .map(ToString::to_string);
     let item_type = item.get("type")?.as_str()?.to_ascii_lowercase();
-    if !(item_type == "agentmessage" || item_type == "agent_message") {
+    if !(item_type == "agentmessage"
+        || item_type == "agent_message"
+        || item_type == "reasoning"
+        || item_type == "thought")
+    {
         return None;
     }
 
@@ -1876,6 +1963,35 @@ mod tests {
             })
         );
         assert_eq!(stream_rx.try_recv().ok(), None);
+    }
+
+    #[test]
+    fn stream_turn_content_from_response_ignores_agent_message_delta_notifications() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "delta": "{\"messages\":[{\"type\":\"answer\",\"text\":\"partial\"",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1"
+            }
+        });
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+        let mut assistant_messages = Vec::new();
+        let mut active_phase = None;
+
+        // Act
+        RealCodexAppServerClient::stream_turn_content_from_response(
+            &response_value,
+            &stream_tx,
+            &mut assistant_messages,
+            &mut active_phase,
+        );
+
+        // Assert
+        assert!(assistant_messages.is_empty());
+        assert!(stream_rx.try_recv().is_err());
     }
 
     #[test]
@@ -2897,5 +3013,150 @@ mod tests {
 
         // Assert
         assert_eq!(error_message, Some("Something else went wrong".to_string()));
+    }
+
+    #[test]
+    fn extract_agent_message_delta_ignores_content_delta_for_agent_message_item() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/updated",
+            "params": {
+                "item": {
+                    "type": "agentMessage",
+                    "delta": "partial content"
+                }
+            }
+        });
+
+        // Act
+        let message = extract_agent_message_delta(&response_value);
+
+        // Assert
+        assert_eq!(message, None);
+    }
+
+    #[test]
+    fn extract_agent_message_delta_returns_content_delta_for_reasoning_item() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/updated",
+            "params": {
+                "item": {
+                    "type": "reasoning",
+                    "delta": "thinking..."
+                }
+            }
+        });
+
+        // Act
+        let message = extract_agent_message_delta(&response_value);
+
+        // Assert
+        assert_eq!(
+            message,
+            Some(ExtractedAgentMessage {
+                message: "thinking...".to_string(),
+                phase: Some("thinking".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn extract_agent_message_delta_ignores_content_for_agent_message_delta_notification() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "delta": "streamed thought chunk",
+                "itemId": "item-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1"
+            }
+        });
+
+        // Act
+        let message = extract_agent_message_delta(&response_value);
+
+        // Assert
+        assert_eq!(message, None);
+    }
+
+    #[test]
+    fn extract_agent_message_delta_returns_content_for_plan_delta_notification() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/plan/delta",
+            "params": {
+                "delta": "1. Inspect files",
+                "itemId": "plan-1",
+                "threadId": "thread-1",
+                "turnId": "turn-1"
+            }
+        });
+
+        // Act
+        let message = extract_agent_message_delta(&response_value);
+
+        // Assert
+        assert_eq!(
+            message,
+            Some(ExtractedAgentMessage {
+                message: "1. Inspect files".to_string(),
+                phase: Some("plan".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn extract_agent_message_delta_returns_content_for_reasoning_text_delta_notification() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/reasoning/textDelta",
+            "params": {
+                "delta": "Tracing event stream",
+                "itemId": "reasoning-1",
+                "contentIndex": 0,
+                "threadId": "thread-1",
+                "turnId": "turn-1"
+            }
+        });
+
+        // Act
+        let message = extract_agent_message_delta(&response_value);
+
+        // Assert
+        assert_eq!(
+            message,
+            Some(ExtractedAgentMessage {
+                message: "Tracing event stream".to_string(),
+                phase: Some("thinking".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn extract_agent_message_returns_text_for_reasoning_item() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "reasoning",
+                    "text": "Thought complete"
+                }
+            }
+        });
+
+        // Act
+        let message = extract_agent_message(&response_value);
+
+        // Assert
+        assert_eq!(
+            message,
+            Some(ExtractedAgentMessage {
+                message: "Thought complete".to_string(),
+                phase: None,
+            })
+        );
     }
 }

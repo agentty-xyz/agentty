@@ -51,16 +51,21 @@ impl AgentChannel for AppServerAgentChannel {
 
     /// Runs one app-server turn and bridges stream events to [`TurnEvent`]s.
     ///
-    /// [`AppServerStreamEvent::AssistantMessage`] events are forwarded as
-    /// [`TurnEvent::AssistantDelta`] (formatting adjusted based on the
-    /// `is_delta` flag) for non-strict providers. Strict providers suppress
-    /// assistant stream chunks and rely on final payload parsing to avoid
-    /// leaking malformed first-pass output when a repair retry is needed.
-    /// Non-delta assistant messages are normalized through
-    /// [`parse_agent_response`] so structured protocol payloads stream as
-    /// human-readable text. Provider phase metadata is accepted but not
-    /// surfaced in [`TurnEvent`] yet. [`AppServerStreamEvent::ProgressUpdate`]
-    /// events are forwarded as [`TurnEvent::Progress`].
+    /// [`AppServerStreamEvent::AssistantMessage`] events are routed to either
+    /// [`TurnEvent::AssistantDelta`] or [`TurnEvent::ThoughtDelta`] for
+    /// non-strict providers. Strict providers suppress assistant stream chunks
+    /// and rely on final payload parsing to avoid leaking malformed first-pass
+    /// output when a repair retry is needed.
+    ///
+    /// Codex non-delta assistant chunks are suppressed to keep transcript
+    /// persistence deterministic: only the final parsed answer is appended by
+    /// the worker. Codex thought-style deltas (`phase: thinking/plan`) are
+    /// emitted as [`TurnEvent::ThoughtDelta`]. Other deltas are normalized via
+    /// [`normalize_stream_assistant_chunk`] and emitted as
+    /// [`TurnEvent::AssistantDelta`].
+    ///
+    /// [`AppServerStreamEvent::ProgressUpdate`] events are forwarded as
+    /// [`TurnEvent::Progress`].
     ///
     /// # Errors
     /// Returns [`AgentError`] when [`AppServerClient::run_turn`] fails.
@@ -102,15 +107,26 @@ impl AgentChannel for AppServerAgentChannel {
                         match event {
                             AppServerStreamEvent::AssistantMessage {
                                 message,
-                                phase: _phase,
+                                phase,
                                 is_delta,
                             } => {
                                 if !should_stream_assistant_messages {
                                     continue;
                                 }
 
+                                if kind == AgentKind::Codex && !is_delta {
+                                    continue;
+                                }
+
                                 let trimmed = message.trim_end();
                                 if trimmed.trim().is_empty() {
+                                    continue;
+                                }
+
+                                if is_streamed_thought_message(kind, is_delta, phase.as_deref()) {
+                                    let _ =
+                                        events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
+
                                     continue;
                                 }
 
@@ -195,6 +211,20 @@ fn format_non_delta_assistant_message(message: &str) -> Option<String> {
     let normalized = normalized.trim_end();
 
     Some(format!("{normalized}\n\n"))
+}
+
+/// Returns whether one streamed assistant chunk should be treated as thought
+/// text.
+///
+/// Codex app-server emits thought/planning deltas with `phase` values such as
+/// `thinking` and `plan`. These are surfaced as [`TurnEvent::ThoughtDelta`] so
+/// worker transcript output only contains final assistant answers.
+fn is_streamed_thought_message(kind: AgentKind, is_delta: bool, phase: Option<&str>) -> bool {
+    if kind != AgentKind::Codex || !is_delta {
+        return false;
+    }
+
+    matches!(phase, Some("thinking" | "plan" | "reasoning" | "thought"))
 }
 
 /// Parses one final assistant payload, optionally repairing malformed
@@ -321,9 +351,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies `AssistantMessage` with `is_delta: false` appends `\n\n` after
-    /// trimmed text for paragraph spacing.
-    async fn test_run_turn_bridges_non_delta_assistant_message_with_trailing_newlines() {
+    /// Verifies Codex non-delta assistant chunks are suppressed so transcript
+    /// output only uses the final parsed answer.
+    async fn test_run_turn_codex_suppresses_non_delta_assistant_messages() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -347,16 +377,17 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        let event = events_rx.try_recv().expect("should have received an event");
-        assert_eq!(
-            event,
-            TurnEvent::AssistantDelta("Full paragraph\n\n".to_string())
-        );
+        while let Ok(event) = events_rx.try_recv() {
+            assert!(
+                !matches!(event, TurnEvent::AssistantDelta(_)),
+                "no AssistantDelta should be emitted for codex non-delta chunks, got: {event:?}"
+            );
+        }
     }
 
     #[tokio::test]
-    /// Verifies non-delta structured JSON streams only `answer` text.
-    async fn test_run_turn_bridges_non_delta_structured_json_as_answer_text() {
+    /// Verifies Codex non-delta structured JSON chunks are suppressed.
+    async fn test_run_turn_codex_suppresses_non_delta_structured_json_streaming() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -384,8 +415,50 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
+        while let Ok(event) = events_rx.try_recv() {
+            assert!(
+                !matches!(event, TurnEvent::AssistantDelta(_)),
+                "no AssistantDelta should be emitted for codex structured non-delta chunks, got: \
+                 {event:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    /// Verifies Codex thought-phase deltas are routed to `ThoughtDelta`.
+    async fn test_run_turn_routes_codex_thinking_delta_to_thought_event() {
+        // Arrange
+        let mut mock_client = MockAppServerClient::new();
+        mock_client
+            .expect_run_turn()
+            .returning(|_request, stream_tx| {
+                let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
+                    message: "Inspecting files".to_string(),
+                    phase: Some("thinking".to_string()),
+                    is_delta: true,
+                });
+
+                Box::pin(async {
+                    Ok(make_ok_response(
+                        r#"{"messages":[{"type":"answer","text":"Done."}]}"#,
+                    ))
+                })
+            });
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), make_turn_request(), events_tx)
+            .await;
+
+        // Assert
+        assert!(result.is_ok());
         let event = events_rx.try_recv().expect("should have received an event");
-        assert_eq!(event, TurnEvent::AssistantDelta("Done.\n\n".to_string()));
+        assert_eq!(
+            event,
+            TurnEvent::ThoughtDelta("Inspecting files".to_string())
+        );
     }
 
     #[tokio::test]

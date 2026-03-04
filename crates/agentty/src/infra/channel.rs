@@ -74,6 +74,9 @@ pub struct TurnRequest {
 pub enum TurnEvent {
     /// A fragment of the assistant's text response.
     AssistantDelta(String),
+    /// A streamed thinking/planning fragment shown separately from transcript
+    /// output.
+    ThoughtDelta(String),
     /// The turn completed successfully with final token counts.
     Completed {
         /// Whether the provider reset its context for this turn.
@@ -155,9 +158,9 @@ pub trait AgentChannel: Send + Sync {
 
     /// Executes one prompt turn and streams incremental events to `events`.
     ///
-    /// Implementations emit [`TurnEvent::AssistantDelta`] and
-    /// [`TurnEvent::Progress`] as output arrives. When the turn finishes,
-    /// [`TurnResult`] is returned.
+    /// Implementations emit [`TurnEvent::AssistantDelta`],
+    /// [`TurnEvent::ThoughtDelta`], and [`TurnEvent::Progress`] as output
+    /// arrives. When the turn finishes, [`TurnResult`] is returned.
     ///
     /// # Errors
     /// Returns [`AgentError`] when the turn cannot be executed (spawn failure,

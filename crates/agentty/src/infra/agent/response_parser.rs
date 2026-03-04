@@ -91,6 +91,7 @@ struct CodexItem {
     #[serde(rename = "type")]
     item_type: Option<String>,
     text: Option<String>,
+    delta: Option<String>,
 }
 
 /// Parses Claude output and falls back to raw output when parsing fails.
@@ -256,11 +257,16 @@ fn parse_codex_response(stdout: &str) -> Option<ParsedResponse> {
             continue;
         };
 
-        if item.item_type.as_deref() != Some("agent_message") {
+        let item_type = item.item_type.as_deref().unwrap_or_default();
+        if !(item_type == "agent_message"
+            || item_type == "agentmessage"
+            || item_type == "reasoning"
+            || item_type == "thought")
+        {
             continue;
         }
 
-        if let Some(text) = item.text {
+        if let Some(text) = item.text.or(item.delta) {
             if is_codex_completion_status_message(&text) {
                 continue;
             }
@@ -285,20 +291,39 @@ pub(super) fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(Strin
     }
 
     let event = serde_json::from_str::<CodexEvent>(trimmed_line).ok()?;
-    if event.event_type.as_deref() == Some("item.started") {
-        let item = event.item?;
+    let event_type = event.event_type.as_deref();
+    if event_type == Some("item.started") {
+        let item = event.item.as_ref()?;
         let item_type = item.item_type.as_deref()?;
         let progress_message = compact_codex_progress_message(item_type)?;
 
         return Some((progress_message, false));
     }
 
-    if event.event_type.as_deref() != Some("item.completed") {
+    if event_type == Some("item.updated") {
+        let item = event.item.as_ref()?;
+        let item_type = item.item_type.as_deref()?;
+        if item_type == "agent_message"
+            || item_type == "agentmessage"
+            || item_type == "reasoning"
+            || item_type == "thought"
+        {
+            let delta = item.delta.as_ref().or(item.text.as_ref())?.clone();
+            return Some((delta, true));
+        }
+    }
+
+    if event_type != Some("item.completed") {
         return None;
     }
 
     let item = event.item?;
-    if item.item_type.as_deref() != Some("agent_message") {
+    let item_type = item.item_type.as_deref()?;
+    if !(item_type == "agent_message"
+        || item_type == "agentmessage"
+        || item_type == "reasoning"
+        || item_type == "thought")
+    {
         return None;
     }
 
@@ -544,7 +569,7 @@ pub(crate) fn compact_codex_progress_message(item_type: &str) -> Option<String> 
         "agent_message" => None,
         "command_execution" => Some("Running a command".to_string()),
         "context_compaction" => Some("Compacting context".to_string()),
-        "reasoning" => Some("Thinking".to_string()),
+        "reasoning" | "thought" => Some("Thinking".to_string()),
         "web_search" => Some("Searching the web".to_string()),
         other => Some(format!("Working: {}", other.replace('_', " "))),
     }

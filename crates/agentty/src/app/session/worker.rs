@@ -493,6 +493,8 @@ async fn apply_turn_result(
 ///
 /// - [`TurnEvent::AssistantDelta`]: appends text to the session output buffer
 ///   and emits [`AppEvent::OutputAppended`].
+/// - [`TurnEvent::ThoughtDelta`]: updates the progress indicator with streamed
+///   thought text without appending it to session transcript output.
 /// - [`TurnEvent::Progress`]: updates the UI progress indicator via
 ///   [`SessionTaskService::set_session_progress`].
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
@@ -533,6 +535,19 @@ async fn consume_turn_events(
                 )
                 .await;
                 streamed_any_content = true;
+            }
+            TurnEvent::ThoughtDelta(thought) => {
+                if thought.trim().is_empty() {
+                    continue;
+                }
+                if active_progress.as_deref() != Some(thought.as_str()) {
+                    active_progress = Some(thought.clone());
+                    SessionTaskService::set_session_progress(
+                        &app_event_tx,
+                        &session_id,
+                        Some(thought),
+                    );
+                }
             }
             TurnEvent::Progress(progress) => {
                 if active_progress.as_deref() != Some(&progress) {
