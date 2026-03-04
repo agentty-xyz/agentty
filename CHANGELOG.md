@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.7] - 2026-03-04
+
+### Added
+
+- **UI:** Add `Ctrl+u` prompt-line deletion and intent-aware confirmations for merge, delete, and quit actions.
+- **Settings:** Persist Codex reasoning levels and propagate reasoning identifiers through runtime integrations.
+- **Environment:** Allow `AGENTTY_ROOT` to override the default agentty data root.
+
+### Changed
+
+- **UI:** Remove the session list project column and highlight the active project name in the `Sessions` tab.
+- **Session:** Preserve live session state during reload and unify child PID propagation across assist/rebase/merge flows.
+- **Docs:** Split usage docs into dedicated workflow and keybindings pages and refine rebase conflict guidance.
+- **Quality:** Require full validation checks during execution and standardize the full test command to single-threaded runs.
+
+### Fixed
+
+- **Tests:** Refresh stale assertions after settings/help text updates.
+
+### Contributors
+
+- @minev-dev
+- @andagaev
+
 ## [v0.4.6] - 2026-03-02
 
 ### Added
