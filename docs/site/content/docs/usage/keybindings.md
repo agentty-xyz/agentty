@@ -71,7 +71,7 @@ state:
 | `e` | Open editor (session worktree) |
 | `d` | Show diff |
 | `f` | Show review (read-only) |
-| `m` | Queue merge (confirmation popup) |
+| `m` | Add to merge queue (confirmation popup) |
 | `r` | Rebase |
 | `Shift+Tab` | Toggle permission mode |
 | `j` / `k` | Scroll output |

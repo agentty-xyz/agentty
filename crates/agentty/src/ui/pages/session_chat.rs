@@ -794,7 +794,7 @@ mod tests {
         // Assert
         assert!(help_text.contains("Enter: reply"));
         assert!(help_text.contains("o: open"));
-        assert!(help_text.contains("m: queue merge"));
+        assert!(help_text.contains("m: add to merge queue"));
         assert!(help_text.contains("r: rebase"));
         assert!(!help_text.contains("d: diff"));
     }

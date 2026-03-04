@@ -240,10 +240,13 @@ async fn handle_view_key(
 }
 
 /// Opens a merge confirmation overlay for the active view session.
+///
+/// The body text asks whether the current session should be added to the
+/// merge queue.
 fn open_merge_confirmation(app: &mut App, view_context: &ViewContext) {
     app.mode = AppMode::Confirmation {
         confirmation_intent: ConfirmationIntent::MergeSession,
-        confirmation_message: "Queue merge for this session?".to_string(),
+        confirmation_message: "Add this session to merge queue?".to_string(),
         confirmation_title: "Confirm Merge".to_string(),
         restore_view: Some(confirmation_view_mode(view_context)),
         session_id: Some(view_context.session_id.clone()),
@@ -1429,7 +1432,7 @@ mod tests {
                 session_id: Some(ref mode_session_id),
                 selected_confirmation_index: DEFAULT_OPTION_INDEX,
             } if confirmation_title == "Confirm Merge"
-                && confirmation_message == "Queue merge for this session?"
+                && confirmation_message == "Add this session to merge queue?"
                 && restored_session_id == &session_id
                 && mode_session_id == &session_id
                 && status_message == "Preparing focused review..."

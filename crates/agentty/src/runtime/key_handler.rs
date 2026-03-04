@@ -160,7 +160,7 @@ async fn handle_delete_confirmation(
     Ok(EventResult::Continue)
 }
 
-/// Restores view mode and attempts to queue merge for the confirmed session.
+/// Restores view mode and attempts to add confirmed session to merge queue.
 async fn handle_merge_confirmation(
     app: &mut App,
     confirmation_session_id: Option<String>,
@@ -349,7 +349,7 @@ mod tests {
             .expect("failed to create session");
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::MergeSession,
-            confirmation_message: "Queue merge for this session?".to_string(),
+            confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::FocusedReview,
@@ -392,7 +392,7 @@ mod tests {
             .expect("failed to create session");
         app.mode = AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::MergeSession,
-            confirmation_message: "Queue merge for this session?".to_string(),
+            confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,

@@ -31,9 +31,9 @@ Session statuses and what you can do in each state:
 
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
-| **New** | Session created, prompt not yet sent. | `Enter` reply, `m` queue merge, `r` rebase, `o` open worktree, `e` open `nvim`, scroll, help |
+| **New** | Session created, prompt not yet sent. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `e` open `nvim`, scroll, help |
 | **InProgress** | Agent is actively working. | `Ctrl+c` stop, `o` open worktree, `e` open `nvim`, scroll, help |
-| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` queue merge, `r` rebase, `o` open worktree, `e` open `nvim`, `d` diff, `f` focused review, `Shift+Tab` permission mode, scroll, help |
+| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `e` open `nvim`, `d` diff, `f` focused review, `Shift+Tab` permission mode, scroll, help |
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, `e` open `nvim`, scroll, help |
 | **Merging** | Changes are being merged into the base branch. | read-only view (`q`, scroll, help) |
