@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::access::SESSION_NOT_FOUND_ERROR;
 use super::worker::SessionCommand;
 use super::{SessionTaskService, session_branch, session_folder};
-use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, settings};
+use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, setting};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::domain::setting::SettingName;
@@ -18,7 +18,7 @@ use crate::infra::agent::{self as agent, AgentCommandMode, BuildCommandRequest};
 use crate::infra::channel::TurnMode;
 use crate::infra::fs::FsClient;
 use crate::infra::{db, git};
-use crate::ui::pages::session_list::grouped_session_indexes;
+use crate::ui::page::session_list::grouped_session_indexes;
 
 /// Maximum stored length for generated session titles.
 const GENERATED_SESSION_TITLE_MAX_CHARACTERS: usize = 72;
@@ -944,7 +944,7 @@ impl SessionManager {
     }
 
     async fn resolve_default_session_model(&self, services: &AppServices) -> AgentModel {
-        settings::load_default_smart_model_setting(services, self.default_session_model).await
+        setting::load_default_smart_model_setting(services, self.default_session_model).await
     }
 
     /// Reverts filesystem and database changes after session creation failure.

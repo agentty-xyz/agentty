@@ -1,11 +1,11 @@
 pub mod activity_heatmap;
-pub mod components;
+pub mod component;
 pub mod diff_util;
 pub mod icon;
 pub mod layout;
 pub mod markdown;
-pub mod overlays;
-pub mod pages;
+pub mod overlay;
+pub mod page;
 mod render;
 pub mod router;
 pub mod state;

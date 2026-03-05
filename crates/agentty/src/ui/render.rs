@@ -10,7 +10,7 @@ use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
-use crate::ui::{components, router};
+use crate::ui::{component, router};
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -58,7 +58,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     let content_area = outer_chunks[1];
     let footer_bar_area = outer_chunks[2];
 
-    components::status_bar::StatusBar::new(current_version_display_text())
+    component::status_bar::StatusBar::new(current_version_display_text())
         .latest_available_version(
             context
                 .latest_available_version
@@ -127,7 +127,7 @@ fn render_footer_bar(
         ),
     };
 
-    components::footer_bar::FooterBar::new(footer_dir)
+    component::footer_bar::FooterBar::new(footer_dir)
         .git_branch(footer_branch)
         .git_status(footer_status)
         .render(f, footer_bar_area);

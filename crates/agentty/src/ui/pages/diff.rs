@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::domain::session::Session;
-use crate::ui::components::file_explorer::{FileExplorer, FileTreeItem};
+use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
 use crate::ui::state::help_action;
 use crate::ui::util::{
     DiffLine, DiffLineKind, diff_line_change_totals, max_diff_line_number, parse_diff_lines,

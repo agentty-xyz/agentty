@@ -28,7 +28,7 @@ use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{app_server, db};
 use crate::runtime::mode::sync_blocked;
 use crate::ui;
-use crate::ui::pages::session_list::preferred_initial_session_index;
+use crate::ui::page::session_list::preferred_initial_session_index;
 use crate::ui::state::app_mode::{AppMode, HelpContext};
 use crate::ui::state::prompt::PromptAtMentionState;
 
@@ -37,7 +37,7 @@ mod merge_queue;
 mod project;
 mod service;
 pub(crate) mod session;
-pub(crate) mod settings;
+pub(crate) mod setting;
 pub(crate) mod tab;
 mod task;
 
@@ -50,7 +50,7 @@ pub use session::SessionManager;
 use session::SessionTaskService;
 pub(crate) use session::{SyncMainOutcome, SyncSessionStartError};
 pub use session_state::SessionState;
-pub use settings::SettingsManager;
+pub use setting::SettingsManager;
 pub use tab::{Tab, TabManager};
 
 /// Relative directory name used for session git worktrees under `~/.agentty`.

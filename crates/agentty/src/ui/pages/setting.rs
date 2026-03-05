@@ -3,7 +3,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
-use crate::app::settings::SettingsManager;
+use crate::app::setting::SettingsManager;
 use crate::ui::Page;
 use crate::ui::state::help_action;
 
@@ -13,7 +13,7 @@ pub struct SettingsPage<'a> {
 }
 
 impl<'a> SettingsPage<'a> {
-    /// Creates a settings page renderer bound to a mutable settings manager.
+    /// Creates a settings page renderer bound to a mutable setting manager.
     pub fn new(manager: &'a mut SettingsManager) -> Self {
         Self { manager }
     }

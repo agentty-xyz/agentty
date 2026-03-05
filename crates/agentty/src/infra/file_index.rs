@@ -618,16 +618,16 @@ mod tests {
             },
             FileEntry {
                 is_dir: false,
-                path: "crates/agentty/src/app/settings.rs".to_string(),
+                path: "crates/agentty/src/app/setting.rs".to_string(),
             },
         ];
 
         // Act
-        let filtered = filter_entries(&entries, "settings");
+        let filtered = filter_entries(&entries, "setting");
 
         // Assert
         assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].path, "crates/agentty/src/app/settings.rs");
+        assert_eq!(filtered[0].path, "crates/agentty/src/app/setting.rs");
     }
 
     #[test]

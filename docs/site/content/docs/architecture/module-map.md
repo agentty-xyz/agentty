@@ -27,7 +27,7 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/app/project.rs` | `ProjectManager` - project CRUD and selection orchestration. |
 | `crates/agentty/src/app/service.rs` | `AppServices` dependency container (`Database`, `FsClient`, `GitClient`, app-server client, event sender). |
 | `crates/agentty/src/app/session_state.rs` | `SessionState` - per-session runtime state container. |
-| `crates/agentty/src/app/settings.rs` | `SettingsManager` - settings management and persistence. |
+| `crates/agentty/src/app/setting.rs` | `SettingsManager` - settings management and persistence. |
 | `crates/agentty/src/app/tab.rs` | `TabManager` - top-level tab definitions and tab selection state. |
 | `crates/agentty/src/app/task.rs` | App-scoped background tasks (git status polling, version checks, review assists, app-server turns). |
 | `crates/agentty/src/app/session/` | Session-specific orchestration split by concern: |
@@ -102,7 +102,7 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/ui/render.rs` | Frame composition and render context. |
 | `crates/agentty/src/ui/router.rs` | Mode-to-page routing for content rendering. |
 | `crates/agentty/src/ui/layout.rs` | Layout helper utilities. |
-| `crates/agentty/src/ui/overlays.rs` | Overlay rendering dispatch (help, info, confirmation). |
+| `crates/agentty/src/ui/overlay.rs` | Overlay rendering dispatch (help, info, confirmation). |
 | `crates/agentty/src/ui/markdown.rs` | Markdown rendering utilities. |
 | `crates/agentty/src/ui/diff_util.rs` | Diff parsing and rendering helpers. |
 | `crates/agentty/src/ui/icon.rs` | Icon constants and helpers. |
@@ -114,8 +114,8 @@ choose the correct module when implementing changes.
 | - `project_list.rs` | Project list page. |
 | - `session_chat.rs` | Session chat page (new sessions and replies). |
 | - `session_list.rs` | Session list page. |
-| - `settings.rs` | Settings page. |
-| - `stats.rs` | Stats/analytics page. |
+| - `setting.rs` | Settings page. |
+| - `stat.rs` | Stats/analytics page. |
 | `crates/agentty/src/ui/components/` | Reusable widgets and overlays: |
 | - `chat_input.rs` | Chat input widget. |
 | - `confirmation_overlay.rs` | Confirmation dialog overlay. |

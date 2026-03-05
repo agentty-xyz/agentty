@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::widgets::TableState;
 
-use crate::app::{AppServices, SessionState, settings};
+use crate::app::{AppServices, SessionState, setting};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{DailyActivity, Session};
 use crate::infra::git;
@@ -128,7 +128,7 @@ impl SessionManager {
         services: &AppServices,
         fallback_model: AgentModel,
     ) -> AgentModel {
-        settings::load_default_smart_model_setting(services, fallback_model).await
+        setting::load_default_smart_model_setting(services, fallback_model).await
     }
 
     /// Returns session snapshots and stats payloads required for rendering.

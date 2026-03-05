@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::domain::session::{DailyActivity, Session};
 use crate::ui::Page;
-use crate::ui::pages::session_list::{model_column_width, project_column_width};
+use crate::ui::page::session_list::{model_column_width, project_column_width};
 use crate::ui::state::help_action;
 use crate::ui::util::{
     build_activity_heatmap_grid, build_visible_heatmap_month_row, current_day_key_local,

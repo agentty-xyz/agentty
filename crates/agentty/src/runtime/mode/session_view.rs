@@ -10,7 +10,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::{EventResult, TuiTerminal, terminal};
-use crate::ui::pages::session_chat::SessionChatPage;
+use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
 };

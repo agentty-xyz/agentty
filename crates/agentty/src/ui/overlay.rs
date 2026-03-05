@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{AppMode, HelpContext};
-use crate::ui::{Component, Page, components, pages};
+use crate::ui::{Component, Page, component, page};
 
 /// Borrowed parameters for rendering the sync-blocked popup overlay.
 #[derive(Clone, Copy)]
@@ -36,7 +36,7 @@ pub(crate) fn render_confirmation_overlay(
         unreachable!("matched confirmation mode above");
     };
 
-    components::confirmation_overlay::ConfirmationOverlay::new(
+    component::confirmation_overlay::ConfirmationOverlay::new(
         confirmation_title,
         confirmation_message,
     )
@@ -63,7 +63,7 @@ pub(crate) fn render_sync_blocked_popup(
 
     let popup_message = sync_popup_message(default_branch, message, project_name);
 
-    components::info_overlay::InfoOverlay::new(title, &popup_message)
+    component::info_overlay::InfoOverlay::new(title, &popup_message)
         .is_loading(is_loading)
         .render(f, area);
 }
@@ -103,7 +103,7 @@ pub(crate) fn render_help(
         session_progress_messages,
     );
 
-    components::help_overlay::HelpOverlay::new(help_context)
+    component::help_overlay::HelpOverlay::new(help_context)
         .scroll_offset(scroll_offset)
         .render(f, area);
 }
@@ -144,7 +144,7 @@ fn render_help_background(
                 let active_progress = session_progress_messages
                     .get(session_id)
                     .map(std::string::String::as_str);
-                pages::session_chat::SessionChatPage::new(
+                page::session_chat::SessionChatPage::new(
                     sessions,
                     session_index,
                     *view_scroll,
@@ -161,7 +161,7 @@ fn render_help_background(
             session_id,
         } => {
             if let Some(session) = sessions.iter().find(|session| session.id == *session_id) {
-                pages::diff::DiffPage::new(
+                page::diff::DiffPage::new(
                     session,
                     diff.clone(),
                     *diff_scroll,

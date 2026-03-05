@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::App;
 use crate::runtime::EventResult;
-use crate::ui::components::file_explorer::FileExplorer;
+use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, HelpContext};
 use crate::ui::util::parse_diff_lines;
 

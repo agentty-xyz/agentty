@@ -7,9 +7,9 @@ use ratatui::widgets::TableState;
 use crate::app::{SettingsManager, Tab};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
-use crate::ui::overlays::SyncBlockedPopupRenderContext;
+use crate::ui::overlay::SyncBlockedPopupRenderContext;
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
-use crate::ui::{Component, Page, RenderContext, components, overlays, pages};
+use crate::ui::{Component, Page, RenderContext, component, overlay, page};
 
 /// Shared borrowed data required to render list-page backgrounds.
 pub(crate) struct ListBackgroundRenderContext<'a> {
@@ -142,7 +142,7 @@ fn render_list_or_overlay_mode(
                     aux.session_progress_messages,
                 );
             } else {
-                overlays::render_confirmation_overlay(f, area, mode, shared.list_background());
+                overlay::render_confirmation_overlay(f, area, mode, shared.list_background());
             }
         }
 
@@ -152,7 +152,7 @@ fn render_list_or_overlay_mode(
             message,
             project_name,
             title,
-        } => overlays::render_sync_blocked_popup(
+        } => overlay::render_sync_blocked_popup(
             f,
             area,
             shared.list_background(),
@@ -167,7 +167,7 @@ fn render_list_or_overlay_mode(
         AppMode::Help {
             context: help_context,
             scroll_offset,
-        } => overlays::render_help(
+        } => overlay::render_help(
             f,
             area,
             help_context,
@@ -220,7 +220,7 @@ fn render_merge_confirmation_overlay(
         },
     );
 
-    components::confirmation_overlay::ConfirmationOverlay::new(
+    component::confirmation_overlay::ConfirmationOverlay::new(
         context.confirmation_title,
         context.confirmation_message,
     )
@@ -307,7 +307,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         .get(session_id)
         .map(std::string::String::as_str);
 
-    pages::session_chat::SessionChatPage::new(
+    page::session_chat::SessionChatPage::new(
         sessions,
         session_index,
         scroll_offset,
@@ -328,7 +328,7 @@ fn render_diff_mode(
     file_explorer_selected_index: usize,
 ) {
     if let Some(session) = sessions.iter().find(|session| session.id == session_id) {
-        pages::diff::DiffPage::new(
+        page::diff::DiffPage::new(
             session,
             diff.to_string(),
             scroll_offset,
@@ -359,11 +359,11 @@ pub(crate) fn render_list_background(
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(content_area);
 
-    components::tab::Tabs::new(current_tab, active_project_id, projects).render(f, chunks[0]);
+    component::tab::Tabs::new(current_tab, active_project_id, projects).render(f, chunks[0]);
 
     match current_tab {
         Tab::Projects => {
-            pages::project_list::ProjectListPage::new(
+            page::project_list::ProjectListPage::new(
                 projects,
                 project_table_state,
                 active_project_id,
@@ -371,13 +371,13 @@ pub(crate) fn render_list_background(
             .render(f, chunks[1]);
         }
         Tab::Sessions => {
-            pages::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
+            page::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
         }
         Tab::Stats => {
-            pages::stats::StatsPage::new(sessions, stats_activity).render(f, chunks[1]);
+            page::stat::StatsPage::new(sessions, stats_activity).render(f, chunks[1]);
         }
         Tab::Settings => {
-            pages::settings::SettingsPage::new(settings).render(f, chunks[1]);
+            page::setting::SettingsPage::new(settings).render(f, chunks[1]);
         }
     }
 }
