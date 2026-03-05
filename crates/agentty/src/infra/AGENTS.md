@@ -6,6 +6,8 @@ Implementations of external interfaces (Database, Git, System).
 
 ## Directory Index
 
+- [CLAUDE.md](CLAUDE.md) - Symlink to AGENTS.md.
+- [GEMINI.md](GEMINI.md) - Symlink to AGENTS.md.
 - [agent/](agent/) - Provider-specific backend builders and response parsing modules.
 - [agent.rs](agent.rs) - Agent module root that wires provider modules under `agent/`.
 - [app_server.rs](app_server.rs) - Shared app-server trait and turn request/response event types.
