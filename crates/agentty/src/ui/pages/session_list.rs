@@ -156,6 +156,18 @@ impl SessionGroup {
     }
 }
 
+/// Resolves the initial raw-session selection index for list-mode focus.
+///
+/// Active sessions are preferred so opening the session list lands on ongoing
+/// work when both active and archived items are present. If no active sessions
+/// exist, this falls back to the first selectable grouped row.
+pub(crate) fn preferred_initial_session_index(sessions: &[Session]) -> Option<usize> {
+    sessions_for_group(sessions, SessionGroup::ActiveSessions)
+        .map(|(index, _)| index)
+        .next()
+        .or_else(|| grouped_session_indexes(sessions).first().copied())
+}
+
 /// Returns session indexes in the same order as selectable rows in the grouped
 /// session table.
 pub(crate) fn grouped_session_indexes(sessions: &[Session]) -> Vec<usize> {
@@ -395,6 +407,37 @@ mod tests {
         );
         assert_eq!(main_area.height, area.height - 1);
         assert_eq!(footer_area.height, 1);
+    }
+
+    #[test]
+    fn test_preferred_initial_session_index_prefers_active_group_when_available() {
+        // Arrange
+        let sessions = vec![
+            test_session("archive-1", Status::Done),
+            test_session("active-1", Status::Review),
+            test_session("merge-1", Status::Queued),
+        ];
+
+        // Act
+        let selected_index = preferred_initial_session_index(&sessions);
+
+        // Assert
+        assert_eq!(selected_index, Some(1));
+    }
+
+    #[test]
+    fn test_preferred_initial_session_index_falls_back_to_first_grouped_session() {
+        // Arrange
+        let sessions = vec![
+            test_session("archive-1", Status::Done),
+            test_session("merge-1", Status::Queued),
+        ];
+
+        // Act
+        let selected_index = preferred_initial_session_index(&sessions);
+
+        // Assert
+        assert_eq!(selected_index, Some(1));
     }
 
     #[test]

@@ -26,6 +26,7 @@ use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::runtime::mode::sync_blocked;
 use crate::ui;
+use crate::ui::pages::session_list::preferred_initial_session_index;
 use crate::ui::state::app_mode::AppMode;
 
 mod assist;
@@ -308,7 +309,7 @@ impl App {
         .await;
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
-        table_state.select((!sessions.is_empty()).then_some(0));
+        table_state.select(preferred_initial_session_index(&sessions));
 
         let git_status_cancel = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -1775,7 +1776,7 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session::{Session, SessionSize, SessionStats, Status};
+    use crate::domain::session::{SESSION_DATA_DIR, Session, SessionSize, SessionStats, Status};
     use crate::infra::agent::protocol::AgentResponseMessage;
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
@@ -1824,6 +1825,63 @@ mod tests {
             mock_app_server(),
         )
         .await
+    }
+
+    #[tokio::test]
+    /// Ensures startup selection prefers active sessions over archive rows.
+    async fn test_new_prefers_active_session_for_initial_selection() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project(&base_path.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        let active_session_id = "z-active-session";
+        let archive_session_id = "a-archive-session";
+        database
+            .insert_session(
+                active_session_id,
+                "gemini-3-flash-preview",
+                "main",
+                &Status::Review.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert active session");
+        database
+            .insert_session(
+                archive_session_id,
+                "gemini-3-flash-preview",
+                "main",
+                &Status::Done.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert archived session");
+
+        let active_folder_name = active_session_id.chars().take(8).collect::<String>();
+        let active_session_data_dir = base_path.join(active_folder_name).join(SESSION_DATA_DIR);
+        fs::create_dir_all(active_session_data_dir).expect("failed to create active session dir");
+
+        // Act
+        let app = App::new(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            mock_app_server(),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.selected_session().map(|session| session.id.as_str()),
+            Some(active_session_id)
+        );
     }
 
     /// Builds a test app with one selected session and configurable open
