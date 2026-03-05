@@ -1,19 +1,18 @@
 +++
 title = "Runtime Flow"
-description = "Goals, workspace map, runtime event flow, and agent channel transport model."
+description = "Goals, workspace map, runtime event flow, background tasks, and agent channel transport model."
 weight = 2
 +++
 
 <a id="architecture-runtime-flow-introduction"></a>
-This guide covers how Agentty is structured at runtime, from process bootstrap to
-mode dispatch and turn execution.
+This guide documents Agentty's runtime data flows end to end: the foreground event loop, reducer/event buses, session-worker turn execution, merge/rebase/sync orchestration, and every background task with trigger points and side effects.
 
 <!-- more -->
 
 ## Architecture Goals
 
 <a id="architecture-runtime-flow-goals"></a>
-Agentty is structured around clear boundaries:
+Agentty runtime design is built around these constraints:
 
 - Keep domain logic independent from infrastructure and UI.
 - Keep long-running or external operations behind trait boundaries for testability.
@@ -29,48 +28,132 @@ Agentty is structured around clear boundaries:
 | `crates/ag-xtask/` | Workspace maintenance commands (index checks, migration checks, automation helpers). |
 | `docs/site/content/docs/` | End-user and contributor documentation published at `/docs/`. |
 
-## Runtime Flow (Top to Bottom)
+## Main Runtime Flow
 
 <a id="architecture-runtime-flow-main"></a>
-The main runtime path is:
+Primary foreground path from process start to one event-loop cycle:
 
 ```text
 main.rs
-  ├─ Database::open(...)
-  ├─ RoutingAppServerClient::new()
-  ├─ App::new(base_path, working_dir, git_branch, db, app_server_client)
+  ├─ Database::open(...)                    // sqlite open + WAL + FK + migrations
+  ├─ RoutingAppServerClient::new()          // Codex/Gemini router
+  ├─ App::new(...)
+  │    ├─ load startup project/session snapshots
+  │    ├─ fail unfinished operations from previous run
+  │    └─ spawn app background tasks
   └─ runtime::run(&mut app)
        ├─ terminal::setup_terminal()
-       ├─ event::spawn_event_reader(...)
+       ├─ event::spawn_event_reader(...)    // dedicated OS thread
        └─ run_main_loop(...)
-            ├─ event::process_events(...)
-            │    └─ key_handler::handle_key_event(...)
-            │         └─ runtime/mode/* handlers
-            │              └─ app/* orchestration
-            │                   └─ infra/* boundaries
-            └─ ui::render::draw(...)
-                 └─ ui::router (mode-to-page dispatch)
+            ├─ sessions.sync_from_handles() // pull Arc<Mutex> runtime state into snapshots
+            ├─ ui::render::draw(...)
+            └─ event::process_events(...)
+                 ├─ key events -> mode handlers -> app/session orchestration
+                 ├─ app events -> App::apply_app_events reducer
+                 └─ tick -> refresh_sessions_if_needed safety poll
 ```
 
 <a id="architecture-runtime-flow-notes"></a>
-This flow keeps UI and key handling thin while `app/` owns state transitions and
-workflow orchestration.
+Foreground loop details:
+
+- `run_main_loop()` renders every cycle and applies snapshot sync before draw.
+- `process_events()` waits on terminal events, app events, or tick (`tokio::select!`).
+- After one event, it drains queued terminal events immediately to avoid one-key-per-frame lag.
+- Tick interval is `50ms`; metadata-based session reload fallback is `5s` (`SESSION_REFRESH_INTERVAL`).
+
+## Data Channels
+
+<a id="architecture-runtime-flow-channels"></a>
+Agentty uses four primary runtime data channels:
+
+| Channel | Producer(s) | Consumer(s) | Payload | Purpose |
+|---------|-------------|-------------|---------|---------|
+| Terminal `Event` channel (`runtime/event.rs`) | Event-reader thread | `runtime::process_events()` | `crossterm::Event` | User input and terminal events. |
+| App event bus (`AppEvent`) | App background tasks, workers, task helpers | `App::apply_app_events()` reducer | `AppEvent` variants | Safe cross-task app-state mutation. |
+| Turn event stream (`TurnEvent`) | `AgentChannel` implementations | Session worker `consume_turn_events()` | Stream deltas/progress/pid | Real-time turn output and progress updates. |
+| Session handles (`SessionHandles`) | Workers/session task helpers | `SessionState::sync_from_handles()` | Shared `Arc<Mutex<...>>` output/status/pid | Fast snapshot sync without full DB reload. |
+
+## App Event Reducer Flow
+
+<a id="architecture-runtime-flow-app-events"></a>
+`App::apply_app_events()` is the single reducer path for async app events.
+
+Flow:
+
+1. Drain queued events (`first_event` + `try_recv` loop).
+1. Reduce into `AppEventBatch` (coalesces refresh, git status, model/progress updates).
+1. Apply side effects in stable order.
+
+Reducer behaviors that matter for data flow:
+
+- `RefreshSessions` sets `should_force_reload`, which triggers `refresh_sessions_now()` and `reload_projects()`.
+- `SessionUpdated` marks touched sessions so reducer can call `sync_session_from_handle()` selectively.
+- `SessionProgressUpdated` updates transient progress labels used by UI.
+- `AgentResponseReceived` routes question-mode transitions for active view sessions.
+- After touched-session sync, terminal statuses (`Done`, `Canceled`) drop per-session worker senders so workers can shut down runtimes.
+
+## Session Turn Data Flow
+
+<a id="architecture-runtime-flow-turn"></a>
+From prompt submit to persisted result:
+
+1. Prompt mode submits:
+1. `start_session()` for first prompt (`TurnMode::Start`) or `reply()` for follow-up (`TurnMode::Resume`).
+1. Session command is persisted in `session_operation` before enqueue.
+1. `SessionWorkerService` lazily creates or reuses a per-session worker queue.
+1. Worker marks operation `running`, checks cancel flags, then runs channel turn.
+1. Worker creates `TurnRequest` (reasoning level, model, prompt, replay output, provider conversation id).
+1. Worker spawns `consume_turn_events()` and sets initial progress (`Thinking`).
+1. `AgentChannel::run_turn()` streams `TurnEvent` values and returns `TurnResult`.
+1. Worker applies final result:
+1. Append final assistant transcript output (`answer` text, fallback `question` text).
+1. Persist session questions and emit `AppEvent::AgentResponseReceived`.
+1. Persist stats and per-model usage.
+1. Persist provider conversation id (app-server providers).
+1. Run auto-commit assistance path.
+1. Refresh persisted session size.
+1. Update final status (`Review` or `Question`; on failure -> `Review`).
+
+### Operation Lifecycle and Recovery
+
+<a id="architecture-session-operation-lifecycle"></a>
+Turn execution is durable and restart-safe:
+
+- Before enqueue: insert `session_operation` row (`queued`).
+- Worker transitions: `queued -> running -> done/failed/canceled`.
+- Cancel requests are persisted and checked before command execution.
+- On startup, unfinished operations are failed with reason `Interrupted by app restart`, and impacted sessions are reset to `Review`.
+
+### Status Transition Rules
+
+<a id="architecture-runtime-flow-status"></a>
+Runtime status transitions enforced by `Status::can_transition_to()`:
+
+- `New -> InProgress` (first prompt)
+- `Review/Question -> InProgress` (reply)
+- `Review -> Queued -> Merging -> Done` (merge queue path)
+- `Review -> Rebasing -> Review/Question` (rebase path)
+- `Review/Question -> Canceled`
+- `InProgress/Rebasing -> Review/Question` (post-turn or post-rebase)
 
 ## Agent Channel Architecture
 
 <a id="architecture-agent-channel"></a>
-Agent turns are executed through the provider-agnostic `AgentChannel` trait,
-which decouples session workers from transport details:
+Session workers are transport-agnostic through `AgentChannel`:
 
 ```text
 app/session/worker.rs
   └─ AgentChannel::run_turn(session_id, TurnRequest, event_tx)
-       ├─ CliAgentChannel        (Claude: spawns CLI subprocess)
-       └─ AppServerAgentChannel  (Codex/Gemini: delegates to AppServerClient)
+       ├─ CliAgentChannel        (Claude; subprocess per turn)
+       └─ AppServerAgentChannel  (Codex/Gemini; persistent runtime per session)
+            └─ AppServerClient
+                 └─ RoutingAppServerClient
+                      ├─ RealCodexAppServerClient
+                      └─ RealGeminiAcpClient
 ```
 
 <a id="architecture-key-types"></a>
-**Key types** (all in `infra/channel.rs`):
+Key types (`infra/channel.rs`):
 
 | Type | Purpose |
 |------|---------|
@@ -80,65 +163,46 @@ app/session/worker.rs
 | `TurnMode` | `Start` (fresh turn) or `Resume` (with optional session output replay). |
 
 <a id="architecture-provider-conversation-id-flow"></a>
-**Provider conversation ID flow**: app-server providers return a
-`provider_conversation_id` after each turn. Session workers persist this to the
-database so a future runtime restart can resume the provider's native context
-instead of replaying the full transcript.
+Provider conversation id flow:
 
-## Session Operation Lifecycle and Recovery
-
-<a id="architecture-session-operation-lifecycle"></a>
-Turn execution is persisted as a durable operation lifecycle before worker
-execution starts:
-
-- Each queued turn is stored in `session_operation` before enqueue.
-- A per-session worker queue runs one command at a time and marks operation
-  state transitions (`queued` -> `running` -> `done`/`failed`/`canceled`).
-- Startup recovery marks unfinished operations as failed and restores affected
-  sessions to `Review` so users can safely continue from known state.
-- Cancel requests are persisted and checked before execution so queued turns can
-  be skipped deterministically.
+- App-server providers return `provider_conversation_id` in `TurnResult`.
+- Worker persists it to DB (`update_session_provider_conversation_id`).
+- Future `TurnRequest` loads and forwards it so runtime restarts can resume native provider context.
 
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a>
-Agentty normalizes provider interactions into one response protocol:
+Provider output is normalized to one structured response protocol:
 
-1. Prompt builders prepend structured-response instructions. Gemini inlines the
-   schema; Codex uses a no-schema template because transport `outputSchema`
-   already enforces shape; Claude relies on native CLI `--json-schema`.
-1. Channels stream provider events as `AssistantDelta`, `ThoughtDelta`, and
-   `Progress`.
-1. Final turn output is parsed into protocol `messages` (`answer`/`question`).
-1. Session workers persist answers to transcript output and store questions for
-   **Question** mode.
+1. Prompt builders prepend protocol instructions (`answer`/`question` schema).
+1. Channels stream deltas/progress as `TurnEvent`.
+1. Final output is parsed to protocol `messages`.
+1. Worker persists final display text and question payloads, then emits `AgentResponseReceived`.
 
 <a id="architecture-agent-interaction-streaming"></a>
 Streaming behavior differs by transport/provider:
 
-- CLI channel (Claude): stdout lines are parsed into content/progress events;
-  protocol JSON fragments are suppressed while streaming.
-- App-server channel (Codex): streamed thought phases (`thinking`, `plan`,
-  `reasoning`) become `ThoughtDelta`; non-delta assistant chunks are suppressed
-  for deterministic final transcript assembly.
-- App-server channel (Gemini): assistant stream chunks are suppressed in strict
-  mode; only final parsed protocol output is persisted.
+- CLI channel (`CliAgentChannel`): parses stdout lines into `AssistantDelta` and `Progress`; keeps raw output for final parse.
+- App-server channel (`AppServerAgentChannel`): bridges `AppServerStreamEvent` to `TurnEvent`.
+- Codex thought phases (`thinking`/`plan`/`reasoning`/`thought`) stream as `ThoughtDelta`.
+- Strict providers suppress streamed assistant chunks when needed so malformed first-pass protocol JSON is not persisted.
 
 <a id="architecture-agent-interaction-validation"></a>
-Final-output validation also differs by provider:
+Final-output validation:
 
-- Claude and Gemini run strict protocol parsing with up to three repair retries
-  when output is invalid.
-- Codex sends `outputSchema` in `turn/start` and uses permissive fallback
-  parsing for resiliency.
+- Claude and Gemini use strict protocol parsing with up to three repair retries when invalid.
+- Codex uses permissive parse fallback (schema already supplied via app-server `outputSchema` path).
 
 ## Clarification Question Loop
 
 <a id="architecture-agent-question-loop"></a>
-When final parsed output contains one or more `question` messages, Agentty
-stores them on the session row and switches status to **Question**. The runtime
-enters question input mode, collects responses one-by-one, then sends a single
-follow-up reply in this shape:
+Question-mode loop:
+
+1. Worker receives final parsed response containing `question` messages.
+1. Worker persists question list and sets session status `Question`.
+1. Reducer switches active view to `AppMode::Question` when that session is focused.
+1. User answers each question.
+1. Runtime builds one follow-up prompt:
 
 ```text
 Clarifications:
@@ -148,4 +212,47 @@ Clarifications:
    A: <response 2>
 ```
 
-After submission, the session returns to normal turn execution.
+6. Runtime submits this as a normal reply turn; flow returns to standard worker path.
+
+## Background Task Catalog
+
+<a id="architecture-runtime-flow-background-tasks"></a>
+Detached/background execution paths and their trigger conditions:
+
+| Task | Trigger | Spawn site | Emits / Writes | What it does |
+|------|---------|------------|----------------|--------------|
+| Terminal event reader thread | Runtime startup | `runtime/event::spawn_event_reader` | Terminal `Event` channel | Polls crossterm and forwards events; pauses while external editor is open. |
+| Git status poller loop | App startup (if project has git branch), and project switch | `TaskService::spawn_git_status_task` | `AppEvent::GitStatusUpdated` | Periodic fetch + ahead/behind snapshot (about every 30s). |
+| Version check one-shot | App startup | `TaskService::spawn_version_check_task` | `AppEvent::VersionAvailabilityUpdated` | Checks npm latest version tag and reports update availability. |
+| Per-session worker loop | First command enqueue for a session | `SessionWorkerService::spawn_session_worker` | DB `session_operation` updates, app/session updates | Serializes all turn commands per session and manages channel lifecycle. |
+| Per-turn turn-event consumer | Every queued turn execution | `run_channel_turn` | Output append, progress updates, pid slot updates | Consumes `TurnEvent` stream and applies immediate side effects. |
+| CLI stdout/stderr readers | Every CLI-backed turn | `CliAgentChannel::run_turn` | `TurnEvent` stream + raw buffers | Reads subprocess streams and emits incremental deltas/progress. |
+| App-server stream bridge | Every app-server-backed turn | `AppServerAgentChannel::run_turn` | `TurnEvent` stream | Bridges `AppServerStreamEvent` to unified turn events. |
+| Session title generation | First successful `Start` turn | `spawn_start_turn_title_generation` | DB title + `AppEvent::RefreshSessions` | Runs one-shot title prompt and persists generated title if valid. |
+| At-mention file indexing | Prompt input activates `@` mention mode | `runtime/mode/prompt::activate_at_mention` | `AppEvent::AtMentionEntriesLoaded` | Lists session files (`spawn_blocking`) and updates mention picker entries. |
+| Background session-size refresh | Enter on session in list mode | `App::refresh_session_size_in_background` | DB size + `AppEvent::RefreshSessions` | Computes diff-size bucket without blocking key handling path. |
+| Deferred session cleanup | Delete with deferred cleanup path | `delete_selected_session_deferred_cleanup` | Filesystem/git side effects | Removes worktree folder and branch asynchronously after DB deletion. |
+| Focused review assist | View mode focused-review toggle when diff is reviewable | `TaskService::spawn_focused_review_assist_task` | `FocusedReviewPrepared` / `FocusedReviewPreparationFailed` | Runs model review prompt and stores final review text or error. |
+| Sync-main workflow task | List-mode sync action (`s`) | `TokioSyncMainRunner::start_sync_main` | `AppEvent::SyncMainCompleted` | Pull-rebase/push selected project branch, with assisted conflict flow. |
+| Session merge task | Merge confirmation accepted | `SessionMergeService::merge_session` | Output append, status updates, session metadata updates | Runs rebase + squash merge + worktree cleanup in background. |
+| Session rebase task | Rebase action in view mode | `SessionMergeService::rebase_session` | Output append, status updates | Runs assisted rebase and returns session to `Review`/`Question`. |
+
+## Sync, Merge, and Rebase Flows
+
+<a id="architecture-runtime-flow-git-workflows"></a>
+Project and session git workflows use shared boundaries (`GitClient`, `FsClient`, assist helpers) but have distinct orchestration paths:
+
+- `sync main`: selected project branch pull/rebase/push, optional assisted conflict resolution, popup result summary.
+- session merge: queue-aware workflow, assisted rebase first, squash merge into base branch, worktree cleanup, status `Done` on success.
+- session rebase: assisted rebase of session branch onto base branch, returns to `Review` after completion/failure reporting.
+
+## Persistence and Recovery Boundaries
+
+<a id="architecture-runtime-flow-persistence"></a>
+Persistence invariants that shape runtime flow:
+
+- DB opens with SQLite WAL and `foreign_keys = ON`, then embedded migrations run at startup.
+- Session snapshots in memory are authoritative for rendering; DB is authoritative for restart recovery.
+- Shared session handles (`output`, `status`, `child_pid`) provide low-latency updates between DB reloads.
+- Event-driven refresh is primary (`RefreshSessions`); metadata polling is fallback safety only.
+- External integrations (`GitClient`, `AppServerClient`, `AgentChannel`, `EventSource`, `FsClient`, `TmuxClient`) isolate side effects and enable deterministic tests.
