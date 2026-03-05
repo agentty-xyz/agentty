@@ -155,6 +155,7 @@ mod tests {
     /// Creates a `ProjectListItem` for tab-label rendering tests.
     fn project_list_item(id: i64, display_name: Option<&str>, path: &str) -> ProjectListItem {
         ProjectListItem {
+            active_session_count: 0,
             last_session_updated_at: None,
             project: Project {
                 created_at: 0,

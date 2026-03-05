@@ -30,6 +30,7 @@ impl Project {
 /// Aggregated project snapshot for list and switcher views.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectListItem {
+    pub active_session_count: u32,
     pub last_session_updated_at: Option<i64>,
     pub project: Project,
     pub session_count: u32,

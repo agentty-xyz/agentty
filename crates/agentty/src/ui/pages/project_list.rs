@@ -1,6 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use time::OffsetDateTime;
 
@@ -80,32 +81,33 @@ impl Page for ProjectListPage<'_> {
 
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
-    let (title, branch, session_count, last_opened, path) =
-        project_row_values(project_item, active_project_id);
+    let (title, branch, last_opened, path) = project_row_values(project_item, active_project_id);
 
     Row::new(vec![
         Cell::from(title),
         Cell::from(branch),
-        Cell::from(session_count),
+        Cell::from(session_count_line(
+            project_item.session_count,
+            project_item.active_session_count,
+        )),
         Cell::from(last_opened),
         Cell::from(path),
     ])
     .style(project_row_style(project_item, active_project_id))
 }
 
-/// Returns all project row display values for reuse and testing.
+/// Returns project row display values for reuse and testing.
 fn project_row_values(
     project_item: &ProjectListItem,
     active_project_id: i64,
-) -> (String, String, String, String, String) {
+) -> (String, String, String, String) {
     let project = &project_item.project;
     let title = project_title(project_item, active_project_id);
     let branch = project.git_branch.as_deref().unwrap_or("-");
-    let session_count = project_item.session_count.to_string();
     let last_opened = format_last_opened(project.last_opened_at);
     let path = project.path.to_string_lossy().to_string();
 
-    (title, branch.to_string(), session_count, last_opened, path)
+    (title, branch.to_string(), last_opened, path)
 }
 
 /// Returns style for one project row, emphasizing the active project.
@@ -125,6 +127,19 @@ fn project_title(project_item: &ProjectListItem, active_project_id: i64) -> Stri
     }
 
     display_label
+}
+
+/// Builds a styled line for the session count column, coloring the active
+/// indicator in yellow when active sessions exist.
+fn session_count_line(total: u32, active: u32) -> Line<'static> {
+    if active > 0 {
+        return Line::from(vec![
+            Span::raw(format!("{total} ")),
+            Span::styled(format!("▶ {active}"), Style::default().fg(Color::Yellow)),
+        ]);
+    }
+
+    Line::from(total.to_string())
 }
 
 /// Formats the project last-opened timestamp for table display.
@@ -163,9 +178,10 @@ mod tests {
     }
 
     #[test]
-    fn test_project_row_values_show_session_count() {
+    fn test_project_row_values_show_metadata() {
         // Arrange
         let project_item = ProjectListItem {
+            active_session_count: 0,
             last_session_updated_at: Some(20),
             project: Project {
                 created_at: 1,
@@ -185,14 +201,36 @@ mod tests {
 
         // Assert
         assert_eq!(values.0, "agentty");
-        assert_eq!(values.2, "3");
-        assert_eq!(values.3, "2023-11-14");
+        assert_eq!(values.2, "2023-11-14");
+    }
+
+    #[test]
+    fn test_session_count_line_shows_plain_total_without_active() {
+        // Arrange & Act
+        let line = session_count_line(7, 0);
+
+        // Assert
+        assert_eq!(line.to_string(), "7");
+        assert_eq!(line.spans.len(), 1);
+    }
+
+    #[test]
+    fn test_session_count_line_colors_active_indicator_yellow() {
+        // Arrange & Act
+        let line = session_count_line(5, 2);
+
+        // Assert
+        assert_eq!(line.spans.len(), 2);
+        assert_eq!(line.spans[0].content.as_ref(), "5 ");
+        assert_eq!(line.spans[1].content.as_ref(), "▶ 2");
+        assert_eq!(line.spans[1].style.fg, Some(Color::Yellow));
     }
 
     #[test]
     fn test_project_row_values_mark_active_project_title() {
         // Arrange
         let project_item = ProjectListItem {
+            active_session_count: 0,
             last_session_updated_at: Some(20),
             project: Project {
                 created_at: 1,

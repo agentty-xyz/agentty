@@ -246,6 +246,7 @@ mod tests {
     fn project_manager_fixture() -> ProjectManager {
         let project_items = vec![
             ProjectListItem {
+                active_session_count: 0,
                 last_session_updated_at: Some(10),
                 project: Project {
                     created_at: 1,
@@ -260,6 +261,7 @@ mod tests {
                 session_count: 3,
             },
             ProjectListItem {
+                active_session_count: 0,
                 last_session_updated_at: Some(11),
                 project: Project {
                     created_at: 1,

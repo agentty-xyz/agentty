@@ -1678,6 +1678,8 @@ impl App {
         };
 
         ProjectListItem {
+            active_session_count: u32::try_from(project_row.active_session_count)
+                .unwrap_or(u32::MAX),
             last_session_updated_at: project_row.last_session_updated_at,
             project,
             session_count: u32::try_from(project_row.session_count).unwrap_or(u32::MAX),

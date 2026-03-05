@@ -42,6 +42,7 @@ pub struct ProjectRow {
 
 /// Row returned when loading one project with aggregated session statistics.
 pub struct ProjectListRow {
+    pub active_session_count: i64,
     pub created_at: i64,
     pub display_name: Option<String>,
     pub git_branch: Option<String>,
@@ -220,7 +221,8 @@ WHERE id = ?
     pub async fn load_projects_with_stats(&self) -> Result<Vec<ProjectListRow>, String> {
         let rows = sqlx::query(
             r"
-SELECT p.created_at,
+SELECT COALESCE(stats.active_session_count, 0) AS active_session_count,
+       p.created_at,
        p.display_name,
        p.git_branch,
        p.id,
@@ -234,7 +236,9 @@ FROM project AS p
 LEFT JOIN (
     SELECT project_id,
            MAX(updated_at) AS last_session_updated_at,
-           COUNT(*) AS session_count
+           COUNT(*) AS session_count,
+           COUNT(CASE WHEN status NOT IN ('Done', 'Canceled', 'Queued', 'Merging')
+                      THEN 1 END) AS active_session_count
     FROM session
     WHERE project_id IS NOT NULL
     GROUP BY project_id
@@ -252,6 +256,7 @@ ORDER BY p.is_favorite DESC,
         Ok(rows
             .iter()
             .map(|row| ProjectListRow {
+                active_session_count: row.get("active_session_count"),
                 created_at: row.get("created_at"),
                 display_name: row.get("display_name"),
                 git_branch: row.get("git_branch"),
