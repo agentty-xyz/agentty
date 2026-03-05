@@ -14,7 +14,7 @@ use crate::infra::agent::protocol::{
     build_protocol_repair_prompt, normalize_stream_assistant_chunk, parse_agent_response,
     parse_agent_response_strict,
 };
-use crate::infra::agent::{AgentBackend, AgentCommandMode, BuildCommandRequest};
+use crate::infra::agent::{self as agent, AgentBackend, AgentCommandMode, BuildCommandRequest};
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnMode,
     TurnRequest, TurnResult,
@@ -23,7 +23,7 @@ use crate::infra::channel::{
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
 ///
 /// Stdout lines are classified by
-/// [`crate::infra::agent::parse_stream_output_line`] and forwarded as
+/// [`agent::parse_stream_output_line`] and forwarded as
 /// [`TurnEvent::AssistantDelta`] or [`TurnEvent::Progress`]. A kill signal
 /// transitions the turn to a failed state with a `[Stopped]` banner. A spawn
 /// failure is surfaced through [`AgentError`].
@@ -37,7 +37,7 @@ pub struct CliAgentChannel {
 impl CliAgentChannel {
     /// Creates a new CLI channel for the given agent provider.
     pub fn new(kind: AgentKind) -> Self {
-        let backend = Arc::from(crate::infra::agent::create_backend(kind));
+        let backend = Arc::from(agent::create_backend(kind));
 
         Self { backend, kind }
     }
@@ -48,10 +48,7 @@ impl CliAgentChannel {
     /// construction and process spawning without relying on a real provider
     /// binary.
     #[cfg(test)]
-    pub(crate) fn with_backend(
-        backend: Arc<dyn crate::infra::agent::AgentBackend>,
-        kind: AgentKind,
-    ) -> Self {
+    pub(crate) fn with_backend(backend: Arc<dyn agent::AgentBackend>, kind: AgentKind) -> Self {
         Self { backend, kind }
     }
 }
@@ -173,7 +170,7 @@ impl AgentChannel for CliAgentChannel {
 
             let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
             let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
-            let parsed = crate::infra::agent::parse_response(kind, &stdout_text, &stderr_text);
+            let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
             let assistant_message = parse_or_repair_structured_response(
                 backend,
                 kind,
@@ -226,9 +223,7 @@ async fn stream_stdout(
             buf.push('\n');
         }
 
-        let Some((text, is_response_content)) =
-            crate::infra::agent::parse_stream_output_line(kind, &line)
-        else {
+        let Some((text, is_response_content)) = agent::parse_stream_output_line(kind, &line) else {
             continue;
         };
 
@@ -273,7 +268,7 @@ async fn parse_or_repair_structured_response(
     folder: &std::path::Path,
     model: &str,
     response_text: &str,
-) -> Result<crate::infra::agent::AgentResponse, AgentError> {
+) -> Result<agent::AgentResponse, AgentError> {
     if !requires_strict_structured_output(kind) {
         return Ok(parse_agent_response(response_text));
     }
@@ -339,7 +334,7 @@ async fn run_structured_output_repair_turn(
 
     let stdout_text = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
-    let parsed = crate::infra::agent::parse_response(kind, &stdout_text, &stderr_text);
+    let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
 
     Ok(parsed.content)
 }

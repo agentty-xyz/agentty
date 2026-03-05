@@ -8,15 +8,16 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::access::SESSION_NOT_FOUND_ERROR;
+use super::worker::SessionCommand;
 use super::{SessionTaskService, session_branch, session_folder};
-use crate::app::session::worker::SessionCommand;
-use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
+use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, settings};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::domain::setting::SettingName;
-use crate::infra::agent::{AgentCommandMode, BuildCommandRequest};
+use crate::infra::agent::{self as agent, AgentCommandMode, BuildCommandRequest};
 use crate::infra::channel::TurnMode;
 use crate::infra::fs::FsClient;
+use crate::infra::{db, git};
 use crate::ui::pages::session_list::grouped_session_indexes;
 
 /// Maximum stored length for generated session titles.
@@ -204,8 +205,7 @@ impl SessionManager {
             .insert_session_creation_activity_now(&session_id)
             .await;
 
-        if let Err(error) = crate::infra::agent::create_backend(session_model.kind()).setup(&folder)
-        {
+        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -316,7 +316,7 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         prompt: &str,
-        backend: std::sync::Arc<dyn crate::infra::agent::AgentBackend>,
+        backend: std::sync::Arc<dyn agent::AgentBackend>,
         session_model: AgentModel,
     ) {
         let channel: std::sync::Arc<dyn crate::infra::channel::AgentChannel> =
@@ -509,7 +509,7 @@ impl SessionManager {
     /// Deletes worktree resources for a previously removed session.
     async fn cleanup_deleted_session_resources(
         fs_client: Arc<dyn FsClient>,
-        git_client: Arc<dyn crate::infra::git::GitClient>,
+        git_client: Arc<dyn git::GitClient>,
         cleanup: DeletedSessionCleanup,
     ) {
         if cleanup.has_git_branch {
@@ -649,7 +649,7 @@ impl SessionManager {
 
         let session_output = if !is_first_message
             && (should_replay_history
-                || crate::infra::agent::transport_mode(session_model.kind()).uses_app_server())
+                || agent::transport_mode(session_model.kind()).uses_app_server())
         {
             Some(session.output.clone())
         } else {
@@ -779,7 +779,7 @@ impl SessionManager {
     /// new title.
     pub(crate) fn spawn_session_title_generation_task(
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
-        db: crate::infra::db::Database,
+        db: db::Database,
         session_id: &str,
         folder: &Path,
         prompt: &str,
@@ -833,7 +833,7 @@ impl SessionManager {
         prompt: &str,
         model: AgentModel,
     ) -> Option<String> {
-        let backend = crate::infra::agent::create_backend(model.kind());
+        let backend = agent::create_backend(model.kind());
         let command = backend
             .build_command(BuildCommandRequest {
                 reasoning_level: ReasoningLevel::default(),
@@ -851,8 +851,7 @@ impl SessionManager {
 
         let stdout_text = String::from_utf8_lossy(&command_output.stdout).into_owned();
         let stderr_text = String::from_utf8_lossy(&command_output.stderr).into_owned();
-        let parsed_response =
-            crate::infra::agent::parse_response(model.kind(), &stdout_text, &stderr_text);
+        let parsed_response = agent::parse_response(model.kind(), &stdout_text, &stderr_text);
 
         Some(parsed_response.content)
     }
@@ -881,9 +880,7 @@ impl SessionManager {
             return None;
         }
 
-        if let Ok(protocol_response) =
-            crate::infra::agent::protocol::parse_agent_response_strict(content)
-        {
+        if let Ok(protocol_response) = agent::protocol::parse_agent_response_strict(content) {
             return Self::parse_generated_session_title_from_protocol_response(&protocol_response);
         }
 
@@ -895,7 +892,7 @@ impl SessionManager {
     /// Extracts the first usable title candidate from protocol `answer`
     /// messages.
     fn parse_generated_session_title_from_protocol_response(
-        protocol_response: &crate::infra::agent::protocol::AgentResponse,
+        protocol_response: &agent::protocol::AgentResponse,
     ) -> Option<String> {
         for answer in protocol_response.answers() {
             if let Some(first_line) = Self::first_nonempty_line(&answer)
@@ -947,8 +944,7 @@ impl SessionManager {
     }
 
     async fn resolve_default_session_model(&self, services: &AppServices) -> AgentModel {
-        crate::app::settings::load_default_smart_model_setting(services, self.default_session_model)
-            .await
+        settings::load_default_smart_model_setting(services, self.default_session_model).await
     }
 
     /// Reverts filesystem and database changes after session creation failure.
@@ -1042,6 +1038,7 @@ mod tests {
 
     use super::*;
     use crate::app::SessionState;
+    use crate::app::session::{RealClock, SessionDefaults};
     use crate::domain::session::{SessionHandles, SessionSize, SessionStats};
 
     /// Builds a session manager with one session for reply-context tests.
@@ -1056,16 +1053,16 @@ mod tests {
             handles,
             vec![session],
             TableState::default(),
-            Arc::new(crate::app::session::RealClock),
+            Arc::new(RealClock),
             1,
             0,
         );
 
         SessionManager::new(
-            crate::app::session::SessionDefaults {
+            SessionDefaults {
                 model: AgentModel::Gpt53Codex,
             },
-            Arc::new(crate::infra::git::MockGitClient::new()),
+            Arc::new(git::MockGitClient::new()),
             state,
             Vec::new(),
         )

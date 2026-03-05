@@ -14,18 +14,18 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use super::access::{SESSION_HANDLES_NOT_FOUND_ERROR, SESSION_NOT_FOUND_ERROR};
-use super::{COMMIT_MESSAGE, session_branch};
+use super::{COMMIT_MESSAGE, Clock, SessionTaskService, session_branch};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
-use crate::app::session::{Clock, SessionTaskService};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::Status;
+use crate::infra::agent;
 use crate::infra::db::Database;
-use crate::infra::fs::FsClient;
-use crate::infra::git::{self, GitClient};
+use crate::infra::fs::{self as fs, FsClient};
+use crate::infra::git::{self as git, GitClient};
 
 const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -310,12 +310,12 @@ impl RealSyncAssistClient {
         session_model: AgentModel,
     ) -> Result<(), String> {
         tokio::task::spawn_blocking(move || {
-            let backend = crate::infra::agent::create_backend(session_model.kind());
+            let backend = agent::create_backend(session_model.kind());
             let mut command = backend
-                .build_command(crate::infra::agent::BuildCommandRequest {
+                .build_command(agent::BuildCommandRequest {
                     reasoning_level: ReasoningLevel::default(),
                     folder: &folder,
-                    mode: crate::infra::agent::AgentCommandMode::Start { prompt: &prompt },
+                    mode: agent::AgentCommandMode::Start { prompt: &prompt },
                     model: session_model.as_str(),
                 })
                 .map_err(|error| {
@@ -866,7 +866,7 @@ impl SessionManager {
         git_client: Arc<dyn GitClient>,
         session_model: AgentModel,
     ) -> Result<SyncMainOutcome, SyncSessionStartError> {
-        let fs_client: Arc<dyn FsClient> = Arc::new(crate::infra::fs::RealFsClient);
+        let fs_client: Arc<dyn FsClient> = Arc::new(fs::RealFsClient);
         let sync_assist_client: Arc<dyn SyncAssistClient> = Arc::new(RealSyncAssistClient);
 
         Self::sync_main_for_project_with_assist_client(
@@ -1679,12 +1679,12 @@ impl SessionManager {
         session_model: AgentModel,
         prompt: &str,
     ) -> Result<String, String> {
-        let backend = crate::infra::agent::create_backend(session_model.kind());
+        let backend = agent::create_backend(session_model.kind());
         let mut command = backend
-            .build_command(crate::infra::agent::BuildCommandRequest {
+            .build_command(agent::BuildCommandRequest {
                 reasoning_level: ReasoningLevel::default(),
                 folder,
-                mode: crate::infra::agent::AgentCommandMode::Start { prompt },
+                mode: agent::AgentCommandMode::Start { prompt },
                 model: session_model.as_str(),
             })
             .map_err(|error| format!("Failed to build merge commit message command: {error}"))?;
@@ -1695,7 +1695,7 @@ impl SessionManager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let parsed = crate::infra::agent::parse_response(session_model.kind(), &stdout, &stderr);
+        let parsed = agent::parse_response(session_model.kind(), &stdout, &stderr);
         let content = parsed.content.trim().to_string();
 
         if content.is_empty() {
@@ -1812,15 +1812,16 @@ mod tests {
     use mockall::Sequence;
 
     use super::*;
+    use crate::app::session::RealClock;
 
     /// Returns the production clock implementation as a trait object.
     fn test_clock() -> Arc<dyn Clock> {
-        Arc::new(crate::app::session::RealClock)
+        Arc::new(RealClock)
     }
 
     /// Builds a filesystem mock that delegates operations to local disk.
-    fn create_passthrough_mock_fs_client() -> crate::infra::fs::MockFsClient {
-        let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+    fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
+        let mut mock_fs_client = fs::MockFsClient::new();
         mock_fs_client
             .expect_create_dir_all()
             .times(0..)

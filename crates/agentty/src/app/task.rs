@@ -11,7 +11,10 @@ use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::infra::agent;
 use crate::infra::git::GitClient;
+#[cfg(not(test))]
+use crate::version;
 
 /// Stateless helpers for app-scoped background pollers and app-server
 /// session execution.
@@ -102,10 +105,10 @@ impl TaskService {
         #[cfg(not(test))]
         tokio::spawn(async move {
             let latest_available_version =
-                crate::version::latest_npm_version_tag()
+                version::latest_npm_version_tag()
                     .await
                     .filter(|latest_version| {
-                        crate::version::is_newer_than_current_version(
+                        version::is_newer_than_current_version(
                             env!("CARGO_PKG_VERSION"),
                             latest_version,
                         )
@@ -178,9 +181,8 @@ impl TaskService {
             ));
         }
 
-        let parsed =
-            crate::infra::agent::parse_response(review_model.kind(), &stdout_text, &stderr_text);
-        let agent_response = crate::infra::agent::protocol::parse_agent_response(&parsed.content);
+        let parsed = agent::parse_response(review_model.kind(), &stdout_text, &stderr_text);
+        let agent_response = agent::protocol::parse_agent_response(&parsed.content);
         let focused_review_text = agent_response.to_display_text();
         let focused_review_text = focused_review_text.trim();
         if focused_review_text.is_empty() {
@@ -200,10 +202,10 @@ impl TaskService {
         review_model: AgentModel,
         focused_review_prompt: &str,
     ) -> Result<std::process::Output, String> {
-        let backend = crate::infra::agent::create_backend(review_model.kind());
+        let backend = agent::create_backend(review_model.kind());
         let mode = Self::focused_review_assist_command_mode(focused_review_prompt);
         let command = backend
-            .build_command(crate::infra::agent::BuildCommandRequest {
+            .build_command(agent::BuildCommandRequest {
                 reasoning_level: ReasoningLevel::default(),
                 folder: session_folder,
                 mode,
@@ -222,8 +224,8 @@ impl TaskService {
     /// Returns the command mode for focused review assist runs.
     fn focused_review_assist_command_mode(
         focused_review_prompt: &str,
-    ) -> crate::infra::agent::AgentCommandMode<'_> {
-        crate::infra::agent::AgentCommandMode::Start {
+    ) -> agent::AgentCommandMode<'_> {
+        agent::AgentCommandMode::Start {
             prompt: focused_review_prompt,
         }
     }
@@ -310,7 +312,7 @@ mod tests {
         let structured_json = r#"{"messages":[{"type":"answer","text":"Review looks good."}]}"#;
 
         // Act
-        let agent_response = crate::infra::agent::protocol::parse_agent_response(structured_json);
+        let agent_response = agent::protocol::parse_agent_response(structured_json);
         let display_text = agent_response.to_display_text();
 
         // Assert
@@ -325,7 +327,7 @@ mod tests {
         let plain_text = "This is a plain review response.";
 
         // Act
-        let agent_response = crate::infra::agent::protocol::parse_agent_response(plain_text);
+        let agent_response = agent::protocol::parse_agent_response(plain_text);
         let display_text = agent_response.to_display_text();
 
         // Assert
@@ -345,7 +347,7 @@ mod tests {
         // Assert
         assert!(matches!(
             mode,
-            crate::infra::agent::AgentCommandMode::Start {
+            agent::AgentCommandMode::Start {
                 prompt: "Review this diff",
             }
         ));

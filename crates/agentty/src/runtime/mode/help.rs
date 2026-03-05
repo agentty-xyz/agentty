@@ -37,13 +37,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::infra::app_server;
     use crate::infra::db::Database;
     use crate::ui::state::app_mode::{DoneSessionOutputMode, HelpContext};
-    use crate::ui::state::help_action::HelpAction;
+    use crate::ui::state::help_action::{HelpAction, ViewSessionState};
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> std::sync::Arc<dyn crate::infra::app_server::AppServerClient> {
-        std::sync::Arc::new(crate::infra::app_server::MockAppServerClient::new())
+    fn mock_app_server() -> std::sync::Arc<dyn app_server::AppServerClient> {
+        std::sync::Arc::new(app_server::MockAppServerClient::new())
     }
 
     async fn new_test_app() -> (App, tempfile::TempDir) {
@@ -96,7 +97,7 @@ mod tests {
                 focused_review_status_message: None,
                 focused_review_text: None,
                 session_id: "s1".to_string(),
-                session_state: crate::ui::state::help_action::ViewSessionState::Interactive,
+                session_state: ViewSessionState::Interactive,
                 scroll_offset: Some(5),
             },
             scroll_offset: 0,

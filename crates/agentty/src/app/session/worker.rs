@@ -13,8 +13,9 @@ use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionStats, Status};
 use crate::domain::setting::SettingName;
+use crate::infra::agent;
 use crate::infra::channel::{
-    AgentChannel, AgentError, TurnEvent, TurnMode, TurnRequest, TurnResult,
+    AgentChannel, AgentError, TurnEvent, TurnMode, TurnRequest, TurnResult, create_agent_channel,
 };
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
@@ -192,10 +193,7 @@ impl SessionWorkerService {
             .test_agent_channels
             .remove(&runtime.session_id)
             .unwrap_or_else(|| {
-                crate::infra::channel::create_agent_channel(
-                    runtime.session_model.kind(),
-                    services.app_server_client(),
-                )
+                create_agent_channel(runtime.session_model.kind(), services.app_server_client())
             });
 
         let context = SessionWorkerContext {
@@ -636,9 +634,7 @@ async fn spawn_start_turn_title_generation(
 /// Falls back to joined `question` text when no answers are present so
 /// clarification prompts stay visible while thought-only responses are not
 /// persisted as final transcript output.
-fn build_assistant_transcript_output(
-    assistant_message: &crate::infra::agent::AgentResponse,
-) -> Option<String> {
+fn build_assistant_transcript_output(assistant_message: &agent::AgentResponse) -> Option<String> {
     let answer_text = assistant_message.to_answer_display_text();
     if !answer_text.trim().is_empty() {
         return Some(format!("{}\n\n", answer_text.trim_end()));
@@ -760,6 +756,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::app::session::RealClock;
     use crate::infra::agent::AgentResponse;
     use crate::infra::agent::protocol::AgentResponseMessage;
     use crate::infra::channel::MockAgentChannel;
@@ -968,7 +965,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
-            clock: Arc::new(crate::app::session::RealClock),
+            clock: Arc::new(RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             git_client: Arc::new(MockGitClient::new()),
@@ -1025,7 +1022,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
-            clock: Arc::new(crate::app::session::RealClock),
+            clock: Arc::new(RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             git_client: Arc::new(MockGitClient::new()),

@@ -5,8 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::{App, Tab};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
-use crate::runtime::{EventResult, TuiTerminal, mode};
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent};
+use crate::runtime::{EventResult, TuiTerminal, mode, terminal};
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
@@ -76,7 +76,7 @@ async fn handle_list_external_editor_key(
     }
 
     let project_root = app.projects.working_dir().to_path_buf();
-    let _ = crate::runtime::terminal::open_nvim(terminal, event_reader_pause, &project_root).await;
+    let _ = terminal::open_nvim(terminal, event_reader_pause, &project_root).await;
 
     Some(EventResult::Continue)
 }
@@ -165,12 +165,9 @@ async fn handle_delete_confirmation(
 async fn handle_merge_confirmation(
     app: &mut App,
     confirmation_session_id: Option<String>,
-    restore_view: Option<crate::ui::state::app_mode::ConfirmationViewMode>,
+    restore_view: Option<ConfirmationViewMode>,
 ) -> io::Result<EventResult> {
-    app.mode = restore_view.map_or(
-        AppMode::List,
-        crate::ui::state::app_mode::ConfirmationViewMode::into_view_mode,
-    );
+    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
 
     if let Some(session_id) = confirmation_session_id
         && let Err(error) = app.merge_session(&session_id).await
@@ -191,6 +188,7 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::infra::app_server;
     use crate::ui::state::app_mode::{ConfirmationViewMode, DoneSessionOutputMode};
 
     fn setup_test_git_repo(path: &Path) {
@@ -228,8 +226,8 @@ mod tests {
     }
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> std::sync::Arc<dyn crate::infra::app_server::AppServerClient> {
-        std::sync::Arc::new(crate::infra::app_server::MockAppServerClient::new())
+    fn mock_app_server() -> std::sync::Arc<dyn app_server::AppServerClient> {
+        std::sync::Arc::new(app_server::MockAppServerClient::new())
     }
 
     async fn new_test_app() -> (App, tempfile::TempDir) {

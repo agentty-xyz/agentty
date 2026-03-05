@@ -15,6 +15,7 @@ use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
 use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::session::{Session, Status};
@@ -24,10 +25,12 @@ use crate::infra::file_index::FileEntry;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
+use crate::infra::{app_server, db};
 use crate::runtime::mode::sync_blocked;
 use crate::ui;
 use crate::ui::pages::session_list::preferred_initial_session_index;
-use crate::ui::state::app_mode::AppMode;
+use crate::ui::state::app_mode::{AppMode, HelpContext};
+use crate::ui::state::prompt::PromptAtMentionState;
 
 mod assist;
 mod merge_queue;
@@ -218,7 +221,7 @@ impl SyncMainRunner for TokioSyncMainRunner {
 
 /// External clients used to compose [`App`] startup dependencies.
 struct AppClients {
-    app_server_client: Arc<dyn crate::infra::app_server::AppServerClient>,
+    app_server_client: Arc<dyn app_server::AppServerClient>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     sync_main_runner: Arc<dyn SyncMainRunner>,
@@ -252,7 +255,7 @@ impl App {
         working_dir: PathBuf,
         git_branch: Option<String>,
         db: Database,
-        app_server_client: Arc<dyn crate::infra::app_server::AppServerClient>,
+        app_server_client: Arc<dyn app_server::AppServerClient>,
     ) -> Self {
         let clients = AppClients {
             app_server_client,
@@ -1021,7 +1024,7 @@ impl App {
                 questions,
                 responses: Vec::new(),
                 current_index: 0,
-                input: crate::domain::input::InputState::default(),
+                input: InputState::default(),
             };
         }
     }
@@ -1047,7 +1050,7 @@ impl App {
                 return;
             }
 
-            *at_mention_state = Some(crate::ui::state::prompt::PromptAtMentionState::new(entries));
+            *at_mention_state = Some(PromptAtMentionState::new(entries));
         }
     }
 
@@ -1085,7 +1088,7 @@ impl App {
             }
             AppMode::Help {
                 context:
-                    crate::ui::state::app_mode::HelpContext::View {
+                    HelpContext::View {
                         focused_review_status_message,
                         focused_review_text,
                         session_id: view_session_id,
@@ -1649,7 +1652,7 @@ impl App {
     }
 
     /// Converts a project row into domain project model.
-    fn project_from_row(project_row: crate::infra::db::ProjectRow) -> Project {
+    fn project_from_row(project_row: db::ProjectRow) -> Project {
         Project {
             created_at: project_row.created_at,
             display_name: project_row.display_name,
@@ -1663,9 +1666,7 @@ impl App {
     }
 
     /// Converts an aggregated project row into list-friendly project metadata.
-    fn project_list_item_from_row(
-        project_row: crate::infra::db::ProjectListRow,
-    ) -> ProjectListItem {
+    fn project_list_item_from_row(project_row: db::ProjectListRow) -> ProjectListItem {
         let project = Project {
             created_at: project_row.created_at,
             display_name: project_row.display_name,
@@ -1793,8 +1794,8 @@ mod tests {
     use crate::ui::state::app_mode::DoneSessionOutputMode;
 
     /// Builds one mock app-server client wrapped in `Arc`.
-    fn mock_app_server() -> Arc<dyn crate::infra::app_server::AppServerClient> {
-        Arc::new(crate::infra::app_server::MockAppServerClient::new())
+    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
+        Arc::new(app_server::MockAppServerClient::new())
     }
 
     /// Builds one deterministic session snapshot rooted at `session_folder`.

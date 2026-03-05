@@ -305,7 +305,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Page::render(&mut page, frame, area);
+                Page::render(&mut page, frame, area);
             })
             .expect("failed to draw stats page");
 
@@ -405,7 +405,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Page::render(&mut page, frame, area);
+                Page::render(&mut page, frame, area);
             })
             .expect("failed to draw stats page");
 
@@ -429,7 +429,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Page::render(&mut page, frame, area);
+                Page::render(&mut page, frame, area);
             })
             .expect("failed to draw stats page");
 

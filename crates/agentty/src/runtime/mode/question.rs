@@ -1,6 +1,7 @@
 use crossterm::event::{self, KeyCode, KeyEvent};
 
 use crate::app::App;
+use crate::domain::input::InputState;
 use crate::runtime::EventResult;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
 
@@ -181,7 +182,7 @@ fn store_question_response(
 
     responses.push(response);
     *current_index += 1;
-    *input = crate::domain::input::InputState::default();
+    *input = InputState::default();
 
     if *current_index < questions.len() {
         return None;
@@ -228,11 +229,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::infra::app_server;
     use crate::infra::db::Database;
 
     /// Builds one mock app-server client wrapped in `Arc`.
-    fn mock_app_server() -> Arc<dyn crate::infra::app_server::AppServerClient> {
-        Arc::new(crate::infra::app_server::MockAppServerClient::new())
+    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
+        Arc::new(app_server::MockAppServerClient::new())
     }
 
     /// Creates one test app with in-memory persistence.
@@ -265,7 +267,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            input: crate::domain::input::InputState::default(),
+            input: InputState::default(),
         };
 
         // Act
@@ -294,7 +296,7 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
-            input: crate::domain::input::InputState::with_text("typed answer".to_string()),
+            input: InputState::with_text("typed answer".to_string()),
         };
 
         // Act
@@ -321,7 +323,7 @@ mod tests {
             questions: vec!["Need exact date?".to_string()],
             responses: Vec::new(),
             current_index: 0,
-            input: crate::domain::input::InputState::with_text("March 4, 2026".to_string()),
+            input: InputState::with_text("March 4, 2026".to_string()),
         };
 
         // Act
@@ -347,7 +349,7 @@ mod tests {
             questions: vec!["Question".to_string()],
             responses: Vec::new(),
             current_index: 0,
-            input: crate::domain::input::InputState::default(),
+            input: InputState::default(),
         };
 
         // Act

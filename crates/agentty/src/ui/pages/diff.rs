@@ -286,7 +286,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Page::render(&mut diff_page, frame, area);
+                Page::render(&mut diff_page, frame, area);
             })
             .expect("failed to draw diff page");
 

@@ -280,11 +280,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::infra::fs;
 
     /// Returns a filesystem mock that reports the supplied directories as
     /// existing.
-    fn create_folder_lookup_mock(existing_folders: Vec<PathBuf>) -> crate::infra::fs::MockFsClient {
-        let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+    fn create_folder_lookup_mock(existing_folders: Vec<PathBuf>) -> fs::MockFsClient {
+        let mut mock_fs_client = fs::MockFsClient::new();
         mock_fs_client
             .expect_is_dir()
             .times(0..)

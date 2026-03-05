@@ -128,7 +128,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                crate::ui::Component::render(&overlay, f, area);
+                Component::render(&overlay, f, area);
             })
             .expect("failed to draw");
 
@@ -156,7 +156,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = f.area();
-                crate::ui::Component::render(&overlay, f, area);
+                Component::render(&overlay, f, area);
             })
             .expect("failed to draw");
 

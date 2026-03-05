@@ -5,8 +5,9 @@ use std::process::Command;
 
 use askama::Template;
 
+use super::protocol;
+use super::response_parser::ParsedResponse;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
-use crate::infra::agent::response_parser::ParsedResponse;
 
 /// Marker used to detect whether protocol instructions are already included
 /// in a prompt.
@@ -254,7 +255,7 @@ pub(crate) fn prepend_protocol_instructions(prompt: &str) -> Result<String, Agen
         return Ok(prompt.to_string());
     }
 
-    let protocol_schema_json = crate::infra::agent::protocol::agent_response_output_schema_json();
+    let protocol_schema_json = protocol::agent_response_output_schema_json();
     let template = ProtocolInstructionPromptTemplate {
         prompt,
         protocol_schema_json: &protocol_schema_json,

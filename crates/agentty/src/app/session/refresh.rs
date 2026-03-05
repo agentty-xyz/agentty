@@ -172,13 +172,15 @@ mod tests {
 
     use super::*;
     use crate::app::SessionState;
+    use crate::app::session::{Clock, SessionDefaults};
     use crate::domain::agent::AgentKind;
+    use crate::infra::git;
     #[test]
     fn test_is_session_refresh_due_returns_false_before_deadline() {
         // Arrange
         let now = Instant::now();
         let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
-        let clock: Arc<dyn crate::app::session::Clock> = fake_clock;
+        let clock: Arc<dyn Clock> = fake_clock;
         let session_manager = session_manager_fixture(clock);
 
         // Act
@@ -195,7 +197,7 @@ mod tests {
         // Arrange
         let now = Instant::now();
         let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
-        let clock: Arc<dyn crate::app::session::Clock> = fake_clock.clone();
+        let clock: Arc<dyn Clock> = fake_clock.clone();
         let session_manager = session_manager_fixture(clock);
         fake_clock.set_now_instant(now + SESSION_REFRESH_INTERVAL);
 
@@ -207,12 +209,11 @@ mod tests {
     }
 
     /// Builds a session manager with deterministic time and empty state.
-    fn session_manager_fixture(clock: Arc<dyn crate::app::session::Clock>) -> SessionManager {
-        let git_client: Arc<dyn crate::infra::git::GitClient> =
-            Arc::new(crate::infra::git::MockGitClient::new());
+    fn session_manager_fixture(clock: Arc<dyn Clock>) -> SessionManager {
+        let git_client: Arc<dyn git::GitClient> = Arc::new(git::MockGitClient::new());
 
         SessionManager::new(
-            crate::app::session::SessionDefaults {
+            SessionDefaults {
                 model: AgentKind::Gemini.default_model(),
             },
             git_client,
@@ -253,7 +254,7 @@ mod tests {
         }
     }
 
-    impl crate::app::session::Clock for FakeClock {
+    impl Clock for FakeClock {
         fn now_instant(&self) -> Instant {
             *self
                 .instant

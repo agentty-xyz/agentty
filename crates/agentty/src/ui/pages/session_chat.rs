@@ -390,10 +390,10 @@ impl<'a> SessionChatPage<'a> {
             chat_input.render(f, input_chunks[0]);
 
             let help_actions = vec![
-                crate::ui::state::help_action::HelpAction::new("send", "Enter", "Send response"),
-                crate::ui::state::help_action::HelpAction::new("skip", "Esc", "Skip (no answer)"),
+                help_action::HelpAction::new("send", "Enter", "Send response"),
+                help_action::HelpAction::new("skip", "Esc", "Skip (no answer)"),
             ];
-            let help_text = crate::ui::state::help_action::footer_text(&help_actions);
+            let help_text = help_action::footer_text(&help_actions);
             let help_para = Paragraph::new(help_text)
                 .style(Style::default().fg(Color::Gray))
                 .alignment(ratatui::layout::Alignment::Right);

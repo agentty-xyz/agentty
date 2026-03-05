@@ -9,9 +9,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::widgets::TableState;
 
-use crate::app::{AppServices, SessionState};
+use crate::app::{AppServices, SessionState, settings};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{DailyActivity, Session};
+use crate::infra::git;
 
 mod access;
 mod lifecycle;
@@ -69,7 +70,7 @@ impl Clock for RealClock {
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
     default_session_model: AgentModel,
-    git_client: Arc<dyn crate::infra::git::GitClient>,
+    git_client: Arc<dyn git::GitClient>,
     merge_service: SessionMergeService,
     pending_history_replay: HashSet<String>,
     state: SessionState,
@@ -84,7 +85,7 @@ impl SessionManager {
     /// reply can rehydrate provider context after app restart.
     pub(crate) fn new(
         defaults: SessionDefaults,
-        git_client: Arc<dyn crate::infra::git::GitClient>,
+        git_client: Arc<dyn git::GitClient>,
         state: SessionState,
         stats_activity: Vec<DailyActivity>,
     ) -> Self {
@@ -107,7 +108,7 @@ impl SessionManager {
     }
 
     /// Returns the configured session git client used by orchestration flows.
-    pub(crate) fn git_client(&self) -> Arc<dyn crate::infra::git::GitClient> {
+    pub(crate) fn git_client(&self) -> Arc<dyn git::GitClient> {
         Arc::clone(&self.git_client)
     }
 
@@ -127,7 +128,7 @@ impl SessionManager {
         services: &AppServices,
         fallback_model: AgentModel,
     ) -> AgentModel {
-        crate::app::settings::load_default_smart_model_setting(services, fallback_model).await
+        settings::load_default_smart_model_setting(services, fallback_model).await
     }
 
     /// Returns session snapshots and stats payloads required for rendering.
@@ -216,23 +217,24 @@ mod tests {
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
     use crate::domain::setting::SettingName;
-    use crate::infra::agent::AgentCommandMode;
     use crate::infra::agent::tests::MockAgentBackend;
+    use crate::infra::agent::{AgentCommandMode, AgentResponse};
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
     use crate::infra::channel::{MockAgentChannel, TurnEvent, TurnMode, TurnResult};
     use crate::infra::db::Database;
-    use crate::infra::fs::FsClient;
-    use crate::infra::git;
-    use crate::ui::state::app_mode::AppMode;
+    use crate::infra::fs::{self as fs, FsClient};
+    use crate::infra::{app_server, git};
+    use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
+    use crate::ui::util;
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> Arc<dyn crate::infra::app_server::AppServerClient> {
+    fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
         Arc::new(MockAppServerClient::new())
     }
 
     /// Builds a filesystem mock that delegates operations to local disk.
-    fn create_passthrough_mock_fs_client() -> crate::infra::fs::MockFsClient {
-        let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+    fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
+        let mut mock_fs_client = fs::MockFsClient::new();
         mock_fs_client
             .expect_create_dir_all()
             .times(0..)
@@ -447,10 +449,7 @@ mod tests {
     /// This helper counts lines in non-metadata files so mocked git clients
     /// can still drive size-related assertions without invoking shell `git`.
     fn synthetic_diff_from_session_folder(folder: &Path) -> String {
-        fn count_lines_recursively(
-            fs_client: &dyn crate::infra::fs::FsClient,
-            entry: &Path,
-        ) -> usize {
+        fn count_lines_recursively(fs_client: &dyn fs::FsClient, entry: &Path) -> usize {
             if !entry.is_dir() {
                 return fs_client
                     .read_file(entry.to_path_buf())
@@ -514,14 +513,14 @@ mod tests {
 
     /// Replaces app-level git dependencies with the provided mock client.
     fn install_mock_git_client(app: &mut App, mock_git_client: git::MockGitClient) {
-        let mock_git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let mock_git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
         let base_path = app.services.base_path().to_path_buf();
         let db = app.services.db().clone();
         let event_sender = app.services.event_sender();
         let app_server_client = app.services.app_server_client();
         let fs_client = app.services.fs_client();
 
-        app.services = crate::app::AppServices::new(
+        app.services = AppServices::new(
             base_path,
             db,
             event_sender,
@@ -539,7 +538,7 @@ mod tests {
         working_dir: PathBuf,
         git_branch: Option<String>,
         db: Database,
-        app_server_client: Arc<dyn crate::infra::app_server::AppServerClient>,
+        app_server_client: Arc<dyn app_server::AppServerClient>,
     ) -> App {
         let mut app = App::new(path, working_dir.clone(), git_branch, db, app_server_client).await;
         let mock_git_client = create_default_mock_git_client(working_dir);
@@ -1708,7 +1707,7 @@ mod tests {
             day_key_one * seconds_per_day + 600,
             day_key_two * seconds_per_day + 50,
         ] {
-            let day_key = crate::ui::util::activity_day_key_local(timestamp_seconds);
+            let day_key = util::activity_day_key_local(timestamp_seconds);
             let day_count = expected_activity_by_day.entry(day_key).or_insert(0);
             *day_count = day_count.saturating_add(1);
         }
@@ -1877,7 +1876,7 @@ mod tests {
         .await;
         let selected_session_id = app.sessions.sessions[1].id.clone();
         app.mode = AppMode::View {
-            done_session_output_mode: crate::ui::state::app_mode::DoneSessionOutputMode::Summary,
+            done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: None,
             focused_review_text: None,
             session_id: selected_session_id.clone(),
@@ -2236,7 +2235,7 @@ mod tests {
                 Box::pin(async move {
                     let _ = done.send(());
                     Ok(TurnResult {
-                        assistant_message: crate::infra::agent::AgentResponse::plain(""),
+                        assistant_message: AgentResponse::plain(""),
                         context_reset: false,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -2375,7 +2374,7 @@ mod tests {
             Box::pin(async move {
                 let _ = done.send(());
                 Ok(TurnResult {
-                    assistant_message: crate::infra::agent::AgentResponse::plain(""),
+                    assistant_message: AgentResponse::plain(""),
                     context_reset: false,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -2744,13 +2743,7 @@ mod tests {
         let source = "Line 1\nLine 2".as_bytes();
 
         // Act
-        crate::app::session::SessionTaskService::capture_raw_output(
-            source,
-            &buffer,
-            None,
-            Arc::new(crate::app::session::RealClock),
-        )
-        .await;
+        SessionTaskService::capture_raw_output(source, &buffer, None, Arc::new(RealClock)).await;
 
         // Assert
         let out = buffer.lock().expect("failed to lock buffer").clone();
@@ -3515,8 +3508,7 @@ mod tests {
                     let _ = shutdown_tx.send(session_id);
                 })
             });
-        let app_server_client: Arc<dyn crate::infra::app_server::AppServerClient> =
-            Arc::new(mock_app_server);
+        let app_server_client: Arc<dyn app_server::AppServerClient> = Arc::new(mock_app_server);
         let mut app = new_test_app_with_db_and_app_server(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -3586,8 +3578,7 @@ mod tests {
                     let _ = shutdown_tx.send(session_id);
                 })
             });
-        let app_server_client: Arc<dyn crate::infra::app_server::AppServerClient> =
-            Arc::new(mock_app_server);
+        let app_server_client: Arc<dyn app_server::AppServerClient> = Arc::new(mock_app_server);
         let mut app = new_test_app_with_db_and_app_server(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),

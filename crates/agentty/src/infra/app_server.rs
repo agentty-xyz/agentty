@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::domain::agent::ReasoningLevel;
+use crate::infra::agent;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -413,17 +414,15 @@ pub fn turn_prompt_for_runtime(
     context_reset: bool,
 ) -> Result<String, String> {
     let turn_prompt = if context_reset {
-        crate::infra::agent::build_resume_prompt(prompt, session_output)
-            .map_err(|error| error.to_string())?
+        agent::build_resume_prompt(prompt, session_output).map_err(|error| error.to_string())?
     } else {
         prompt.to_string()
     };
 
-    let turn_prompt = crate::infra::agent::prepend_repo_root_path_instructions(&turn_prompt)
+    let turn_prompt = agent::prepend_repo_root_path_instructions(&turn_prompt)
         .map_err(|error| error.to_string())?;
 
-    crate::infra::agent::prepend_protocol_instructions(&turn_prompt)
-        .map_err(|error| error.to_string())
+    agent::prepend_protocol_instructions(&turn_prompt).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

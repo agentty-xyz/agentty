@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::domain::agent::{AgentKind, ReasoningLevel};
-use crate::infra::agent::AgentResponse;
+use crate::infra::agent::{self as agent, AgentResponse};
 use crate::infra::app_server::AppServerClient;
 use crate::infra::channel::app_server::AppServerAgentChannel;
 use crate::infra::channel::cli::CliAgentChannel;
@@ -187,7 +187,7 @@ pub fn create_agent_channel(
     kind: AgentKind,
     app_server_client: Arc<dyn AppServerClient>,
 ) -> Arc<dyn AgentChannel> {
-    if crate::infra::agent::transport_mode(kind).uses_app_server() {
+    if agent::transport_mode(kind).uses_app_server() {
         Arc::new(AppServerAgentChannel::new(app_server_client, kind))
     } else {
         Arc::new(CliAgentChannel::new(kind))

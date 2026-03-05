@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::app::session::{Clock, RunAgentAssistTaskInput, SessionTaskService};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::infra::agent;
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
@@ -121,12 +122,12 @@ pub(super) async fn append_assist_header(
 /// Returns an error when the agent process cannot be spawned, fails, or is
 /// interrupted.
 pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> Result<(), String> {
-    let backend = crate::infra::agent::create_backend(context.session_model.kind());
+    let backend = agent::create_backend(context.session_model.kind());
     let command = backend
-        .build_command(crate::infra::agent::BuildCommandRequest {
+        .build_command(agent::BuildCommandRequest {
             reasoning_level: ReasoningLevel::default(),
             folder: &context.folder,
-            mode: crate::infra::agent::AgentCommandMode::Resume {
+            mode: agent::AgentCommandMode::Resume {
                 prompt,
                 session_output: None,
             },

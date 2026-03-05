@@ -9,7 +9,7 @@ use crate::infra::file_index;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
-use crate::ui::util::{move_input_cursor_down, move_input_cursor_up};
+use crate::ui::util::{format_token_count, move_input_cursor_down, move_input_cursor_up};
 
 struct PromptContext {
     is_at_mention: bool,
@@ -570,9 +570,9 @@ fn build_token_usage_rows(
             let rows = usage_rows
                 .into_iter()
                 .map(|row| TokenUsageRow {
-                    in_tokens: crate::ui::util::format_token_count(row.input_tokens),
+                    in_tokens: format_token_count(row.input_tokens),
                     model: row.model,
-                    out_tokens: crate::ui::util::format_token_count(row.output_tokens),
+                    out_tokens: format_token_count(row.output_tokens),
                 })
                 .collect();
 
@@ -1018,9 +1018,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::infra::app_server;
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
-    use crate::ui::state::prompt::{PromptAtMentionState, PromptHistoryState};
+    use crate::ui::state::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 
     fn setup_test_git_repo(path: &Path) {
         Command::new("git")
@@ -1066,8 +1067,8 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let mock_app_server: std::sync::Arc<dyn crate::infra::app_server::AppServerClient> =
-            std::sync::Arc::new(crate::infra::app_server::MockAppServerClient::new());
+        let mock_app_server: std::sync::Arc<dyn app_server::AppServerClient> =
+            std::sync::Arc::new(app_server::MockAppServerClient::new());
         let mut app = App::new(
             base_path.clone(),
             base_path,
@@ -1084,7 +1085,7 @@ mod tests {
         app.mode = AppMode::Prompt {
             at_mention_state,
             history_state: PromptHistoryState::new(Vec::new()),
-            slash_state: crate::ui::state::prompt::PromptSlashState::new(),
+            slash_state: PromptSlashState::new(),
             session_id,
             input: InputState::with_text(input_text.to_string()),
             scroll_offset: None,

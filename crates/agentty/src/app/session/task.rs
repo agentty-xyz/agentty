@@ -20,6 +20,7 @@ use crate::app::assist::{
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::session::Status;
+use crate::infra::agent;
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
@@ -357,11 +358,7 @@ impl SessionTaskService {
             ));
         }
 
-        let parsed = crate::infra::agent::parse_response(
-            agent,
-            &captured.stdout_text,
-            &captured.stderr_text,
-        );
+        let parsed = agent::parse_response(agent, &captured.stdout_text, &captured.stderr_text);
         let normalized_assist_output = Self::normalize_assist_final_output(&parsed.content);
 
         if !captured.streamed_response_seen {
@@ -640,7 +637,7 @@ impl SessionTaskService {
         clock: &dyn Clock,
     ) {
         let Some((stream_text, is_response_content)) =
-            crate::infra::agent::parse_stream_output_line(stream_context.agent, line)
+            agent::parse_stream_output_line(stream_context.agent, line)
         else {
             Self::flush_stream_output_for_skipped_line(
                 stream_context,
@@ -878,7 +875,7 @@ impl SessionTaskService {
     /// Structured protocol payloads are unwrapped to display text while
     /// partial protocol JSON fragments are suppressed.
     fn normalize_assist_stream_response_content(stream_text: &str) -> Option<String> {
-        crate::infra::agent::protocol::normalize_stream_assistant_chunk(stream_text)
+        agent::protocol::normalize_stream_assistant_chunk(stream_text)
     }
 
     /// Normalizes final assist output before persistence and UI updates.
@@ -886,7 +883,7 @@ impl SessionTaskService {
     /// Structured protocol payloads are unwrapped to display text while
     /// plain text payloads pass through unchanged.
     fn normalize_assist_final_output(output: &str) -> String {
-        let parsed_response = crate::infra::agent::protocol::parse_agent_response(output);
+        let parsed_response = agent::protocol::parse_agent_response(output);
 
         parsed_response.to_display_text()
     }
@@ -907,12 +904,13 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
+    use crate::app::session::RealClock;
     use crate::db::Database;
     use crate::infra::git::MockGitClient;
 
     /// Returns the production clock implementation as a trait object.
     fn test_clock() -> Arc<dyn Clock> {
-        Arc::new(crate::app::session::RealClock)
+        Arc::new(RealClock)
     }
 
     #[test]

@@ -8,11 +8,14 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::domain::agent::AgentKind;
+use crate::infra::agent;
 use crate::infra::agent::protocol::{
     build_protocol_repair_prompt, normalize_stream_assistant_chunk, parse_agent_response,
     parse_agent_response_strict,
 };
-use crate::infra::app_server::{AppServerClient, AppServerStreamEvent, AppServerTurnRequest};
+use crate::infra::app_server::{
+    AppServerClient, AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse,
+};
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnMode,
     TurnRequest, TurnResult,
@@ -246,8 +249,8 @@ async fn parse_or_repair_structured_response(
     client: &Arc<dyn AppServerClient>,
     kind: AgentKind,
     original_request: &AppServerTurnRequest,
-    response: &crate::infra::app_server::AppServerTurnResponse,
-) -> Result<crate::infra::agent::AgentResponse, AgentError> {
+    response: &AppServerTurnResponse,
+) -> Result<agent::AgentResponse, AgentError> {
     if !requires_strict_structured_output(kind) {
         return Ok(parse_agent_response(&response.assistant_message));
     }
@@ -279,7 +282,7 @@ fn requires_strict_structured_output(kind: AgentKind) -> bool {
 /// Builds one app-server repair turn request from the original request.
 fn build_repair_request(
     original_request: &AppServerTurnRequest,
-    response: &crate::infra::app_server::AppServerTurnResponse,
+    response: &AppServerTurnResponse,
 ) -> AppServerTurnRequest {
     AppServerTurnRequest {
         reasoning_level: original_request.reasoning_level,

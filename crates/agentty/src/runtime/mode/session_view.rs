@@ -9,7 +9,7 @@ use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::runtime::{EventResult, TuiTerminal};
+use crate::runtime::{EventResult, TuiTerminal, terminal};
 use crate::ui::pages::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
@@ -390,7 +390,7 @@ async fn open_external_editor_for_view_session(
     event_reader_pause: &AtomicBool,
     session_folder: &std::path::Path,
 ) {
-    let _ = crate::runtime::terminal::open_nvim(terminal, event_reader_pause, session_folder).await;
+    let _ = terminal::open_nvim(terminal, event_reader_pause, session_folder).await;
 }
 
 /// Switches the TUI mode from session view to the prompt input.
@@ -741,10 +741,11 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::infra::app_server;
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> std::sync::Arc<dyn crate::infra::app_server::AppServerClient> {
-        std::sync::Arc::new(crate::infra::app_server::MockAppServerClient::new())
+    fn mock_app_server() -> std::sync::Arc<dyn app_server::AppServerClient> {
+        std::sync::Arc::new(app_server::MockAppServerClient::new())
     }
 
     async fn new_test_app() -> (App, tempfile::TempDir) {

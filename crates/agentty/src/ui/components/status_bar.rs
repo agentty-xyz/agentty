@@ -89,7 +89,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Component::render(&status_bar, frame, area);
+                Component::render(&status_bar, frame, area);
             })
             .expect("failed to draw");
 
@@ -117,7 +117,7 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                crate::ui::Component::render(&status_bar, frame, area);
+                Component::render(&status_bar, frame, area);
             })
             .expect("failed to draw");
 

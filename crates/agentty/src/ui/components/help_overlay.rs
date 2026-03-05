@@ -118,6 +118,7 @@ fn centered_rect(area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::state::help_action::HelpAction;
 
     #[test]
 
@@ -181,9 +182,7 @@ mod tests {
     fn test_help_overlay_new_stores_fields() {
         // Arrange
         let context = HelpContext::List {
-            keybindings: vec![crate::ui::state::help_action::HelpAction::new(
-                "quit", "q", "Quit",
-            )],
+            keybindings: vec![HelpAction::new("quit", "q", "Quit")],
         };
 
         // Act

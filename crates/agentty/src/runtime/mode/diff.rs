@@ -119,10 +119,11 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+    use crate::infra::app_server;
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
-    fn mock_app_server() -> std::sync::Arc<dyn crate::infra::app_server::AppServerClient> {
-        std::sync::Arc::new(crate::infra::app_server::MockAppServerClient::new())
+    fn mock_app_server() -> std::sync::Arc<dyn app_server::AppServerClient> {
+        std::sync::Arc::new(app_server::MockAppServerClient::new())
     }
 
     async fn new_test_app() -> (App, tempfile::TempDir) {

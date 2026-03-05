@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::permission::PermissionMode;
+use crate::infra::agent;
 use crate::infra::agent::protocol::agent_response_output_schema;
 use crate::infra::app_server::{
     self, AppServerClient, AppServerFuture, AppServerSessionRegistry, AppServerStreamEvent,
@@ -1190,7 +1191,7 @@ fn extract_agent_message(response_value: &Value) -> Option<ExtractedAgentMessage
     }
 
     if let Some(item_text) = item.get("text").and_then(Value::as_str) {
-        if crate::infra::agent::is_codex_completion_status_message(item_text) {
+        if agent::is_codex_completion_status_message(item_text) {
             return None;
         }
 
@@ -1214,7 +1215,7 @@ fn extract_agent_message(response_value: &Value) -> Option<ExtractedAgentMessage
     }
 
     let message = parts.join("\n\n");
-    if crate::infra::agent::is_codex_completion_status_message(&message) {
+    if agent::is_codex_completion_status_message(&message) {
         return None;
     }
 
@@ -1447,7 +1448,7 @@ fn extract_item_started_progress(response_value: &Value) -> Option<String> {
 
     let normalized_item_type = camel_to_snake(raw_item_type);
 
-    crate::infra::agent::compact_codex_progress_message(&normalized_item_type)
+    agent::compact_codex_progress_message(&normalized_item_type)
 }
 
 /// Converts a camelCase string to `snake_case`.
