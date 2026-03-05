@@ -14,10 +14,14 @@ mod key_handler;
 pub mod mode;
 mod terminal;
 
+/// Shared ratatui terminal type used by runtime helpers.
 pub(crate) type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
+/// Event-loop continuation outcome after processing one input/tick cycle.
 pub(crate) enum EventResult {
+    /// Continue running the runtime loop.
     Continue,
+    /// Exit the runtime loop and terminate the TUI session.
     Quit,
 }
 

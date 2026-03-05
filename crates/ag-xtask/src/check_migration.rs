@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 
 use tracing::error;
 
+/// Validates that each crate migration directory has unique numeric prefixes.
+///
+/// # Errors
+/// Returns an error when duplicate migration prefixes are found.
 pub(crate) fn run() -> Result<(), String> {
     let migration_dirs = find_migration_dirs(Path::new("crates"));
 

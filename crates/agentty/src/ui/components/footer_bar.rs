@@ -7,6 +7,7 @@ use ratatui::widgets::Paragraph;
 use crate::icon::Icon;
 use crate::ui::Component;
 
+/// Footer widget that renders the working directory and optional git status.
 pub struct FooterBar {
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
@@ -14,6 +15,7 @@ pub struct FooterBar {
 }
 
 impl FooterBar {
+    /// Creates a footer bar initialized with the active working directory.
     pub fn new(working_dir: String) -> Self {
         Self {
             git_branch: None,

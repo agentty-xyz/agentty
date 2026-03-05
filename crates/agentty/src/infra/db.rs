@@ -1437,9 +1437,11 @@ fn unix_timestamp_now() -> i64 {
         .map_or(0, |duration| i64::try_from(duration.as_secs()).unwrap_or(0))
 }
 
-#[cfg(test)]
 impl Database {
-    /// Opens an in-memory `SQLite` database for tests and runs migrations.
+    /// Opens an in-memory `SQLite` database and runs migrations.
+    ///
+    /// This is primarily used by tests and any ephemeral workflows that need
+    /// an isolated database instance.
     ///
     /// # Errors
     /// Returns an error if the database connection or migrations fail.

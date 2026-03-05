@@ -1712,6 +1712,10 @@ impl SessionManager {
         Ok(content)
     }
 
+    /// Parses a model response payload into a merge commit-message object.
+    ///
+    /// The parser accepts either a pure JSON payload or JSON wrapped in
+    /// surrounding provider text by extracting the outermost object braces.
     pub(crate) fn parse_merge_commit_message_response(
         content: &str,
     ) -> Option<ModelMergeCommitMessageResponse> {
@@ -1735,6 +1739,7 @@ impl SessionManager {
             .map_err(|error| format!("Failed to render `merge_commit_message_prompt.md`: {error}"))
     }
 
+    /// Builds a deterministic fallback merge commit message.
     pub(crate) fn fallback_merge_commit_message(
         source_branch: &str,
         target_branch: &str,
