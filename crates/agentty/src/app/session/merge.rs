@@ -718,11 +718,6 @@ impl SessionManager {
             (merge_outcome, Some(commit_message))
         };
 
-        if !SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Done).await
-        {
-            return Err("Invalid status transition to Done".to_string());
-        }
-
         Self::cleanup_merged_session_worktree(
             folder.clone(),
             Arc::clone(&fs_client),
@@ -741,6 +736,11 @@ impl SessionManager {
                 &app_event_tx,
             )
             .await;
+        }
+
+        if !SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Done).await
+        {
+            return Err("Invalid status transition to Done".to_string());
         }
 
         Ok(Self::merge_success_message(

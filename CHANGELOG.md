@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.0] - 2026-03-04
+
+### Added
+
+- **UI:** Handle agent clarification questions in a dedicated question mode with persistent history.
+- **UI:** Highlight `@mention` tokens in chat input.
+- **UI:** Improve chat input wrapping and viewport scrolling.
+- **UI:** Align session output wrapping with panel borders.
+- **Architecture:** Switch agent output to schema-validated JSON messages and normalize assist protocol output.
+- **Architecture:** Inject `FsClient` and `Clock` dependencies into session workflows for better testability.
+- **Architecture:** Route session stats and filesystem workflows through the app layer.
+- **Docs:** Add diff-first verification guidance and refine site responsiveness.
+
+### Changed
+
+- **Session:** Move first-turn title generation to the start-turn worker and use plain text.
+- **Session:** Filter Codex thought/reasoning text from persisted assistant output and handle it separately during streaming.
+- **Session:** Remove plan messages from the agent response protocol.
+- **Session:** Prefer active sessions for initial selection in the UI.
+- **Protocol:** Prefer agent message content over trailing reasoning payloads.
+
+### Removed
+
+- **UI:** Remove session stop shortcut (`Ctrl+c`) and stop-session flow.
+- **Architecture:** Remove unused `nix` dependency.
+
+### Fixed
+
+- **Session:** Ensure merge cleanup (worktree/branch removal) completes before marking session as `Done`.
+- **Sync:** Optimize session output synchronization for append-heavy updates.
+- **Review:** Parse structured agent responses in focused review assist correctly.
+
+### Contributors
+
+- @minev-dev
+- @andagaev
+
 ## [v0.4.7] - 2026-03-04
 
 ### Added
