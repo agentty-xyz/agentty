@@ -11,7 +11,6 @@ use crate::icon::Icon;
 use crate::ui::Component;
 use crate::ui::markdown::render_markdown;
 use crate::ui::state::app_mode::DoneSessionOutputMode;
-use crate::ui::util::truncate_with_ellipsis;
 
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
@@ -366,16 +365,12 @@ impl<'a> SessionOutput<'a> {
 }
 
 impl Component for SessionOutput<'_> {
+    /// Renders bordered output content for the active session.
+    ///
+    /// Session status/title headers are rendered by the page layer so this
+    /// component keeps the output border title-free.
     fn render(&self, f: &mut Frame, output_area: Rect) {
         let status = self.session.status;
-        let status_str = status.to_string();
-        let max_title_width = output_area
-            .width
-            .saturating_sub(u16::try_from(status_str.len()).unwrap_or(0))
-            .saturating_sub(8) as usize;
-        let truncated_title = truncate_with_ellipsis(self.session.display_title(), max_title_width);
-        let title = format!(" {status_str} - {truncated_title} ");
-
         let lines = Self::output_lines(
             self.session,
             output_area,
@@ -391,8 +386,7 @@ impl Component for SessionOutput<'_> {
             .block(
                 Block::default()
                     .borders(Self::output_panel_borders())
-                    .border_style(Style::default().fg(status.color()))
-                    .title(Span::styled(title, Style::default().fg(status.color()))),
+                    .border_style(Style::default().fg(status.color())),
             )
             .scroll((final_scroll, 0));
 
@@ -428,6 +422,14 @@ mod tests {
             title: None,
             updated_at: 0,
         }
+    }
+
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
     }
 
     #[test]
@@ -913,5 +915,28 @@ mod tests {
         );
         assert_eq!(output.focused_review_text, Some(focused_review_text));
         assert_eq!(output.scroll_offset, Some(10));
+    }
+
+    #[test]
+    fn test_render_does_not_draw_status_title_in_output_border() {
+        // Arrange
+        let mut session = session_fixture();
+        session.title = Some("Header Session".to_string());
+        session.status = Status::Review;
+        let output = SessionOutput::new(&session);
+        let backend = ratatui::backend::TestBackend::new(80, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                output.render(frame, area);
+            })
+            .expect("failed to draw session output");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains("Review - Header Session"));
     }
 }

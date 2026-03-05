@@ -12,7 +12,7 @@ use crate::ui::component::session_output::SessionOutput;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
-use crate::ui::util::calculate_input_height;
+use crate::ui::util::{calculate_input_height, truncate_with_ellipsis};
 use crate::ui::{Component, Page};
 
 /// Maximum rendered height of the prompt input panel, including borders.
@@ -240,13 +240,17 @@ impl<'a> SessionChatPage<'a> {
         })
     }
 
-    /// Renders the session output panel and context-aware bottom panel.
+    /// Renders the session header, output panel, and context-aware bottom
+    /// panel.
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
         let bottom_height = self.bottom_height(area, session);
         let chunks = Layout::default()
             .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
             .margin(1)
             .split(area);
+        let output_chunks = Layout::default()
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(chunks[0]);
 
         let mut output =
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
@@ -258,8 +262,22 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        output.render(f, chunks[0]);
+        Self::render_session_header(f, output_chunks[0], session);
+        output.render(f, output_chunks[1]);
         self.render_bottom_panel(f, chunks[1], session);
+    }
+
+    /// Renders a standalone status/title row above the output panel border.
+    fn render_session_header(f: &mut Frame, header_area: Rect, session: &Session) {
+        let status_label = session.status.to_string();
+        let status_width = u16::try_from(status_label.len()).unwrap_or(u16::MAX);
+        let reserved_width = status_width.saturating_add(5);
+        let max_title_width = usize::from(header_area.width.saturating_sub(reserved_width));
+        let header_title = truncate_with_ellipsis(session.display_title(), max_title_width);
+        let header_text = format!(" {status_label} - {header_title} ");
+        let header = Paragraph::new(header_text).style(Style::default().fg(session.status.color()));
+
+        f.render_widget(header, header_area);
     }
 
     fn bottom_height(&self, area: Rect, session: &Session) -> u16 {
@@ -500,6 +518,24 @@ mod tests {
             title: None,
             updated_at: 0,
         }
+    }
+
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    fn buffer_row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+        let start = usize::from(row) * usize::from(width);
+        let end = start + usize::from(width);
+
+        buffer.content()[start..end]
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
     }
 
     #[test]
@@ -1020,5 +1056,56 @@ mod tests {
 
         // Assert
         assert_eq!(bottom_height, 7);
+    }
+
+    #[test]
+    fn test_render_places_session_header_above_output_border() {
+        // Arrange
+        let mut session = session_fixture();
+        session.title = Some("Header Session".to_string());
+        let mode = AppMode::List;
+        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let width = 80;
+        let backend = ratatui::backend::TestBackend::new(width, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw session chat page");
+
+        // Assert
+        let header_row = buffer_row_text(terminal.backend().buffer(), 1, width);
+        let output_border_row = buffer_row_text(terminal.backend().buffer(), 2, width);
+        assert!(header_row.contains("New - Header Session"));
+        assert!(!output_border_row.contains("New - Header Session"));
+    }
+
+    #[test]
+    fn test_render_truncates_long_session_header_title() {
+        // Arrange
+        let mut session = session_fixture();
+        let long_title = "This is a very long session title for truncation behavior validation";
+        session.title = Some(long_title.to_string());
+        let mode = AppMode::List;
+        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let backend = ratatui::backend::TestBackend::new(28, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw session chat page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains(long_title));
+        assert!(text.contains("..."));
     }
 }

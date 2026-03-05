@@ -24,6 +24,9 @@ Agentty organizes its interface into four tabs, accessible with `Tab`:
 | **Stats** | View usage statistics. |
 | **Settings** | Configure Codex reasoning level, default models, and other preferences. |
 
+In session chat view, the status and session title render in a dedicated
+header row above the output panel.
+
 ## Session Lifecycle
 
 <a id="usage-session-lifecycle"></a>
