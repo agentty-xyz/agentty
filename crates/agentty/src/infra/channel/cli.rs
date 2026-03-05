@@ -20,6 +20,9 @@ use crate::infra::channel::{
     TurnRequest, TurnResult,
 };
 
+/// Maximum number of repair turns for strict structured-protocol providers.
+const MAX_STRUCTURED_OUTPUT_REPAIR_ATTEMPTS: usize = 3;
+
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
 ///
 /// Stdout lines are classified by
@@ -277,21 +280,34 @@ async fn parse_or_repair_structured_response(
         return Ok(parsed_response);
     }
 
-    let repair_content = run_structured_output_repair_turn(
-        backend,
-        kind,
-        reasoning_level,
-        folder,
-        model,
-        response_text,
-    )
-    .await?;
+    let mut last_response = response_text.to_string();
+    let mut last_error = None;
 
-    parse_agent_response_strict(&repair_content).map_err(|error| {
-        AgentError(format!(
-            "Agent output did not match the required JSON schema after one repair attempt: {error}"
-        ))
-    })
+    for _attempt in 0..MAX_STRUCTURED_OUTPUT_REPAIR_ATTEMPTS {
+        last_response = run_structured_output_repair_turn(
+            Arc::clone(&backend),
+            kind,
+            reasoning_level,
+            folder,
+            model,
+            &last_response,
+        )
+        .await?;
+
+        match parse_agent_response_strict(&last_response) {
+            Ok(parsed_response) => return Ok(parsed_response),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    let parse_error =
+        last_error.unwrap_or(crate::infra::agent::protocol::AgentResponseParseError::InvalidFormat);
+
+    Err(AgentError(format!(
+        "Agent output did not match the required JSON schema after \
+         {MAX_STRUCTURED_OUTPUT_REPAIR_ATTEMPTS} repair attempts: \
+         {parse_error}\nlast_response:\n{last_response}"
+    )))
 }
 
 /// Runs one best-effort repair turn that asks the model to re-emit valid

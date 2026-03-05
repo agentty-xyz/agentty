@@ -16,8 +16,8 @@ pub use backend::{
     create_backend, parse_response, transport_mode,
 };
 pub(crate) use backend::{
-    build_resume_prompt, parse_stream_output_line, prepend_protocol_instructions,
-    prepend_repo_root_path_instructions,
+    ProtocolInstructionMode, build_resume_prompt, parse_stream_output_line,
+    prepend_protocol_instructions, prepend_repo_root_path_instructions,
 };
 pub(crate) use protocol::AgentResponse;
 pub use response_parser::ParsedResponse;

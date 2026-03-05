@@ -36,9 +36,8 @@ POSIX paths. This keeps file references consistent in session output and reviews
 ## Structured Response Protocol
 
 <a id="backends-structured-response-protocol"></a>
-For normal coding turns, Agentty prepends a structured response contract to the
-prompt. The agent response should be a single JSON object with a `messages`
-array, where each entry has:
+Agent responses should be a single JSON object with a `messages` array, where
+each entry has:
 
 - `type`: `answer` or `question`
 - `text`: markdown text payload
@@ -65,7 +64,14 @@ so Agentty can collect clarifications in question input mode.
 Agentty validates final agent output against the structured response protocol.
 
 - Claude and Gemini integrations use strict parsing and run one automatic
-  repair retry when output does not match the protocol schema.
+  repair retry loop (up to three repair turns) when output does not match the
+  protocol schema.
+- Claude turns use native schema validation via `claude --json-schema` and
+  `--output-format json` (no Claude `stream-json` mode).
+- Codex app-server turns enforce structured output through transport
+  `outputSchema`; Codex prompts do not prepend schema text.
+- Claude always uses structured protocol output (including utility/plain
+  command paths) through native schema enforcement.
 - Codex app-server turns include `outputSchema` at transport level and then use
   permissive final parsing fallback so non-schema text is still visible if
   needed.

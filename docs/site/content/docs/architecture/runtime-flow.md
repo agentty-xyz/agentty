@@ -104,7 +104,9 @@ execution starts:
 <a id="architecture-agent-interaction-protocol"></a>
 Agentty normalizes provider interactions into one response protocol:
 
-1. Prompt builders prepend the structured-response contract and schema.
+1. Prompt builders prepend structured-response instructions. Gemini inlines the
+   schema; Codex uses a no-schema template because transport `outputSchema`
+   already enforces shape; Claude relies on native CLI `--json-schema`.
 1. Channels stream provider events as `AssistantDelta`, `ThoughtDelta`, and
    `Progress`.
 1. Final turn output is parsed into protocol `messages` (`answer`/`question`).
@@ -125,8 +127,8 @@ Streaming behavior differs by transport/provider:
 <a id="architecture-agent-interaction-validation"></a>
 Final-output validation also differs by provider:
 
-- Claude and Gemini run strict protocol parsing and one repair retry when output
-  is invalid.
+- Claude and Gemini run strict protocol parsing with up to three repair retries
+  when output is invalid.
 - Codex sends `outputSchema` in `turn/start` and uses permissive fallback
   parsing for resiliency.
 

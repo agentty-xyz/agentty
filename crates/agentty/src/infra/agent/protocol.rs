@@ -215,11 +215,7 @@ pub(crate) fn parse_agent_response_strict(
         return Ok(response);
     }
 
-    let Some(json_candidate) = extract_first_json_object(trimmed) else {
-        return Err(AgentResponseParseError::InvalidFormat);
-    };
-
-    parse_structured_json_response(json_candidate).ok_or(AgentResponseParseError::InvalidFormat)
+    parse_first_valid_embedded_json_response(trimmed).ok_or(AgentResponseParseError::InvalidFormat)
 }
 
 /// Normalizes one streamed assistant chunk for transcript display.
@@ -361,14 +357,39 @@ fn is_json_punctuation_only(value: &str) -> bool {
         .all(|character| matches!(character, '{' | '}' | '[' | ']' | ':' | ',' | '"'))
 }
 
-/// Extracts the first complete top-level JSON object from free-form text.
-fn extract_first_json_object(raw: &str) -> Option<&str> {
+/// Parses the first valid protocol payload embedded in free-form text.
+///
+/// This skips non-protocol or invalid JSON objects that may appear before the
+/// actual protocol payload.
+fn parse_first_valid_embedded_json_response(raw: &str) -> Option<AgentResponse> {
+    let mut search_from = 0;
+
+    while let Some((start_index, end_index)) = extract_next_json_object_range(raw, search_from) {
+        let json_candidate = raw.get(start_index..end_index)?;
+        if let Some(parsed_response) = parse_structured_json_response(json_candidate) {
+            return Some(parsed_response);
+        }
+
+        search_from = start_index + 1;
+    }
+
+    None
+}
+
+/// Extracts the next complete top-level JSON object byte range starting at
+/// `search_from`.
+fn extract_next_json_object_range(raw: &str, search_from: usize) -> Option<(usize, usize)> {
+    if search_from >= raw.len() || !raw.is_char_boundary(search_from) {
+        return None;
+    }
+
     let mut object_start: Option<usize> = None;
     let mut brace_depth: usize = 0;
     let mut in_string = false;
     let mut is_escaped = false;
 
-    for (index, character) in raw.char_indices() {
+    for (relative_index, character) in raw[search_from..].char_indices() {
+        let index = search_from + relative_index;
         if object_start.is_none() {
             if character == '{' {
                 object_start = Some(index);
@@ -402,7 +423,7 @@ fn extract_first_json_object(raw: &str) -> Option<&str> {
                     && let Some(start_index) = object_start
                 {
                     let end_index = index + character.len_utf8();
-                    return raw.get(start_index..end_index);
+                    return Some((start_index, end_index));
                 }
             }
             _ => {}
@@ -482,6 +503,29 @@ mod tests {
             response,
             Ok(AgentResponse {
                 messages: vec![AgentResponseMessage::answer("Done.")],
+            })
+        );
+    }
+
+    #[test]
+    /// Strict parsing skips invalid embedded objects before a valid payload.
+    fn test_parse_agent_response_strict_skips_invalid_embedded_json_before_valid_payload() {
+        // Arrange
+        let raw = concat!(
+            "Pseudo schema\n",
+            "{\"messages\":[{\"type\":\"answer\" | \"question\",\"text\":\"bad\"}]}\n",
+            "Actual payload\n",
+            "{\"messages\":[{\"type\":\"answer\",\"text\":\"Recovered.\"}]}"
+        );
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(
+            response,
+            Ok(AgentResponse {
+                messages: vec![AgentResponseMessage::answer("Recovered.")],
             })
         );
     }

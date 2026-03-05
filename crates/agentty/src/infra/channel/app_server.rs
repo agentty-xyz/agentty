@@ -21,6 +21,9 @@ use crate::infra::channel::{
     TurnRequest, TurnResult,
 };
 
+/// Maximum number of repair turns for strict structured-protocol providers.
+const MAX_STRUCTURED_OUTPUT_REPAIR_ATTEMPTS: usize = 3;
+
 /// [`AgentChannel`] adapter backed by a persistent app-server session.
 ///
 /// Turn execution is delegated to [`AppServerClient::run_turn`].
@@ -259,18 +262,37 @@ async fn parse_or_repair_structured_response(
         return Ok(parsed_response);
     }
 
-    let repair_request = build_repair_request(original_request, response);
-    let (repair_stream_tx, _repair_stream_rx) = mpsc::unbounded_channel();
-    let repair_response = client
-        .run_turn(repair_request, repair_stream_tx)
-        .await
-        .map_err(AgentError)?;
+    let mut last_response_text = response.assistant_message.clone();
+    let mut provider_conversation_id = response.provider_conversation_id.clone();
+    let mut last_error = None;
 
-    parse_agent_response_strict(&repair_response.assistant_message).map_err(|error| {
-        AgentError(format!(
-            "Agent output did not match the required JSON schema after one repair attempt: {error}"
-        ))
-    })
+    for _attempt in 0..MAX_STRUCTURED_OUTPUT_REPAIR_ATTEMPTS {
+        let repair_request = build_repair_request(
+            original_request,
+            &last_response_text,
+            provider_conversation_id.as_deref(),
+        );
+        let (repair_stream_tx, _repair_stream_rx) = mpsc::unbounded_channel();
+        let repair_response = client
+            .run_turn(repair_request, repair_stream_tx)
+            .await
+            .map_err(AgentError)?;
+        provider_conversation_id = repair_response.provider_conversation_id;
+        last_response_text = repair_response.assistant_message;
+
+        match parse_agent_response_strict(&last_response_text) {
+            Ok(parsed_response) => return Ok(parsed_response),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    let parse_error =
+        last_error.unwrap_or(crate::infra::agent::protocol::AgentResponseParseError::InvalidFormat);
+
+    Err(AgentError(format!(
+        "Agent output did not match the required JSON schema after \
+         {MAX_STRUCTURED_OUTPUT_REPAIR_ATTEMPTS} repair attempts: {parse_error}"
+    )))
 }
 
 /// Returns whether the provider should fail closed on invalid structured
@@ -282,17 +304,17 @@ fn requires_strict_structured_output(kind: AgentKind) -> bool {
 /// Builds one app-server repair turn request from the original request.
 fn build_repair_request(
     original_request: &AppServerTurnRequest,
-    response: &AppServerTurnResponse,
+    assistant_message: &str,
+    provider_conversation_id: Option<&str>,
 ) -> AppServerTurnRequest {
     AppServerTurnRequest {
         reasoning_level: original_request.reasoning_level,
         folder: original_request.folder.clone(),
         live_session_output: None,
         model: original_request.model.clone(),
-        prompt: build_protocol_repair_prompt(&response.assistant_message),
-        provider_conversation_id: response
-            .provider_conversation_id
-            .clone()
+        prompt: build_protocol_repair_prompt(assistant_message),
+        provider_conversation_id: provider_conversation_id
+            .map(ToString::to_string)
             .or_else(|| original_request.provider_conversation_id.clone()),
         session_id: original_request.session_id.clone(),
         session_output: None,

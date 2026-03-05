@@ -12,7 +12,10 @@ use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader, Lines};
 
 /// Default timeout for initialization handshakes and session creation.
-pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+///
+/// Set conservatively to absorb slower cold starts from provider runtimes and
+/// first-run model initialization without failing healthy sessions.
+pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default timeout for a single prompt turn.
 pub const TURN_TIMEOUT: Duration = Duration::from_mins(5);

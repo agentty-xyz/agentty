@@ -2,8 +2,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
-    prepend_protocol_instructions, prepend_repo_root_path_instructions,
+    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest,
+    ProtocolInstructionMode, build_resume_prompt, prepend_protocol_instructions,
+    prepend_repo_root_path_instructions,
 };
 
 /// Backend implementation for the Gemini CLI.
@@ -39,7 +40,7 @@ impl AgentBackend for GeminiBackend {
         };
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
         let prompt = if mode.uses_structured_protocol() {
-            prepend_protocol_instructions(&prompt)?
+            prepend_protocol_instructions(&prompt, ProtocolInstructionMode::WithSchema)?
         } else {
             prompt
         };

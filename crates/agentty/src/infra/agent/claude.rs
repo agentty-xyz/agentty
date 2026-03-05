@@ -3,8 +3,9 @@ use std::process::{Command, Stdio};
 
 use super::backend::{
     AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
-    prepend_protocol_instructions, prepend_repo_root_path_instructions,
+    prepend_repo_root_path_instructions,
 };
+use crate::infra::agent::protocol::agent_response_output_schema_json;
 
 /// Backend implementation for the Claude CLI.
 pub(super) struct ClaudeBackend;
@@ -35,11 +36,6 @@ impl AgentBackend for ClaudeBackend {
             } => build_resume_prompt(prompt, session_output)?,
         };
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
-        let prompt = if mode.uses_structured_protocol() {
-            prepend_protocol_instructions(&prompt)?
-        } else {
-            prompt
-        };
         let mut command = Command::new("claude");
 
         if matches!(mode, AgentCommandMode::Resume { .. }) {
@@ -50,11 +46,12 @@ impl AgentBackend for ClaudeBackend {
         command
             .arg("--allowedTools")
             .arg("Edit,Bash,EnterPlanMode,ExitPlanMode");
+        command.arg("--verbose");
+        command.arg("--output-format").arg("json");
         command
-            .arg("--verbose")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--include-partial-messages")
+            .arg("--json-schema")
+            .arg(agent_response_output_schema_json());
+        command
             .env("ANTHROPIC_MODEL", model)
             .current_dir(folder)
             .stdout(Stdio::piped())
@@ -95,7 +92,8 @@ mod tests {
         // Assert
         assert!(debug_command.contains("--allowedTools"));
         assert!(debug_command.contains("Edit,Bash,EnterPlanMode,ExitPlanMode"));
-        assert!(debug_command.contains("--include-partial-messages"));
+        assert!(debug_command.contains("--output-format"));
+        assert!(debug_command.contains("json"));
         assert!(!debug_command.contains("--permission-mode"));
     }
 
@@ -127,9 +125,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies plain-start Claude prompts skip structured protocol
-    /// instructions.
-    fn test_claude_start_plain_command_skips_protocol_instructions() {
+    /// Verifies plain-start Claude prompts still enforce native structured
+    /// output schema validation.
+    fn test_claude_start_plain_command_enforces_json_schema() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = ClaudeBackend;
@@ -150,6 +148,38 @@ mod tests {
         let debug_command = format!("{command:?}");
 
         // Assert
+        assert!(!debug_command.contains("Structured response protocol:"));
+        assert!(debug_command.contains("--output-format"));
+        assert!(debug_command.contains("json"));
+        assert!(debug_command.contains("--json-schema"));
+    }
+
+    #[test]
+    /// Verifies structured Claude commands include native JSON schema
+    /// validation.
+    fn test_claude_start_command_includes_json_schema() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
+                folder: temp_directory.path(),
+                mode: AgentCommandMode::Start {
+                    prompt: "Return protocol response",
+                },
+                model: "claude-sonnet-4-6",
+            },
+        )
+        .expect("command should build");
+        let debug_command = format!("{command:?}");
+
+        // Assert
+        assert!(debug_command.contains("--json-schema"));
+        assert!(debug_command.contains("AgentResponse"));
         assert!(!debug_command.contains("Structured response protocol:"));
     }
 }

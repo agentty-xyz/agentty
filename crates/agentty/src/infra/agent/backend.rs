@@ -26,6 +26,15 @@ pub enum AgentTransport {
     Cli,
 }
 
+/// Schema-instruction rendering mode for protocol prompt templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolInstructionMode {
+    /// Inlines the full JSON schema in the prompt body.
+    WithSchema,
+    /// Omits the schema body and relies on externally enforced schema.
+    WithoutSchema,
+}
+
 impl AgentTransport {
     /// Returns whether this transport uses app-server sessions.
     pub fn uses_app_server(self) -> bool {
@@ -125,14 +134,26 @@ struct ResumeWithSessionOutputPromptTemplate<'a> {
 }
 
 /// Askama view model for rendering the structured response protocol
-/// instructions.
+/// instructions with inline schema details.
 #[derive(Template)]
-#[template(path = "protocol_instruction_prompt.md", escape = "none")]
-struct ProtocolInstructionPromptTemplate<'a> {
+#[template(path = "protocol_instruction_prompt_with_schema.md", escape = "none")]
+struct ProtocolInstructionWithSchemaPromptTemplate<'a> {
     /// User prompt appended after protocol instructions.
     prompt: &'a str,
     /// Pretty-printed JSON schema contract injected into the prompt template.
     protocol_schema_json: &'a str,
+}
+
+/// Askama view model for rendering structured response protocol
+/// instructions without an inline schema block.
+#[derive(Template)]
+#[template(
+    path = "protocol_instruction_prompt_without_schema.md",
+    escape = "none"
+)]
+struct ProtocolInstructionWithoutSchemaPromptTemplate<'a> {
+    /// User prompt appended after protocol instructions.
+    prompt: &'a str,
 }
 
 /// Askama view model for rendering repo-root file path contract instructions.
@@ -250,21 +271,38 @@ pub(crate) fn prepend_repo_root_path_instructions(
 ///
 /// # Errors
 /// Returns an error if Askama template rendering fails.
-pub(crate) fn prepend_protocol_instructions(prompt: &str) -> Result<String, AgentBackendError> {
+pub(crate) fn prepend_protocol_instructions(
+    prompt: &str,
+    mode: ProtocolInstructionMode,
+) -> Result<String, AgentBackendError> {
     if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER) {
         return Ok(prompt.to_string());
     }
 
-    let protocol_schema_json = protocol::agent_response_output_schema_json();
-    let template = ProtocolInstructionPromptTemplate {
-        prompt,
-        protocol_schema_json: &protocol_schema_json,
+    let rendered = match mode {
+        ProtocolInstructionMode::WithSchema => {
+            let protocol_schema_json = protocol::agent_response_output_schema_json();
+            let template = ProtocolInstructionWithSchemaPromptTemplate {
+                prompt,
+                protocol_schema_json: &protocol_schema_json,
+            };
+
+            template.render().map_err(|error| {
+                AgentBackendError::CommandBuild(format!(
+                    "Failed to render `protocol_instruction_prompt_with_schema.md`: {error}"
+                ))
+            })?
+        }
+        ProtocolInstructionMode::WithoutSchema => {
+            let template = ProtocolInstructionWithoutSchemaPromptTemplate { prompt };
+
+            template.render().map_err(|error| {
+                AgentBackendError::CommandBuild(format!(
+                    "Failed to render `protocol_instruction_prompt_without_schema.md`: {error}"
+                ))
+            })?
+        }
     };
-    let rendered = template.render().map_err(|error| {
-        AgentBackendError::CommandBuild(format!(
-            "Failed to render `protocol_instruction_prompt.md`: {error}"
-        ))
-    })?;
 
     Ok(rendered.trim_end().to_string())
 }
@@ -383,13 +421,14 @@ mod tests {
 
     #[test]
     /// Ensures protocol instructions are prepended to plain prompts.
-    fn test_prepend_protocol_instructions_adds_protocol_instructions() {
+    fn test_prepend_protocol_instructions_with_schema_adds_protocol_instructions() {
         // Arrange
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt = prepend_protocol_instructions(prompt)
-            .expect("protocol instruction prompt should render");
+        let rendered_prompt =
+            prepend_protocol_instructions(prompt, ProtocolInstructionMode::WithSchema)
+                .expect("protocol instruction prompt should render");
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
@@ -402,17 +441,39 @@ mod tests {
 
     #[test]
     /// Ensures protocol instructions are not duplicated when already present.
-    fn test_prepend_protocol_instructions_is_idempotent() {
+    fn test_prepend_protocol_instructions_with_schema_is_idempotent() {
         // Arrange
-        let prompt = prepend_protocol_instructions("Implement feature")
-            .expect("protocol instruction prompt should render");
+        let prompt =
+            prepend_protocol_instructions("Implement feature", ProtocolInstructionMode::WithSchema)
+                .expect("protocol instruction prompt should render");
 
         // Act
-        let rendered_prompt = prepend_protocol_instructions(&prompt)
-            .expect("protocol instruction prompt should render");
+        let rendered_prompt =
+            prepend_protocol_instructions(&prompt, ProtocolInstructionMode::WithSchema)
+                .expect("protocol instruction prompt should render");
 
         // Assert
         assert_eq!(rendered_prompt, prompt);
+    }
+
+    #[test]
+    /// Ensures non-schema protocol instructions are prepended to plain prompts.
+    fn test_prepend_protocol_instructions_without_schema_adds_protocol_instructions() {
+        // Arrange
+        let prompt = "Implement feature";
+
+        // Act
+        let rendered_prompt =
+            prepend_protocol_instructions(prompt, ProtocolInstructionMode::WithoutSchema)
+                .expect("protocol instruction prompt should render");
+
+        // Assert
+        assert!(rendered_prompt.contains("Structured response protocol:"));
+        assert!(rendered_prompt.contains("Return a single JSON object"));
+        assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));
+        assert!(rendered_prompt.contains("The JSON Schema is enforced externally"));
+        assert!(!rendered_prompt.contains("Follow this JSON Schema exactly:"));
+        assert!(rendered_prompt.ends_with(prompt));
     }
 
     #[test]

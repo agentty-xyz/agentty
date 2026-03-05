@@ -3,8 +3,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
-    prepend_protocol_instructions, prepend_repo_root_path_instructions,
+    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest,
+    ProtocolInstructionMode, build_resume_prompt, prepend_protocol_instructions,
+    prepend_repo_root_path_instructions,
 };
 use crate::domain::agent::ReasoningLevel;
 
@@ -47,7 +48,7 @@ impl AgentBackend for CodexBackend {
         let prompt = prepend_root_instructions_if_available(&prompt, folder);
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
         let prompt = if mode.uses_structured_protocol() {
-            prepend_protocol_instructions(&prompt)?
+            prepend_protocol_instructions(&prompt, ProtocolInstructionMode::WithoutSchema)?
         } else {
             prompt
         };
@@ -145,6 +146,8 @@ mod tests {
             debug_command.contains("User prompt:\nRun checks")
                 || debug_command.contains("User prompt:\\nRun checks")
         );
+        assert!(debug_command.contains("Structured response protocol:"));
+        assert!(!debug_command.contains("Follow this JSON Schema exactly:"));
     }
 
     /// Verifies resume command composes replay-based prompt content when

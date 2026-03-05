@@ -118,24 +118,83 @@ pub(super) fn parse_codex_response_with_fallback(stdout: &str, stderr: &str) -> 
     })
 }
 
+/// Parses one full Claude turn payload from stream-json stdout.
+///
+/// Prefers the final non-empty `result` field when present. When Claude emits
+/// an empty or missing `result` field (observed in some stream-json runs), this
+/// falls back to the latest assistant stream message content so callers still
+/// receive the assistant reply instead of raw NDJSON.
 fn parse_claude_response(stdout: &str) -> Option<ParsedResponse> {
     let trimmed_stdout = stdout.trim();
-    if let Some(parsed_response) = parse_claude_response_payload(trimmed_stdout) {
-        return Some(parsed_response);
+    if trimmed_stdout.is_empty() {
+        return None;
     }
 
-    for line in stdout.lines().rev() {
+    let mut latest_result_stats: Option<SessionStats> = None;
+    let mut latest_non_empty_result: Option<ParsedResponse> = None;
+    let mut latest_stream_message_content: Option<String> = None;
+
+    if let Some(parsed_response) = parse_claude_response_payload(trimmed_stdout) {
+        latest_result_stats = Some(parsed_response.stats.clone());
+        if !parsed_response.content.trim().is_empty() {
+            latest_non_empty_result = Some(parsed_response);
+        }
+    }
+    if let Some(parsed_response) = parse_claude_response_array_payload(trimmed_stdout) {
+        latest_result_stats = Some(parsed_response.stats.clone());
+        if !parsed_response.content.trim().is_empty() {
+            latest_non_empty_result = Some(parsed_response);
+        }
+    }
+
+    for line in stdout.lines() {
         let trimmed_line = line.trim();
         if trimmed_line.is_empty() {
             continue;
         }
 
         if let Some(parsed_response) = parse_claude_response_payload(trimmed_line) {
-            return Some(parsed_response);
+            latest_result_stats = Some(parsed_response.stats.clone());
+            if !parsed_response.content.trim().is_empty() {
+                latest_non_empty_result = Some(parsed_response);
+            }
+
+            continue;
+        }
+        if let Some(parsed_response) = parse_claude_response_array_payload(trimmed_line) {
+            latest_result_stats = Some(parsed_response.stats.clone());
+            if !parsed_response.content.trim().is_empty() {
+                latest_non_empty_result = Some(parsed_response);
+            }
+
+            continue;
+        }
+
+        let Ok(stream_event) = serde_json::from_str::<serde_json::Value>(trimmed_line) else {
+            continue;
+        };
+
+        if let Some(stats) = extract_claude_usage_stats(&stream_event) {
+            latest_result_stats = Some(stats);
+        }
+
+        if let Some(content) = extract_claude_stream_assistant_content(&stream_event) {
+            latest_stream_message_content = Some(content);
         }
     }
 
-    None
+    if let Some(parsed_response) = latest_non_empty_result {
+        return Some(parsed_response);
+    }
+
+    let content = latest_stream_message_content?;
+    if content.trim().is_empty() {
+        return None;
+    }
+
+    let stats = latest_result_stats.unwrap_or_default();
+
+    Some(ParsedResponse { content, stats })
 }
 
 /// Parses one Claude stream line into display text and content/progress type.
@@ -363,6 +422,60 @@ fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
     Some(ParsedResponse { content, stats })
 }
 
+/// Parses one Claude JSON-array payload and extracts the best assistant
+/// result text and usage stats.
+///
+/// Newer CLI variants can emit one JSON array containing init/assistant/result
+/// events rather than one flat object. This parser keeps the latest non-empty
+/// `result` string when present, otherwise falls back to assistant message
+/// text.
+fn parse_claude_response_array_payload(stdout: &str) -> Option<ParsedResponse> {
+    let events = serde_json::from_str::<serde_json::Value>(stdout).ok()?;
+    let events = events.as_array()?;
+    let mut latest_result_content: Option<String> = None;
+    let mut latest_assistant_content: Option<String> = None;
+    let mut latest_stats: Option<SessionStats> = None;
+
+    for event in events {
+        if let Some(stats) = extract_claude_usage_stats(event) {
+            latest_stats = Some(stats);
+        }
+
+        if let Some(result_content) = event.get("result").and_then(serde_json::Value::as_str)
+            && !result_content.trim().is_empty()
+        {
+            latest_result_content = Some(result_content.to_string());
+        }
+
+        if let Some(assistant_content) = extract_claude_stream_assistant_content(event) {
+            latest_assistant_content = Some(assistant_content);
+        }
+    }
+
+    let content = latest_result_content.or(latest_assistant_content)?;
+    let stats = latest_stats.unwrap_or_default();
+
+    Some(ParsedResponse { content, stats })
+}
+
+/// Extracts Claude usage statistics from one JSON stream event.
+fn extract_claude_usage_stats(stream_event: &serde_json::Value) -> Option<SessionStats> {
+    let usage = stream_event.get("usage")?;
+
+    Some(SessionStats {
+        input_tokens: usage
+            .get("input_tokens")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+            .cast_unsigned(),
+        output_tokens: usage
+            .get("output_tokens")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0)
+            .cast_unsigned(),
+    })
+}
+
 fn parse_gemini_response_payload(stdout: &str) -> Option<ParsedResponse> {
     let response = serde_json::from_str::<GeminiResponse>(stdout).ok()?;
     let content = response.response?;
@@ -373,17 +486,20 @@ fn parse_gemini_response_payload(stdout: &str) -> Option<ParsedResponse> {
 
 /// Extracts assistant text chunks from one Claude `stream-json` line.
 ///
-/// Claude emits assistant updates as `{"type":"assistant","message":...}`
-/// events. This helper joins all text content blocks from `message.content`
-/// into one displayable chunk.
+/// Supports both legacy `{"type":"assistant","message":...}` events and newer
+/// `{"type":"message",...}` assistant events. Text blocks are joined into one
+/// displayable chunk.
 fn extract_claude_stream_assistant_content(stream_event: &serde_json::Value) -> Option<String> {
-    if stream_event.get("type").and_then(serde_json::Value::as_str) != Some("assistant") {
+    let message = extract_claude_stream_assistant_message(stream_event)?;
+    if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
         return None;
     }
 
-    let message = stream_event.get("message")?;
-    if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
-        return None;
+    if let Some(content) = message.get("content").and_then(serde_json::Value::as_str) {
+        let trimmed_content = content.trim();
+        if !trimmed_content.is_empty() {
+            return Some(trimmed_content.to_string());
+        }
     }
 
     let content_blocks = message
@@ -399,6 +515,23 @@ fn extract_claude_stream_assistant_content(stream_event: &serde_json::Value) -> 
     }
 
     Some(text)
+}
+
+/// Resolves the assistant message payload from one Claude stream event.
+///
+/// Claude has emitted both nested assistant events (`type=assistant`) and
+/// direct message events (`type=message`) across releases.
+fn extract_claude_stream_assistant_message(
+    stream_event: &serde_json::Value,
+) -> Option<&serde_json::Value> {
+    let event_type = stream_event
+        .get("type")
+        .and_then(serde_json::Value::as_str)?;
+    match event_type {
+        "assistant" => stream_event.get("message"),
+        "message" => Some(stream_event),
+        _ => None,
+    }
 }
 
 /// Returns text from one Claude assistant content block when present.
@@ -650,12 +783,77 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_parse_response_uses_stream_message_when_result_is_empty() {
+        // Arrange
+        let stdout = concat!(
+            r#"{"type":"message","role":"assistant","content":"Recovered response payload"}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success","result":"","usage":{"input_tokens":11,"output_tokens":7}}"#
+        );
+
+        // Act
+        let parsed = parse_claude_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(parsed.content, "Recovered response payload");
+        assert_eq!(parsed.stats.input_tokens, 11);
+        assert_eq!(parsed.stats.output_tokens, 7);
+    }
+
+    #[test]
+    fn test_claude_parse_response_reads_usage_when_result_is_missing() {
+        // Arrange
+        let stdout = concat!(
+            r#"{"type":"message","role":"assistant","content":"Recovered response payload"}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success","usage":{"input_tokens":13,"output_tokens":5}}"#
+        );
+
+        // Act
+        let parsed = parse_claude_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(parsed.content, "Recovered response payload");
+        assert_eq!(parsed.stats.input_tokens, 13);
+        assert_eq!(parsed.stats.output_tokens, 5);
+    }
+
+    #[test]
+    fn test_claude_parse_response_reads_result_from_json_array_payload() {
+        // Arrange
+        let stdout = r#"[{"type":"system","subtype":"init"},{"type":"result","subtype":"success","result":"{\"messages\":[{\"type\":\"answer\",\"text\":\"Recovered payload\"}]}","usage":{"input_tokens":5,"output_tokens":3}}]"#;
+
+        // Act
+        let parsed = parse_claude_response_with_fallback(stdout, "");
+
+        // Assert
+        assert_eq!(
+            parsed.content,
+            r#"{"messages":[{"type":"answer","text":"Recovered payload"}]}"#
+        );
+        assert_eq!(parsed.stats.input_tokens, 5);
+        assert_eq!(parsed.stats.output_tokens, 3);
+    }
+
+    #[test]
     fn test_parse_claude_stream_output_line_reads_assistant_message_content_blocks() {
         // Arrange
         let stdout_line = concat!(
             r#"{"type":"assistant","message":{"role":"assistant","content":["#,
             r#"{"type":"text","text":"Partial "},{"type":"text","text":"answer"}]}}"#
         );
+
+        // Act
+        let parsed_line = parse_claude_stream_output_line(stdout_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("Partial answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_parse_claude_stream_output_line_reads_message_event_content() {
+        // Arrange
+        let stdout_line = r#"{"type":"message","role":"assistant","content":"Partial answer"}"#;
 
         // Act
         let parsed_line = parse_claude_stream_output_line(stdout_line);
