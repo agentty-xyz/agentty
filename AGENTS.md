@@ -249,6 +249,7 @@ git worktree prune
 - **Pragmatic Abstractions:** Introduce new abstractions only when they provide clear payoff (reuse, reduced complexity, or materially better testability). For straightforward changes, prefer direct in-place edits with minimal diff.
 - **Test Coverage:** Try to maintain 100% test coverage when it makes sense. Ensure critical logic is always covered, but pragmatic exceptions are allowed for boilerplate or untestable I/O.
 - **Readability:** Use descriptive variable names. Do NOT use single-letter variables (e.g., `f`, `p`, `c`) or single-letter prefixes. Code should be self-documenting.
+- **Legacy Retention Approval:** Prefer removing legacy code/behavior during development. If retaining legacy code/behavior for any reason, obtain explicit user approval first.
 - **Diff-First Verification:** In every non-`main` branch, when a user asks for something that is not currently present on `main`, always inspect the full worktree diff against the branch base/fork point (typically `main`) before concluding what changed or what still needs to be implemented. This check must include committed and uncommitted changes, include untracked files, and avoid counting commits already applied to the base branch (for example via squash merge or cherry-pick).
 - Always cover all touched code with auto tests to prevent regressions and ensure stability.
 - Structure tests using "Arrange, Act, Assert" comments to clearly separate setup, execution, and verification phases.
