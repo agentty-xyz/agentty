@@ -160,27 +160,16 @@ impl TaskService {
     ) -> Result<String, String> {
         let focused_review_prompt =
             Self::focused_review_assist_prompt(focused_review_diff, session_summary)?;
-        let backend = crate::infra::agent::create_backend(review_model.kind());
-        let command = backend
-            .build_command(crate::infra::agent::BuildCommandRequest {
-                reasoning_level: ReasoningLevel::default(),
-                folder: session_folder,
-                mode: crate::infra::agent::AgentCommandMode::Resume {
-                    prompt: &focused_review_prompt,
-                    session_output: None,
-                },
-                model: review_model.as_str(),
-            })
-            .map_err(|error| error.to_string())?;
-        let mut tokio_command = tokio::process::Command::from(command);
-        tokio_command.stdin(std::process::Stdio::null());
-        let command_output = tokio_command
-            .output()
-            .await
-            .map_err(|error| format!("Failed to execute review assist command: {error}"))?;
+        let command_output = Self::focused_review_assist_command_output(
+            session_folder,
+            review_model,
+            &focused_review_prompt,
+        )
+        .await?;
 
         let stdout_text = String::from_utf8_lossy(&command_output.stdout).into_owned();
         let stderr_text = String::from_utf8_lossy(&command_output.stderr).into_owned();
+
         if !command_output.status.success() {
             return Err(Self::format_focused_review_assist_exit_error(
                 command_output.status.code(),
@@ -199,6 +188,44 @@ impl TaskService {
         }
 
         Ok(focused_review_text.to_string())
+    }
+
+    /// Executes one review assist model command and returns captured process
+    /// output.
+    ///
+    /// Focused review assist is intentionally isolated and always starts a
+    /// fresh one-off run.
+    async fn focused_review_assist_command_output(
+        session_folder: &Path,
+        review_model: AgentModel,
+        focused_review_prompt: &str,
+    ) -> Result<std::process::Output, String> {
+        let backend = crate::infra::agent::create_backend(review_model.kind());
+        let mode = Self::focused_review_assist_command_mode(focused_review_prompt);
+        let command = backend
+            .build_command(crate::infra::agent::BuildCommandRequest {
+                reasoning_level: ReasoningLevel::default(),
+                folder: session_folder,
+                mode,
+                model: review_model.as_str(),
+            })
+            .map_err(|error| error.to_string())?;
+        let mut tokio_command = tokio::process::Command::from(command);
+        tokio_command.stdin(std::process::Stdio::null());
+
+        tokio_command
+            .output()
+            .await
+            .map_err(|error| format!("Failed to execute review assist command: {error}"))
+    }
+
+    /// Returns the command mode for focused review assist runs.
+    fn focused_review_assist_command_mode(
+        focused_review_prompt: &str,
+    ) -> crate::infra::agent::AgentCommandMode<'_> {
+        crate::infra::agent::AgentCommandMode::Start {
+            prompt: focused_review_prompt,
+        }
     }
 
     /// Renders the review assist prompt from the markdown template.
@@ -303,5 +330,24 @@ mod tests {
 
         // Assert
         assert_eq!(display_text.trim(), "This is a plain review response.");
+    }
+
+    #[test]
+    /// Verifies focused review assist always uses an isolated start command
+    /// mode.
+    fn test_focused_review_assist_command_mode_always_uses_start() {
+        // Arrange
+        let focused_review_prompt = "Review this diff";
+
+        // Act
+        let mode = TaskService::focused_review_assist_command_mode(focused_review_prompt);
+
+        // Assert
+        assert!(matches!(
+            mode,
+            crate::infra::agent::AgentCommandMode::Start {
+                prompt: "Review this diff",
+            }
+        ));
     }
 }
