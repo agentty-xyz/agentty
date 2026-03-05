@@ -77,17 +77,41 @@ impl SessionState {
 
     /// Synchronizes one session snapshot from shared runtime handles.
     ///
-    /// Output uses full string inequality instead of length-only checks so
-    /// equal-length edits (for example replacements) are not missed.
+    /// Output synchronization prefers an append-only fast path: when runtime
+    /// output extends the existing snapshot with the same prefix, only the
+    /// newly appended suffix is copied. Equal-length rewrites and non-prefix
+    /// changes still fall back to full replacement so edits are never missed.
     fn sync_session_with_handles(session: &mut Session, session_handles: &SessionHandles) {
-        if let Ok(output) = session_handles.output.lock()
-            && session.output != *output
-        {
-            session.output.clone_from(&*output);
+        if let Ok(output) = session_handles.output.lock() {
+            Self::sync_session_output(&mut session.output, output.as_str());
         }
 
         if let Ok(status) = session_handles.status.lock() {
             session.status = *status;
+        }
+    }
+
+    /// Synchronizes one output snapshot from its shared runtime output buffer.
+    ///
+    /// This keeps equal-length rewrites correct while reducing copy cost for
+    /// append-heavy streams by pushing only the unseen suffix.
+    fn sync_session_output(session_output: &mut String, handle_output: &str) {
+        let session_output_len = session_output.len();
+        let handle_output_len = handle_output.len();
+
+        if session_output_len == handle_output_len {
+            if session_output != handle_output {
+                session_output.clear();
+                session_output.push_str(handle_output);
+            }
+        } else if handle_output_len > session_output_len
+            && handle_output.starts_with(session_output.as_str())
+            && let Some(appended_output) = handle_output.get(session_output_len..)
+        {
+            session_output.push_str(appended_output);
+        } else {
+            session_output.clear();
+            session_output.push_str(handle_output);
         }
     }
 }
@@ -200,5 +224,69 @@ mod tests {
         // Assert
         assert_eq!(session.output, "New");
         assert_eq!(session.status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies append-only output sync copies only the new suffix.
+    fn sync_session_with_handles_appends_suffix_for_extended_output() {
+        // Arrange
+        let mut session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            folder: std::env::temp_dir(),
+            id: "session-3".to_string(),
+            model: AgentKind::Gemini.default_model(),
+            output: "first line\n".to_string(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            questions: Vec::new(),
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::InProgress,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let handles =
+            SessionHandles::new("first line\nsecond line\n".to_string(), Status::InProgress);
+
+        // Act
+        SessionState::sync_session_with_handles(&mut session, &handles);
+
+        // Assert
+        assert_eq!(session.output, "first line\nsecond line\n");
+        assert_eq!(session.status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies non-prefix changes still use full replacement when lengths
+    /// differ.
+    fn sync_session_with_handles_replaces_output_when_prefix_changes() {
+        // Arrange
+        let mut session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            folder: std::env::temp_dir(),
+            id: "session-4".to_string(),
+            model: AgentKind::Gemini.default_model(),
+            output: "abc".to_string(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            questions: Vec::new(),
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::InProgress,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let handles = SessionHandles::new("xyzq".to_string(), Status::Review);
+
+        // Act
+        SessionState::sync_session_with_handles(&mut session, &handles);
+
+        // Assert
+        assert_eq!(session.output, "xyzq");
+        assert_eq!(session.status, Status::Review);
     }
 }
