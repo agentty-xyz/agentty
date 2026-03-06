@@ -30,6 +30,7 @@ sqlx.workspace = true
 time.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true

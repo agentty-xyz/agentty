@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthChar;
 
 use crate::ui::util::wrap_styled_line;
 
@@ -368,6 +369,10 @@ fn render_prefixed_inline_line(
 
 /// Wraps one verbatim line while preserving a fixed prefix for wrapped
 /// continuations.
+///
+/// Prompt content wraps on word boundaries when possible to mirror chat-input
+/// wrapping, and falls back to character wrapping for words wider than the
+/// available width.
 fn render_prefixed_verbatim_line(
     prefix: &str,
     continuation_prefix: &str,
@@ -385,7 +390,7 @@ fn render_prefixed_verbatim_line(
         return wrap_styled_line(spans, width);
     }
 
-    let wrapped_content = wrap_verbatim_spans(
+    let wrapped_content = wrap_verbatim_spans_with_word_boundaries(
         content_span_builder(content, content_style),
         width - prefix_width,
     );
@@ -539,7 +544,8 @@ fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'st
     let mut current_width = 0;
 
     for character in content.chars() {
-        if current_width == width {
+        let character_width = character_display_width(character);
+        if current_width > 0 && character_width > 0 && current_width + character_width > width {
             wrapped_lines.push(Line::from(vec![Span::styled(
                 std::mem::take(&mut current_segment),
                 style,
@@ -548,7 +554,7 @@ fn wrap_verbatim_line(content: &str, style: Style, width: usize) -> Vec<Line<'st
         }
 
         current_segment.push(character);
-        current_width += 1;
+        current_width += character_width;
     }
 
     if !current_segment.is_empty() {
@@ -576,13 +582,14 @@ fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'sta
         let content = span.content.into_owned();
 
         for character in content.chars() {
-            if current_width == width {
+            let character_width = character_display_width(character);
+            if current_width > 0 && character_width > 0 && current_width + character_width > width {
                 wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
                 current_width = 0;
             }
 
             push_verbatim_span_character(&mut current_spans, style, character);
-            current_width += 1;
+            current_width += character_width;
         }
     }
 
@@ -597,6 +604,151 @@ fn wrap_verbatim_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'sta
     wrapped_lines
 }
 
+/// Wraps verbatim spans while preferring word boundaries.
+///
+/// The wrapper keeps original whitespace and style spans intact, unlike
+/// markdown inline wrapping which normalizes whitespace.
+///
+/// Implementation detail: this is a single-pass algorithm with a buffered
+/// pending word, so long lines with sparse whitespace stay linear-time without
+/// repeated lookahead scans.
+fn wrap_verbatim_spans_with_word_boundaries(
+    spans: Vec<Span<'static>>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::from(spans)];
+    }
+
+    let mut wrapped_lines = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_width = 0;
+    let mut pending_word_spans = Vec::new();
+    let mut pending_word_width = 0;
+    let mut has_characters = false;
+
+    for span in spans {
+        let style = span.style;
+        let content = span.content.into_owned();
+
+        for character in content.chars() {
+            has_characters = true;
+
+            if character.is_whitespace() {
+                flush_pending_word_with_wrap(
+                    &mut wrapped_lines,
+                    &mut current_spans,
+                    &mut current_width,
+                    &mut pending_word_spans,
+                    &mut pending_word_width,
+                    width,
+                );
+                push_character_with_hard_wrap(
+                    &mut wrapped_lines,
+                    &mut current_spans,
+                    &mut current_width,
+                    style,
+                    character,
+                    width,
+                );
+
+                continue;
+            }
+
+            push_verbatim_span_character(&mut pending_word_spans, style, character);
+            pending_word_width += character_display_width(character);
+        }
+    }
+
+    flush_pending_word_with_wrap(
+        &mut wrapped_lines,
+        &mut current_spans,
+        &mut current_width,
+        &mut pending_word_spans,
+        &mut pending_word_width,
+        width,
+    );
+
+    if !has_characters {
+        return vec![Line::from("")];
+    }
+
+    if !current_spans.is_empty() {
+        wrapped_lines.push(Line::from(current_spans));
+    }
+
+    if wrapped_lines.is_empty() {
+        wrapped_lines.push(Line::from(""));
+    }
+
+    wrapped_lines
+}
+
+/// Flushes one buffered word into the current wrapped output.
+///
+/// A buffered word moves to the next line when appending it would reach or
+/// exceed the available width on a non-empty line, keeping one-cell breathing
+/// room against the right edge in prompt blocks.
+fn flush_pending_word_with_wrap(
+    wrapped_lines: &mut Vec<Line<'static>>,
+    current_spans: &mut Vec<Span<'static>>,
+    current_width: &mut usize,
+    pending_word_spans: &mut Vec<Span<'static>>,
+    pending_word_width: &mut usize,
+    width: usize,
+) {
+    if pending_word_spans.is_empty() {
+        return;
+    }
+
+    if *current_width > 0 && *current_width + *pending_word_width >= width {
+        wrapped_lines.push(Line::from(std::mem::take(current_spans)));
+        *current_width = 0;
+    }
+
+    let word_spans = std::mem::take(pending_word_spans);
+    for span in word_spans {
+        let style = span.style;
+        let content = span.content.into_owned();
+
+        for character in content.chars() {
+            push_character_with_hard_wrap(
+                wrapped_lines,
+                current_spans,
+                current_width,
+                style,
+                character,
+                width,
+            );
+        }
+    }
+
+    // The pending word buffer is always fully consumed above, including the
+    // hard-wrap fallback for overlong words, so width can be reset
+    // unconditionally.
+    *pending_word_width = 0;
+}
+
+/// Appends one character to the current line, wrapping immediately when the
+/// line is already full.
+fn push_character_with_hard_wrap(
+    wrapped_lines: &mut Vec<Line<'static>>,
+    current_spans: &mut Vec<Span<'static>>,
+    current_width: &mut usize,
+    style: Style,
+    character: char,
+    width: usize,
+) {
+    let character_width = character_display_width(character);
+    if *current_width > 0 && character_width > 0 && *current_width + character_width > width {
+        wrapped_lines.push(Line::from(std::mem::take(current_spans)));
+        *current_width = 0;
+    }
+
+    push_verbatim_span_character(current_spans, style, character);
+    *current_width += character_width;
+}
+
 fn push_verbatim_span_character(spans: &mut Vec<Span<'static>>, style: Style, character: char) {
     if let Some(last_span) = spans.last_mut()
         && last_span.style == style
@@ -607,6 +759,11 @@ fn push_verbatim_span_character(spans: &mut Vec<Span<'static>>, style: Style, ch
     }
 
     spans.push(Span::styled(character.to_string(), style));
+}
+
+/// Returns terminal display width for one Unicode scalar value.
+fn character_display_width(character: char) -> usize {
+    UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
 fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
@@ -1055,6 +1212,120 @@ mod tests {
             lines.last().expect("bottom padding").spans[0].style,
             user_prompt_content_style()
         );
+    }
+
+    #[test]
+    fn test_render_markdown_wraps_user_prompt_on_word_boundaries() {
+        // Arrange
+        let input = " › one two three";
+
+        // Act
+        let lines = render_markdown(input, 8);
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(rendered_lines.contains(&" › one".to_string()));
+        assert!(rendered_lines.contains(&"   two".to_string()));
+        assert!(rendered_lines.contains(&"   three".to_string()));
+    }
+
+    #[test]
+    fn test_render_markdown_wraps_clarification_answer_on_word_boundaries() {
+        // Arrange
+        let input =
+            " › Clarifications:\n   1. Q: Need tests?\n      A: very long answer text for review";
+
+        // Act
+        let lines = render_markdown(input, 18);
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(rendered_lines.contains(&"      A: very".to_string()));
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line.trim_start().starts_with("long answer"))
+        );
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line.trim_start().starts_with("text for"))
+        );
+        assert!(
+            rendered_lines
+                .iter()
+                .any(|line| line.trim_start().starts_with("review"))
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_wraps_long_prompt_word_with_hard_fallback() {
+        // Arrange
+        let input = " › supercalifragilisticexpialidocious";
+
+        // Act
+        let lines = render_markdown(input, 8);
+        let rendered_lines = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_string())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(rendered_lines.contains(&" › super".to_string()));
+        assert!(rendered_lines.contains(&"   calif".to_string()));
+        assert!(rendered_lines.contains(&"   ragil".to_string()));
+    }
+
+    #[test]
+    fn test_wrap_verbatim_spans_with_word_boundaries_handles_wide_characters() {
+        // Arrange
+        let spans = vec![Span::raw("你好 你好".to_string())];
+
+        // Act
+        let lines = wrap_verbatim_spans_with_word_boundaries(spans, 5);
+
+        // Assert
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].to_string(), "你好 ");
+        assert_eq!(lines[0].width(), 5);
+        assert_eq!(lines[1].to_string(), "你好");
+        assert_eq!(lines[1].width(), 4);
+    }
+
+    #[test]
+    fn test_wrap_verbatim_spans_with_word_boundaries_wraps_when_word_reaches_edge() {
+        // Arrange
+        let spans = vec![Span::raw("foo bar".to_string())];
+
+        // Act
+        let lines = wrap_verbatim_spans_with_word_boundaries(spans, 7);
+
+        // Assert
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].to_string(), "foo ");
+        assert_eq!(lines[1].to_string(), "bar");
+    }
+
+    #[test]
+    fn test_wrap_verbatim_spans_handles_wide_characters() {
+        // Arrange
+        let spans = vec![Span::raw("你好你好".to_string())];
+
+        // Act
+        let lines = wrap_verbatim_spans(spans, 5);
+
+        // Assert
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].to_string(), "你好");
+        assert_eq!(lines[0].width(), 4);
+        assert_eq!(lines[1].to_string(), "你好");
+        assert_eq!(lines[1].width(), 4);
     }
 
     #[test]

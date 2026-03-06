@@ -64,6 +64,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "unicode-width",
  "uuid",
 ]
 
