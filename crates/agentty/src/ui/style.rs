@@ -23,8 +23,12 @@ pub mod palette {
     pub const QUESTION: Color = Color::LightMagenta;
     /// Base surface color for bars and selected rows.
     pub const SURFACE: Color = Color::DarkGray;
+    /// Subtle danger-tinted surface used behind removed diff lines.
+    pub const SURFACE_DANGER: Color = Color::Rgb(48, 24, 24);
     /// Elevated surface color for table headers.
     pub const SURFACE_ELEVATED: Color = Color::Gray;
+    /// Subtle success-tinted surface used behind added diff lines.
+    pub const SURFACE_SUCCESS: Color = Color::Rgb(18, 44, 26);
     /// Primary readable text color.
     pub const TEXT: Color = Color::White;
     /// Muted text color for secondary copy.

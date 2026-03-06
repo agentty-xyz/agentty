@@ -112,8 +112,8 @@ impl<'a> DiffPage<'a> {
 
                     continue;
                 }
-                DiffLineKind::Addition => ("+", Style::default().fg(style::palette::SUCCESS)),
-                DiffLineKind::Deletion => ("-", Style::default().fg(style::palette::DANGER)),
+                DiffLineKind::Addition => ("+", Self::addition_line_style()),
+                DiffLineKind::Deletion => ("-", Self::deletion_line_style()),
                 DiffLineKind::Context => (" ", Style::default().fg(style::palette::TEXT_MUTED)),
             };
 
@@ -155,6 +155,20 @@ impl<'a> DiffPage<'a> {
             .scroll((self.scroll_offset, SCROLL_X_OFFSET));
 
         f.render_widget(paragraph, area);
+    }
+
+    /// Returns the style used for added diff lines.
+    fn addition_line_style() -> Style {
+        Style::default()
+            .fg(style::palette::SUCCESS)
+            .bg(style::palette::SURFACE_SUCCESS)
+    }
+
+    /// Returns the style used for removed diff lines.
+    fn deletion_line_style() -> Style {
+        Style::default()
+            .fg(style::palette::DANGER)
+            .bg(style::palette::SURFACE_DANGER)
     }
 }
 
@@ -269,6 +283,17 @@ mod tests {
             .collect()
     }
 
+    fn background_cell_count(
+        buffer: &ratatui::buffer::Buffer,
+        color: ratatui::style::Color,
+    ) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.bg == color)
+            .count()
+    }
+
     #[test]
     fn test_render_shows_updated_diff_help_hint() {
         // Arrange
@@ -328,5 +353,44 @@ mod tests {
         assert_eq!(selected_lines.len(), parsed_lines.len());
         assert_eq!(selected_lines[0].content, parsed_lines[0].content);
         assert_eq!(selected_lines[3].content, parsed_lines[3].content);
+    }
+
+    #[test]
+    fn test_render_applies_background_tints_to_changed_lines() {
+        // Arrange
+        let session = session_fixture();
+        let mut diff_page = DiffPage::new(
+            &session,
+            concat!(
+                "diff --git a/src/main.rs b/src/main.rs\n",
+                "@@ -1,2 +1,2 @@\n",
+                "-old content\n",
+                "+new content\n"
+            )
+            .to_string(),
+            0,
+            0,
+        );
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut diff_page, frame, area);
+            })
+            .expect("failed to draw diff page");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        assert!(
+            background_cell_count(buffer, style::palette::SURFACE_SUCCESS) > 0,
+            "expected added lines to include success background tint"
+        );
+        assert!(
+            background_cell_count(buffer, style::palette::SURFACE_DANGER) > 0,
+            "expected removed lines to include danger background tint"
+        );
     }
 }

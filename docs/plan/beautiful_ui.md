@@ -15,7 +15,7 @@ Status-aware UI polish plan aligned with the current Ratatui implementation in `
 | Tab bar | Active tab is yellow + bold; no active background treatment or separators. | Not started |
 | Tables | Table headers now use bold muted text (without heavy gray fill), row selection uses full-row highlight (no `>> ` marker), and primary list tables have wider spacing. | Done |
 | Status and footer bars | Status/footer bars are present and functional, and page-level keybinding hints now render as styled key/label spans. | Partial |
-| Diff view | Strong structure exists (file explorer, line-number gutter, sign column). Added/removed lines are foreground-only (no background tinting). | Partial |
+| Diff view | Strong structure exists (file explorer, line-number gutter, sign column). Added/removed lines now include subtle background tinting for faster scanning. | Done |
 | Overlays/dialogs | Overlay components are established. `InfoOverlay` already uses rounded borders and padding; others still use square borders and no shared dimmed backdrop. | Partial |
 | Chat presentation | Prompt blocks already have background treatment in markdown rendering; spinner/progress text exists. Input still uses square-border style with no focus variant. | Partial |
 | Empty-state and badge UX | Session group placeholders are still generic (`No sessions...`), and session size/status display remains text-color only (no badge/pill styling). | Not started |
@@ -76,11 +76,11 @@ Primary file:
 
 - `components/tab.rs`
 
-## 5) Improve diff scanability with background tints
+## 5) Improve diff scanability with background tints - Done
 
-- Keep the current useful structure (file tree + numeric gutter + sign column).
-- Add subtle background colors for additions/deletions in `pages/diff.rs`.
-- Preserve readable contrast for wrapped lines and hunk headers.
+- [x] Keep the current useful structure (file tree + numeric gutter + sign column).
+- [x] Add subtle background colors for additions/deletions in `pages/diff.rs`.
+- [x] Preserve readable contrast for wrapped lines and hunk headers.
 
 Primary files:
 
@@ -128,7 +128,7 @@ Primary files:
 1. Shared color palette + color token migration. (Done)
 1. Footer keybinding styling. (Done)
 1. Table selection/header/spacing refresh. (Done)
-1. Diff addition/deletion background tinting.
+1. Diff addition/deletion background tinting. (Done)
 1. Tab bar polish.
 1. Overlay consistency + background dimming.
 1. Chat input focus and output border follow-up.
