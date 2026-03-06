@@ -18,20 +18,7 @@ Required structure:
 
 ## Review
 
-### High-Level Overview of Changes
-
-- Summarize the most important changes in plain language.
-- Focus on what changed at the system or feature level rather than line-by-line edits.
-- If there are no material changes, write `- None`.
-
-### Changed Files and Why
-
-- List only files with meaningful changes.
-- For each file, include:
-  - file path,
-  - what changed,
-  - why the change was made (intent/problem addressed).
-- If no meaningful files changed, write `- None`.
+All review parts must be concise.
 
 ### Project Impact
 
@@ -39,6 +26,12 @@ Required structure:
 - Cover practical effects such as behavior, reliability, maintainability, performance, security, or developer workflow.
 - If impact is unclear, state the uncertainty briefly.
 - If there is no notable impact, write `- None`.
+
+### Suggestions
+
+- Provide concrete, actionable follow-up suggestions based on the diff.
+- Keep suggestions scoped to the current changes and prioritize highest-impact items first.
+- If there are no suggestions, write `- None`.
 
 Existing session summary context (may be empty):
 {{ session_summary }}
