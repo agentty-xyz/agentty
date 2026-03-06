@@ -136,13 +136,36 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
 }
 
 /// Handles text input while a settings editor is active.
+///
+/// The `Open Commands` editor is multiline: `Shift+Enter` inserts a newline,
+/// `Enter` finishes editing, and arrow keys move the cursor.
 async fn handle_settings_text_input(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     match key.code {
         KeyCode::Enter => {
-            app.settings.handle_enter(&app.services).await;
+            if app.settings.is_editing_open_commands()
+                && key.modifiers.contains(KeyModifiers::SHIFT)
+            {
+                app.settings
+                    .append_selected_text_character(&app.services, '\n')
+                    .await;
+            } else {
+                app.settings.stop_text_input_editing();
+            }
         }
         KeyCode::Esc => {
             app.settings.stop_text_input_editing();
+        }
+        KeyCode::Left => {
+            app.settings.move_selected_text_cursor_left();
+        }
+        KeyCode::Right => {
+            app.settings.move_selected_text_cursor_right();
+        }
+        KeyCode::Up => {
+            app.settings.move_selected_text_cursor_up();
+        }
+        KeyCode::Down => {
+            app.settings.move_selected_text_cursor_down();
         }
         KeyCode::Backspace => {
             app.settings
@@ -698,6 +721,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_shift_enter_key_inserts_open_command_newline_while_editing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.open_command = "nvim .".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT))
+            .await
+            .expect("failed to handle Shift+Enter key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(app.settings.is_editing_text_input());
+        assert_eq!(app.settings.open_command, "nvim .\n");
+    }
+
+    #[tokio::test]
     async fn test_handle_enter_key_stops_open_command_editing_when_already_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
@@ -713,6 +756,74 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(!app.settings.is_editing_text_input());
+    }
+
+    #[tokio::test]
+    async fn test_handle_esc_key_stops_open_command_editing_when_already_editing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle Esc key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(!app.settings.is_editing_text_input());
+    }
+
+    #[tokio::test]
+    async fn test_handle_left_key_moves_open_command_cursor_while_editing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.open_command = "ac".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        handle(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle left key");
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to insert character after cursor move");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.open_command, "abc");
+    }
+
+    #[tokio::test]
+    async fn test_handle_up_key_moves_open_command_cursor_to_previous_line() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_for_settings().await;
+        app.settings.open_command = "ab\nxy".to_string();
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("failed to start settings editing");
+
+        // Act
+        handle(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+            .await
+            .expect("failed to handle up key");
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT),
+        )
+        .await
+        .expect("failed to insert character after up move");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(app.settings.open_command, "abZ\nxy");
     }
 
     #[tokio::test]

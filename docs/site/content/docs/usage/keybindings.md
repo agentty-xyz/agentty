@@ -46,7 +46,9 @@ accented row text, even while cursor selection moves to other rows.
 |-----|--------|
 | `q` | Quit |
 | `j` / `k` | Navigate settings |
-| `Enter` | Edit setting |
+| `Enter` | Edit setting / finish text edit |
+| `Shift+Enter` | Add newline while editing `Open Commands` |
+| `Up` / `Down` / `Left` / `Right` | Move cursor while editing `Open Commands` |
 | `Tab` | Switch tab |
 | `?` | Help |
 
@@ -55,7 +57,7 @@ The Settings tab includes:
 
 - `Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex turns.
 - `Default Smart Model`, `Default Fast Model`, and `Default Review Model`.
-- `Open Commands` for launching session worktrees (separate commands with `||`).
+- `Open Commands` for launching session worktrees (one command per line).
 
 ## Session View
 
@@ -86,7 +88,7 @@ Additional notes:
 
 - **Open command behavior**: `o` always opens the session worktree in tmux.
   If one `Open Commands` entry is configured, it runs immediately.
-  If multiple entries are configured (`||` separator), Agentty opens a selector popup.
+  If multiple entries are configured (one command per line), Agentty opens a selector popup.
 - **Question**: opening the session enters Question Input mode until all prompts are answered or skipped.
 - **Done**: `t` toggles between summary and full output.
 - **Review**: Runs in read-only review mode. It can use internet lookup

@@ -1970,7 +1970,7 @@ mod tests {
     async fn configured_open_commands_returns_trimmed_non_empty_entries() {
         // Arrange
         let mut app = new_test_app().await;
-        app.settings.open_command = "  nvim . ||\n npm run dev \n|| ".to_string();
+        app.settings.open_command = "  nvim . \n npm run dev \n".to_string();
 
         // Act
         let open_commands = app.configured_open_commands();
@@ -2034,7 +2034,7 @@ mod tests {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-multiple-open-commands");
         let mut app =
-            new_test_app_with_selected_session(session_folder.clone(), " nvim . || npm run dev ")
+            new_test_app_with_selected_session(session_folder.clone(), " nvim . \n npm run dev ")
                 .await;
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client

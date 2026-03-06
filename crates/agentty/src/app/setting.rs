@@ -2,6 +2,7 @@ use ratatui::widgets::TableState;
 
 use crate::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::app::AppServices;
+use crate::domain::input::InputState;
 use crate::domain::setting::SettingName;
 
 /// Loads the persisted smart-model default used for new sessions.
@@ -55,9 +56,6 @@ enum SettingRow {
     DefaultReviewModel,
     OpenCommand,
 }
-
-/// Separator token used to store multiple open commands in one setting value.
-const OPEN_COMMAND_SEPARATOR: &str = "||";
 
 impl SettingRow {
     const ALL: [Self; 5] = [
@@ -128,6 +126,7 @@ pub struct SettingsManager {
     /// Table selection state for the settings page.
     pub table_state: TableState,
     editing_text_row: Option<SettingRow>,
+    open_command_input: Option<InputState>,
     use_last_used_model_as_default: bool,
 }
 
@@ -171,6 +170,7 @@ impl SettingsManager {
             open_command,
             table_state,
             editing_text_row: None,
+            open_command_input: None,
             use_last_used_model_as_default,
         }
     }
@@ -216,9 +216,16 @@ impl SettingsManager {
         self.editing_text_row.is_some()
     }
 
-    /// Exits settings text input editing mode.
+    /// Returns whether the `Open Commands` multiline editor is currently
+    /// active.
+    #[must_use]
+    pub fn is_editing_open_commands(&self) -> bool {
+        self.is_editing_text_input_for(SettingRow::OpenCommand)
+    }
+
+    /// Exits settings text input editing mode and clears editor cursor state.
     pub fn stop_text_input_editing(&mut self) {
-        self.editing_text_row = None;
+        self.finish_text_input_editing();
     }
 
     /// Appends one character to the selected text setting value and persists
@@ -245,6 +252,26 @@ impl SettingsManager {
         }
     }
 
+    /// Moves the active text editor cursor one character to the left.
+    pub fn move_selected_text_cursor_left(&mut self) {
+        self.move_selected_text_cursor(TextCursorDirection::Left);
+    }
+
+    /// Moves the active text editor cursor one character to the right.
+    pub fn move_selected_text_cursor_right(&mut self) {
+        self.move_selected_text_cursor(TextCursorDirection::Right);
+    }
+
+    /// Moves the active text editor cursor to the previous line.
+    pub fn move_selected_text_cursor_up(&mut self) {
+        self.move_selected_text_cursor(TextCursorDirection::Up);
+    }
+
+    /// Moves the active text editor cursor to the next line.
+    pub fn move_selected_text_cursor_down(&mut self) {
+        self.move_selected_text_cursor(TextCursorDirection::Down);
+    }
+
     /// Returns settings table rows as `(name, value)` pairs.
     #[must_use]
     pub fn settings_rows(&self) -> Vec<(&'static str, String)> {
@@ -258,7 +285,8 @@ impl SettingsManager {
     #[must_use]
     pub fn footer_hint(&self) -> &'static str {
         if self.is_editing_text_input_for(SettingRow::OpenCommand) {
-            "Editing open commands: separate commands with `||`, Enter to finish, Esc to cancel"
+            "Editing open commands: one command per line, Shift+Enter inserts newline, Enter/Esc \
+             finish"
         } else if self.is_editing_text_input() {
             "Editing setting value: type text, Enter to finish, Esc to cancel"
         } else {
@@ -268,7 +296,7 @@ impl SettingsManager {
 
     /// Returns configured open commands in persisted order.
     ///
-    /// Commands are split by `||` and newlines, then trimmed.
+    /// Commands are split by newlines and trimmed.
     #[must_use]
     pub fn open_commands(&self) -> Vec<String> {
         parse_open_commands(self.open_command.as_str())
@@ -295,12 +323,30 @@ impl SettingsManager {
     /// Toggles text editing mode for the requested row.
     fn toggle_text_input(&mut self, row: SettingRow) {
         if self.editing_text_row == Some(row) {
-            self.editing_text_row = None;
+            self.finish_text_input_editing();
 
             return;
         }
 
+        self.start_text_input_editing(row);
+    }
+
+    /// Starts text editing mode for the requested row.
+    fn start_text_input_editing(&mut self, row: SettingRow) {
         self.editing_text_row = Some(row);
+        if row == SettingRow::OpenCommand {
+            self.open_command_input = Some(InputState::with_text(self.open_command.clone()));
+        }
+    }
+
+    /// Finalizes the active text editing session and synchronizes cached text.
+    fn finish_text_input_editing(&mut self) {
+        if self.is_editing_text_input_for(SettingRow::OpenCommand) {
+            self.sync_open_command_from_input();
+            self.open_command_input = None;
+        }
+
+        self.editing_text_row = None;
     }
 
     /// Appends text to the selected setting row.
@@ -308,7 +354,9 @@ impl SettingsManager {
         match row.control() {
             SettingControl::Selector => false,
             SettingControl::TextInput => {
-                self.open_command.push(character);
+                let open_command_input = self.open_command_input_mut();
+                open_command_input.insert_char(character);
+                self.sync_open_command_from_input();
 
                 true
             }
@@ -319,7 +367,54 @@ impl SettingsManager {
     fn remove_text_character(&mut self, row: SettingRow) -> bool {
         match row.control() {
             SettingControl::Selector => false,
-            SettingControl::TextInput => self.open_command.pop().is_some(),
+            SettingControl::TextInput => {
+                let open_command_input = self.open_command_input_mut();
+                let previous_text = open_command_input.text().to_string();
+                open_command_input.delete_backward();
+
+                let is_changed = open_command_input.text() != previous_text;
+                if is_changed {
+                    self.sync_open_command_from_input();
+                }
+
+                is_changed
+            }
+        }
+    }
+
+    /// Moves the active text editor cursor for the selected row.
+    fn move_selected_text_cursor(&mut self, direction: TextCursorDirection) {
+        if let Some(editing_row) = self.editing_text_row {
+            self.move_text_cursor(editing_row, direction);
+        }
+    }
+
+    /// Moves the text editor cursor for the given row.
+    fn move_text_cursor(&mut self, row: SettingRow, direction: TextCursorDirection) {
+        if !matches!(row.control(), SettingControl::TextInput) {
+            return;
+        }
+
+        let open_command_input = self.open_command_input_mut();
+        match direction {
+            TextCursorDirection::Down => open_command_input.move_down(),
+            TextCursorDirection::Left => open_command_input.move_left(),
+            TextCursorDirection::Right => open_command_input.move_right(),
+            TextCursorDirection::Up => open_command_input.move_up(),
+        }
+    }
+
+    /// Returns mutable access to the `Open Commands` editor state.
+    fn open_command_input_mut(&mut self) -> &mut InputState {
+        let open_command_value = self.open_command.clone();
+        self.open_command_input
+            .get_or_insert_with(|| InputState::with_text(open_command_value))
+    }
+
+    /// Synchronizes the persisted `open_command` value from editor state.
+    fn sync_open_command_from_input(&mut self) {
+        if let Some(open_command_input) = &self.open_command_input {
+            self.open_command = open_command_input.text().to_string();
         }
     }
 
@@ -338,7 +433,7 @@ impl SettingsManager {
             SettingRow::DefaultReviewModel => self.default_review_model.as_str().to_string(),
             SettingRow::OpenCommand => {
                 if self.is_editing_text_input_for(row) {
-                    format!("{}|", self.open_command)
+                    display_open_command_with_cursor(&self.open_command, self.open_command_cursor())
                 } else if self.open_command.is_empty() {
                     "<empty>".to_string()
                 } else {
@@ -346,6 +441,13 @@ impl SettingsManager {
                 }
             }
         }
+    }
+
+    /// Returns the active `Open Commands` editor cursor position.
+    fn open_command_cursor(&self) -> usize {
+        self.open_command_input
+            .as_ref()
+            .map_or_else(|| self.open_command.chars().count(), |input| input.cursor)
     }
 
     /// Cycles selector-type rows and persists their updated values.
@@ -495,15 +597,44 @@ impl SettingsManager {
     }
 }
 
+/// Cursor movement direction for text-input settings rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextCursorDirection {
+    Down,
+    Left,
+    Right,
+    Up,
+}
+
 /// Parses the settings text field into executable open-command entries.
 fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
     open_command_setting
-        .split(OPEN_COMMAND_SEPARATOR)
-        .flat_map(str::lines)
+        .lines()
         .map(str::trim)
         .filter(|command| !command.is_empty())
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+/// Renders `text` with a `|` cursor marker at `cursor_char_index`.
+fn display_open_command_with_cursor(text: &str, cursor_char_index: usize) -> String {
+    let mut rendered_text = String::with_capacity(text.len() + 1);
+    let char_count = text.chars().count();
+    let clamped_cursor_index = cursor_char_index.min(char_count);
+
+    for (char_index, character) in text.chars().enumerate() {
+        if char_index == clamped_cursor_index {
+            rendered_text.push('|');
+        }
+
+        rendered_text.push(character);
+    }
+
+    if clamped_cursor_index == char_count {
+        rendered_text.push('|');
+    }
+
+    rendered_text
 }
 
 /// Returns all selectable models in settings display order.
@@ -580,6 +711,7 @@ mod tests {
             open_command: String::new(),
             table_state,
             editing_text_row: None,
+            open_command_input: None,
             use_last_used_model_as_default: false,
         }
     }
@@ -715,7 +847,8 @@ mod tests {
         // Assert
         assert_eq!(
             footer_hint,
-            "Editing open commands: separate commands with `||`, Enter to finish, Esc to cancel"
+            "Editing open commands: one command per line, Shift+Enter inserts newline, Enter/Esc \
+             finish"
         );
     }
 
@@ -733,10 +866,10 @@ mod tests {
     }
 
     #[test]
-    fn open_commands_splits_double_pipe_and_newline_entries() {
+    fn open_commands_splits_newline_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = " nvim . ||\n npm run dev \n||  ".to_string();
+        manager.open_command = " nvim . \n npm run dev \n".to_string();
 
         // Act
         let open_commands = manager.open_commands();
@@ -746,6 +879,19 @@ mod tests {
             open_commands,
             vec!["nvim .".to_string(), "npm run dev".to_string()]
         );
+    }
+
+    #[test]
+    fn open_commands_does_not_split_double_pipe_entries() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.open_command = "nvim . || npm run dev".to_string();
+
+        // Act
+        let open_commands = manager.open_commands();
+
+        // Assert
+        assert_eq!(open_commands, vec!["nvim . || npm run dev".to_string()]);
     }
 
     #[test]
@@ -772,6 +918,22 @@ mod tests {
 
         // Assert
         assert_eq!(rows[4].1, "http://localhost:5173|");
+    }
+
+    #[test]
+    fn settings_rows_show_cursor_within_open_command_while_editing() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.open_command = "abc".to_string();
+        manager.editing_text_row = Some(SettingRow::OpenCommand);
+        manager.open_command_input = Some(InputState::with_text(manager.open_command.clone()));
+        manager.move_selected_text_cursor_left();
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[4].1, "ab|c");
     }
 
     #[test]

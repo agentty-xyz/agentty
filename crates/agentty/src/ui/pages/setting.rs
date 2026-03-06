@@ -42,7 +42,11 @@ impl Page for SettingsPage<'_> {
             .settings_rows()
             .into_iter()
             .map(|(setting_name, setting_value)| {
-                Row::new(vec![Cell::from(setting_name), Cell::from(setting_value)]).height(1)
+                let row_line_count = setting_value.lines().count().max(1);
+                let row_height = u16::try_from(row_line_count).unwrap_or(u16::MAX);
+
+                Row::new(vec![Cell::from(setting_name), Cell::from(setting_value)])
+                    .height(row_height)
             })
             .collect::<Vec<_>>();
 

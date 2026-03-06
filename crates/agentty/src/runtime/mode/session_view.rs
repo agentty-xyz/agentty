@@ -1394,7 +1394,7 @@ mod tests {
     async fn test_open_worktree_for_view_session_opens_command_selector_for_multiple_commands() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.settings.open_command = "nvim . || npm run dev".to_string();
+        app.settings.open_command = "nvim .\nnpm run dev".to_string();
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: Some("Preparing focused review".to_string()),
