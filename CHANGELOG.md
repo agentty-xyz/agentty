@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.2] - 2026-03-05
+
+### Added
+
+- **UI:** Support multiline open command editing in the settings tab.
+- **UI:** Render session status header directly above the output panel.
+- **Session:** Add open command selector when multiple launch commands are configured for a worktree.
+- **Docs:** Add `CLAUDE` and `GEMINI` symlinks for module-level `AGENTS.md` files.
+
+### Changed
+
+- **Architecture:** Rename `app` and `ui` module roots to singular names (`app.rs`, `ui.rs`, `domain.rs`, `infra.rs`, `runtime.rs`).
+- **Architecture:** Parse merge commit messages from structured protocol output.
+- **Architecture:** Harden `AGENTS.md` index validation and normalize directory index links.
+- **Docs:** Prevent content and table-of-contents text overflow on the documentation site.
+- **Docs:** Expand runtime flow documentation and add doc comments across migration, runtime, UI, and database helpers.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.5.1] - 2026-03-04
 
 ### Added
