@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.3] - 2026-03-06
+
+### Added
+
+- **UI:** Support `Alt+Enter` and `Shift+Enter` newline entry across settings and prompt.
+- **Session:** Generate session titles from user intent when the first start turn begins.
+
+### Changed
+
+- **UI:** Migrate UI color usage to semantic palette tokens.
+- **UI:** Refresh table visual styling across list and stats pages.
+- **UI:** Render clarification prompts with distinct spacing and styling.
+- **UI:** Render footer help as styled keybinding lines.
+- **UI:** Session list uses shared page margin.
+- **UI:** Stop `@mention` highlighting before trailing punctuation.
+- **Session Output:** Improve verbatim markdown wrapping and Unicode width handling.
+- **Session Output:** Preserve multiline user prompts across persistence and rendering.
+- **Review:** Tighten review suggestion severity criteria and require concise actionable suggestions.
+- **Architecture:** Refactor module roots into router-only modules.
+- **Claude:** Enforce strict MCP config for Claude backend.
+- **Docs:** Reframe UI beautification plan around implementation status.
+
+### Fixed
+
+- **Session Output:** Prevent duplicate final assistant output after streaming.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.5.2] - 2026-03-05
 
 ### Added
