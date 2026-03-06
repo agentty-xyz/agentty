@@ -37,34 +37,60 @@ impl Component for Tabs<'_> {
         let paragraph = Paragraph::new(line).block(
             Block::default()
                 .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(style::palette::BORDER))
                 .padding(Padding::top(1)),
         );
         f.render_widget(paragraph, area);
     }
 }
 
-/// Returns styled tab spans with a project-qualified sessions tab label.
+/// Returns styled tab spans with separators and a project-qualified sessions
+/// tab label.
 fn tab_spans(
     current_tab: Tab,
     active_project_id: i64,
     projects: &[ProjectListItem],
 ) -> Vec<Span<'static>> {
-    [Tab::Projects, Tab::Sessions, Tab::Stats, Tab::Settings]
+    let mut spans = Vec::with_capacity(7);
+
+    for (tab_index, tab) in [Tab::Projects, Tab::Sessions, Tab::Stats, Tab::Settings]
         .iter()
-        .map(|tab| {
-            let label = format!(" {} ", tab_label(*tab, active_project_id, projects));
-            if *tab == current_tab {
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(style::palette::WARNING)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled(label, Style::default().fg(style::palette::TEXT_MUTED))
-            }
-        })
-        .collect()
+        .enumerate()
+    {
+        if tab_index > 0 {
+            spans.push(tab_separator_span());
+        }
+
+        spans.push(tab_span(*tab, current_tab, active_project_id, projects));
+    }
+
+    spans
+}
+
+/// Returns one styled separator span between tabs.
+fn tab_separator_span() -> Span<'static> {
+    Span::styled("|", Style::default().fg(style::palette::BORDER))
+}
+
+/// Returns one styled tab span with active/inactive affordance treatment.
+fn tab_span(
+    tab: Tab,
+    current_tab: Tab,
+    active_project_id: i64,
+    projects: &[ProjectListItem],
+) -> Span<'static> {
+    let label = format!(" {} ", tab_label(tab, active_project_id, projects));
+
+    if tab == current_tab {
+        return Span::styled(
+            label,
+            Style::default()
+                .fg(style::palette::WARNING)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+
+    Span::styled(label, Style::default().fg(style::palette::TEXT_MUTED))
 }
 
 /// Returns the display label for a top-level tab.
@@ -108,7 +134,7 @@ mod tests {
             .join("");
 
         // Assert
-        assert_eq!(rendered_tabs, " Projects  Sessions  Stats  Settings ");
+        assert_eq!(rendered_tabs, " Projects | Sessions | Stats | Settings ");
     }
 
     #[test]
@@ -121,10 +147,11 @@ mod tests {
 
         // Assert
         assert_eq!(spans[0].style.fg, Some(style::palette::TEXT_MUTED));
-        assert_eq!(spans[1].style.fg, Some(style::palette::TEXT_MUTED));
-        assert_eq!(spans[2].style.fg, Some(style::palette::WARNING));
-        assert_eq!(spans[3].style.fg, Some(style::palette::TEXT_MUTED));
-        assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans[2].style.fg, Some(style::palette::TEXT_MUTED));
+        assert_eq!(spans[4].style.fg, Some(style::palette::WARNING));
+        assert_eq!(spans[4].style.bg, None);
+        assert_eq!(spans[6].style.fg, Some(style::palette::TEXT_MUTED));
+        assert!(spans[4].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -147,9 +174,27 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_tabs,
-            " Projects  Sessions (Primary)  Stats  Settings "
+            " Projects | Sessions (Primary) | Stats | Settings "
         );
-        assert_eq!(spans[1].style.fg, Some(style::palette::WARNING));
+        assert_eq!(spans[2].style.fg, Some(style::palette::WARNING));
+        assert_eq!(spans[2].style.bg, None);
+    }
+
+    #[test]
+    fn test_tab_spans_render_divider_spans_with_border_color() {
+        // Arrange
+        let current_tab = Tab::Projects;
+
+        // Act
+        let spans = tab_spans(current_tab, 0, &[]);
+
+        // Assert
+        assert_eq!(spans[1].content.as_ref(), "|");
+        assert_eq!(spans[3].content.as_ref(), "|");
+        assert_eq!(spans[5].content.as_ref(), "|");
+        assert_eq!(spans[1].style.fg, Some(style::palette::BORDER));
+        assert_eq!(spans[3].style.fg, Some(style::palette::BORDER));
+        assert_eq!(spans[5].style.fg, Some(style::palette::BORDER));
     }
 
     /// Creates a `ProjectListItem` for tab-label rendering tests.

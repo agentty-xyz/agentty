@@ -12,7 +12,7 @@ Status-aware UI polish plan aligned with the current Ratatui implementation in `
 |------|---------------------------|--------|
 | Color system | Shared semantic palette tokens are defined in `style.rs` and migrated across target UI components/pages. Heatmap colors in `pages/stat.rs` remain a separate RGB data-visualization scale. | Done |
 | Spacing and padding | Most pages render with outer `margin(1)` and some overlays use inner padding (`InfoOverlay`). Major table/list views now use `column_spacing(2)` for improved scanability. | Partial |
-| Tab bar | Active tab is yellow + bold; no active background treatment or separators. | Not started |
+| Tab bar | Active tab now uses warning-colored bold text (without background fill), and tabs are partitioned with styled separators and a muted bottom border. | Done |
 | Tables | Table headers now use bold muted text (without heavy gray fill), row selection uses full-row highlight (no `>> ` marker), and primary list tables have wider spacing. | Done |
 | Status and footer bars | Status/footer bars are present and functional, and page-level keybinding hints now render as styled key/label spans. | Partial |
 | Diff view | Strong structure exists (file explorer, line-number gutter, sign column). Added/removed lines now include subtle background tinting for faster scanning. | Done |
@@ -66,15 +66,15 @@ Primary files:
 - `pages/setting.rs`
 - `pages/stat.rs`
 
-## 4) Upgrade tab bar affordance
+## 4) Upgrade tab bar affordance - Done
 
-- Add active-tab background (not only yellow text).
-- Add separators or spacing treatment that clearly partitions tabs.
-- Keep project-qualified Sessions label behavior already present.
+- [x] Keep selected-tab emphasis text-only (warning color + bold) for cleaner visual weight.
+- [x] Add separators or spacing treatment that clearly partitions tabs.
+- [x] Keep project-qualified Sessions label behavior already present.
 
 Primary file:
 
-- `components/tab.rs`
+- `component/tab.rs`
 
 ## 5) Improve diff scanability with background tints - Done
 
@@ -129,7 +129,7 @@ Primary files:
 1. Footer keybinding styling. (Done)
 1. Table selection/header/spacing refresh. (Done)
 1. Diff addition/deletion background tinting. (Done)
-1. Tab bar polish.
+1. Tab bar polish. (Done)
 1. Overlay consistency + background dimming.
 1. Chat input focus and output border follow-up.
 1. Empty states and optional badges.
