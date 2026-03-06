@@ -29,8 +29,9 @@ All review parts must be concise.
 
 ### Suggestions
 
-- Provide concrete, actionable follow-up suggestions based on the diff.
-- Keep suggestions scoped to the current changes and prioritize highest-impact items first.
+- Provide only high- and medium-severity follow-up suggestions based on the diff.
+- Exclude low-severity, optional polish, and stylistic nits.
+- Keep suggestions scoped to the current changes and prioritize high-severity items first.
 - If there are no suggestions, write `- None`.
 
 Existing session summary context (may be empty):
