@@ -24,12 +24,12 @@ Plan for extending `crates/agentty/src/app`, `crates/agentty/src/infra`, and `cr
 
 **Why now:** The app should depend on one small orchestration contract, not on GitHub- or GitLab-specific endpoint shapes leaking through session workflows.
 
-- [ ] Add a generic boundary such as `ReviewRequestClient` or `ForgeClient` under `crates/agentty/src/infra/` with only the core operations Agentty actually needs.
-- [ ] Keep the contract narrow: detect supported forge, find an existing review request by source branch, create one, refresh summary state, and produce an openable web URL.
-- [ ] Add concrete adapters for GitHub pull requests and GitLab merge requests instead of a broad lowest-common-denominator abstraction over every provider feature.
-- [ ] Route GitHub operations through `gh` and GitLab operations through `glab` so authentication, host selection, and user-local CLI setup stay aligned with each forge's native tooling.
-- [ ] Fail fast for unsupported remotes and non-forge repositories with actionable session UI copy.
-- [ ] Add focused tests for forge detection and unsupported-remote handling so this boundary can land independently before any provider-specific API work.
+- [x] Add a generic boundary such as `ReviewRequestClient` or `ForgeClient` under `crates/agentty/src/infra/` with only the core operations Agentty actually needs.
+- [x] Keep the contract narrow: detect supported forge, find an existing review request by source branch, create one, refresh summary state, and produce an openable web URL.
+- [x] Add concrete adapters for GitHub pull requests and GitLab merge requests instead of a broad lowest-common-denominator abstraction over every provider feature.
+- [x] Route GitHub operations through `gh` and GitLab operations through `glab` so authentication, host selection, and user-local CLI setup stay aligned with each forge's native tooling.
+- [x] Fail fast for unsupported remotes and non-forge repositories with actionable session UI copy.
+- [x] Add focused tests for forge detection and unsupported-remote handling so this boundary can land independently before any provider-specific API work.
 
 Primary files:
 

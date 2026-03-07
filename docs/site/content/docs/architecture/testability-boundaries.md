@@ -18,6 +18,7 @@ All traits below use `#[cfg_attr(test, mockall::automock)]`:
 | Trait | Module | Boundary |
 |-------|--------|----------|
 | `SyncMainRunner` | `app/core.rs` | App-level async sync orchestration trigger used by list-mode sync flows. |
+| `ReviewRequestClient` | `infra/forge.rs` | Cross-forge review-request detection and provider-specific `gh`/`glab` orchestration boundary. |
 | `GitClient` | `infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push, pull). |
 | `FsClient` | `infra/fs.rs` | Filesystem operations used by app orchestration (create/remove/read workflow files). |
 | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and dispatching open commands. |
