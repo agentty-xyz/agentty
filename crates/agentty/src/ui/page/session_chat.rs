@@ -606,7 +606,7 @@ mod tests {
 
         // Assert
         assert_eq!(menu.options.len(), AgentKind::Codex.models().len());
-        assert_eq!(menu.options[0].label, "gpt-5.3-codex");
+        assert_eq!(menu.options[0].label, "gpt-5.4");
         assert_eq!(
             menu.options[0].description,
             "Latest Codex model for coding quality."
