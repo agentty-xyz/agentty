@@ -1,24 +1,19 @@
 //! Session task execution helpers for process running, output capture, and
 //! status persistence.
 
-use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use askama::Template;
-use tokio::io::{AsyncBufReadExt as _, AsyncRead};
 use tokio::sync::mpsc;
 
-use super::{COMMIT_MESSAGE, Clock};
+use super::COMMIT_MESSAGE;
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
 use crate::app::{AppEvent, SessionManager};
-use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::AgentModel;
 use crate::domain::session::Status;
 use crate::infra::agent;
 use crate::infra::db::Database;
@@ -36,69 +31,27 @@ struct AutoCommitAssistPromptTemplate<'a> {
     commit_error: &'a str,
 }
 
-/// Maximum wall-clock delay before buffered output is flushed.
-const OUTPUT_BATCH_INTERVAL: Duration = Duration::from_millis(50);
-/// Maximum buffered output size before a flush is triggered.
-const OUTPUT_BATCH_SIZE: usize = 1024; // 1KB
 /// Stateless helpers for session process execution and output handling.
 pub(crate) struct SessionTaskService;
 
 /// Inputs needed to execute an agent-assisted edit task.
 pub(crate) struct RunAgentAssistTaskInput {
-    /// Agent family used for response parsing.
-    pub(crate) agent: AgentKind,
     /// App event sender used for progress and status updates.
     pub(crate) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Shared process identifier slot used for cancellation.
     pub(crate) child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used for deterministic output-batch timing.
-    pub(crate) clock: Arc<dyn Clock>,
-    /// Prepared assist command to execute.
-    pub(crate) cmd: Command,
     /// Database handle used for output/status persistence.
     pub(crate) db: Database,
+    /// Session worktree folder where the assist prompt runs.
+    pub(crate) folder: std::path::PathBuf,
     /// Session identifier for persisted updates.
     pub(crate) id: String,
     /// Shared output buffer receiving incremental output.
     pub(crate) output: Arc<Mutex<String>>,
+    /// One-shot assist prompt submitted to the agent.
+    pub(crate) prompt: String,
     /// Session model used for agent metadata and parsing.
     pub(crate) session_model: AgentModel,
-}
-
-/// Shared context for streaming incremental agent output as it arrives.
-#[derive(Clone)]
-pub(in crate::app::session) struct StreamOutputContext {
-    /// Latest progress line currently shown in the UI, if any.
-    active_progress_message: Arc<Mutex<Option<String>>>,
-    /// Agent family used for stream parsing.
-    agent: AgentKind,
-    /// App event sender used to publish output/progress updates.
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Database handle used for persisted output chunks.
-    db: Database,
-    /// Session identifier for output updates.
-    id: String,
-    /// Tracks whether non-response stream output was seen.
-    non_response_stream_output_seen: Arc<AtomicBool>,
-    /// Shared in-memory output buffer.
-    output: Arc<Mutex<String>>,
-    /// Tracks whether streamed response chunks were seen.
-    streamed_response_seen: Arc<AtomicBool>,
-}
-
-/// Captured terminal output from one child process run.
-struct CapturedOutput {
-    /// Full stderr text captured while the child process ran.
-    stderr_text: String,
-    /// Whether response content was already emitted incrementally from stream.
-    streamed_response_seen: bool,
-    /// Full stdout text captured while the child process ran.
-    stdout_text: String,
-}
-
-enum ActiveProgressMessageUpdate {
-    NoChange,
-    Updated,
 }
 
 impl SessionTaskService {
@@ -253,7 +206,6 @@ impl SessionTaskService {
         let assist_context = AssistContext {
             app_event_tx: context.app_event_tx.clone(),
             child_pid: Arc::clone(&context.child_pid),
-            clock: Arc::clone(&context.clock),
             db: context.db.clone(),
             folder: context.folder.clone(),
             git_client: Arc::clone(&context.git_client),
@@ -284,181 +236,67 @@ impl SessionTaskService {
         format_detail_lines(commit_error)
     }
 
-    /// Executes one agent command for assisted edits without auto-commit.
-    ///
-    /// Structured protocol responses are normalized to plain display text so
-    /// session output does not show raw protocol JSON payloads. Stream flush
-    /// timing is sourced from an injected [`Clock`] for deterministic tests.
+    /// Executes one isolated assist prompt and appends the normalized answer
+    /// text to the session transcript.
     ///
     /// # Errors
-    /// Returns an error when spawning fails, waiting fails, the process is
-    /// interrupted, or the command exits with a non-zero status code.
+    /// Returns an error when the one-shot prompt fails or returns invalid
+    /// protocol output.
     pub(crate) async fn run_agent_assist_task(
         input: RunAgentAssistTaskInput,
     ) -> Result<(), String> {
+        let backend = agent::create_backend(input.session_model.kind());
+
+        Self::run_agent_assist_task_with_backend(input, backend.as_ref()).await
+    }
+
+    /// Executes one isolated assist prompt using the provided backend.
+    ///
+    /// # Errors
+    /// Returns an error when the one-shot prompt fails or returns invalid
+    /// protocol output.
+    async fn run_agent_assist_task_with_backend(
+        input: RunAgentAssistTaskInput,
+        backend: &dyn agent::AgentBackend,
+    ) -> Result<(), String> {
         let RunAgentAssistTaskInput {
-            agent,
             app_event_tx,
             child_pid,
-            clock,
-            cmd,
             db,
+            folder,
             id,
             output,
+            prompt,
             session_model,
         } = input;
+        let assist_submission = agent::submit_one_shot_with_backend(
+            backend,
+            agent::OneShotRequest {
+                child_pid: Some(child_pid.as_ref()),
+                folder: &folder,
+                model: session_model,
+                prompt: &prompt,
+                reasoning_level: crate::domain::agent::ReasoningLevel::default(),
+            },
+        )
+        .await
+        .inspect_err(|_error| {
+            Self::clear_session_progress(&app_event_tx, &id);
+        })?;
 
-        let mut tokio_cmd = tokio::process::Command::from(cmd);
-        tokio_cmd.stdin(std::process::Stdio::null());
-
-        let mut child = match tokio_cmd.spawn() {
-            Ok(child) => child,
-            Err(spawn_error) => {
-                let message = format!("Failed to spawn process: {spawn_error}\n");
-                Self::append_session_output(&output, &db, &app_event_tx, &id, &message).await;
-                Self::clear_session_progress(&app_event_tx, &id);
-
-                return Err(message.trim().to_string());
-            }
-        };
-
-        if let Some(pid) = child.id()
-            && let Ok(mut guard) = child_pid.lock()
-        {
-            *guard = Some(pid);
+        let answer_text = assist_submission.response.to_answer_display_text();
+        if !answer_text.trim().is_empty() {
+            Self::append_session_output(&output, &db, &app_event_tx, &id, &answer_text).await;
         }
 
-        let captured =
-            Self::capture_child_output(&mut child, agent, &app_event_tx, &db, &id, &output, clock)
-                .await;
-
-        let exit_status = child
-            .wait()
-            .await
-            .map_err(|error| format!("Failed to wait for agent assistance process: {error}"))?;
-
-        if let Ok(mut guard) = child_pid.lock() {
-            *guard = None;
-        }
+        let _ = db.update_session_stats(&id, &assist_submission.stats).await;
+        let _ = db
+            .upsert_session_usage(&id, session_model.as_str(), &assist_submission.stats)
+            .await;
 
         Self::clear_session_progress(&app_event_tx, &id);
 
-        if exit_status.signal().is_some() {
-            let message = "\n[Stopped] Agent assistance interrupted.\n";
-            Self::append_session_output(&output, &db, &app_event_tx, &id, message).await;
-
-            return Err("Agent assistance interrupted".to_string());
-        }
-
-        if !exit_status.success() {
-            return Err(Self::format_assist_exit_error(
-                exit_status.code(),
-                &captured.stdout_text,
-                &captured.stderr_text,
-            ));
-        }
-
-        let parsed = agent::parse_response(agent, &captured.stdout_text, &captured.stderr_text);
-        let normalized_assist_output = Self::normalize_assist_final_output(&parsed.content);
-
-        if !captured.streamed_response_seen {
-            Self::append_session_output(
-                &output,
-                &db,
-                &app_event_tx,
-                &id,
-                &normalized_assist_output,
-            )
-            .await;
-        }
-        let _ = db.update_session_stats(&id, &parsed.stats).await;
-        let _ = db
-            .upsert_session_usage(&id, session_model.as_str(), &parsed.stats)
-            .await;
-
         Ok(())
-    }
-
-    async fn capture_child_output(
-        child: &mut tokio::process::Child,
-        agent: AgentKind,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        db: &Database,
-        id: &str,
-        output: &Arc<Mutex<String>>,
-        clock: Arc<dyn Clock>,
-    ) -> CapturedOutput {
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let raw_stdout = Arc::new(Mutex::new(String::new()));
-        let raw_stderr = Arc::new(Mutex::new(String::new()));
-        let mut handles = Vec::new();
-        let active_progress_message = Arc::new(Mutex::new(None));
-        let non_response_stream_output_seen = Arc::new(AtomicBool::new(false));
-        let streamed_response_seen = Arc::new(AtomicBool::new(false));
-
-        if let Some(stdout) = stdout {
-            let buffer = Arc::clone(&raw_stdout);
-            let stream_context = StreamOutputContext {
-                active_progress_message: Arc::clone(&active_progress_message),
-                agent,
-                app_event_tx: app_event_tx.clone(),
-                db: db.clone(),
-                id: id.to_string(),
-                non_response_stream_output_seen: Arc::clone(&non_response_stream_output_seen),
-                output: Arc::clone(output),
-                streamed_response_seen: Arc::clone(&streamed_response_seen),
-            };
-            let clock = Arc::clone(&clock);
-            handles.push(tokio::spawn(async move {
-                Self::capture_raw_output(stdout, &buffer, Some(stream_context), clock).await;
-            }));
-        }
-
-        if let Some(stderr) = stderr {
-            let buffer = Arc::clone(&raw_stderr);
-            let clock = Arc::clone(&clock);
-            handles.push(tokio::spawn(async move {
-                Self::capture_raw_output(stderr, &buffer, None, clock).await;
-            }));
-        }
-
-        for handle in handles {
-            let _ = handle.await;
-        }
-
-        let stderr_text = raw_stderr.lock().map(|buf| buf.clone()).unwrap_or_default();
-        let stdout_text = raw_stdout.lock().map(|buf| buf.clone()).unwrap_or_default();
-
-        CapturedOutput {
-            stderr_text,
-            streamed_response_seen: streamed_response_seen.load(Ordering::Relaxed),
-            stdout_text,
-        }
-    }
-
-    fn format_assist_exit_error(exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
-        let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
-        let output_detail = Self::format_assist_output_detail(stdout, stderr);
-
-        format!("Agent assistance failed with exit code {exit_code}: {output_detail}")
-    }
-
-    fn format_assist_output_detail(stdout: &str, stderr: &str) -> String {
-        let trimmed_stdout = stdout.trim();
-        let trimmed_stderr = stderr.trim();
-        if !trimmed_stderr.is_empty() && !trimmed_stdout.is_empty() {
-            return format!("stderr: {trimmed_stderr}; stdout: {trimmed_stdout}");
-        }
-        if !trimmed_stderr.is_empty() {
-            return format!("stderr: {trimmed_stderr}");
-        }
-        if !trimmed_stdout.is_empty() {
-            return format!("stdout: {trimmed_stdout}");
-        }
-
-        "no stdout or stderr output".to_string()
     }
 
     /// Applies a status transition to memory and database when valid.
@@ -496,71 +334,6 @@ impl SessionTaskService {
         true
     }
 
-    /// Captures raw output from a stream into in-memory buffers.
-    ///
-    /// Parsed response-content chunks are normalized before they are appended
-    /// to user-visible session output so protocol wrappers are hidden. Flush
-    /// timing uses an injected [`Clock`] for deterministic tests.
-    pub(in crate::app::session) async fn capture_raw_output<R: AsyncRead + Unpin>(
-        source: R,
-        buffer: &Arc<Mutex<String>>,
-        stream_context: Option<StreamOutputContext>,
-        clock: Arc<dyn Clock>,
-    ) {
-        let mut reader = tokio::io::BufReader::new(source).lines();
-        let mut raw_buffer_batch = String::new();
-        let mut session_output_batch = String::new();
-        let mut last_flush = clock.now_instant();
-
-        while let Ok(Some(line)) = reader.next_line().await {
-            raw_buffer_batch.push_str(&line);
-            raw_buffer_batch.push('\n');
-
-            let should_flush = raw_buffer_batch.len() >= OUTPUT_BATCH_SIZE
-                || session_output_batch.len() >= OUTPUT_BATCH_SIZE
-                || last_flush.elapsed() >= OUTPUT_BATCH_INTERVAL;
-
-            Self::flush_raw_buffer_if_needed(buffer, &mut raw_buffer_batch, should_flush);
-
-            let Some(stream_context) = &stream_context else {
-                if should_flush {
-                    last_flush = clock.now_instant();
-                }
-                continue;
-            };
-
-            Self::process_stream_output_line(
-                stream_context,
-                &line,
-                &mut session_output_batch,
-                should_flush,
-                &mut last_flush,
-                clock.as_ref(),
-            )
-            .await;
-        }
-
-        // Final flush
-        if !raw_buffer_batch.is_empty()
-            && let Ok(mut buf) = buffer.lock()
-        {
-            buf.push_str(&raw_buffer_batch);
-        }
-
-        if let Some(stream_context) = stream_context
-            && !session_output_batch.is_empty()
-        {
-            Self::append_session_output(
-                &stream_context.output,
-                &stream_context.db,
-                &stream_context.app_event_tx,
-                &stream_context.id,
-                &session_output_batch,
-            )
-            .await;
-        }
-    }
-
     /// Appends output to the in-memory handle buffer and database.
     pub(crate) async fn append_session_output(
         output: &Arc<Mutex<String>>,
@@ -578,284 +351,9 @@ impl SessionTaskService {
         });
     }
 
-    /// Flushes raw stream text into the shared in-memory output buffer.
-    fn flush_raw_buffer_if_needed(
-        buffer: &Arc<Mutex<String>>,
-        raw_buffer_batch: &mut String,
-        should_flush: bool,
-    ) {
-        if should_flush && !raw_buffer_batch.is_empty() {
-            if let Ok(mut buf) = buffer.lock() {
-                buf.push_str(raw_buffer_batch);
-            }
-
-            raw_buffer_batch.clear();
-        }
-    }
-
-    /// Flushes session-visible output when the caller indicates a flush point.
-    async fn flush_session_output_if_needed(
-        stream_context: &StreamOutputContext,
-        session_output_batch: &mut String,
-        should_flush: bool,
-        last_flush: &mut std::time::Instant,
-        clock: &dyn Clock,
-    ) {
-        if !should_flush {
-            return;
-        }
-
-        Self::flush_session_output_batch(stream_context, session_output_batch).await;
-        *last_flush = clock.now_instant();
-    }
-
-    /// Flushes any pending stream output when one parsed line is skipped.
-    async fn flush_stream_output_for_skipped_line(
-        stream_context: &StreamOutputContext,
-        session_output_batch: &mut String,
-        should_flush: bool,
-        last_flush: &mut std::time::Instant,
-        clock: &dyn Clock,
-    ) {
-        Self::flush_session_output_if_needed(
-            stream_context,
-            session_output_batch,
-            should_flush,
-            last_flush,
-            clock,
-        )
-        .await;
-    }
-
-    /// Processes one parsed stream line and routes response/progress updates.
-    async fn process_stream_output_line(
-        stream_context: &StreamOutputContext,
-        line: &str,
-        session_output_batch: &mut String,
-        should_flush: bool,
-        last_flush: &mut std::time::Instant,
-        clock: &dyn Clock,
-    ) {
-        let Some((stream_text, is_response_content)) =
-            agent::parse_stream_output_line(stream_context.agent, line)
-        else {
-            Self::flush_stream_output_for_skipped_line(
-                stream_context,
-                session_output_batch,
-                should_flush,
-                last_flush,
-                clock,
-            )
-            .await;
-
-            return;
-        };
-
-        if stream_text.trim().is_empty() {
-            Self::flush_stream_output_for_skipped_line(
-                stream_context,
-                session_output_batch,
-                should_flush,
-                last_flush,
-                clock,
-            )
-            .await;
-
-            return;
-        }
-
-        if is_response_content {
-            let Some(normalized_stream_text) =
-                Self::normalize_assist_stream_response_content(&stream_text)
-            else {
-                Self::flush_stream_output_for_skipped_line(
-                    stream_context,
-                    session_output_batch,
-                    should_flush,
-                    last_flush,
-                    clock,
-                )
-                .await;
-
-                return;
-            };
-            if normalized_stream_text.trim().is_empty() {
-                Self::flush_stream_output_for_skipped_line(
-                    stream_context,
-                    session_output_batch,
-                    should_flush,
-                    last_flush,
-                    clock,
-                )
-                .await;
-
-                return;
-            }
-
-            Self::handle_response_content_line(
-                stream_context,
-                &normalized_stream_text,
-                session_output_batch,
-                should_flush,
-                last_flush,
-                clock,
-            )
-            .await;
-
-            return;
-        }
-
-        Self::handle_progress_content_line(
-            stream_context,
-            stream_text,
-            session_output_batch,
-            should_flush,
-            last_flush,
-            clock,
-        )
-        .await;
-    }
-
-    /// Handles parsed response content and reconciles progress state
-    /// transitions.
-    ///
-    /// Streamed response entries are separated by a blank line to improve
-    /// readability in chat output. Progress labels are cleared from UI state
-    /// without emitting synthetic completion lines into chat output.
-    async fn handle_response_content_line(
-        stream_context: &StreamOutputContext,
-        stream_text: &str,
-        session_output_batch: &mut String,
-        should_flush: bool,
-        last_flush: &mut std::time::Instant,
-        clock: &dyn Clock,
-    ) {
-        let should_prefix_blank_line = !stream_context
-            .streamed_response_seen
-            .load(Ordering::Relaxed)
-            && stream_context
-                .non_response_stream_output_seen
-                .load(Ordering::Relaxed);
-
-        if should_prefix_blank_line {
-            session_output_batch.push('\n');
-        }
-
-        let normalized_stream_text = stream_text.trim_end_matches('\n');
-        session_output_batch.push_str(normalized_stream_text);
-        session_output_batch.push_str("\n\n");
-
-        if should_flush {
-            Self::flush_session_output_batch(stream_context, session_output_batch).await;
-            *last_flush = clock.now_instant();
-        }
-
-        stream_context
-            .streamed_response_seen
-            .store(true, Ordering::Relaxed);
-
-        let previous_progress_message =
-            Self::take_active_progress_message(&stream_context.active_progress_message);
-
-        if previous_progress_message.is_some() {
-            // Flush pending output before clearing the progress indicator.
-            Self::flush_session_output_batch(stream_context, session_output_batch).await;
-            Self::set_session_progress(&stream_context.app_event_tx, &stream_context.id, None);
-        }
-    }
-
-    /// Handles parsed non-response progress content and publishes progress
-    /// updates without appending progress text into chat output.
-    async fn handle_progress_content_line(
-        stream_context: &StreamOutputContext,
-        stream_text: String,
-        session_output_batch: &mut String,
-        should_flush: bool,
-        last_flush: &mut std::time::Instant,
-        clock: &dyn Clock,
-    ) {
-        stream_context
-            .non_response_stream_output_seen
-            .store(true, Ordering::Relaxed);
-
-        match Self::replace_active_progress_message_if_changed(
-            &stream_context.active_progress_message,
-            &stream_text,
-        ) {
-            ActiveProgressMessageUpdate::NoChange => {
-                Self::flush_session_output_if_needed(
-                    stream_context,
-                    session_output_batch,
-                    should_flush,
-                    last_flush,
-                    clock,
-                )
-                .await;
-
-                return;
-            }
-            ActiveProgressMessageUpdate::Updated => {}
-        }
-
-        // Flush pending output before publishing progress updates.
-        Self::flush_session_output_batch(stream_context, session_output_batch).await;
-        Self::set_session_progress(
-            &stream_context.app_event_tx,
-            &stream_context.id,
-            Some(stream_text),
-        );
-
-        // Reset flush timer as we just did a potential write (progress update events
-        // are immediate)
-        *last_flush = clock.now_instant();
-    }
-
-    /// Persists and clears the session output batch when it contains data.
-    async fn flush_session_output_batch(
-        stream_context: &StreamOutputContext,
-        session_output_batch: &mut String,
-    ) {
-        if !session_output_batch.is_empty() {
-            Self::append_session_output(
-                &stream_context.output,
-                &stream_context.db,
-                &stream_context.app_event_tx,
-                &stream_context.id,
-                session_output_batch,
-            )
-            .await;
-            session_output_batch.clear();
-        }
-    }
-
-    fn take_active_progress_message(
-        active_progress_message: &Arc<Mutex<Option<String>>>,
-    ) -> Option<String> {
-        let Ok(mut active_progress_message) = active_progress_message.lock() else {
-            return None;
-        };
-
-        active_progress_message.take()
-    }
-
     /// Clears the transient progress message for one session.
     pub(crate) fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
         Self::set_session_progress(app_event_tx, id, None);
-    }
-
-    fn replace_active_progress_message_if_changed(
-        active_progress_message: &Arc<Mutex<Option<String>>>,
-        stream_text: &str,
-    ) -> ActiveProgressMessageUpdate {
-        let Ok(mut active_progress_message) = active_progress_message.lock() else {
-            return ActiveProgressMessageUpdate::NoChange;
-        };
-        if active_progress_message.as_deref() == Some(stream_text) {
-            return ActiveProgressMessageUpdate::NoChange;
-        }
-        active_progress_message.replace(stream_text.to_string());
-
-        ActiveProgressMessageUpdate::Updated
     }
 
     /// Emits a transient progress message update for one session.
@@ -870,24 +368,6 @@ impl SessionTaskService {
         });
     }
 
-    /// Normalizes one streamed assist response chunk for transcript emission.
-    ///
-    /// Structured protocol payloads are unwrapped to display text while
-    /// partial protocol JSON fragments are suppressed.
-    fn normalize_assist_stream_response_content(stream_text: &str) -> Option<String> {
-        agent::protocol::normalize_stream_assistant_chunk(stream_text)
-    }
-
-    /// Normalizes final assist output before persistence and UI updates.
-    ///
-    /// Structured protocol payloads are unwrapped to display text while
-    /// plain text payloads pass through unchanged.
-    fn normalize_assist_final_output(output: &str) -> String {
-        let parsed_response = agent::protocol::parse_agent_response(output);
-
-        parsed_response.to_display_text()
-    }
-
     fn status_requires_full_refresh(status: Status) -> bool {
         matches!(
             status,
@@ -898,19 +378,41 @@ impl SessionTaskService {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
     use std::path::PathBuf;
-    use std::process::{Command, Stdio};
-    use std::sync::atomic::AtomicBool;
+    use std::process::Command;
 
     use super::*;
-    use crate::app::session::RealClock;
     use crate::db::Database;
+    use crate::infra::agent::AgentCommandMode;
+    use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::git::MockGitClient;
 
-    /// Returns the production clock implementation as a trait object.
-    fn test_clock() -> Arc<dyn Clock> {
-        Arc::new(RealClock)
+    /// Builds one deterministic shell command used by mocked backends.
+    fn mock_shell_command(stdout: &str, stderr: &str, exit_code: i32) -> Command {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(
+            "printf '%s' \"$ASSIST_STDOUT\"; printf '%s' \"$ASSIST_STDERR\" >&2; exit \
+             \"$ASSIST_EXIT\"",
+        );
+        command.env("ASSIST_STDOUT", stdout);
+        command.env("ASSIST_STDERR", stderr);
+        command.env("ASSIST_EXIT", exit_code.to_string());
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+
+        command
+    }
+
+    /// Inserts one review session used by assist-task tests.
+    async fn insert_review_session(database: &Database, model: &str) {
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-id", model, "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
     }
 
     #[test]
@@ -981,7 +483,6 @@ mod tests {
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
             db: Database::open_in_memory()
                 .await
                 .expect("failed to open in-memory db"),
@@ -1019,7 +520,6 @@ mod tests {
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
             db: Database::open_in_memory()
                 .await
                 .expect("failed to open in-memory db"),
@@ -1056,7 +556,6 @@ mod tests {
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
             db: Database::open_in_memory()
                 .await
                 .expect("failed to open in-memory db"),
@@ -1079,49 +578,48 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures assist command output is appended without auto-commit side
-    /// effects for assistant-only runs.
-    async fn test_run_agent_assist_task_appends_output_without_committing() {
+    /// Verifies one-shot assist output unwraps structured protocol answers
+    /// before persistence and session usage updates.
+    async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         // Arrange
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session(
-                "session-id",
-                "claude-sonnet-4-20250514",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-
+        insert_review_session(&database, AgentModel::ClaudeOpus46.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
+        let child_pid = Arc::new(Mutex::new(None));
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().times(1).returning(|request| {
+            assert!(matches!(
+                request.mode,
+                AgentCommandMode::OneShot {
+                    prompt: "Resolve conflict",
+                }
+            ));
 
-        let mut command = Command::new("sh");
-        command
-            .args(["-lc", "printf 'assistant output'"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            Ok(mock_shell_command(
+                r#"{"result":"{\"messages\":[{\"type\":\"answer\",\"text\":\"Resolved the rebase conflict.\"}]}","usage":{"input_tokens":11,"output_tokens":7}}"#,
+                "",
+                0,
+            ))
+        });
 
         // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Claude,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database.clone(),
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::ClaudeOpus46,
-        })
+        let result = SessionTaskService::run_agent_assist_task_with_backend(
+            RunAgentAssistTaskInput {
+                app_event_tx,
+                child_pid: Arc::clone(&child_pid),
+                db: database.clone(),
+                folder: temp_dir.path().to_path_buf(),
+                id: "session-id".to_string(),
+                output: Arc::clone(&output),
+                prompt: "Resolve conflict".to_string(),
+                session_model: AgentModel::ClaudeOpus46,
+            },
+            &backend,
+        )
         .await;
 
         // Assert
@@ -1131,318 +629,9 @@ mod tests {
             result.err()
         );
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(output_text.contains("assistant output"));
-        let sessions = database
-            .load_sessions()
-            .await
-            .expect("failed to load sessions");
-        assert_eq!(sessions.len(), 1);
-    }
-
-    #[tokio::test]
-    /// Verifies Codex stream parsing drops command-progress JSON while keeping
-    /// final assistant output.
-    async fn test_run_agent_assist_task_streams_codex_output_without_duplication() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session("session-id", "gpt-5.3-codex", "main", "Review", project_id)
-            .await
-            .expect("failed to insert session");
-
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                "printf '%s\\n' \
-                 '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}' \
-                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
-                 Command completed\"}}' \
-                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
-                 Final answer\"}}' \
-                 '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
-                 7}}'",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Codex,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database.clone(),
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
-        })
-        .await;
-
-        // Assert
-        assert!(
-            result.is_ok(),
-            "assist task should succeed: {:?}",
-            result.err()
-        );
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(!output_text.contains("Command completed"));
-        assert!(!output_text.contains("Running a command"));
-        assert!(!output_text.contains("command_execution"));
-        assert_eq!(output_text.matches("Final answer").count(), 1);
-        let sessions = database
-            .load_sessions()
-            .await
-            .expect("failed to load sessions");
-        assert_eq!(sessions[0].input_tokens, 11);
-        assert_eq!(sessions[0].output_tokens, 7);
-    }
-
-    #[tokio::test]
-    /// Verifies stream parsing keeps spacing between distinct assistant
-    /// messages.
-    async fn test_run_agent_assist_task_streams_codex_output_with_spacing_between_messages() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session("session-id", "gpt-5.3-codex", "main", "Review", project_id)
-            .await
-            .expect("failed to insert session");
-
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                "printf '%s\\n' \
-                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
-                 First message\"}}' \
-                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
-                 Final answer\"}}' \
-                 '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
-                 7}}'",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Codex,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database,
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
-        })
-        .await;
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-
-        // Assert
-        assert!(
-            result.is_ok(),
-            "assist task should succeed: {:?}",
-            result.err()
-        );
-        assert!(output_text.contains("First message\n\nFinal answer"));
-        assert_eq!(output_text.matches("Final answer").count(), 1);
-    }
-
-    #[tokio::test]
-    /// Verifies Codex structured protocol payloads are unwrapped to plain
-    /// assistant text in streamed assist output.
-    async fn test_run_agent_assist_task_streams_codex_structured_output_without_raw_json() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session("session-id", "gpt-5.3-codex", "main", "Review", project_id)
-            .await
-            .expect("failed to insert session");
-
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                r#"printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"messages\":[{\"type\":\"answer\",\"text\":\"Resolved the rebase conflict.\"}]}"}}' '{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":7}}'"#,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Codex,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database,
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
-        })
-        .await;
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-
-        // Assert
-        assert!(
-            result.is_ok(),
-            "assist task should succeed: {:?}",
-            result.err()
-        );
         assert!(output_text.contains("Resolved the rebase conflict."));
         assert!(!output_text.contains(r#"{"messages""#));
-    }
-
-    #[tokio::test]
-    /// Verifies non-stream assist fallback output unwraps structured protocol
-    /// payloads before persistence.
-    async fn test_run_agent_assist_task_unwraps_structured_output_in_non_stream_fallback() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session(
-                "session-id",
-                "claude-sonnet-4-20250514",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                r#"printf '%s\n' '{"type":"result","subtype":"success","result":"{\"messages\":[{\"type\":\"answer\",\"text\":\"Applied conflict resolution.\"}]}","usage":{"input_tokens":11,"output_tokens":7}}'"#,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Claude,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database,
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::ClaudeOpus46,
-        })
-        .await;
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-
-        // Assert
-        assert!(
-            result.is_ok(),
-            "assist task should succeed: {:?}",
-            result.err()
-        );
-        assert!(output_text.contains("Applied conflict resolution."));
-        assert!(!output_text.contains(r#"{"messages""#));
-    }
-
-    #[tokio::test]
-    /// Verifies Claude progress events stay compact while final response and
-    /// token stats are persisted.
-    async fn test_run_agent_assist_task_streams_claude_output_with_compact_progress() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session(
-                "session-id",
-                "claude-sonnet-4-20250514",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                "printf '%s\\n' '{\"type\":\"tool_use\",\"tool_name\":\"Bash\"}' \
-                 '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"Final \
-                 answer\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}'",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Claude,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database.clone(),
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::ClaudeOpus46,
-        })
-        .await;
-
-        // Assert
-        assert!(
-            result.is_ok(),
-            "assist task should succeed: {:?}",
-            result.err()
-        );
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(!output_text.contains("Running a command"));
-        assert!(!output_text.contains("tool_use"));
-        assert_eq!(output_text.matches("Final answer").count(), 1);
+        assert_eq!(*child_pid.lock().expect("failed to lock child pid"), None);
         let sessions = database
             .load_sessions()
             .await
@@ -1452,220 +641,127 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Gemini progress events stay compact while final response and
-    /// token stats are persisted.
-    async fn test_run_agent_assist_task_streams_gemini_output_with_compact_progress() {
+    /// Verifies assist-task usage accounting includes the initial attempt and
+    /// any protocol-repair turns.
+    async fn test_run_agent_assist_task_accumulates_stats_across_protocol_repair_attempts() {
         // Arrange
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session(
-                "session-id",
-                "gemini-3-flash-preview",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-
+        insert_review_session(&database, AgentModel::ClaudeOpus46.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let build_call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().times(2).returning({
+            let build_call_count = Arc::clone(&build_call_count);
 
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                "printf '%s\\n' \
-                 '{\"type\":\"tool_use\",\"tool_name\":\"google_search\",\"tool_id\":\"tool-1\",\"\
-                 parameters\":{}}' \
-                 '{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Final \
-                 answer\",\"delta\":true}' \
-                 '{\"type\":\"result\",\"status\":\"success\",\"stats\":{\"input_tokens\":11,\"\
-                 output_tokens\":7}}'",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            move |request| {
+                let attempt =
+                    build_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Gemini,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database.clone(),
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::Gemini3FlashPreview,
-        })
-        .await;
+                match attempt {
+                    0 => {
+                        assert!(matches!(
+                            request.mode,
+                            AgentCommandMode::OneShot {
+                                prompt: "Resolve conflict",
+                            }
+                        ));
 
-        // Assert
-        assert!(
-            result.is_ok(),
-            "assist task should succeed: {:?}",
-            result.err()
-        );
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(!output_text.contains("Searching the web"));
-        assert!(!output_text.contains("google_search"));
-        assert_eq!(output_text.matches("Final answer").count(), 1);
-        let sessions = database
-            .load_sessions()
-            .await
-            .expect("failed to load sessions");
-        assert_eq!(sessions[0].input_tokens, 11);
-        assert_eq!(sessions[0].output_tokens, 7);
-    }
+                        Ok(mock_shell_command(
+                            r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1}}"#,
+                            "",
+                            0,
+                        ))
+                    }
+                    1 => {
+                        let prompt = match request.mode {
+                            AgentCommandMode::OneShot { prompt } => prompt,
+                            _ => "",
+                        };
+                        assert!(
+                            prompt.contains(
+                                "Your previous response did not match the required JSON schema."
+                            ),
+                            "repair prompt should explain the protocol failure"
+                        );
 
-    #[tokio::test]
-    /// Ensures repeated progress updates are de-duplicated in emitted app
-    /// events.
-    async fn test_run_agent_assist_task_deduplicates_repeated_progress_updates() {
-        // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session("session-id", "gpt-5.3-codex", "main", "Review", project_id)
-            .await
-            .expect("failed to insert session");
-
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-lc",
-                "printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"type\":\"web_search\"}}' \
-                 '{\"type\":\"item.started\",\"item\":{\"type\":\"web_search\"}}' \
-                 '{\"type\":\"item.started\",\"item\":{\"type\":\"web_search\"}}' \
-                 '{\"type\":\"item.started\",\"item\":{\"type\":\"reasoning\"}}' \
-                 '{\"type\":\"item.started\",\"item\":{\"type\":\"reasoning\"}}' \
-                 '{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\"}}' \
-                 '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\
-                 Final answer\"}}' \
-                 '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":11,\"output_tokens\":\
-                 7}}'",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Codex,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database,
-            id: "session-id".to_string(),
-            output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
-        })
-        .await;
-        let mut progress_updates = Vec::new();
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::SessionProgressUpdated {
-                progress_message,
-                session_id,
-            } = event
-                && session_id == "session-id"
-            {
-                progress_updates.push(progress_message);
+                        Ok(mock_shell_command(
+                            r#"{"result":"{\"messages\":[{\"type\":\"answer\",\"text\":\"Recovered conflict resolution.\"}]}","usage":{"input_tokens":3,"output_tokens":2}}"#,
+                            "",
+                            0,
+                        ))
+                    }
+                    _ => unreachable!("unexpected extra backend call"),
+                }
             }
-        }
+        });
+
+        // Act
+        let result = SessionTaskService::run_agent_assist_task_with_backend(
+            RunAgentAssistTaskInput {
+                app_event_tx,
+                child_pid: Arc::new(Mutex::new(None)),
+                db: database.clone(),
+                folder: temp_dir.path().to_path_buf(),
+                id: "session-id".to_string(),
+                output: Arc::clone(&output),
+                prompt: "Resolve conflict".to_string(),
+                session_model: AgentModel::ClaudeOpus46,
+            },
+            &backend,
+        )
+        .await;
 
         // Assert
         assert!(
             result.is_ok(),
-            "assist task should succeed: {:?}",
+            "assist task should succeed after repair: {:?}",
             result.err()
         );
-        assert_eq!(
-            progress_updates
-                .iter()
-                .filter(|entry| entry.as_deref() == Some("Searching the web"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            progress_updates
-                .iter()
-                .filter(|entry| entry.as_deref() == Some("Thinking"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            progress_updates
-                .iter()
-                .filter(|entry| entry.as_deref() == Some("Running a command"))
-                .count(),
-            1
-        );
-        assert_eq!(progress_updates.last(), Some(&None));
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(!output_text.contains("Web search completed"));
-        assert!(!output_text.contains("Thinking completed"));
-        assert!(!output_text.contains("Command completed"));
-        assert!(!output_text.contains("Searching the web"));
-        assert!(!output_text.contains("Running a command"));
+        assert!(output_text.contains("Recovered conflict resolution."));
+        let sessions = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+        assert_eq!(sessions[0].input_tokens, 5);
+        assert_eq!(sessions[0].output_tokens, 3);
     }
 
     #[tokio::test]
-    /// Verifies non-zero child exits surface both exit code and stderr text.
+    /// Verifies non-zero assist subprocess exits surface the one-shot command
+    /// error details.
     async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         // Arrange
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        database
-            .insert_session(
-                "session-id",
-                "claude-sonnet-4-20250514",
-                "main",
-                "Review",
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
-
+        insert_review_session(&database, AgentModel::ClaudeOpus46.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let output = Arc::new(Mutex::new(String::new()));
-
-        let mut command = Command::new("sh");
-        command
-            .args(["-lc", "printf 'assist failed' >&2; exit 7"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let mut backend = MockAgentBackend::new();
+        backend
+            .expect_build_command()
+            .times(1)
+            .returning(|_| Ok(mock_shell_command("", "assist failed", 7)));
 
         // Act
-        let result = SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-            agent: AgentKind::Claude,
-            app_event_tx,
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            cmd: command,
-            db: database,
-            id: "session-id".to_string(),
-            output,
-            session_model: AgentModel::ClaudeOpus46,
-        })
+        let result = SessionTaskService::run_agent_assist_task_with_backend(
+            RunAgentAssistTaskInput {
+                app_event_tx,
+                child_pid: Arc::new(Mutex::new(None)),
+                db: database,
+                folder: temp_dir.path().to_path_buf(),
+                id: "session-id".to_string(),
+                output: Arc::new(Mutex::new(String::new())),
+                prompt: "Resolve conflict".to_string(),
+                session_model: AgentModel::ClaudeOpus46,
+            },
+            &backend,
+        )
         .await;
 
         // Assert
@@ -1673,148 +769,5 @@ mod tests {
         let error_text = result.expect_err("expected non-zero exit to fail");
         assert!(error_text.contains("exit code 7"));
         assert!(error_text.contains("assist failed"));
-    }
-
-    #[tokio::test]
-    /// Verifies streaming response-content lines are routed to the output
-    /// buffer and database, and emit `SessionUpdated` events.
-    async fn test_capture_raw_output_routes_response_content_to_output_buffer_and_db() {
-        // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        db.insert_session(
-            "sess-resp",
-            "claude-opus-4-6",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        let output = Arc::new(Mutex::new(String::new()));
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let raw_buffer = Arc::new(Mutex::new(String::new()));
-        let stream_context = StreamOutputContext {
-            active_progress_message: Arc::new(Mutex::new(None)),
-            agent: AgentKind::Claude,
-            app_event_tx,
-            db: db.clone(),
-            id: "sess-resp".to_string(),
-            non_response_stream_output_seen: Arc::new(AtomicBool::new(false)),
-            output: Arc::clone(&output),
-            streamed_response_seen: Arc::new(AtomicBool::new(false)),
-        };
-        // Claude assistant stream line: response content chunk
-        let response_line = concat!(
-            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}]}}"#,
-            "\n"
-        );
-        let cursor = Cursor::new(response_line.as_bytes().to_vec());
-
-        // Act
-        SessionTaskService::capture_raw_output(
-            cursor,
-            &raw_buffer,
-            Some(stream_context),
-            test_clock(),
-        )
-        .await;
-        let observed_events: Vec<AppEvent> =
-            std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect();
-
-        // Assert
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(
-            output_text.contains("hello world"),
-            "response content should appear in output: {output_text}"
-        );
-        assert!(
-            observed_events
-                .iter()
-                .any(|event| matches!(event, AppEvent::SessionUpdated { .. })),
-            "should emit SessionUpdated when output is appended"
-        );
-        assert!(
-            !observed_events.iter().any(|event| matches!(
-                event,
-                AppEvent::SessionProgressUpdated {
-                    progress_message: Some(_),
-                    ..
-                }
-            )),
-            "should not emit progress events for response content"
-        );
-    }
-
-    #[tokio::test]
-    /// Verifies streaming progress lines emit `SessionProgressUpdated` UI
-    /// events without appending content to the output buffer or database.
-    async fn test_capture_raw_output_routes_progress_lines_to_ui_event_only() {
-        // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        db.insert_session(
-            "sess-prog",
-            "claude-opus-4-6",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        let output = Arc::new(Mutex::new(String::new()));
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let raw_buffer = Arc::new(Mutex::new(String::new()));
-        let stream_context = StreamOutputContext {
-            active_progress_message: Arc::new(Mutex::new(None)),
-            agent: AgentKind::Claude,
-            app_event_tx,
-            db: db.clone(),
-            id: "sess-prog".to_string(),
-            non_response_stream_output_seen: Arc::new(AtomicBool::new(false)),
-            output: Arc::clone(&output),
-            streamed_response_seen: Arc::new(AtomicBool::new(false)),
-        };
-        // Claude tool_use JSON line: progress indicator
-        let progress_line = "{\"type\":\"tool_use\",\"tool_name\":\"Bash\"}\n";
-        let cursor = Cursor::new(progress_line.as_bytes().to_vec());
-
-        // Act
-        SessionTaskService::capture_raw_output(
-            cursor,
-            &raw_buffer,
-            Some(stream_context),
-            test_clock(),
-        )
-        .await;
-        let observed_events: Vec<AppEvent> =
-            std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect();
-
-        // Assert
-        let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(
-            output_text.is_empty(),
-            "progress lines should not appear in output buffer: {output_text}"
-        );
-        assert!(
-            observed_events.iter().any(|event| matches!(
-                event,
-                AppEvent::SessionProgressUpdated {
-                    progress_message: Some(_),
-                    ..
-                }
-            )),
-            "should emit SessionProgressUpdated for progress lines"
-        );
     }
 }

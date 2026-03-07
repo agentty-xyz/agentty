@@ -18,6 +18,7 @@ When backend protocol or provider parsing behavior changes, update:
 - [`gemini.rs`](gemini.rs) - Gemini CLI backend command construction.
 - [`protocol.rs`](protocol.rs) - Structured response contract (`AgentResponse`, `AgentResponseMessage`, `AgentResponseMessageKind`), schema generation, parsing, and repair helpers.
 - [`response_parser.rs`](response_parser.rs) - Provider-specific parsing for final and streaming output.
+- [`submission.rs`](submission.rs) - Shared one-shot prompt execution with strict protocol parsing and repair.
 - [`AGENTS.md`](AGENTS.md) - Local module guidance and directory index.
 - [`CLAUDE.md`](CLAUDE.md) - Symlink to AGENTS.md.
 - [`GEMINI.md`](GEMINI.md) - Symlink to AGENTS.md.

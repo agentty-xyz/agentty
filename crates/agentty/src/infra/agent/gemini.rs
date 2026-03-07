@@ -30,7 +30,7 @@ impl AgentBackend for GeminiBackend {
             .session_output()
             .is_some_and(|session_output| !session_output.trim().is_empty());
         let prompt = match mode {
-            AgentCommandMode::Start { prompt } | AgentCommandMode::StartPlain { prompt } => {
+            AgentCommandMode::Start { prompt } | AgentCommandMode::OneShot { prompt } => {
                 prompt.to_string()
             }
             AgentCommandMode::Resume {
@@ -39,11 +39,11 @@ impl AgentBackend for GeminiBackend {
             } => build_resume_prompt(prompt, session_output)?,
         };
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
-        let prompt = if mode.uses_structured_protocol() {
-            prepend_protocol_instructions(&prompt, ProtocolInstructionMode::WithSchema)?
-        } else {
-            prompt
-        };
+        let prompt = prepend_protocol_instructions(
+            &prompt,
+            ProtocolInstructionMode::WithSchema,
+            mode.protocol_prompt_kind(),
+        )?;
         let mut command = Command::new("gemini");
         command
             .arg("--prompt")
@@ -119,9 +119,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies plain-start Gemini prompts skip structured protocol
-    /// instructions.
-    fn test_gemini_start_plain_command_skips_protocol_instructions() {
+    /// Verifies one-shot Gemini prompts keep the protocol wrapper without the
+    /// session change-summary contract.
+    fn test_gemini_one_shot_command_skips_change_summary_instructions() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = GeminiBackend;
@@ -132,7 +132,7 @@ mod tests {
             BuildCommandRequest {
                 reasoning_level: ReasoningLevel::default(),
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::StartPlain {
+                mode: AgentCommandMode::OneShot {
                     prompt: "Generate title",
                 },
                 model: "gemini-3-flash-preview",
@@ -142,6 +142,7 @@ mod tests {
         let debug_command = format!("{command:?}");
 
         // Assert
-        assert!(!debug_command.contains("Structured response protocol:"));
+        assert!(debug_command.contains("Structured response protocol:"));
+        assert!(!debug_command.contains("## Change Summary"));
     }
 }

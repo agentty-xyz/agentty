@@ -2,7 +2,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
+    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest,
+    ProtocolInstructionMode, build_resume_prompt, prepend_protocol_instructions,
     prepend_repo_root_path_instructions,
 };
 use crate::infra::agent::protocol::agent_response_output_schema_json;
@@ -35,7 +36,7 @@ impl AgentBackend for ClaudeBackend {
             model,
         } = request;
         let prompt = match mode {
-            AgentCommandMode::Start { prompt } | AgentCommandMode::StartPlain { prompt } => {
+            AgentCommandMode::Start { prompt } | AgentCommandMode::OneShot { prompt } => {
                 prompt.to_string()
             }
             AgentCommandMode::Resume {
@@ -44,6 +45,11 @@ impl AgentBackend for ClaudeBackend {
             } => build_resume_prompt(prompt, session_output)?,
         };
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
+        let prompt = prepend_protocol_instructions(
+            &prompt,
+            ProtocolInstructionMode::WithoutSchema,
+            mode.protocol_prompt_kind(),
+        )?;
         let mut command = Command::new("claude");
 
         if matches!(mode, AgentCommandMode::Resume { .. }) {
@@ -136,9 +142,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies plain-start Claude prompts still enforce native structured
-    /// output schema validation.
-    fn test_claude_start_plain_command_enforces_json_schema() {
+    /// Verifies one-shot Claude prompts keep protocol JSON and skip session
+    /// change-summary requirements.
+    fn test_claude_one_shot_command_enforces_json_schema_without_change_summary() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = ClaudeBackend;
@@ -149,7 +155,7 @@ mod tests {
             BuildCommandRequest {
                 reasoning_level: ReasoningLevel::default(),
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::StartPlain {
+                mode: AgentCommandMode::OneShot {
                     prompt: "Generate title",
                 },
                 model: "claude-sonnet-4-6",
@@ -159,7 +165,8 @@ mod tests {
         let debug_command = format!("{command:?}");
 
         // Assert
-        assert!(!debug_command.contains("Structured response protocol:"));
+        assert!(debug_command.contains("Structured response protocol:"));
+        assert!(!debug_command.contains("## Change Summary"));
         assert!(debug_command.contains("--output-format"));
         assert!(debug_command.contains("json"));
         assert!(debug_command.contains("--json-schema"));
@@ -191,6 +198,7 @@ mod tests {
         // Assert
         assert!(debug_command.contains("--json-schema"));
         assert!(debug_command.contains("AgentResponse"));
-        assert!(!debug_command.contains("Structured response protocol:"));
+        assert!(debug_command.contains("Structured response protocol:"));
+        assert!(debug_command.contains("## Change Summary"));
     }
 }

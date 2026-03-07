@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use super::{Clock, SessionTaskService};
+use super::SessionTaskService;
 use crate::app::assist::AssistContext;
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -71,8 +71,6 @@ struct SessionWorkerContext {
     /// Provider-agnostic agent channel for this session's worker.
     channel: Arc<dyn AgentChannel>,
     child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used by downstream assist output batching.
-    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
@@ -84,8 +82,6 @@ struct SessionWorkerContext {
 /// Runtime snapshot required to create or reuse one session worker.
 pub(super) struct SessionWorkerRuntime {
     child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used by downstream assist output batching.
-    clock: Arc<dyn Clock>,
     folder: PathBuf,
     output: Arc<Mutex<String>>,
     session_id: String,
@@ -200,7 +196,6 @@ impl SessionWorkerService {
             app_event_tx: services.event_sender(),
             channel,
             child_pid: Arc::clone(&runtime.child_pid),
-            clock: Arc::clone(&runtime.clock),
             db: services.db().clone(),
             folder: runtime.folder.clone(),
             git_client: services.git_client(),
@@ -490,7 +485,6 @@ impl SessionManager {
 
         Ok(SessionWorkerRuntime {
             child_pid: Arc::clone(&handles.child_pid),
-            clock: Arc::clone(&self.state().clock),
             folder: session.folder.clone(),
             output: Arc::clone(&handles.output),
             session_id: session.id.clone(),
@@ -590,7 +584,6 @@ async fn apply_turn_result(
             SessionTaskService::handle_auto_commit(AssistContext {
                 app_event_tx: context.app_event_tx.clone(),
                 child_pid: Arc::clone(&context.child_pid),
-                clock: Arc::clone(&context.clock),
                 db: context.db.clone(),
                 folder: context.folder.clone(),
                 git_client: Arc::clone(&context.git_client),
@@ -835,7 +828,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::app::session::RealClock;
     use crate::infra::agent::AgentResponse;
     use crate::infra::agent::protocol::AgentResponseMessage;
     use crate::infra::channel::MockAgentChannel;
@@ -1265,7 +1257,6 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
-            clock: Arc::new(RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             git_client: Arc::new(MockGitClient::new()),
@@ -1322,7 +1313,6 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
-            clock: Arc::new(RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             git_client: Arc::new(MockGitClient::new()),

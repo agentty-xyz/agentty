@@ -163,26 +163,14 @@ impl TaskService {
     ) -> Result<String, String> {
         let focused_review_prompt =
             Self::focused_review_assist_prompt(focused_review_diff, session_summary)?;
-        let command_output = Self::focused_review_assist_command_output(
-            session_folder,
-            review_model,
-            &focused_review_prompt,
-        )
+        let agent_response = agent::submit_one_shot(agent::OneShotRequest {
+            child_pid: None,
+            folder: session_folder,
+            model: review_model,
+            prompt: &focused_review_prompt,
+            reasoning_level: ReasoningLevel::default(),
+        })
         .await?;
-
-        let stdout_text = String::from_utf8_lossy(&command_output.stdout).into_owned();
-        let stderr_text = String::from_utf8_lossy(&command_output.stderr).into_owned();
-
-        if !command_output.status.success() {
-            return Err(Self::format_focused_review_assist_exit_error(
-                command_output.status.code(),
-                &stdout_text,
-                &stderr_text,
-            ));
-        }
-
-        let parsed = agent::parse_response(review_model.kind(), &stdout_text, &stderr_text);
-        let agent_response = agent::protocol::parse_agent_response(&parsed.content);
         let focused_review_text = agent_response.to_display_text();
         let focused_review_text = focused_review_text.trim();
         if focused_review_text.is_empty() {
@@ -190,44 +178,6 @@ impl TaskService {
         }
 
         Ok(focused_review_text.to_string())
-    }
-
-    /// Executes one review assist model command and returns captured process
-    /// output.
-    ///
-    /// Focused review assist is intentionally isolated and always starts a
-    /// fresh one-off run.
-    async fn focused_review_assist_command_output(
-        session_folder: &Path,
-        review_model: AgentModel,
-        focused_review_prompt: &str,
-    ) -> Result<std::process::Output, String> {
-        let backend = agent::create_backend(review_model.kind());
-        let mode = Self::focused_review_assist_command_mode(focused_review_prompt);
-        let command = backend
-            .build_command(agent::BuildCommandRequest {
-                reasoning_level: ReasoningLevel::default(),
-                folder: session_folder,
-                mode,
-                model: review_model.as_str(),
-            })
-            .map_err(|error| error.to_string())?;
-        let mut tokio_command = tokio::process::Command::from(command);
-        tokio_command.stdin(std::process::Stdio::null());
-
-        tokio_command
-            .output()
-            .await
-            .map_err(|error| format!("Failed to execute review assist command: {error}"))
-    }
-
-    /// Returns the command mode for focused review assist runs.
-    fn focused_review_assist_command_mode(
-        focused_review_prompt: &str,
-    ) -> agent::AgentCommandMode<'_> {
-        agent::AgentCommandMode::Start {
-            prompt: focused_review_prompt,
-        }
     }
 
     /// Renders the review assist prompt from the markdown template.
@@ -246,36 +196,6 @@ impl TaskService {
         template
             .render()
             .map_err(|error| format!("Failed to render `review_assist_prompt.md`: {error}"))
-    }
-
-    /// Formats a review assist process failure with normalized output
-    /// details for UI display.
-    fn format_focused_review_assist_exit_error(
-        exit_code: Option<i32>,
-        stdout: &str,
-        stderr: &str,
-    ) -> String {
-        let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
-        let output_detail = Self::focused_review_assist_output_detail(stdout, stderr);
-
-        format!("Review assist failed with exit code {exit_code}: {output_detail}")
-    }
-
-    /// Formats stdout/stderr details for review assist failures.
-    fn focused_review_assist_output_detail(stdout: &str, stderr: &str) -> String {
-        let trimmed_stdout = stdout.trim();
-        let trimmed_stderr = stderr.trim();
-        if !trimmed_stderr.is_empty() && !trimmed_stdout.is_empty() {
-            return format!("stderr: {trimmed_stderr}; stdout: {trimmed_stdout}");
-        }
-        if !trimmed_stderr.is_empty() {
-            return format!("stderr: {trimmed_stderr}");
-        }
-        if !trimmed_stdout.is_empty() {
-            return format!("stdout: {trimmed_stdout}");
-        }
-
-        "no stdout or stderr output".to_string()
     }
 }
 
@@ -305,8 +225,7 @@ mod tests {
 
     #[test]
     /// Verifies that structured `AgentResponse` JSON is unwrapped to plain
-    /// display text, matching the parsing chain used by
-    /// [`TaskService::focused_review_assist_text`].
+    /// display text for focused review rendering.
     fn test_structured_agent_response_is_unwrapped_to_display_text() {
         // Arrange
         let structured_json = r#"{"messages":[{"type":"answer","text":"Review looks good."}]}"#;
@@ -317,39 +236,5 @@ mod tests {
 
         // Assert
         assert_eq!(display_text.trim(), "Review looks good.");
-    }
-
-    #[test]
-    /// Verifies that plain text content (non-JSON) passes through the parsing
-    /// chain unchanged.
-    fn test_plain_text_response_passes_through_unchanged() {
-        // Arrange
-        let plain_text = "This is a plain review response.";
-
-        // Act
-        let agent_response = agent::protocol::parse_agent_response(plain_text);
-        let display_text = agent_response.to_display_text();
-
-        // Assert
-        assert_eq!(display_text.trim(), "This is a plain review response.");
-    }
-
-    #[test]
-    /// Verifies focused review assist always uses an isolated start command
-    /// mode.
-    fn test_focused_review_assist_command_mode_always_uses_start() {
-        // Arrange
-        let focused_review_prompt = "Review this diff";
-
-        // Act
-        let mode = TaskService::focused_review_assist_command_mode(focused_review_prompt);
-
-        // Assert
-        assert!(matches!(
-            mode,
-            agent::AgentCommandMode::Start {
-                prompt: "Review this diff",
-            }
-        ));
     }
 }

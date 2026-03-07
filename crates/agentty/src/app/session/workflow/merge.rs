@@ -5,7 +5,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,7 +12,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 
 use super::access::{SESSION_HANDLES_NOT_FOUND_ERROR, SESSION_NOT_FOUND_ERROR};
-use super::{COMMIT_MESSAGE, Clock, SessionTaskService, session_branch};
+use super::{COMMIT_MESSAGE, SessionTaskService, session_branch};
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
@@ -61,8 +60,6 @@ struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used by downstream assist output batching.
-    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -80,8 +77,6 @@ struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used by downstream assist output batching.
-    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -95,8 +90,6 @@ struct RebaseTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used by downstream assist output batching.
-    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -289,68 +282,26 @@ trait SyncAssistClient: Send + Sync {
 struct RealSyncAssistClient;
 
 impl RealSyncAssistClient {
-    /// Runs one sync conflict assistance command in a blocking worker.
+    /// Runs one sync conflict assistance command through the shared one-shot
+    /// agent submission path.
     ///
     /// # Errors
-    /// Returns an error when spawning, joining, or executing the agent command
-    /// fails.
+    /// Returns an error when the one-shot agent command fails.
     async fn run_assist_command(
         folder: PathBuf,
         prompt: String,
         session_model: AgentModel,
     ) -> Result<(), String> {
-        tokio::task::spawn_blocking(move || {
-            let backend = agent::create_backend(session_model.kind());
-            let mut command = backend
-                .build_command(agent::BuildCommandRequest {
-                    reasoning_level: ReasoningLevel::default(),
-                    folder: &folder,
-                    mode: agent::AgentCommandMode::Start { prompt: &prompt },
-                    model: session_model.as_str(),
-                })
-                .map_err(|error| {
-                    format!("Failed to build sync rebase assist model command: {error}")
-                })?;
-            command.stdin(Stdio::null());
-
-            let output = command
-                .output()
-                .map_err(|error| format!("Failed to run sync rebase assist model: {error}"))?;
-            if output.status.success() {
-                return Ok(());
-            }
-
-            let detail = Self::assist_output_detail(&output.stdout, &output.stderr);
-
-            Err(format!(
-                "Sync rebase assistance failed with exit code {}: {detail}",
-                output
-                    .status
-                    .code()
-                    .map_or_else(|| "unknown".to_string(), |code| code.to_string())
-            ))
+        let _ = agent::submit_one_shot(agent::OneShotRequest {
+            child_pid: None,
+            folder: &folder,
+            model: session_model,
+            prompt: &prompt,
+            reasoning_level: ReasoningLevel::default(),
         })
-        .await
-        .map_err(|error| format!("Failed to join sync rebase assist task: {error}"))?
-    }
+        .await?;
 
-    /// Formats stdout/stderr text for sync-assist failure messages.
-    fn assist_output_detail(stdout: &[u8], stderr: &[u8]) -> String {
-        let trimmed_stdout = String::from_utf8_lossy(stdout).trim().to_string();
-        let trimmed_stderr = String::from_utf8_lossy(stderr).trim().to_string();
-        if !trimmed_stderr.is_empty() && !trimmed_stdout.is_empty() {
-            return format!("stderr: {trimmed_stderr}; stdout: {trimmed_stdout}");
-        }
-
-        if !trimmed_stderr.is_empty() {
-            return format!("stderr: {trimmed_stderr}");
-        }
-
-        if !trimmed_stdout.is_empty() {
-            return format!("stdout: {trimmed_stdout}");
-        }
-
-        "no stdout or stderr output".to_string()
+        Ok(())
     }
 }
 
@@ -512,7 +463,6 @@ impl SessionMergeService {
             app_event_tx,
             base_branch,
             child_pid,
-            clock: Arc::clone(&manager.state().clock),
             db,
             folder,
             fs_client,
@@ -586,7 +536,6 @@ impl SessionMergeService {
             app_event_tx,
             base_branch,
             child_pid,
-            clock: Arc::clone(&manager.state().clock),
             db,
             folder: session.folder.clone(),
             fs_client,
@@ -680,18 +629,15 @@ impl SessionManager {
                 let folder = folder.clone();
                 let squash_diff = squash_diff.clone();
                 let fallback_commit_message_for_task = fallback_commit_message.clone();
-                let generate_message = tokio::task::spawn_blocking(move || {
-                    Self::generate_merge_commit_message_from_diff(
-                        &folder,
-                        session_model,
-                        &squash_diff,
-                    )
-                    .unwrap_or(fallback_commit_message_for_task)
-                });
+                let generate_message = Self::generate_merge_commit_message_from_diff(
+                    folder.as_path(),
+                    session_model,
+                    squash_diff.as_str(),
+                );
 
                 match tokio::time::timeout(MERGE_COMMIT_MESSAGE_TIMEOUT, generate_message).await {
-                    Ok(Ok(message)) => message,
-                    Ok(Err(_)) | Err(_) => fallback_commit_message,
+                    Ok(Some(message)) => message,
+                    Ok(None) | Err(_) => fallback_commit_message_for_task,
                 }
             };
 
@@ -746,7 +692,6 @@ impl SessionManager {
             app_event_tx: input.app_event_tx.clone(),
             base_branch: input.base_branch.clone(),
             child_pid: Arc::clone(&input.child_pid),
-            clock: Arc::clone(&input.clock),
             db: input.db.clone(),
             folder: input.folder.clone(),
             fs_client: Arc::clone(&input.fs_client),
@@ -1087,7 +1032,6 @@ impl SessionManager {
             app_event_tx,
             base_branch,
             child_pid,
-            clock,
             db,
             folder,
             fs_client,
@@ -1103,7 +1047,6 @@ impl SessionManager {
                 app_event_tx: app_event_tx.clone(),
                 base_branch: base_branch.clone(),
                 child_pid: Arc::clone(&child_pid),
-                clock: Arc::clone(&clock),
                 db: db.clone(),
                 folder: folder.clone(),
                 fs_client: Arc::clone(&fs_client),
@@ -1627,7 +1570,6 @@ impl SessionManager {
         AssistContext {
             app_event_tx: input.app_event_tx.clone(),
             child_pid: Arc::clone(&input.child_pid),
-            clock: Arc::clone(&input.clock),
             db: input.db.clone(),
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
@@ -1643,65 +1585,53 @@ impl SessionManager {
         let _ = input.git_client.abort_rebase(folder).await;
     }
 
-    fn generate_merge_commit_message_from_diff(
+    async fn generate_merge_commit_message_from_diff(
         folder: &Path,
         session_model: AgentModel,
         diff: &str,
     ) -> Option<String> {
         let prompt = Self::merge_commit_message_prompt(diff).ok()?;
-        let model_response =
-            Self::generate_merge_commit_message_with_model(folder, session_model, &prompt).ok()?;
-        Self::parse_merge_commit_message_response(&model_response)
+        let answer_text =
+            Self::generate_merge_commit_message_with_model(folder, session_model, &prompt)
+                .await
+                .ok()?;
+
+        Self::merge_commit_message_from_answer_text(&answer_text)
     }
 
-    fn generate_merge_commit_message_with_model(
+    /// Executes one isolated merge commit-message prompt and returns the
+    /// answer text.
+    ///
+    /// # Errors
+    /// Returns an error when the one-shot prompt cannot run or produces an
+    /// empty `answer` payload.
+    async fn generate_merge_commit_message_with_model(
         folder: &Path,
         session_model: AgentModel,
         prompt: &str,
     ) -> Result<String, String> {
-        let backend = agent::create_backend(session_model.kind());
-        let mut command = backend
-            .build_command(agent::BuildCommandRequest {
-                reasoning_level: ReasoningLevel::default(),
-                folder,
-                mode: agent::AgentCommandMode::Start { prompt },
-                model: session_model.as_str(),
-            })
-            .map_err(|error| format!("Failed to build merge commit message command: {error}"))?;
-        command.stdin(Stdio::null());
-        let output = command
-            .output()
-            .map_err(|error| format!("Failed to run merge commit message model: {error}"))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let parsed = agent::parse_response(session_model.kind(), &stdout, &stderr);
-        let content = parsed.content.trim().to_string();
+        let response = agent::submit_one_shot(agent::OneShotRequest {
+            child_pid: None,
+            folder,
+            model: session_model,
+            prompt,
+            reasoning_level: ReasoningLevel::default(),
+        })
+        .await?;
+        let content = response.to_answer_display_text();
+        let content = content.trim().to_string();
 
         if content.is_empty() {
-            let stderr_text = stderr.trim();
-            if stderr_text.is_empty() {
-                return Err("Merge commit message model returned empty output".to_string());
-            }
-
-            return Err(format!(
-                "Merge commit message model returned empty output: {stderr_text}"
-            ));
+            return Err("Merge commit message model returned empty output".to_string());
         }
 
         Ok(content)
     }
 
-    /// Parses merge commit-message text from structured protocol output.
-    ///
-    /// Only protocol responses are accepted. The returned value is the joined
-    /// `answer` message text, which may contain a title-only commit message or
-    /// a multi-line message where title and body are separated by a blank line.
-    pub(crate) fn parse_merge_commit_message_response(content: &str) -> Option<String> {
-        let protocol_response = agent::protocol::parse_agent_response_strict(content).ok()?;
-        let answer_text = protocol_response.to_answer_display_text();
+    /// Normalizes merge commit-message answer text returned by the one-shot
+    /// protocol runner.
+    fn merge_commit_message_from_answer_text(answer_text: &str) -> Option<String> {
         let trimmed_answer_text = answer_text.trim();
-
         if trimmed_answer_text.is_empty() {
             return None;
         }
@@ -1800,12 +1730,6 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::*;
-    use crate::app::session::RealClock;
-
-    /// Returns the production clock implementation as a trait object.
-    fn test_clock() -> Arc<dyn Clock> {
-        Arc::new(RealClock)
-    }
 
     /// Builds a filesystem mock that delegates operations to local disk.
     fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -1863,7 +1787,6 @@ mod tests {
                 app_event_tx,
                 base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
-                clock: test_clock(),
                 db,
                 folder,
                 fs_client: test_fs_client(),
@@ -1962,6 +1885,33 @@ mod tests {
         assert_eq!(summary, "Apply session updates");
     }
 
+    #[test]
+    fn test_merge_commit_message_from_answer_text_accepts_plain_answer_text() {
+        // Arrange
+        let answer_text = "Refine merge flow\n\n- Keep generated title";
+
+        // Act
+        let commit_message = SessionManager::merge_commit_message_from_answer_text(answer_text);
+
+        // Assert
+        assert_eq!(
+            commit_message.as_deref(),
+            Some("Refine merge flow\n\n- Keep generated title")
+        );
+    }
+
+    #[test]
+    fn test_merge_commit_message_from_answer_text_rejects_blank_answer_text() {
+        // Arrange
+        let answer_text = "   \n";
+
+        // Act
+        let commit_message = SessionManager::merge_commit_message_from_answer_text(answer_text);
+
+        // Assert
+        assert!(commit_message.is_none());
+    }
+
     #[tokio::test]
     async fn test_rebase_assist_input_clone() {
         // Arrange
@@ -1972,7 +1922,6 @@ mod tests {
             app_event_tx: tx,
             base_branch: "main".to_string(),
             child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
             db,
             folder: temp_dir.path().to_path_buf(),
             fs_client: test_fs_client(),

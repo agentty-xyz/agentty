@@ -35,6 +35,17 @@ pub enum ProtocolInstructionMode {
     WithoutSchema,
 }
 
+/// Prompt contract layered on top of the structured response envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolPromptKind {
+    /// Interactive session discussions that must report current-turn and
+    /// cumulative branch changes.
+    SessionDiscussion,
+    /// Isolated utility prompts that return structured protocol JSON without
+    /// the session change-summary footer.
+    OneShot,
+}
+
 impl AgentTransport {
     /// Returns whether this transport uses app-server sessions.
     pub fn uses_app_server(self) -> bool {
@@ -65,9 +76,9 @@ pub enum AgentCommandMode<'a> {
         /// User prompt to send.
         prompt: &'a str,
     },
-    /// Starts one plain-text utility command without structured protocol
-    /// instructions.
-    StartPlain {
+    /// Starts one isolated utility command that still returns structured
+    /// protocol output.
+    OneShot {
         /// User prompt to send.
         prompt: &'a str,
     },
@@ -84,7 +95,7 @@ impl<'a> AgentCommandMode<'a> {
     /// Returns the user prompt for this command mode.
     pub fn prompt(self) -> &'a str {
         match self {
-            Self::Start { prompt } | Self::StartPlain { prompt } | Self::Resume { prompt, .. } => {
+            Self::Start { prompt } | Self::OneShot { prompt } | Self::Resume { prompt, .. } => {
                 prompt
             }
         }
@@ -93,14 +104,17 @@ impl<'a> AgentCommandMode<'a> {
     /// Returns transcript output used for resume replay, when present.
     pub fn session_output(self) -> Option<&'a str> {
         match self {
-            Self::Start { .. } | Self::StartPlain { .. } => None,
+            Self::Start { .. } | Self::OneShot { .. } => None,
             Self::Resume { session_output, .. } => session_output,
         }
     }
 
-    /// Returns whether this mode requires structured protocol instructions.
-    pub fn uses_structured_protocol(self) -> bool {
-        !matches!(self, Self::StartPlain { .. })
+    /// Returns the prompt contract used for this command mode.
+    pub fn protocol_prompt_kind(self) -> ProtocolPromptKind {
+        match self {
+            Self::Start { .. } | Self::Resume { .. } => ProtocolPromptKind::SessionDiscussion,
+            Self::OneShot { .. } => ProtocolPromptKind::OneShot,
+        }
     }
 }
 
@@ -138,6 +152,8 @@ struct ResumeWithSessionOutputPromptTemplate<'a> {
 #[derive(Template)]
 #[template(path = "protocol_instruction_prompt_with_schema.md", escape = "none")]
 struct ProtocolInstructionWithSchemaPromptTemplate<'a> {
+    /// Whether change-summary instructions are required in the answer text.
+    include_change_summary: bool,
     /// User prompt appended after protocol instructions.
     prompt: &'a str,
     /// Pretty-printed JSON schema contract injected into the prompt template.
@@ -152,6 +168,8 @@ struct ProtocolInstructionWithSchemaPromptTemplate<'a> {
     escape = "none"
 )]
 struct ProtocolInstructionWithoutSchemaPromptTemplate<'a> {
+    /// Whether change-summary instructions are required in the answer text.
+    include_change_summary: bool,
     /// User prompt appended after protocol instructions.
     prompt: &'a str,
 }
@@ -172,7 +190,7 @@ pub trait AgentBackend: Send + Sync {
     /// Returns an error when one-time backend setup cannot be completed.
     fn setup(&self, folder: &Path) -> Result<(), AgentBackendError>;
 
-    /// Builds one command for a start or resume interaction.
+    /// Builds one command for a start, resume, or one-shot interaction.
     ///
     /// # Errors
     /// Returns an error when prompt rendering or provider argument
@@ -274,15 +292,18 @@ pub(crate) fn prepend_repo_root_path_instructions(
 pub(crate) fn prepend_protocol_instructions(
     prompt: &str,
     mode: ProtocolInstructionMode,
+    prompt_kind: ProtocolPromptKind,
 ) -> Result<String, AgentBackendError> {
     if prompt.contains(PROTOCOL_INSTRUCTIONS_MARKER) {
         return Ok(prompt.to_string());
     }
 
+    let include_change_summary = matches!(prompt_kind, ProtocolPromptKind::SessionDiscussion);
     let rendered = match mode {
         ProtocolInstructionMode::WithSchema => {
             let protocol_schema_json = protocol::agent_response_output_schema_json();
             let template = ProtocolInstructionWithSchemaPromptTemplate {
+                include_change_summary,
                 prompt,
                 protocol_schema_json: &protocol_schema_json,
             };
@@ -294,7 +315,10 @@ pub(crate) fn prepend_protocol_instructions(
             })?
         }
         ProtocolInstructionMode::WithoutSchema => {
-            let template = ProtocolInstructionWithoutSchemaPromptTemplate { prompt };
+            let template = ProtocolInstructionWithoutSchemaPromptTemplate {
+                include_change_summary,
+                prompt,
+            };
 
             template.render().map_err(|error| {
                 AgentBackendError::CommandBuild(format!(
@@ -421,14 +445,17 @@ mod tests {
 
     #[test]
     /// Ensures protocol instructions are prepended to plain prompts.
-    fn test_prepend_protocol_instructions_with_schema_adds_protocol_instructions() {
+    fn test_prepend_protocol_instructions_with_schema_adds_session_protocol_instructions() {
         // Arrange
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_instructions(prompt, ProtocolInstructionMode::WithSchema)
-                .expect("protocol instruction prompt should render");
+        let rendered_prompt = prepend_protocol_instructions(
+            prompt,
+            ProtocolInstructionMode::WithSchema,
+            ProtocolPromptKind::SessionDiscussion,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
@@ -446,14 +473,20 @@ mod tests {
     /// Ensures protocol instructions are not duplicated when already present.
     fn test_prepend_protocol_instructions_with_schema_is_idempotent() {
         // Arrange
-        let prompt =
-            prepend_protocol_instructions("Implement feature", ProtocolInstructionMode::WithSchema)
-                .expect("protocol instruction prompt should render");
+        let prompt = prepend_protocol_instructions(
+            "Implement feature",
+            ProtocolInstructionMode::WithSchema,
+            ProtocolPromptKind::SessionDiscussion,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_instructions(&prompt, ProtocolInstructionMode::WithSchema)
-                .expect("protocol instruction prompt should render");
+        let rendered_prompt = prepend_protocol_instructions(
+            &prompt,
+            ProtocolInstructionMode::WithSchema,
+            ProtocolPromptKind::SessionDiscussion,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Assert
         assert_eq!(rendered_prompt, prompt);
@@ -461,14 +494,17 @@ mod tests {
 
     #[test]
     /// Ensures non-schema protocol instructions are prepended to plain prompts.
-    fn test_prepend_protocol_instructions_without_schema_adds_protocol_instructions() {
+    fn test_prepend_protocol_instructions_without_schema_adds_session_protocol_instructions() {
         // Arrange
         let prompt = "Implement feature";
 
         // Act
-        let rendered_prompt =
-            prepend_protocol_instructions(prompt, ProtocolInstructionMode::WithoutSchema)
-                .expect("protocol instruction prompt should render");
+        let rendered_prompt = prepend_protocol_instructions(
+            prompt,
+            ProtocolInstructionMode::WithoutSchema,
+            ProtocolPromptKind::SessionDiscussion,
+        )
+        .expect("protocol instruction prompt should render");
 
         // Assert
         assert!(rendered_prompt.contains("Structured response protocol:"));
@@ -483,33 +519,54 @@ mod tests {
     }
 
     #[test]
-    /// Ensures plain-start mode disables structured protocol instructions.
-    fn test_agent_command_mode_start_plain_disables_structured_protocol() {
+    /// Ensures one-shot mode uses the isolated prompt contract.
+    fn test_agent_command_mode_one_shot_uses_one_shot_prompt_kind() {
         // Arrange
-        let mode = AgentCommandMode::StartPlain {
+        let mode = AgentCommandMode::OneShot {
             prompt: "Generate title",
         };
 
         // Act
-        let uses_structured_protocol = mode.uses_structured_protocol();
+        let prompt_kind = mode.protocol_prompt_kind();
 
         // Assert
-        assert!(!uses_structured_protocol);
+        assert_eq!(prompt_kind, ProtocolPromptKind::OneShot);
     }
 
     #[test]
-    /// Ensures regular start mode keeps structured protocol instructions.
-    fn test_agent_command_mode_start_uses_structured_protocol() {
+    /// Ensures regular start mode keeps the session discussion contract.
+    fn test_agent_command_mode_start_uses_session_discussion_prompt_kind() {
         // Arrange
         let mode = AgentCommandMode::Start {
             prompt: "Generate answer",
         };
 
         // Act
-        let uses_structured_protocol = mode.uses_structured_protocol();
+        let prompt_kind = mode.protocol_prompt_kind();
 
         // Assert
-        assert!(uses_structured_protocol);
+        assert_eq!(prompt_kind, ProtocolPromptKind::SessionDiscussion);
+    }
+
+    #[test]
+    /// Ensures one-shot prompts keep the protocol envelope without session
+    /// change-summary requirements.
+    fn test_prepend_protocol_instructions_without_schema_skips_change_summary_for_one_shot() {
+        // Arrange
+        let prompt = "Generate title";
+
+        // Act
+        let rendered_prompt = prepend_protocol_instructions(
+            prompt,
+            ProtocolInstructionMode::WithoutSchema,
+            ProtocolPromptKind::OneShot,
+        )
+        .expect("protocol instruction prompt should render");
+
+        // Assert
+        assert!(rendered_prompt.contains("Structured response protocol:"));
+        assert!(!rendered_prompt.contains("## Change Summary"));
+        assert!(rendered_prompt.ends_with(prompt));
     }
 
     #[test]

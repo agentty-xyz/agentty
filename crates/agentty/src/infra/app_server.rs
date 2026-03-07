@@ -428,8 +428,12 @@ pub fn turn_prompt_for_runtime(
     let turn_prompt = agent::prepend_repo_root_path_instructions(&turn_prompt)
         .map_err(|error| error.to_string())?;
 
-    agent::prepend_protocol_instructions(&turn_prompt, protocol_instruction_mode)
-        .map_err(|error| error.to_string())
+    agent::prepend_protocol_instructions(
+        &turn_prompt,
+        protocol_instruction_mode,
+        agent::ProtocolPromptKind::SessionDiscussion,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

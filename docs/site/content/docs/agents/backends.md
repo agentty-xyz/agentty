@@ -41,10 +41,20 @@ each entry has:
 
 - `type`: `answer` or `question`
 - `text`: markdown text payload
-- every turn must include at least one `answer` message that ends with a
-  `## Change Summary` section
+
+Session discussion turns add one extra prompt contract on top of the JSON
+envelope:
+
+- every discussion turn must include at least one `answer` message that ends
+  with a `## Change Summary` section
 - `## Change Summary` must contain `### Current Turn` (what changed in this
   turn only) and `### Session Changes` (the cumulative session-branch diff)
+
+One-shot utility prompts, such as title generation, merge commit-message
+generation, focused review preparation, auto-commit assistance, and rebase
+conflict assistance, still return the same protocol JSON shape but skip the
+change-summary footer so the answer text stays usable as a machine-readable
+artifact.
 
 Example payload:
 
@@ -73,6 +83,9 @@ Agentty validates final agent output against the structured response protocol.
 - Claude and Gemini integrations use strict parsing and run one automatic
   repair retry loop (up to three repair turns) when output does not match the
   protocol schema.
+- One-shot utility prompts use the same repair loop for all backends so
+  internal callers always receive valid protocol JSON before parsing titles,
+  commit messages, or review text.
 - Claude turns use native schema validation via `claude --json-schema` and
   `--output-format json` (no Claude `stream-json` mode).
 - Claude turns pass `--strict-mcp-config`, so only MCP servers explicitly
@@ -81,8 +94,8 @@ Agentty validates final agent output against the structured response protocol.
   `Bash`, `EnterPlanMode`, and `ExitPlanMode` for unattended worktree edits.
 - Codex app-server turns enforce structured output through transport
   `outputSchema`; Codex prompts do not prepend schema text.
-- Claude always uses structured protocol output (including utility/plain
-  command paths) through native schema enforcement.
+- Claude always uses structured protocol output, including isolated one-shot
+  utility prompts, through native schema enforcement plus prompt instructions.
 - Codex app-server turns include `outputSchema` at transport level and then use
   permissive final parsing fallback so non-schema text is still visible if
   needed.

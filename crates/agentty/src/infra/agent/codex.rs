@@ -37,7 +37,7 @@ impl AgentBackend for CodexBackend {
             .session_output()
             .is_some_and(|session_output| !session_output.trim().is_empty());
         let prompt = match mode {
-            AgentCommandMode::Start { prompt } | AgentCommandMode::StartPlain { prompt } => {
+            AgentCommandMode::Start { prompt } | AgentCommandMode::OneShot { prompt } => {
                 prompt.to_string()
             }
             AgentCommandMode::Resume {
@@ -47,11 +47,11 @@ impl AgentBackend for CodexBackend {
         };
         let prompt = prepend_root_instructions_if_available(&prompt, folder);
         let prompt = prepend_repo_root_path_instructions(&prompt)?;
-        let prompt = if mode.uses_structured_protocol() {
-            prepend_protocol_instructions(&prompt, ProtocolInstructionMode::WithoutSchema)?
-        } else {
-            prompt
-        };
+        let prompt = prepend_protocol_instructions(
+            &prompt,
+            ProtocolInstructionMode::WithoutSchema,
+            mode.protocol_prompt_kind(),
+        )?;
 
         let mut command = Command::new("codex");
         command.arg("exec");
@@ -259,9 +259,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies plain-start Codex prompts skip structured protocol
-    /// instructions.
-    fn build_start_plain_command_skips_protocol_instructions() {
+    /// Verifies one-shot Codex prompts keep the protocol wrapper without the
+    /// session change-summary contract.
+    fn build_one_shot_command_uses_protocol_without_change_summary() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
@@ -272,7 +272,7 @@ mod tests {
             BuildCommandRequest {
                 reasoning_level: ReasoningLevel::Low,
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::StartPlain {
+                mode: AgentCommandMode::OneShot {
                     prompt: "Generate title",
                 },
                 model: "gpt-5.3-codex",
@@ -282,6 +282,7 @@ mod tests {
         let debug_command = format!("{command:?}");
 
         // Assert
-        assert!(!debug_command.contains("Structured response protocol:"));
+        assert!(debug_command.contains("Structured response protocol:"));
+        assert!(!debug_command.contains("## Change Summary"));
     }
 }

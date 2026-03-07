@@ -2700,21 +2700,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_capture_raw_output() {
-        // Arrange
-        let buffer = Arc::new(Mutex::new(String::new()));
-        let source = "Line 1\nLine 2".as_bytes();
-
-        // Act
-        SessionTaskService::capture_raw_output(source, &buffer, None, Arc::new(RealClock)).await;
-
-        // Assert
-        let out = buffer.lock().expect("failed to lock buffer").clone();
-        assert!(out.contains("Line 1"));
-        assert!(out.contains("Line 2"));
-    }
-
-    #[tokio::test]
     async fn test_next_tab() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -3740,7 +3725,10 @@ mod tests {
         let content = r#"{"messages":[{"type":"answer","text":"Title\n\n- Detail"}]}"#;
 
         // Act
-        let parsed = SessionManager::parse_merge_commit_message_response(content);
+        let parsed = crate::infra::agent::protocol::parse_agent_response_strict(content)
+            .ok()
+            .map(|response| response.to_answer_display_text())
+            .filter(|answer_text| !answer_text.trim().is_empty());
 
         // Assert
         assert!(parsed.is_some());
@@ -3753,7 +3741,10 @@ mod tests {
         let content = r#"{"title":"Title","description":"- Detail"}"#;
 
         // Act
-        let parsed = SessionManager::parse_merge_commit_message_response(content);
+        let parsed = crate::infra::agent::protocol::parse_agent_response_strict(content)
+            .ok()
+            .map(|response| response.to_answer_display_text())
+            .filter(|answer_text| !answer_text.trim().is_empty());
 
         // Assert
         assert!(parsed.is_none());

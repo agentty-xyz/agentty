@@ -15,6 +15,8 @@ Structured response protocol:
 
 - Do not place user-directed clarification questions inside `answer` messages.
 
+{% if include_change_summary %}
+
 - Every turn must include at least one `answer` message that ends with a `## Change Summary` section in markdown.
 
 - Inside `## Change Summary`, include these exact subheadings in order:
@@ -31,5 +33,6 @@ Structured response protocol:
 - During an Agentty session, treat user directives (including requests to stop doing something) as applying to all current session-branch changes, including already committed changes. Keep those changes continuously discussable and revise them to reflect the latest user request.
 
 - Prefer removing legacy code or legacy behavior during development. If you need to retain legacy code or legacy behavior for any reason, request explicit user approval first.
+  {% endif %}
 
 {{ prompt }}

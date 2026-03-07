@@ -14,10 +14,9 @@ use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, setting}
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{SESSION_DATA_DIR, Session, Status};
 use crate::domain::setting::SettingName;
-use crate::infra::agent::{self as agent, AgentCommandMode, BuildCommandRequest};
 use crate::infra::channel::TurnMode;
 use crate::infra::fs::FsClient;
-use crate::infra::{db, git};
+use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
 
 /// Maximum stored length for generated session titles.
@@ -877,27 +876,17 @@ impl SessionManager {
         prompt: &str,
         model: AgentModel,
     ) -> Option<String> {
-        let backend = agent::create_backend(model.kind());
-        let command = backend
-            .build_command(BuildCommandRequest {
-                reasoning_level: ReasoningLevel::default(),
-                folder,
-                mode: AgentCommandMode::StartPlain { prompt },
-                model: model.as_str(),
-            })
-            .ok()?;
-        let mut tokio_command = tokio::process::Command::from(command);
-        tokio_command.stdin(std::process::Stdio::null());
-        let command_output = tokio_command.output().await.ok()?;
-        if !command_output.status.success() {
-            return None;
-        }
+        let response = agent::submit_one_shot(agent::OneShotRequest {
+            child_pid: None,
+            folder,
+            model,
+            prompt,
+            reasoning_level: ReasoningLevel::default(),
+        })
+        .await
+        .ok()?;
 
-        let stdout_text = String::from_utf8_lossy(&command_output.stdout).into_owned();
-        let stderr_text = String::from_utf8_lossy(&command_output.stderr).into_owned();
-        let parsed_response = agent::parse_response(model.kind(), &stdout_text, &stderr_text);
-
-        Some(parsed_response.content)
+        Some(response.to_answer_display_text())
     }
 
     /// Builds the title-generation instruction prompt from the user message.

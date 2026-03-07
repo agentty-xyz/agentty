@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
-use crate::app::session::{Clock, RunAgentAssistTaskInput, SessionTaskService};
-use crate::domain::agent::{AgentModel, ReasoningLevel};
-use crate::infra::agent;
+use crate::app::session::{RunAgentAssistTaskInput, SessionTaskService};
+use crate::domain::agent::AgentModel;
 use crate::infra::db::Database;
 use crate::infra::git::GitClient;
 
@@ -27,8 +26,6 @@ pub(super) struct AssistContext {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Shared process identifier slot used for cancellation.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
-    /// Injected clock used for deterministic stream timing behavior.
-    pub(super) clock: Arc<dyn Clock>,
     /// Database handle used for session persistence updates.
     pub(super) db: Database,
     /// Session worktree folder where git/agent commands run.
@@ -119,31 +116,17 @@ pub(super) async fn append_assist_header(
 /// Executes one assistance run using the current session context.
 ///
 /// # Errors
-/// Returns an error when the agent process cannot be spawned, fails, or is
-/// interrupted.
+/// Returns an error when the one-shot assist command fails or returns invalid
+/// protocol output.
 pub(super) async fn run_agent_assist(context: &AssistContext, prompt: &str) -> Result<(), String> {
-    let backend = agent::create_backend(context.session_model.kind());
-    let command = backend
-        .build_command(agent::BuildCommandRequest {
-            reasoning_level: ReasoningLevel::default(),
-            folder: &context.folder,
-            mode: agent::AgentCommandMode::Resume {
-                prompt,
-                session_output: None,
-            },
-            model: context.session_model.as_str(),
-        })
-        .map_err(|error| error.to_string())?;
-
     SessionTaskService::run_agent_assist_task(RunAgentAssistTaskInput {
-        agent: context.session_model.kind(),
         app_event_tx: context.app_event_tx.clone(),
         child_pid: Arc::clone(&context.child_pid),
-        clock: Arc::clone(&context.clock),
-        cmd: command,
         db: context.db.clone(),
+        folder: context.folder.clone(),
         id: context.id.clone(),
         output: Arc::clone(&context.output),
+        prompt: prompt.to_string(),
         session_model: context.session_model,
     })
     .await
