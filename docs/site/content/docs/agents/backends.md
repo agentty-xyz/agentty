@@ -41,13 +41,20 @@ each entry has:
 
 - `type`: `answer` or `question`
 - `text`: markdown text payload
+- every turn must include at least one `answer` message that ends with a
+  `## Change Summary` section
+- `## Change Summary` must contain `### Current Turn` (what changed in this
+  turn only) and `### Session Changes` (the cumulative session-branch diff)
 
 Example payload:
 
 ```json
 {
   "messages": [
-    { "type": "answer", "text": "Implemented the change." },
+    {
+      "type": "answer",
+      "text": "Implemented the change.\n\n## Change Summary\n### Current Turn\n- Updated the protocol prompt templates.\n### Session Changes\n- Added mandatory per-turn change summaries to the structured response contract."
+    },
     { "type": "question", "text": "Should I run the full test suite?" }
   ]
 }

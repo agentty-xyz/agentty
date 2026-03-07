@@ -435,6 +435,9 @@ mod tests {
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));
         assert!(rendered_prompt.contains("Follow this JSON Schema exactly:"));
+        assert!(rendered_prompt.contains("## Change Summary"));
+        assert!(rendered_prompt.contains("### Current Turn"));
+        assert!(rendered_prompt.contains("### Session Changes"));
         assert!(rendered_prompt.contains("\"messages\""));
         assert!(rendered_prompt.ends_with(prompt));
     }
@@ -472,6 +475,9 @@ mod tests {
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));
         assert!(rendered_prompt.contains("The JSON Schema is enforced externally"));
+        assert!(rendered_prompt.contains("## Change Summary"));
+        assert!(rendered_prompt.contains("### Current Turn"));
+        assert!(rendered_prompt.contains("### Session Changes"));
         assert!(!rendered_prompt.contains("Follow this JSON Schema exactly:"));
         assert!(rendered_prompt.ends_with(prompt));
     }

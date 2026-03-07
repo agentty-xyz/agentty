@@ -175,6 +175,7 @@ Provider conversation id flow:
 Provider output is normalized to one structured response protocol:
 
 1. Prompt builders prepend protocol instructions (`answer`/`question` schema).
+1. Prompt builders also require every turn to end with a markdown `## Change Summary` containing `### Current Turn` and `### Session Changes`.
 1. Channels stream deltas/progress as `TurnEvent`.
 1. Final output is parsed to protocol `messages`.
 1. Worker persists final display text and question payloads, then emits `AgentResponseReceived`.
