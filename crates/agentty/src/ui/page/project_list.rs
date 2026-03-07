@@ -2,24 +2,45 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 use time::OffsetDateTime;
 
 use crate::domain::project::ProjectListItem;
 use crate::ui::state::help_action;
-use crate::ui::{Page, style};
+use crate::ui::{Page, layout, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const ACTIVE_PROJECT_MARKER: &str = "* ";
 /// Horizontal spacing between project-table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
+/// Fixed height reserved for the top Agentty info panel.
+const AGENTTY_INFO_PANEL_HEIGHT: u16 = 9;
+/// Percentage of the top-panel width reserved for the ASCII logo.
+const AGENTTY_INFO_ASCII_WIDTH_PERCENT: u16 = 58;
+/// Number of lines in the Agentty ASCII art banner.
+const AGENTTY_ASCII_ART_LINE_COUNT: u16 = 5;
+/// Maximum visible width of the Agentty ASCII art banner.
+const AGENTTY_ASCII_ART_WIDTH: u16 = 45;
+/// Compile-time version text shown in the projects info panel.
+const AGENTTY_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+/// Short overview text shown alongside the Agentty version.
+const AGENTTY_SHORT_DESCRIPTION: &str =
+    "ADE (agentic development environment) for running AI coding agents in isolated git worktrees.";
+/// ASCII logo shown in the projects info panel.
+const AGENTTY_ASCII_ART: &str = r"    _    ____ _____ _   _ _____ _____ __   __
+   / \  / ___| ____| \ | |_   _|_   _|\ \ / /
+  / _ \| |  _|  _| |  \| | | |   | |   \ V /
+ / ___ \ |_| | |___| |\  | | |   | |    | |
+/_/   \_\____|_____|_| \_| |_|   |_|    |_|";
 
 /// Projects tab renderer showing saved repositories and quick metadata.
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
+    /// Project rows displayed in the table.
     pub projects: &'a [ProjectListItem],
+    /// Stateful cursor position for the project table.
     pub table_state: &'a mut TableState,
 }
 
@@ -47,6 +68,36 @@ impl Page for ProjectListPage<'_> {
 
         let main_area = chunks[0];
         let footer_area = chunks[1];
+        let content_chunks = Layout::vertical([
+            Constraint::Length(AGENTTY_INFO_PANEL_HEIGHT),
+            Constraint::Min(0),
+        ])
+        .split(main_area);
+        let info_area = content_chunks[0];
+        let project_area = content_chunks[1];
+        let info_panel_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Agentty")
+            .border_style(Style::default().fg(style::palette::BORDER));
+        let info_panel_inner_area = info_panel_block.inner(info_area);
+        let info_panel_chunks = Layout::horizontal([
+            Constraint::Percentage(AGENTTY_INFO_ASCII_WIDTH_PERCENT),
+            Constraint::Percentage(100 - AGENTTY_INFO_ASCII_WIDTH_PERCENT),
+        ])
+        .split(info_panel_inner_area);
+        let logo_area = info_panel_chunks[0];
+        let details_area = info_panel_chunks[1];
+        let centered_logo_area = layout::centered_content_rect(
+            logo_area,
+            AGENTTY_ASCII_ART_WIDTH,
+            AGENTTY_ASCII_ART_LINE_COUNT,
+        );
+        let logo_panel = Paragraph::new(AGENTTY_ASCII_ART)
+            .style(Style::default().fg(style::palette::TEXT))
+            .wrap(Wrap { trim: false });
+        let details_panel = Paragraph::new(agentty_info_details_text())
+            .style(Style::default().fg(style::palette::TEXT))
+            .wrap(Wrap { trim: true });
 
         let selected_style = Style::default().bg(style::palette::SURFACE);
         let header = Row::new(["Project", "Branch", "Sessions", "Last Opened", "Path"])
@@ -79,7 +130,10 @@ impl Page for ProjectListPage<'_> {
         .row_highlight_style(selected_style)
         .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
-        f.render_stateful_widget(table, main_area, self.table_state);
+        f.render_stateful_widget(table, project_area, self.table_state);
+        f.render_widget(info_panel_block, info_area);
+        f.render_widget(logo_panel, centered_logo_area);
+        f.render_widget(details_panel, details_area);
 
         let help_message = Paragraph::new(help_action::footer_line(
             &help_action::project_list_footer_actions(),
@@ -103,6 +157,13 @@ fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) ->
         Cell::from(path),
     ])
     .style(project_row_style(project_item, active_project_id))
+}
+
+/// Builds top-panel Agentty metadata text shown to the right of the logo.
+fn agentty_info_details_text() -> String {
+    format!(
+        "Version: {AGENTTY_VERSION}\n\n{AGENTTY_SHORT_DESCRIPTION}\n\nDocs: https://agentty.xyz/docs"
+    )
 }
 
 /// Returns project row display values for reuse and testing.
@@ -286,5 +347,50 @@ mod tests {
 
         // Assert
         assert_eq!(values.0, "* agentty");
+    }
+
+    #[test]
+    fn test_agentty_info_details_text_includes_version_and_description() {
+        // Arrange
+        let expected_version = AGENTTY_VERSION;
+        let expected_description = AGENTTY_SHORT_DESCRIPTION;
+
+        // Act
+        let info_text = agentty_info_details_text();
+
+        // Assert
+        assert!(info_text.contains(expected_version));
+        assert!(info_text.contains(expected_description));
+    }
+
+    #[test]
+    fn test_agentty_ascii_art_banner_matches_reference_header() {
+        // Arrange
+        let expected_banner_header = "    _    ____ _____ _   _ _____ _____ __   __";
+
+        // Assert
+        assert!(AGENTTY_ASCII_ART.starts_with(expected_banner_header));
+    }
+
+    #[test]
+    fn test_agentty_ascii_art_line_count_matches_banner() {
+        // Arrange & Act
+        let actual_line_count = AGENTTY_ASCII_ART.lines().count();
+
+        // Assert
+        assert_eq!(actual_line_count, usize::from(AGENTTY_ASCII_ART_LINE_COUNT));
+    }
+
+    #[test]
+    fn test_agentty_ascii_art_width_matches_banner() {
+        // Arrange & Act
+        let actual_width = AGENTTY_ASCII_ART
+            .lines()
+            .map(str::len)
+            .max()
+            .unwrap_or_default();
+
+        // Assert
+        assert_eq!(actual_width, usize::from(AGENTTY_ASCII_ART_WIDTH));
     }
 }

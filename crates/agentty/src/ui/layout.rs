@@ -24,6 +24,19 @@ pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
         .split(area)
 }
 
+/// Returns a fixed-size content area centered within the available `area`.
+///
+/// The returned rectangle is clamped to the bounds of `area` so callers can
+/// safely request a preferred content size even when the terminal is smaller.
+pub fn centered_content_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+
+    Rect::new(x, y, width, height)
+}
+
 /// Calculate the chat input widget height with a capped visible viewport.
 ///
 /// The returned height includes top and bottom borders and limits the visible
@@ -367,6 +380,30 @@ enum VerticalDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_centered_content_rect_centers_requested_size() {
+        // Arrange
+        let area = Rect::new(10, 5, 40, 12);
+
+        // Act
+        let centered_area = centered_content_rect(area, 20, 5);
+
+        // Assert
+        assert_eq!(centered_area, Rect::new(20, 8, 20, 5));
+    }
+
+    #[test]
+    fn test_centered_content_rect_clamps_requested_size_to_available_area() {
+        // Arrange
+        let area = Rect::new(3, 2, 12, 4);
+
+        // Act
+        let centered_area = centered_content_rect(area, 20, 6);
+
+        // Assert
+        assert_eq!(centered_area, area);
+    }
 
     #[test]
     fn test_calculate_input_height() {
