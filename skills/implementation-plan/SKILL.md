@@ -1,6 +1,6 @@
 ---
 name: implementation-plan
-description: Create and maintain actionable implementation plans for this repository. Use when asked to draft a new plan in docs/plan, revise an existing plan document, or convert a request into a prioritized execution checklist with clear scope, status tracking, file targets, and clarified requirements.
+description: Create and maintain actionable implementation plans for this repository. Use when asked to draft a new plan in docs/plan, revise an existing plan document, or convert a request into an iterative execution checklist with clear scope, status tracking, usable delivery increments, file targets, and clarified requirements.
 ---
 
 # Implementation Plan Workflow
@@ -44,11 +44,21 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Base each row on observable code or command output.
    - Use precise status wording such as `Not started`, `Partial`, `Healthy`, or `Baseline captured`.
 
+1. **Define the implementation approach as usable iterations**
+
+   - Plan the work as an evolving solution, not a hidden bulk implementation.
+   - Make the first iteration the smallest end-to-end slice that a user can already try, even if the behavior is basic.
+   - Ensure each later iteration extends the working baseline with additional capability, refinement, or hardening.
+   - Do not isolate groundwork into a standalone iteration unless that same iteration also delivers visible or testable user value.
+   - Prefer fast-feedback sequencing so the user can validate direction early and adjust the next iteration before more code lands.
+
 1. **Create prioritized execution sections**
 
    - Use numbered priorities with a short `Why now` rationale.
+   - Treat each priority as one iteration in the evolving solution.
+   - State the concrete user-visible or operator-visible outcome that exists when that priority is complete.
    - Add task checklists with `- [ ]` / `- [x]` and make each item implementation-ready.
-   - Size each priority section so the full section can land as one commit or pull request with a clear validation story.
+   - Size each priority section so the full section can land as one commit or pull request with a clear validation story and a usable result.
    - Use checklist items to break down the work inside that priority without forcing each checklist item to be independently shippable.
    - Split or merge priority sections when the current section is too large or too coupled to review and merge independently.
    - List the primary files for each priority using repository-root-relative paths.
@@ -67,6 +77,8 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Remove duplicated or contradictory checklist items.
    - Verify overlapping plan documents are either aligned, explicitly superseded, or called out for user resolution.
    - Ensure every priority section can be executed, validated, and merged independently.
+   - Verify the first priority delivers a minimal but usable slice instead of groundwork alone.
+   - Verify later priorities clearly build on the earlier working slice instead of hiding major functionality until the end.
    - Verify the execution order explains both the merge order and any safe parallel work.
    - Verify the Mermaid dependency graph matches the checklist dependencies and ordered sequence.
    - Verify the final plan reflects the clarified requirements the user provided.
@@ -95,11 +107,18 @@ Use this skeleton when creating a new file in `docs/plan/`:
 |------|---------------------------|--------|
 | <area> | <observation> | <status> |
 
+## Implementation Approach
+
+- Start with the smallest working slice that a user can already exercise end to end.
+- Make the first iteration intentionally basic if needed, but it must still be usable and demonstrable.
+- Add later iterations only as extensions of the working slice so feedback can arrive before the full feature set is built.
+
 ## Updated Priorities
 
 ## 1) <Priority Title>
 
 **Why now:** <rationale>
+**Usable outcome:** <what the user can do after this iteration lands>
 
 - [ ] <implementation task within this priority>
 - [ ] <implementation task within this priority>
