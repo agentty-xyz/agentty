@@ -2,15 +2,29 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::ui::text_util;
+
 /// Maximum number of visible content lines inside the chat input viewport.
 pub const CHAT_INPUT_MAX_VISIBLE_LINES: u16 = 10;
 
 const CHAT_INPUT_BORDER_HEIGHT: u16 = 2;
+const CHAT_INPUT_MIN_PANEL_HEIGHT: u16 = CHAT_INPUT_BORDER_HEIGHT + 1;
 const CHAT_INPUT_INNER_OFFSET: u16 = 1;
 const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
+const QUESTION_PANEL_HELP_HEIGHT: u16 = 1;
+const QUESTION_PANEL_SPACER_HEIGHT: u16 = 1;
 const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
 /// Foreground color used for chat input `@` lookup tokens.
 const CHAT_INPUT_AT_MENTION_COLOR: Color = Color::LightBlue;
+
+/// Height allocation for question mode's prompt, answer input, and footer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuestionPanelLayout {
+    pub help_height: u16,
+    pub input_height: u16,
+    pub question_height: u16,
+    pub spacer_height: u16,
+}
 
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
@@ -40,7 +54,8 @@ pub fn centered_content_rect(area: Rect, width: u16, height: u16) -> Rect {
 /// Calculate the chat input widget height with a capped visible viewport.
 ///
 /// The returned height includes top and bottom borders and limits the visible
-/// content area to [`CHAT_INPUT_MAX_VISIBLE_LINES`].
+/// content area to [`CHAT_INPUT_MAX_VISIBLE_LINES`]. `width` is the full widget
+/// width, including borders.
 pub fn calculate_input_height(width: u16, input: &str) -> u16 {
     let char_count = input.chars().count();
     let (_, _, cursor_y) = compute_input_layout(input, width, char_count);
@@ -50,6 +65,50 @@ pub fn calculate_input_height(width: u16, input: &str) -> u16 {
     content_line_count
         .min(CHAT_INPUT_MAX_VISIBLE_LINES)
         .saturating_add(CHAT_INPUT_BORDER_HEIGHT)
+}
+
+/// Calculates the height split for question mode's prompt, input, and footer.
+///
+/// The answer input keeps its visible content row whenever `available_height`
+/// allows it. When space is tight, the wrapped question text yields height
+/// before the spacer row and bordered input collapse.
+pub fn question_panel_layout(
+    width: u16,
+    available_height: u16,
+    question: &str,
+    input: &str,
+    max_input_panel_height: u16,
+) -> QuestionPanelLayout {
+    let requested_question_height = wrapped_text_height(question, width);
+    let requested_input_height = calculate_input_height(width, input)
+        .min(max_input_panel_height.max(CHAT_INPUT_MIN_PANEL_HEIGHT));
+    let requested_spacer_height = if requested_question_height > 0 {
+        QUESTION_PANEL_SPACER_HEIGHT
+    } else {
+        0
+    };
+    let preferred_total_height = requested_question_height
+        .saturating_add(requested_input_height)
+        .saturating_add(requested_spacer_height)
+        .saturating_add(QUESTION_PANEL_HELP_HEIGHT);
+    let total_height = preferred_total_height.min(available_height);
+    let help_height = total_height.min(QUESTION_PANEL_HELP_HEIGHT);
+    let remaining_height = total_height.saturating_sub(help_height);
+    let input_height = remaining_height.min(requested_input_height);
+    let question_and_spacer_height = remaining_height.saturating_sub(input_height);
+    let spacer_height = if question_and_spacer_height > QUESTION_PANEL_SPACER_HEIGHT {
+        requested_spacer_height
+    } else {
+        0
+    };
+    let question_height = question_and_spacer_height.saturating_sub(spacer_height);
+
+    QuestionPanelLayout {
+        help_height,
+        input_height,
+        question_height,
+        spacer_height,
+    }
 }
 
 /// Compute chat input lines and the cursor position for rendering.
@@ -169,6 +228,13 @@ pub fn first_table_column_width(
     columns
         .first()
         .map_or(0, |column| usize::from(column.width))
+}
+
+/// Returns the wrapped line count for plain text rendered in a paragraph.
+fn wrapped_text_height(text: &str, width: u16) -> u16 {
+    let wrapped_line_count = text_util::wrap_lines(text, usize::from(width.max(1))).len();
+
+    u16::try_from(wrapped_line_count).unwrap_or(u16::MAX).max(1)
 }
 
 fn move_input_cursor_vertical(
@@ -413,6 +479,69 @@ mod tests {
         assert_eq!(calculate_input_height(12, "12345678"), 4);
         assert_eq!(calculate_input_height(12, "12345671234567890"), 5);
         assert_eq!(calculate_input_height(12, &"a".repeat(120)), 12);
+    }
+
+    #[test]
+    fn test_question_panel_layout_preserves_input_height_before_trimming_question() {
+        // Arrange
+        let question = "Need a detailed migration plan with rollback guidance?";
+        let input = "Use two phases.";
+
+        // Act
+        let panel_layout = question_panel_layout(28, 4, question, input, 10);
+
+        // Assert
+        assert_eq!(
+            panel_layout,
+            QuestionPanelLayout {
+                help_height: 1,
+                input_height: 3,
+                question_height: 0,
+                spacer_height: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_question_panel_layout_uses_wrapped_question_height_when_space_allows() {
+        // Arrange
+        let question = "Need a detailed migration plan with rollback guidance?";
+        let input = "Use two phases.";
+
+        // Act
+        let panel_layout = question_panel_layout(28, 8, question, input, 10);
+
+        // Assert
+        assert_eq!(
+            panel_layout,
+            QuestionPanelLayout {
+                help_height: 1,
+                input_height: 3,
+                question_height: 2,
+                spacer_height: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_question_panel_layout_drops_spacer_before_last_question_line() {
+        // Arrange
+        let question = "Need a detailed migration plan with rollback guidance?";
+        let input = "Use two phases.";
+
+        // Act
+        let panel_layout = question_panel_layout(28, 5, question, input, 10);
+
+        // Assert
+        assert_eq!(
+            panel_layout,
+            QuestionPanelLayout {
+                help_height: 1,
+                input_height: 3,
+                question_height: 1,
+                spacer_height: 0,
+            }
+        );
     }
 
     #[test]

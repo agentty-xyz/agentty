@@ -12,7 +12,9 @@ use crate::ui::component::session_output::SessionOutput;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
-use crate::ui::util::{calculate_input_height, truncate_with_ellipsis};
+use crate::ui::util::{
+    calculate_input_height, question_panel_layout, truncate_with_ellipsis, wrap_lines,
+};
 use crate::ui::{Component, Page};
 
 /// Maximum rendered height of the prompt input panel, including borders.
@@ -329,17 +331,19 @@ impl<'a> SessionChatPage<'a> {
         } = self.mode
         {
             let question = questions.get(*current_index).map_or("", String::as_str);
-            let question_height =
-                calculate_input_height(area.width.saturating_sub(2), question).max(1);
-            let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
-                .min(CHAT_INPUT_MAX_PANEL_HEIGHT);
+            let panel_layout = question_panel_layout(
+                area.width,
+                area.height.saturating_sub(1),
+                question,
+                input.text(),
+                CHAT_INPUT_MAX_PANEL_HEIGHT,
+            );
 
-            let desired_bottom_height = question_height
-                .saturating_add(input_height)
-                .saturating_add(1);
-            let max_bottom_height = area.height.saturating_sub(1);
-
-            return desired_bottom_height.min(max_bottom_height);
+            return panel_layout
+                .question_height
+                .saturating_add(panel_layout.spacer_height)
+                .saturating_add(panel_layout.input_height)
+                .saturating_add(panel_layout.help_height);
         }
 
         1
@@ -393,36 +397,46 @@ impl<'a> SessionChatPage<'a> {
         } = self.mode
         {
             let question = questions.get(*current_index).map_or("", String::as_str);
-            let question_height =
-                calculate_input_height(bottom_area.width.saturating_sub(2), question).max(1);
-
+            let panel_layout = question_panel_layout(
+                bottom_area.width,
+                bottom_area.height,
+                question,
+                input.text(),
+                CHAT_INPUT_MAX_PANEL_HEIGHT,
+            );
             let chunks = Layout::default()
-                .constraints([Constraint::Length(question_height), Constraint::Min(0)])
+                .constraints([
+                    Constraint::Length(panel_layout.question_height),
+                    Constraint::Length(panel_layout.spacer_height),
+                    Constraint::Length(panel_layout.input_height),
+                    Constraint::Length(panel_layout.help_height),
+                ])
                 .split(bottom_area);
 
             let question_title = format!("Question {}/{}", current_index + 1, questions.len());
-            let question_para = Paragraph::new(question)
-                .style(Style::default().fg(Color::Yellow))
-                .wrap(ratatui::widgets::Wrap { trim: true });
-            f.render_widget(question_para, chunks[0]);
+            if panel_layout.question_height > 0 {
+                let question_para =
+                    Paragraph::new(wrap_lines(question, usize::from(bottom_area.width.max(1))))
+                        .style(Style::default().fg(Color::Yellow));
+                f.render_widget(question_para, chunks[0]);
+            }
 
             let input_title = format!(" [{question_title}] ");
             let chat_input = ChatInput::new(&input_title, input.text(), input.cursor)
                 .placeholder("Type response (Enter: send, Esc: skip)");
-
-            let input_chunks = Layout::default()
-                .constraints([Constraint::Min(0), Constraint::Length(1)])
-                .split(chunks[1]);
-
-            chat_input.render(f, input_chunks[0]);
+            if panel_layout.input_height > 0 {
+                chat_input.render(f, chunks[2]);
+            }
 
             let help_actions = vec![
                 help_action::HelpAction::new("send", "Enter", "Send response"),
                 help_action::HelpAction::new("skip", "Esc", "Skip (no answer)"),
             ];
-            let help_para = Paragraph::new(help_action::footer_line(&help_actions))
-                .alignment(ratatui::layout::Alignment::Right);
-            f.render_widget(help_para, input_chunks[1]);
+            if panel_layout.help_height > 0 {
+                let help_para = Paragraph::new(help_action::footer_line(&help_actions))
+                    .alignment(ratatui::layout::Alignment::Right);
+                f.render_widget(help_para, chunks[3]);
+            }
 
             return;
         }
@@ -1037,14 +1051,18 @@ mod tests {
         };
         let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
         let area = Rect::new(0, 0, 120, 30);
-        let expected_height = calculate_input_height(area.width.saturating_sub(2), &question)
-            .max(1)
-            .saturating_add(
-                calculate_input_height(area.width.saturating_sub(2), answer)
-                    .min(CHAT_INPUT_MAX_PANEL_HEIGHT),
-            )
-            .saturating_add(1)
-            .min(area.height.saturating_sub(1));
+        let panel_layout = question_panel_layout(
+            area.width,
+            area.height.saturating_sub(1),
+            &question,
+            answer,
+            CHAT_INPUT_MAX_PANEL_HEIGHT,
+        );
+        let expected_height = panel_layout
+            .question_height
+            .saturating_add(panel_layout.spacer_height)
+            .saturating_add(panel_layout.input_height)
+            .saturating_add(panel_layout.help_height);
 
         // Act
         let bottom_height = page.bottom_height(area, &session);
@@ -1123,5 +1141,75 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains(long_title));
         assert!(text.contains("..."));
+    }
+
+    #[test]
+    fn test_render_question_mode_keeps_typed_answer_visible_in_tight_layout() {
+        // Arrange
+        let session = session_fixture();
+        let mode = AppMode::Question {
+            session_id: "session-id".to_string(),
+            questions: vec!["Need a detailed migration plan with rollback guidance?".to_string()],
+            responses: Vec::new(),
+            current_index: 0,
+            input: InputState::with_text("typed answer".to_string()),
+        };
+        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let backend = ratatui::backend::TestBackend::new(32, 8);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw question mode");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("typed answer"));
+    }
+
+    #[test]
+    fn test_render_question_mode_includes_blank_row_between_question_and_input() {
+        // Arrange
+        let session = session_fixture();
+        let question = "Need a detailed migration plan with rollback guidance?".to_string();
+        let mode = AppMode::Question {
+            session_id: "session-id".to_string(),
+            questions: vec![question.clone()],
+            responses: Vec::new(),
+            current_index: 0,
+            input: InputState::with_text("typed answer".to_string()),
+        };
+        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let width = 40;
+        let height = 12;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw question mode");
+
+        // Assert
+        let area = Rect::new(0, 0, width, height);
+        let bottom_height = page.bottom_height(area, &session);
+        let bottom_top = 1 + height.saturating_sub(2).saturating_sub(bottom_height);
+        let panel_layout = question_panel_layout(
+            width.saturating_sub(2),
+            bottom_height,
+            &question,
+            "typed answer",
+            CHAT_INPUT_MAX_PANEL_HEIGHT,
+        );
+        let spacer_row = bottom_top + panel_layout.question_height;
+        let spacer_text = buffer_row_text(terminal.backend().buffer(), spacer_row, width);
+        assert!(spacer_text.trim().is_empty());
     }
 }
