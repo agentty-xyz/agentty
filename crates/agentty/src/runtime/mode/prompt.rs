@@ -1503,6 +1503,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_navigate_prompt_history_up_stays_on_first_entry() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+        if let AppMode::Prompt {
+            history_state,
+            input,
+            ..
+        } = &mut app.mode
+        {
+            history_state.entries = vec!["first".to_string(), "second".to_string()];
+            history_state.selected_index = Some(0);
+            *input = InputState::with_text("first".to_string());
+        }
+
+        // Act
+        navigate_prompt_history_up(&mut app);
+
+        // Assert
+        if let AppMode::Prompt {
+            history_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "first");
+            assert_eq!(history_state.selected_index, Some(0));
+            assert_eq!(history_state.draft_text, None);
+        }
+    }
+
+    #[tokio::test]
     async fn test_navigate_prompt_history_up_selects_latest_entry_and_saves_draft() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
@@ -1549,6 +1580,122 @@ mod tests {
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
         }
+    }
+
+    #[tokio::test]
+    async fn test_advance_prompt_slash_selection_stays_on_last_agent() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Agent;
+            slash_state.selected_index = AgentKind::ALL.len().saturating_sub(1);
+        }
+
+        // Act
+        advance_prompt_slash_selection(&mut app);
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+            assert_eq!(
+                slash_state.selected_index,
+                AgentKind::ALL.len().saturating_sub(1)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_advances_model_command_to_agent_stage() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt {
+            input, slash_state, ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "/model");
+            assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_selects_agent_and_advances_to_model_stage() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        let selected_index = AgentKind::ALL
+            .iter()
+            .position(|agent_kind| *agent_kind == AgentKind::Claude)
+            .expect("expected Claude agent");
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Agent;
+            slash_state.selected_index = selected_index;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Model);
+            assert_eq!(slash_state.selected_agent, Some(AgentKind::Claude));
+            assert_eq!(slash_state.selected_index, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_sets_selected_model_and_resets_input() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        let expected_model = AgentKind::Claude.models()[0];
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.stage = PromptSlashStage::Model;
+            slash_state.selected_agent = Some(AgentKind::Claude);
+            slash_state.selected_index = 0;
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+        app.process_pending_app_events().await;
+
+        // Assert
+        if let AppMode::Prompt {
+            input, slash_state, ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "");
+            assert_eq!(*slash_state, PromptSlashState::new());
+        }
+        assert_eq!(app.sessions.sessions[0].model, expected_model);
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_runs_stats_command_and_resets_slash_state() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/stats", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        app.sessions.sync_from_handles();
+        if let AppMode::Prompt {
+            input, slash_state, ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "");
+            assert_eq!(*slash_state, PromptSlashState::new());
+        }
+        assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
     }
 
     #[tokio::test]

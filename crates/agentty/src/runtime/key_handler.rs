@@ -421,6 +421,25 @@ mod tests {
         assert!(matches!(app.mode, AppMode::List));
     }
 
+    #[test]
+    fn test_confirmation_cancel_mode_returns_list_for_delete_confirmation() {
+        // Arrange
+        let mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::DeleteSession,
+            confirmation_message: "Delete session?".to_string(),
+            confirmation_title: "Confirm Delete".to_string(),
+            restore_view: None,
+            session_id: Some("session-id".to_string()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let cancel_mode = confirmation_cancel_mode(&mode);
+
+        // Assert
+        assert!(matches!(cancel_mode, AppMode::List));
+    }
+
     #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_restores_view_for_merge_confirmation() {
         // Arrange
@@ -602,6 +621,122 @@ mod tests {
                 selected_command_index: 1,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_open_command_selector_key_with_empty_commands_keeps_index_zero() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::OpenCommandSelector {
+            commands: Vec::new(),
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: None,
+                session_id: "session-id".to_string(),
+            },
+            selected_command_index: 0,
+        };
+
+        // Act
+        let event_result = handle_open_command_selector_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::OpenCommandSelector {
+                selected_command_index: 0,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_open_command_selector_key_enter_restores_view_without_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::OpenCommandSelector {
+            commands: vec!["nvim .".to_string()],
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: Some(4),
+                session_id: "session-id".to_string(),
+            },
+            selected_command_index: 0,
+        };
+
+        // Act
+        let event_result = handle_open_command_selector_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                ref session_id,
+                scroll_offset: Some(4),
+            } if session_id == "session-id"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_open_command_selector_key_unknown_key_preserves_state() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::OpenCommandSelector {
+            commands: vec!["nvim .".to_string(), "npm run dev".to_string()],
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                focused_review_status_message: Some("Preparing focused review".to_string()),
+                focused_review_text: Some("Critical finding".to_string()),
+                scroll_offset: Some(1),
+                session_id: "session-id".to_string(),
+            },
+            selected_command_index: 1,
+        };
+
+        // Act
+        let event_result = handle_open_command_selector_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::OpenCommandSelector {
+                selected_command_index: 1,
+                ref commands,
+                restore_view:
+                    ConfirmationViewMode {
+                        done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                        focused_review_status_message: Some(ref status_message),
+                        focused_review_text: Some(ref review_text),
+                        scroll_offset: Some(1),
+                        ref session_id,
+                    },
+            } if commands == &vec!["nvim .".to_string(), "npm run dev".to_string()]
+                && session_id == "session-id"
+                && status_message == "Preparing focused review"
+                && review_text == "Critical finding"
         ));
     }
 }

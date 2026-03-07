@@ -1052,6 +1052,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_view_session_snapshot_disables_actions_for_done_session() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::Done;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id,
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(!snapshot.can_open_worktree);
+        assert!(!snapshot.is_action_allowed);
+        assert_eq!(snapshot.session_state, ViewSessionState::Done);
+        assert_eq!(snapshot.session_status, Status::Done);
+    }
+
+    #[tokio::test]
     async fn test_view_total_lines_counts_wrapped_output_lines() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -1283,6 +1307,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_toggle_focused_review_output_mode_reuses_cached_review_text() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let view_context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: None,
+            session_id,
+            session_index: 0,
+        };
+        let view_session_snapshot =
+            view_session_snapshot(&app, &view_context).expect("expected view snapshot");
+        let mut next_done_session_output_mode = DoneSessionOutputMode::Summary;
+        let mut next_focused_review_status_message = None;
+        let mut next_focused_review_text = Some("Cached review".to_string());
+
+        // Act
+        toggle_focused_review_output_mode(
+            &mut app,
+            &view_context,
+            &view_session_snapshot,
+            &mut next_done_session_output_mode,
+            &mut next_focused_review_status_message,
+            &mut next_focused_review_text,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            next_done_session_output_mode,
+            DoneSessionOutputMode::FocusedReview
+        );
+        assert_eq!(next_focused_review_status_message, None);
+        assert_eq!(next_focused_review_text.as_deref(), Some("Cached review"));
+    }
+
+    #[tokio::test]
+    async fn test_toggle_focused_review_output_mode_starts_loading_for_non_empty_diff() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.settings.default_review_model = AgentModel::ClaudeOpus46;
+        let session_folder = app.sessions.sessions[0].folder.clone();
+        std::fs::write(session_folder.join("README.md"), "review test content\n")
+            .expect("failed to update readme");
+        let view_context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: None,
+            session_id,
+            session_index: 0,
+        };
+        let view_session_snapshot =
+            view_session_snapshot(&app, &view_context).expect("expected view snapshot");
+        let mut next_done_session_output_mode = DoneSessionOutputMode::Summary;
+        let mut next_focused_review_status_message = None;
+        let mut next_focused_review_text = None;
+
+        // Act
+        toggle_focused_review_output_mode(
+            &mut app,
+            &view_context,
+            &view_session_snapshot,
+            &mut next_done_session_output_mode,
+            &mut next_focused_review_status_message,
+            &mut next_focused_review_text,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            next_done_session_output_mode,
+            DoneSessionOutputMode::FocusedReview
+        );
+        assert_eq!(
+            next_focused_review_status_message,
+            Some(focused_review_loading_message(AgentModel::ClaudeOpus46))
+        );
+        assert_eq!(next_focused_review_text, None);
+    }
+
+    #[tokio::test]
     async fn test_focused_review_diff_for_view_session_returns_empty_diff_message() {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -1326,6 +1433,36 @@ mod tests {
                 scroll_offset: 0,
                 ..
             } if session_id == &context.session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_show_diff_for_view_session_uses_error_message_outside_git_repo() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let non_git_dir = tempdir().expect("failed to create non-git dir");
+        app.sessions.sessions[0].folder = non_git_dir.path().to_path_buf();
+        let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: Some(0),
+            session_id: session_id.clone(),
+            session_index: 0,
+        };
+
+        // Act
+        show_diff_for_view_session(&mut app, &context).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                ref session_id,
+                ref diff,
+                scroll_offset: 0,
+                ..
+            } if session_id == &context.session_id && diff.contains("Failed to run git diff:")
         ));
     }
 
@@ -1447,6 +1584,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_worktree_for_view_session_keeps_view_mode_for_single_command() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.settings.open_command = "nvim .".to_string();
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id: session_id.clone(),
+            scroll_offset: Some(2),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        open_worktree_for_view_session(&mut app, &context).await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                session_id: ref mode_session_id,
+                scroll_offset: Some(2),
+            } if mode_session_id == &session_id
+        ));
+    }
+
+    #[tokio::test]
     async fn test_rebase_view_session_appends_error_output_without_review_status() {
         // Arrange
         let (app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -1462,45 +1629,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_question_mark_sets_help_mode_from_view_context() {
+    async fn test_open_view_help_overlay_preserves_view_context() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        let scroll = Some(3);
-        app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+        let view_context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+            focused_review_status_message: Some("Preparing focused review".to_string()),
+            focused_review_text: Some("Critical finding".to_string()),
+            scroll_offset: Some(3),
             session_id: session_id.clone(),
-            scroll_offset: scroll,
+            session_index: 0,
         };
 
-        // Act — simulate what the `?` arm does
-        app.mode = AppMode::Help {
-            context: HelpContext::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
-                session_id,
-                session_state: ViewSessionState::Interactive,
-                scroll_offset: scroll,
-            },
-            scroll_offset: 0,
-        };
+        // Act
+        open_view_help_overlay(&mut app, &view_context, ViewSessionState::Review);
 
         // Assert
         assert!(matches!(
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
-                    done_session_output_mode: DoneSessionOutputMode::Summary,
-                    focused_review_status_message: None,
-                    focused_review_text: None,
-                    ref session_id,
-                    session_state: ViewSessionState::Interactive,
+                    done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                    focused_review_status_message: Some(ref status_message),
+                    focused_review_text: Some(ref review_text),
+                    session_id: ref session_id_in_mode,
+                    session_state: ViewSessionState::Review,
                     scroll_offset: Some(3),
                 },
                 scroll_offset: 0,
-            } if !session_id.is_empty()
+            } if session_id_in_mode == &session_id
+                && status_message == "Preparing focused review"
+                && review_text == "Critical finding"
         ));
     }
 

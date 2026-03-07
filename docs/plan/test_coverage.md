@@ -19,6 +19,7 @@ Baseline measured on March 6, 2026 using `cargo llvm-cov --workspace --json --su
 | Zero-coverage files | Added focused tests for `ui/router.rs`, `ui/render.rs`, and `runtime/core.rs`; coverage refresh pending | Implemented |
 | Large uncovered totals | Added targeted lifecycle/error-path tests for `infra/codex_app_server.rs`, `infra/gemini_acp.rs`, `infra/app_server_transport.rs`, and `app/session/workflow/merge.rs`; coverage refresh pending | Implemented |
 | External boundary error paths | Added deterministic retry/error-path coverage for `infra/git/rebase.rs` and command sequencing/failure coverage for `infra/tmux.rs`; coverage refresh pending | Implemented |
+| Runtime UI mode coverage | Added targeted edge-transition tests for `runtime/mode/prompt.rs`, `runtime/mode/session_view.rs`, and `runtime/key_handler.rs`; coverage refresh pending | Implemented |
 | Coverage policy in CI | No ratcheting line/function threshold in routine checks | Not started |
 
 ## Updated Priorities
@@ -58,9 +59,9 @@ Primary files:
 
 **Why now:** Prompt/session-view mode logic is high-traffic and has many conditional branches.
 
-- [ ] Add edge-case tests for `crates/agentty/src/runtime/mode/prompt.rs` (history navigation, mixed modifiers, slash flows).
-- [ ] Add additional state-transition tests for `crates/agentty/src/runtime/mode/session_view.rs` (status gating, focused review toggles, diff/open actions).
-- [ ] Increase key handling fallback-path assertions in `crates/agentty/src/runtime/key_handler.rs`.
+- [x] Add edge-case tests for `crates/agentty/src/runtime/mode/prompt.rs` (history navigation, mixed modifiers, slash flows).
+- [x] Add additional state-transition tests for `crates/agentty/src/runtime/mode/session_view.rs` (status gating, focused review toggles, diff/open actions).
+- [x] Increase key handling fallback-path assertions in `crates/agentty/src/runtime/key_handler.rs`.
 
 Primary files:
 
