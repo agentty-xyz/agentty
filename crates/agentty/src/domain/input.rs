@@ -265,8 +265,9 @@ impl Default for InputState {
 /// Extracts an `@query` pattern ending at `cursor` from `text`.
 ///
 /// Returns `Some((at_char_index, query_string))` if the cursor sits inside
-/// an `@query` token where `@` is at a word boundary (position 0 or preceded
-/// by whitespace). Returns `None` if no active at-mention is detected.
+/// an `@query` token where `@` starts at a lookup boundary (position `0`,
+/// preceded by whitespace, or preceded by an opening delimiter such as `(`).
+/// Returns `None` if no active at-mention is detected.
 pub fn extract_at_mention_query(text: &str, cursor: usize) -> Option<(usize, String)> {
     if cursor == 0 {
         return None;
@@ -280,7 +281,7 @@ pub fn extract_at_mention_query(text: &str, cursor: usize) -> Option<(usize, Str
         let ch = *chars.get(scan)?;
 
         if ch == '@' {
-            if scan == 0 || chars.get(scan - 1).is_some_and(|ch| ch.is_whitespace()) {
+            if is_at_mention_boundary(chars.get(scan.wrapping_sub(1)).copied()) {
                 let query: String = chars[scan + 1..cursor].iter().collect();
 
                 return Some((scan, query));
@@ -295,6 +296,21 @@ pub fn extract_at_mention_query(text: &str, cursor: usize) -> Option<(usize, Str
     }
 
     None
+}
+
+/// Returns whether the character before `@` starts a file lookup token.
+pub(crate) fn is_at_mention_boundary(previous_character: Option<char>) -> bool {
+    previous_character.is_none_or(|ch| ch.is_whitespace() || is_at_mention_opening_delimiter(ch))
+}
+
+/// Returns whether `ch` can appear inside an active `@` lookup token.
+pub(crate) fn is_at_mention_query_character(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-')
+}
+
+/// Returns whether `ch` is an opening delimiter that can precede `@`.
+fn is_at_mention_opening_delimiter(ch: char) -> bool {
+    matches!(ch, '(' | '[' | '{')
 }
 
 #[cfg(test)]
@@ -382,5 +398,31 @@ mod tests {
         // Assert
         assert_eq!(state.text(), "second line");
         assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_extract_at_mention_query_accepts_parenthesized_lookup() {
+        // Arrange
+        let text = "review (@src/main.rs)";
+        let cursor = "review (@src/main.rs".chars().count();
+
+        // Act
+        let query = extract_at_mention_query(text, cursor);
+
+        // Assert
+        assert_eq!(query, Some((8, "src/main.rs".to_string())));
+    }
+
+    #[test]
+    fn test_extract_at_mention_query_rejects_email_pattern() {
+        // Arrange
+        let text = "person@example.com";
+        let cursor = text.chars().count();
+
+        // Act
+        let query = extract_at_mention_query(text, cursor);
+
+        // Assert
+        assert_eq!(query, None);
     }
 }

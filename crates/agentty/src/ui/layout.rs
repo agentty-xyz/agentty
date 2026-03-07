@@ -2,6 +2,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
 use crate::ui::text_util;
 
 /// Maximum number of visible content lines inside the chat input viewport.
@@ -117,10 +118,12 @@ pub fn question_panel_layout(
 /// lines (from wrapping or explicit newlines) keep the same horizontal padding
 /// as spaces, so text never appears under the prompt icon. Wrapping prefers
 /// whole words when possible; only words that exceed the full content width are
-/// split across lines. Tokens that start with `@` at a word boundary are
+/// split across lines. Tokens that start with `@` at a lookup boundary are
 /// highlighted to make file lookup references easy to spot while typing.
-/// Highlighting continues only while the token is composed of path-like
-/// characters (`[A-Za-z0-9/._-]`), so trailing punctuation is excluded.
+/// Lookup boundaries include the start of the line, whitespace, and opening
+/// delimiters such as `(`. Highlighting continues only while the token is
+/// composed of path-like characters (`[A-Za-z0-9/._-]`), so trailing
+/// punctuation is excluded.
 pub fn compute_input_layout(
     input: &str,
     width: u16,
@@ -321,7 +324,7 @@ fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
             }
         }
 
-        if ch == '@' && last_ch.is_none_or(char::is_whitespace) {
+        if ch == '@' && is_at_mention_boundary(last_ch) {
             in_mention = true;
         } else if in_mention && !is_at_mention_query_character(ch) {
             in_mention = false;
@@ -367,11 +370,6 @@ fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
         cursor_positions,
         display_lines,
     }
-}
-
-/// Returns whether a character can belong to an `@` file-lookup token.
-fn is_at_mention_query_character(ch: char) -> bool {
-    ch.is_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-')
 }
 
 fn target_line_index(
@@ -966,6 +964,26 @@ mod tests {
         }
         assert_eq!(spans[12].content, ")");
         assert_eq!(spans[12].style.fg, None);
+    }
+
+    #[test]
+    fn test_compute_input_layout_highlights_parenthesized_at_mention() {
+        // Arrange
+        let input = "review (@src/main.rs)";
+        let width = 40;
+
+        // Act
+        let (lines, _, _) = compute_input_layout(input, width, 0);
+
+        // Assert
+        let line = &lines[0];
+        let spans = &line.spans;
+
+        for span in spans.iter().take(21).skip(9) {
+            assert_eq!(span.style.fg, Some(CHAT_INPUT_AT_MENTION_COLOR));
+        }
+        assert_eq!(spans[21].content, ")");
+        assert_eq!(spans[21].style.fg, None);
     }
 
     #[test]
