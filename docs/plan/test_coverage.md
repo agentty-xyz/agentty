@@ -17,8 +17,8 @@ Baseline measured on March 6, 2026 using `cargo llvm-cov --workspace --json --su
 | `crates/agentty` | 85.08% line coverage (`31368/36870`) | Baseline captured |
 | `crates/ag-xtask` | 93.18% line coverage (`670/719`) | Healthy |
 | Zero-coverage files | Added focused tests for `ui/router.rs`, `ui/render.rs`, and `runtime/core.rs`; coverage refresh pending | Implemented |
-| Large uncovered totals | Highest gaps in `infra/codex_app_server.rs`, `runtime/mode/prompt.rs`, `app/session/workflow/merge.rs`, `runtime/mode/session_view.rs` | Not started |
-| External boundary error paths | `infra/app_server_transport.rs`, `infra/tmux.rs`, and git rebase flows still have thin failure-path coverage | Partial |
+| Large uncovered totals | Added targeted lifecycle/error-path tests for `infra/codex_app_server.rs`, `infra/gemini_acp.rs`, `infra/app_server_transport.rs`, and `app/session/workflow/merge.rs`; coverage refresh pending | Implemented |
+| External boundary error paths | Added transport and sync-rebase assistance error-path tests; `infra/tmux.rs` and git rebase boundary follow-up still remain | Partial |
 | Coverage policy in CI | No ratcheting line/function threshold in routine checks | Not started |
 
 ## Updated Priorities
@@ -42,10 +42,10 @@ Primary files:
 
 **Why now:** These modules have the largest absolute uncovered line totals and carry high behavior risk.
 
-- [ ] Expand turn lifecycle and error-path tests in `crates/agentty/src/infra/codex_app_server.rs`.
-- [ ] Expand session and permission-flow tests in `crates/agentty/src/infra/gemini_acp.rs`.
-- [ ] Add transport parsing/error handling tests in `crates/agentty/src/infra/app_server_transport.rs`.
-- [ ] Increase branch-path coverage for complex merge assistance in `crates/agentty/src/app/session/workflow/merge.rs`.
+- [x] Expand turn lifecycle and error-path tests in `crates/agentty/src/infra/codex_app_server.rs`.
+- [x] Expand session and permission-flow tests in `crates/agentty/src/infra/gemini_acp.rs`.
+- [x] Add transport parsing/error handling tests in `crates/agentty/src/infra/app_server_transport.rs`.
+- [x] Increase branch-path coverage for complex merge assistance in `crates/agentty/src/app/session/workflow/merge.rs`.
 
 Primary files:
 

@@ -1797,6 +1797,7 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use mockall::Sequence;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
     use crate::app::session::RealClock;
@@ -1850,22 +1851,44 @@ mod tests {
     /// tests.
     async fn build_rebase_assist_input_for_test(
         git_client: Arc<dyn GitClient>,
-    ) -> RebaseAssistInput {
+    ) -> (TempDir, RebaseAssistInput) {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let db = Database::open_in_memory().await.expect("failed to open db");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let folder = temp_dir.path().to_path_buf();
 
-        RebaseAssistInput {
-            app_event_tx,
+        (
+            temp_dir,
+            RebaseAssistInput {
+                app_event_tx,
+                base_branch: "main".to_string(),
+                child_pid: Arc::new(Mutex::new(None)),
+                clock: test_clock(),
+                db,
+                folder,
+                fs_client: test_fs_client(),
+                git_client,
+                id: "session-123".to_string(),
+                output: Arc::new(Mutex::new(String::new())),
+                session_model: AgentModel::Gemini3FlashPreview,
+            },
+        )
+    }
+
+    /// Builds sync rebase assistance input with injected git and assistance
+    /// clients for project-level conflict tests.
+    fn build_sync_rebase_input_for_test(
+        folder: PathBuf,
+        git_client: Arc<dyn GitClient>,
+        sync_assist_client: Arc<dyn SyncAssistClient>,
+    ) -> SyncRebaseAssistInput {
+        SyncRebaseAssistInput {
             base_branch: "main".to_string(),
-            child_pid: Arc::new(Mutex::new(None)),
-            clock: test_clock(),
-            db,
-            folder: PathBuf::from("/tmp/rebase-start-test"),
+            folder,
             fs_client: test_fs_client(),
             git_client,
-            id: "session-123".to_string(),
-            output: Arc::new(Mutex::new(String::new())),
             session_model: AgentModel::Gemini3FlashPreview,
+            sync_assist_client,
         }
     }
 
@@ -1944,13 +1967,14 @@ mod tests {
         // Arrange
         let (tx, _rx) = mpsc::unbounded_channel();
         let db = Database::open_in_memory().await.expect("failed to open db");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
         let input = RebaseAssistInput {
             app_event_tx: tx,
             base_branch: "main".to_string(),
             child_pid: Arc::new(Mutex::new(None)),
             clock: test_clock(),
             db,
-            folder: PathBuf::from("/tmp/test"),
+            folder: temp_dir.path().to_path_buf(),
             fs_client: test_fs_client(),
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".to_string(),
@@ -1994,7 +2018,8 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Ok(()) }));
-        let input = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
 
         // Act
         let result = SessionManager::execute_rebase_workflow(input).await;
@@ -2022,7 +2047,8 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Ok(()) }));
-        let input = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
 
         // Act
         let result = SessionManager::run_rebase_assist_loop_core(
@@ -2063,7 +2089,8 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
-        let input = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
 
         // Act
         let result = SessionManager::run_rebase_start(&input).await;
@@ -2094,7 +2121,8 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Err("abort failed".to_string()) }));
-        let input = build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
 
         // Act
         let result = SessionManager::run_rebase_start(&input).await;
@@ -2128,7 +2156,8 @@ mod tests {
     #[tokio::test]
     async fn test_sync_main_for_project_resolves_conflicts_with_assistance() {
         // Arrange
-        let working_dir = PathBuf::from("/tmp/sync-main-assist-success");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let working_dir = temp_dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
             .expect_find_git_repo_root()
@@ -2236,7 +2265,8 @@ mod tests {
     #[tokio::test]
     async fn test_sync_main_for_project_fails_after_max_assistance_attempts() {
         // Arrange
-        let working_dir = PathBuf::from("/tmp/sync-main-assist-fail");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let working_dir = temp_dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
             .expect_find_git_repo_root()
@@ -2312,6 +2342,163 @@ mod tests {
                 .detail_message()
                 .contains("Conflicts remain unresolved after maximum assistance attempts"),
             "error detail should mention unresolved conflicts"
+        );
+    }
+
+    /// Verifies sync assistance merges tracked conflicts with staged conflict
+    /// marker files and returns a sorted unique list.
+    #[tokio::test]
+    async fn test_load_sync_conflicted_files_merges_and_sorts_results() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Ok(vec!["src/b.rs".to_string(), "src/c.rs".to_string()]) })
+            });
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async { Ok(vec!["src/a.rs".to_string(), "src/c.rs".to_string()]) })
+            });
+
+        let mut mock_sync_assist_client = MockSyncAssistClient::new();
+        mock_sync_assist_client
+            .expect_resolve_rebase_conflicts()
+            .times(0);
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let input = build_sync_rebase_input_for_test(
+            temp_dir.path().to_path_buf(),
+            Arc::new(mock_git_client),
+            Arc::new(mock_sync_assist_client),
+        );
+
+        // Act
+        let conflicted_files = SessionManager::load_sync_conflicted_files(&input, &[]).await;
+
+        // Assert
+        assert_eq!(
+            conflicted_files,
+            Ok(vec![
+                "src/a.rs".to_string(),
+                "src/b.rs".to_string(),
+                "src/c.rs".to_string(),
+            ])
+        );
+    }
+
+    /// Verifies sync conflict checks keep the loop in assistance mode when
+    /// staged files still contain conflict markers.
+    #[tokio::test]
+    async fn test_stage_and_check_for_sync_conflicts_detects_remaining_markers() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_stage_all()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_has_unmerged_paths()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
+
+        let mut mock_sync_assist_client = MockSyncAssistClient::new();
+        mock_sync_assist_client
+            .expect_resolve_rebase_conflicts()
+            .times(0);
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let input = build_sync_rebase_input_for_test(
+            temp_dir.path().to_path_buf(),
+            Arc::new(mock_git_client),
+            Arc::new(mock_sync_assist_client),
+        );
+
+        // Act
+        let still_has_conflicts =
+            SessionManager::stage_and_check_for_sync_conflicts(&input, &["src/lib.rs".to_string()])
+                .await;
+
+        // Assert
+        assert_eq!(still_has_conflicts, Ok(true));
+    }
+
+    /// Verifies sync assistance aborts when the conflicted file fingerprint
+    /// repeats across attempts without any file changes.
+    #[tokio::test]
+    async fn test_run_sync_rebase_assist_loop_aborts_for_unchanged_conflict_files() {
+        // Arrange
+        let temp_dir = tempdir().expect("create temp dir");
+        let conflict_file = temp_dir.path().join("src/lib.rs");
+        std::fs::create_dir_all(
+            conflict_file
+                .parent()
+                .expect("conflict file should have a parent directory"),
+        )
+        .expect("create conflict directory");
+        std::fs::write(&conflict_file, "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>>")
+            .expect("write conflict file");
+
+        let fingerprint_fs_client = create_passthrough_mock_fs_client();
+        let fingerprint = SessionManager::conflicted_file_fingerprint(
+            &fingerprint_fs_client,
+            temp_dir.path(),
+            &["src/lib.rs".to_string()],
+        );
+
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_| Box::pin(async { Ok(vec!["src/lib.rs".to_string()]) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+        mock_git_client
+            .expect_stage_all()
+            .times(REBASE_ASSIST_POLICY.max_attempts - 1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_has_unmerged_paths()
+            .times(REBASE_ASSIST_POLICY.max_attempts - 1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut mock_sync_assist_client = MockSyncAssistClient::new();
+        mock_sync_assist_client
+            .expect_resolve_rebase_conflicts()
+            .times(REBASE_ASSIST_POLICY.max_attempts - 1)
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        let input = build_sync_rebase_input_for_test(
+            temp_dir.path().to_path_buf(),
+            Arc::new(mock_git_client),
+            Arc::new(mock_sync_assist_client),
+        );
+
+        // Act
+        let result = SessionManager::run_sync_rebase_assist_loop(input, fingerprint).await;
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(
+                "Sync rebase assistance made no progress: conflicted files did not change"
+                    .to_string()
+            )
         );
     }
 

@@ -1568,9 +1568,62 @@ fn extract_thread_token_usage_for_turn(
 
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
+    use std::process::Stdio;
+
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
+
+    /// Spawns a shell-backed fake Codex runtime that prints scripted stdout
+    /// responses while keeping stdin open for request writes.
+    fn spawn_scripted_runtime(script: &str) -> tokio::process::Child {
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+
+        command
+            .spawn()
+            .expect("failed to spawn scripted Codex runtime")
+    }
+
+    /// Builds a `CodexSessionRuntime` backed by a scripted shell child for
+    /// protocol lifecycle tests.
+    fn build_scripted_runtime_session(
+        script: &str,
+        thread_id: &str,
+        latest_input_tokens: u64,
+    ) -> (TempDir, CodexSessionRuntime) {
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let folder = temp_dir.path().to_path_buf();
+        let mut child = spawn_scripted_runtime(script);
+        let stdin = child
+            .stdin
+            .take()
+            .expect("scripted runtime stdin should be piped");
+        let stdout = child
+            .stdout
+            .take()
+            .expect("scripted runtime stdout should be piped");
+
+        (
+            temp_dir,
+            CodexSessionRuntime {
+                child,
+                latest_input_tokens,
+                folder,
+                model: AgentModel::Gpt53Codex.as_str().to_string(),
+                restored_context: false,
+                stdin: Some(stdin),
+                stdout_lines: BufReader::new(stdout).lines(),
+                thread_id: thread_id.to_string(),
+            },
+        )
+    }
 
     #[test]
     fn turn_completed_timeout_error_includes_timeout_seconds() {
@@ -1645,6 +1698,109 @@ mod tests {
 
         // Assert
         assert_eq!(threshold, AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT);
+    }
+
+    /// Verifies `thread/start` extracts the returned thread identifier from a
+    /// matching response payload.
+    #[tokio::test]
+    async fn start_thread_returns_thread_id_from_matching_response() {
+        // Arrange
+        let script = r#"
+read request
+request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"thread":{"id":"thread-123"}}}\n' "$request_id"
+cat >/dev/null
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "", 0);
+
+        // Act
+        let thread_id =
+            RealCodexAppServerClient::start_thread(&mut session, ReasoningLevel::default()).await;
+
+        // Assert
+        assert_eq!(thread_id, Ok("thread-123".to_string()));
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies `thread/resume` returns a descriptive error when the runtime
+    /// omits the nested thread identifier.
+    #[tokio::test]
+    async fn resume_thread_returns_error_when_response_omits_thread_id() {
+        // Arrange
+        let script = r#"
+read request
+request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"thread":{}}}\n' "$request_id"
+cat >/dev/null
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "", 0);
+
+        // Act
+        let thread_id = RealCodexAppServerClient::resume_thread(
+            &mut session,
+            "thread-previous",
+            ReasoningLevel::default(),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            thread_id,
+            Err(
+                "Codex app-server `thread/resume` response does not include a thread id"
+                    .to_string()
+            )
+        );
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies context compaction resets cumulative input tokens after the
+    /// runtime confirms successful completion.
+    #[tokio::test]
+    async fn send_compact_request_resets_latest_input_tokens_on_success() {
+        // Arrange
+        let script = r#"
+read request
+request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$request_id"
+printf '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}\n'
+cat >/dev/null
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "thread-1", 450_000);
+
+        // Act
+        let compact_result = RealCodexAppServerClient::send_compact_request(&mut session).await;
+
+        // Assert
+        assert_eq!(compact_result, Ok(()));
+        assert_eq!(session.latest_input_tokens, 0);
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies context compaction surfaces failure details from
+    /// `turn/completed` error payloads.
+    #[tokio::test]
+    async fn send_compact_request_returns_turn_completed_error_details() {
+        // Arrange
+        let script = r#"
+read request
+request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$request_id"
+printf '{"method":"turn/completed","params":{"turn":{"status":"failed","error":{"message":"compaction boom"}}}}\n'
+cat >/dev/null
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "thread-1", 450_000);
+
+        // Act
+        let compact_result = RealCodexAppServerClient::send_compact_request(&mut session).await;
+
+        // Assert
+        assert_eq!(
+            compact_result,
+            Err("Codex context compaction failed: compaction boom".to_string())
+        );
+        assert_eq!(session.latest_input_tokens, 450_000);
+        app_server_transport::shutdown_child(&mut session.child).await;
     }
 
     #[test]

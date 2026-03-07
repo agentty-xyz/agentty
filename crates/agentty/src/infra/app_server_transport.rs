@@ -122,7 +122,24 @@ pub async fn shutdown_child(child: &mut tokio::process::Child) {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Stdio;
+
+    use tokio::io::AsyncBufReadExt;
+
     use super::*;
+
+    /// Spawns a simple echo process that mirrors stdin to stdout for transport
+    /// write tests.
+    fn spawn_cat_process() -> tokio::process::Child {
+        let mut command = tokio::process::Command::new("cat");
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+
+        command.spawn().expect("failed to spawn `cat`")
+    }
 
     #[test]
     fn response_id_matches_returns_true_for_matching_string_id() {
@@ -200,5 +217,103 @@ mod tests {
 
         // Assert
         assert_eq!(message, None);
+    }
+
+    /// Verifies `write_json_line()` serializes one compact JSON line followed
+    /// by a newline.
+    #[tokio::test]
+    async fn write_json_line_writes_serialized_payload_with_newline() {
+        // Arrange
+        let mut child = spawn_cat_process();
+        let mut stdin = child.stdin.take().expect("`cat` stdin should be piped");
+        let stdout = child.stdout.take().expect("`cat` stdout should be piped");
+        let payload = serde_json::json!({
+            "id": "req-1",
+            "method": "initialize",
+            "params": {"value": 1}
+        });
+
+        // Act
+        write_json_line(&mut stdin, &payload)
+            .await
+            .expect("write should succeed");
+        drop(stdin);
+        let echoed_line = BufReader::new(stdout)
+            .lines()
+            .next_line()
+            .await
+            .expect("stdout read should succeed")
+            .expect("echoed payload line should exist");
+
+        // Assert
+        assert_eq!(echoed_line, payload.to_string());
+        shutdown_child(&mut child).await;
+    }
+
+    /// Verifies `wait_for_response_line()` skips unrelated or invalid lines
+    /// until the matching response id arrives.
+    #[tokio::test]
+    async fn wait_for_response_line_skips_invalid_and_non_matching_lines() {
+        // Arrange
+        let (reader, mut writer) = tokio::io::duplex(512);
+        let writer_task = tokio::spawn(async move {
+            writer
+                .write_all(
+                    b"not-json\n{\"id\":\"other\",\"result\":{}}\n{\"id\":\"req-1\",\"result\":{\"ok\":true}}\n",
+                )
+                .await
+                .expect("test writer should succeed");
+        });
+        let mut stdout_lines = BufReader::new(reader).lines();
+
+        // Act
+        let response_line = wait_for_response_line(&mut stdout_lines, "req-1")
+            .await
+            .expect("matching response should be returned");
+
+        // Assert
+        assert_eq!(response_line, "{\"id\":\"req-1\",\"result\":{\"ok\":true}}");
+        writer_task.await.expect("writer task should finish");
+    }
+
+    /// Verifies `wait_for_response_line()` reports early process termination
+    /// when the stream ends before the expected response arrives.
+    #[tokio::test]
+    async fn wait_for_response_line_returns_error_when_stream_ends() {
+        // Arrange
+        let (reader, mut writer) = tokio::io::duplex(256);
+        let writer_task = tokio::spawn(async move {
+            writer
+                .write_all(b"{\"id\":\"other\",\"result\":{}}\n")
+                .await
+                .expect("test writer should succeed");
+            drop(writer);
+        });
+        let mut stdout_lines = BufReader::new(reader).lines();
+
+        // Act
+        let response_result = wait_for_response_line(&mut stdout_lines, "req-1").await;
+
+        // Assert
+        assert_eq!(
+            response_result,
+            Err("App-server terminated before sending expected response".to_string())
+        );
+        writer_task.await.expect("writer task should finish");
+    }
+
+    /// Verifies `shutdown_child()` closes stdin and waits for a cooperative
+    /// child process to exit.
+    #[tokio::test]
+    async fn shutdown_child_exits_cleanly_after_closing_stdin() {
+        // Arrange
+        let mut child = spawn_cat_process();
+
+        // Act
+        shutdown_child(&mut child).await;
+        let exit_status = child.wait().await.expect("child wait should succeed");
+
+        // Assert
+        assert!(exit_status.success());
     }
 }

@@ -861,8 +861,14 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use mockall::Sequence;
+    use tempfile::tempdir;
 
     use super::*;
+
+    /// Creates an isolated temporary worktree path for ACP tests.
+    fn create_temp_folder() -> tempfile::TempDir {
+        tempdir().expect("failed to create temporary test directory")
+    }
 
     /// Configures the expected `session/prompt` request and stores its dynamic
     /// JSON-RPC `id` for a later completion response.
@@ -1048,6 +1054,41 @@ mod tests {
             });
     }
 
+    /// Configures one prompt completion error response using the captured
+    /// `session/prompt` request id.
+    fn expect_prompt_completion_error(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+        prompt_id: Arc<Mutex<Option<String>>>,
+        error_message: &'static str,
+    ) {
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(move || {
+                let response_id = prompt_id
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.clone())
+                    .unwrap_or_else(|| "session-prompt-1".to_string());
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "error": {
+                                "code": -32000,
+                                "message": error_message
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
     /// Verifies progress and chunk events emitted for one streamed turn.
     fn assert_turn_stream_events(stream_rx: &mut mpsc::UnboundedReceiver<AppServerStreamEvent>) {
         assert_eq!(
@@ -1150,12 +1191,43 @@ mod tests {
         assert_eq!(initialize_result, Err("initialize failed".to_string()));
     }
 
+    /// Verifies initialize handshake surfaces malformed JSON responses with a
+    /// parse error.
+    #[tokio::test]
+    async fn initialize_runtime_returns_error_for_invalid_json_response() {
+        // Arrange
+        let mut transport = MockGeminiRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        transport
+            .expect_wait_for_response_line()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok("not-json".to_string()) }));
+
+        // Act
+        let initialize_result = RealGeminiAcpClient::initialize_runtime(&mut transport).await;
+
+        // Assert
+        assert!(
+            initialize_result
+                .expect_err("invalid JSON should fail initialization")
+                .contains("Failed to parse Gemini ACP initialize response"),
+            "error should mention initialize JSON parsing"
+        );
+    }
+
     #[tokio::test]
     async fn start_session_writes_session_new_and_returns_session_id() {
         // Arrange
         let mut transport = MockGeminiRuntimeTransport::new();
         let mut sequence = Sequence::new();
-        let folder = PathBuf::from("/tmp/worktree");
+        let temp_dir = create_temp_folder();
+        let folder = temp_dir.path().to_path_buf();
         transport
             .expect_write_json_line()
             .times(1)
@@ -1202,7 +1274,8 @@ mod tests {
         // Arrange
         let mut transport = MockGeminiRuntimeTransport::new();
         let mut sequence = Sequence::new();
-        let folder = PathBuf::from("/tmp/worktree");
+        let temp_dir = create_temp_folder();
+        let folder = temp_dir.path().to_path_buf();
         transport
             .expect_write_json_line()
             .times(1)
@@ -1269,7 +1342,8 @@ mod tests {
         // Arrange
         let mut transport = MockGeminiRuntimeTransport::new();
         let mut sequence = Sequence::new();
-        let folder = PathBuf::from("/tmp/worktree");
+        let temp_dir = create_temp_folder();
+        let folder = temp_dir.path().to_path_buf();
         transport
             .expect_write_json_line()
             .times(1)
@@ -1330,6 +1404,97 @@ mod tests {
             Ok(("Chunk text".to_string(), 2_u64, 3_u64))
         );
         assert_turn_stream_events(&mut stream_rx);
+    }
+
+    /// Verifies prompt execution returns the JSON-RPC error message from the
+    /// matching completion response.
+    #[tokio::test]
+    async fn run_turn_with_runtime_returns_prompt_error_message() {
+        // Arrange
+        let mut transport = MockGeminiRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let prompt_id = Arc::new(Mutex::new(None));
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+
+        expect_session_prompt_request(&mut transport, &mut sequence, Arc::clone(&prompt_id));
+        expect_prompt_completion_error(&mut transport, &mut sequence, prompt_id, "prompt failed");
+
+        // Act
+        let turn_result = RealGeminiAcpClient::run_turn_with_runtime(
+            &mut transport,
+            "session-1",
+            "Prompt",
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(turn_result, Err("prompt failed".to_string()));
+        assert!(
+            stream_rx.try_recv().is_err(),
+            "error responses should not stream events"
+        );
+    }
+
+    /// Verifies prompt execution falls back to the completion payload text
+    /// when the runtime does not stream message chunks.
+    #[tokio::test]
+    async fn run_turn_with_runtime_uses_completion_message_without_chunks() {
+        // Arrange
+        let mut transport = MockGeminiRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let prompt_id = Arc::new(Mutex::new(None));
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+
+        expect_session_prompt_request(&mut transport, &mut sequence, Arc::clone(&prompt_id));
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move || {
+                let response_id = prompt_id
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.clone())
+                    .unwrap_or_else(|| "session-prompt-1".to_string());
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "result": {
+                                "usage": {
+                                    "inputTokens": 5,
+                                    "outputTokens": 8
+                                },
+                                "message": {
+                                    "content": [{
+                                        "text": "Completion fallback"
+                                    }]
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+
+        // Act
+        let turn_result = RealGeminiAcpClient::run_turn_with_runtime(
+            &mut transport,
+            "session-1",
+            "Prompt",
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(turn_result, Ok(("Completion fallback".to_string(), 5, 8)));
+        assert!(
+            stream_rx.try_recv().is_err(),
+            "completion fallback should not emit delta chunks"
+        );
     }
 
     #[test]
@@ -1867,5 +2032,42 @@ mod tests {
 
         // Assert
         assert_eq!(permission_response, None);
+    }
+
+    /// Verifies raw-value permission parsing still selects an allow option
+    /// when typed deserialization cannot consume the payload.
+    #[test]
+    fn build_permission_response_falls_back_to_raw_option_selection() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": [{
+                    "optionId": "allow-once",
+                    "kind": "allow_once"
+                }]
+            }
+        });
+
+        // Act
+        let permission_response = build_permission_response(&response_value, "session-1");
+
+        // Assert
+        assert_eq!(
+            permission_response,
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "permission-1",
+                "result": {
+                    "outcome": {
+                        "outcome": "selected",
+                        "optionId": "allow-once"
+                    }
+                }
+            }))
+        );
     }
 }
