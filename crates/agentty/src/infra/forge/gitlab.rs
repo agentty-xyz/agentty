@@ -243,26 +243,37 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
     )
 }
 
-/// Builds the `glab mr create` command for `input`.
+/// Builds the `glab api` create command for `input`.
+///
+/// Uses the GitLab API directly so merge-request creation does not depend on
+/// repository-local `glab mr create` state, implicit pushes, or git config
+/// writes in shared worktree metadata.
 fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> ForgeCommand {
-    glab_command(
-        remote,
-        vec![
-            "mr".to_string(),
-            "create".to_string(),
-            "--repo".to_string(),
-            remote.web_url.clone(),
-            "--source-branch".to_string(),
-            input.source_branch.clone(),
-            "--target-branch".to_string(),
-            input.target_branch.clone(),
-            "--title".to_string(),
-            input.title.clone(),
-            "--description".to_string(),
-            input.body.clone().unwrap_or_default(),
-            "--yes".to_string(),
-        ],
-    )
+    let mut arguments = vec![
+        "api".to_string(),
+        "--hostname".to_string(),
+        remote.host.clone(),
+        "--method".to_string(),
+        "POST".to_string(),
+        format!(
+            "projects/{}/merge_requests",
+            encode_project_path(&remote.project_path())
+        ),
+        "--silent".to_string(),
+        "-f".to_string(),
+        format!("source_branch={}", input.source_branch),
+        "-f".to_string(),
+        format!("target_branch={}", input.target_branch),
+        "-f".to_string(),
+        format!("title={}", input.title),
+    ];
+
+    if let Some(body) = input.body.as_deref() {
+        arguments.push("-f".to_string());
+        arguments.push(format!("description={body}"));
+    }
+
+    glab_command(remote, arguments)
 }
 
 /// Builds the `glab mr view` command for one merge-request iid.
@@ -580,7 +591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_review_request_builds_create_command_for_self_hosted_gitlab() {
+    async fn create_review_request_builds_api_create_command_for_self_hosted_gitlab() {
         // Arrange
         let remote = gitlab_remote();
         let input = CreateReviewRequestInput {
@@ -611,13 +622,7 @@ mod tests {
 
                 move |command| command == &create_command(&remote, &input)
             })
-            .returning(|_| {
-                Box::pin(async {
-                    Ok(success_output(
-                        "https://gitlab.example.com/team/project/-/merge_requests/17\n".to_string(),
-                    ))
-                })
-            });
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
         command_runner
             .expect_run()
             .once()
@@ -651,6 +656,39 @@ mod tests {
         assert_eq!(
             review_request.status_summary.as_deref(),
             Some("1 approval, Pipeline Success, Mergeable")
+        );
+    }
+
+    #[test]
+    fn create_command_omits_description_field_when_body_is_missing() {
+        // Arrange
+        let remote = gitlab_remote();
+        let input = CreateReviewRequestInput {
+            body: None,
+            source_branch: "feature/forge".to_string(),
+            target_branch: "main".to_string(),
+            title: "Add forge review support".to_string(),
+        };
+
+        // Act
+        let command = create_command(&remote, &input);
+
+        // Assert
+        assert_eq!(command.executable, "glab");
+        assert!(command.arguments.starts_with(&[
+            "api".to_string(),
+            "--hostname".to_string(),
+            "gitlab.example.com".to_string(),
+            "--method".to_string(),
+            "POST".to_string(),
+            "projects/team%2Fproject/merge_requests".to_string(),
+            "--silent".to_string(),
+        ]));
+        assert!(
+            !command
+                .arguments
+                .iter()
+                .any(|argument| argument.starts_with("description="))
         );
     }
 

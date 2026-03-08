@@ -80,6 +80,7 @@ Review-request actions require the forge CLI that matches the repository remote:
 
 - GitHub remotes require `gh` plus local authentication via `gh auth login`.
 - GitLab remotes require `glab` plus local authentication via `glab auth login`.
+- Session-branch publishing still uses regular Git authentication before the PR/MR is created. HTTPS remotes need a working credential helper or PAT, and SSH remotes need a working SSH key.
 
 ### Typical Transitions
 

@@ -90,6 +90,7 @@ Additional notes:
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
 - **Review requests**: `p` is state-aware. In **Review** without a link it creates or links a PR/MR; with an open link it shows the forge URL; in **Done** or **Canceled** it refreshes the stored PR/MR metadata.
 - **Review-request prerequisites**: GitHub remotes require `gh auth login`; GitLab remotes require `glab auth login`. Missing or unauthenticated CLI state is reported in the session-view popup.
+- **Branch publish auth**: creating a review request first pushes the session branch with regular Git auth. HTTPS remotes need a credential helper or PAT, and SSH remotes need a working SSH key.
 - **Question**: opening the session enters Question Input mode until all prompts are answered or skipped.
 - **Done**: `t` toggles between summary and full output.
 - **Review**: Runs in read-only review mode. It can use internet lookup
