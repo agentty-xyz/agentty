@@ -1,7 +1,9 @@
 //! App-wide background task helpers for status polling, version checks, and
 //! app-server turns.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -13,7 +15,6 @@ use crate::app::AppEvent;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::infra::agent;
 use crate::infra::git::GitClient;
-#[cfg(not(test))]
 use crate::version;
 
 /// Stateless helpers for app-scoped background pollers and app-server
@@ -97,9 +98,7 @@ impl TaskService {
     pub(super) fn spawn_version_check_task(app_event_tx: &mpsc::UnboundedSender<AppEvent>) {
         #[cfg(test)]
         {
-            let _ = app_event_tx.send(AppEvent::VersionAvailabilityUpdated {
-                latest_available_version: None,
-            });
+            let _ = app_event_tx.send(Self::version_availability_event(None));
         }
 
         #[cfg(not(test))]
@@ -107,19 +106,9 @@ impl TaskService {
 
         #[cfg(not(test))]
         tokio::spawn(async move {
-            let latest_available_version =
-                version::latest_npm_version_tag()
-                    .await
-                    .filter(|latest_version| {
-                        version::is_newer_than_current_version(
-                            env!("CARGO_PKG_VERSION"),
-                            latest_version,
-                        )
-                    });
+            let latest_version_tag = version::latest_npm_version_tag().await;
 
-            let _ = app_event_tx.send(AppEvent::VersionAvailabilityUpdated {
-                latest_available_version,
-            });
+            let _ = app_event_tx.send(Self::version_availability_event(latest_version_tag));
         });
     }
 
@@ -145,18 +134,8 @@ impl TaskService {
             )
             .await;
 
-            let app_event = match focused_review_result {
-                Ok(review_text) => AppEvent::FocusedReviewPrepared {
-                    diff_hash,
-                    review_text,
-                    session_id,
-                },
-                Err(error) => AppEvent::FocusedReviewPreparationFailed {
-                    diff_hash,
-                    error,
-                    session_id,
-                },
-            };
+            let app_event =
+                Self::focused_review_app_event(diff_hash, focused_review_result, session_id);
             let _ = app_event_tx.send(app_event);
         });
     }
@@ -170,16 +149,87 @@ impl TaskService {
         focused_review_diff: &str,
         session_summary: Option<&str>,
     ) -> Result<String, String> {
+        Self::focused_review_assist_text_with_submitter(
+            session_folder,
+            review_model,
+            focused_review_diff,
+            session_summary,
+            |review_folder, review_model, focused_review_prompt| {
+                Box::pin(async move {
+                    agent::submit_one_shot(agent::OneShotRequest {
+                        child_pid: None,
+                        folder: review_folder,
+                        model: review_model,
+                        prompt: focused_review_prompt,
+                        reasoning_level: ReasoningLevel::default(),
+                    })
+                    .await
+                })
+            },
+        )
+        .await
+    }
+
+    /// Converts a raw version lookup result into the reducer event consumed by
+    /// app state.
+    fn version_availability_event(latest_version_tag: Option<String>) -> AppEvent {
+        let latest_available_version = latest_version_tag.filter(|latest_version| {
+            version::is_newer_than_current_version(env!("CARGO_PKG_VERSION"), latest_version)
+        });
+
+        AppEvent::VersionAvailabilityUpdated {
+            latest_available_version,
+        }
+    }
+
+    /// Generates review assist text using an injected one-shot submitter so
+    /// failure paths can be tested without subprocess execution.
+    async fn focused_review_assist_text_with_submitter<Submitter>(
+        session_folder: &Path,
+        review_model: AgentModel,
+        focused_review_diff: &str,
+        session_summary: Option<&str>,
+        submitter: Submitter,
+    ) -> Result<String, String>
+    where
+        Submitter: for<'submit> FnOnce(
+            &'submit Path,
+            AgentModel,
+            &'submit str,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<agent::AgentResponse, String>> + Send + 'submit>,
+        >,
+    {
         let focused_review_prompt =
             Self::focused_review_assist_prompt(focused_review_diff, session_summary)?;
-        let agent_response = agent::submit_one_shot(agent::OneShotRequest {
-            child_pid: None,
-            folder: session_folder,
-            model: review_model,
-            prompt: &focused_review_prompt,
-            reasoning_level: ReasoningLevel::default(),
-        })
-        .await?;
+        let agent_response =
+            submitter(session_folder, review_model, &focused_review_prompt).await?;
+
+        Self::focused_review_output_text(&agent_response)
+    }
+
+    /// Builds the final reducer event for one review-assist task outcome.
+    fn focused_review_app_event(
+        diff_hash: u64,
+        focused_review_result: Result<String, String>,
+        session_id: String,
+    ) -> AppEvent {
+        match focused_review_result {
+            Ok(review_text) => AppEvent::FocusedReviewPrepared {
+                diff_hash,
+                review_text,
+                session_id,
+            },
+            Err(error) => AppEvent::FocusedReviewPreparationFailed {
+                diff_hash,
+                error,
+                session_id,
+            },
+        }
+    }
+
+    /// Extracts one non-empty review string from the agent response payload.
+    fn focused_review_output_text(agent_response: &agent::AgentResponse) -> Result<String, String> {
         let focused_review_text = agent_response.to_display_text();
         let focused_review_text = focused_review_text.trim();
         if focused_review_text.is_empty() {
@@ -211,6 +261,169 @@ impl TaskService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::agent::protocol::AgentResponse;
+
+    #[tokio::test]
+    /// Ensures test-mode version checks still emit one reducer event without
+    /// touching the network.
+    async fn spawn_version_check_task_emits_none_update_in_tests() {
+        // Arrange
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        TaskService::spawn_version_check_task(&app_event_tx);
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for version-check event")
+            .expect("version-check task should emit one event");
+
+        // Assert
+        assert_eq!(
+            app_event,
+            AppEvent::VersionAvailabilityUpdated {
+                latest_available_version: None,
+            }
+        );
+    }
+
+    #[test]
+    /// Verifies version availability keeps only tags newer than the current
+    /// crate version.
+    fn version_availability_event_keeps_newer_version_tags() {
+        // Arrange
+        let latest_version_tag = Some("v999.0.0".to_string());
+
+        // Act
+        let app_event = TaskService::version_availability_event(latest_version_tag);
+
+        // Assert
+        assert_eq!(
+            app_event,
+            AppEvent::VersionAvailabilityUpdated {
+                latest_available_version: Some("v999.0.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    /// Verifies version availability suppresses current-version tags so the
+    /// UI only announces true upgrades.
+    fn version_availability_event_ignores_current_version_tag() {
+        // Arrange
+        let latest_version_tag = Some(format!("v{}", env!("CARGO_PKG_VERSION")));
+
+        // Act
+        let app_event = TaskService::version_availability_event(latest_version_tag);
+
+        // Assert
+        assert_eq!(
+            app_event,
+            AppEvent::VersionAvailabilityUpdated {
+                latest_available_version: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    /// Ensures review assist surfaces one-shot submission failures without
+    /// invoking a real subprocess.
+    async fn focused_review_assist_text_with_submitter_returns_submit_error() {
+        // Arrange
+        let session_folder = Path::new("/tmp/review-assist-submit-error");
+        let review_model = AgentModel::ClaudeSonnet46;
+        let focused_review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+
+        // Act
+        let result = TaskService::focused_review_assist_text_with_submitter(
+            session_folder,
+            review_model,
+            focused_review_diff,
+            None,
+            |_, _, _| Box::pin(async { Err("submit failed".to_string()) }),
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("submit failure should be returned");
+        assert_eq!(error, "submit failed");
+    }
+
+    #[test]
+    /// Verifies review-assist event mapping preserves successful review text.
+    fn focused_review_app_event_maps_successful_review_output() {
+        // Arrange
+        let diff_hash = 7;
+        let focused_review_result = Ok("Flagged one missing error branch.".to_string());
+        let session_id = "session-7".to_string();
+
+        // Act
+        let app_event =
+            TaskService::focused_review_app_event(diff_hash, focused_review_result, session_id);
+
+        // Assert
+        assert_eq!(
+            app_event,
+            AppEvent::FocusedReviewPrepared {
+                diff_hash: 7,
+                review_text: "Flagged one missing error branch.".to_string(),
+                session_id: "session-7".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    /// Verifies review-assist event mapping preserves failure details for the
+    /// reducer and view-mode status text.
+    fn focused_review_app_event_maps_failure_output() {
+        // Arrange
+        let diff_hash = 9;
+        let focused_review_result = Err("empty response".to_string());
+        let session_id = "session-9".to_string();
+
+        // Act
+        let app_event =
+            TaskService::focused_review_app_event(diff_hash, focused_review_result, session_id);
+
+        // Assert
+        assert_eq!(
+            app_event,
+            AppEvent::FocusedReviewPreparationFailed {
+                diff_hash: 9,
+                error: "empty response".to_string(),
+                session_id: "session-9".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    /// Verifies review output text is trimmed before it is stored in app
+    /// state.
+    fn focused_review_output_text_trims_agent_response_text() {
+        // Arrange
+        let agent_response = AgentResponse::plain("  Review looks good.  \n");
+
+        // Act
+        let review_text = TaskService::focused_review_output_text(&agent_response)
+            .expect("non-empty output should be accepted");
+
+        // Assert
+        assert_eq!(review_text, "Review looks good.");
+    }
+
+    #[test]
+    /// Verifies whitespace-only review output is rejected so users see a clear
+    /// error instead of a blank review pane.
+    fn focused_review_output_text_rejects_blank_agent_response_text() {
+        // Arrange
+        let agent_response = AgentResponse::plain(" \n\t ");
+
+        // Act
+        let result = TaskService::focused_review_output_text(&agent_response);
+
+        // Assert
+        let error = result.expect_err("blank output should be rejected");
+        assert_eq!(error, "Review assist returned empty output");
+    }
 
     #[test]
     /// Ensures review prompt rendering includes read-only constraints

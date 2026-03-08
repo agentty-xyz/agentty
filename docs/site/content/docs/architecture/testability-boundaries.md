@@ -28,6 +28,7 @@ All traits below use `#[cfg_attr(test, mockall::automock)]`:
 | `AgentBackend` | `infra/agent/backend.rs` | Per-provider CLI command construction and one-time setup. |
 | `AppServerClient` | `infra/app_server.rs` | App-server RPC execution (provider routing, JSON-RPC transport). |
 | `EventSource` | `runtime/event.rs` | Terminal event polling for deterministic event-loop tests. |
+| `TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and alternate-screen transitions for deterministic setup and restore failure-path tests. |
 | `Sleeper` | `lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase assistance. |
 | `VersionCommandRunner` | `infra/version.rs` | npm/curl command execution for update checks. |
 | `GitCommandRunner` | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
