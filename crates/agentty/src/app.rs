@@ -14,9 +14,9 @@ pub(crate) mod setting;
 pub(crate) mod tab;
 mod task;
 
-#[cfg(test)]
-pub(crate) use core::MockSyncMainRunner;
 pub use core::{AGENTTY_WT_DIR, App, agentty_home};
+#[cfg(test)]
+pub(crate) use core::{AppClients, MockSyncMainRunner};
 pub(crate) use core::{AppEvent, FocusedReviewCacheEntry, SessionStatsUsage};
 
 pub use project::ProjectManager;

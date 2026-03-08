@@ -219,13 +219,37 @@ impl SyncMainRunner for TokioSyncMainRunner {
 }
 
 /// External clients used to compose [`App`] startup dependencies.
-struct AppClients {
+pub(crate) struct AppClients {
     app_server_client: Arc<dyn app_server::AppServerClient>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     review_request_client: Arc<dyn ReviewRequestClient>,
     sync_main_runner: Arc<dyn SyncMainRunner>,
     tmux_client: Arc<dyn TmuxClient>,
+}
+
+impl AppClients {
+    /// Builds one client bundle with real implementations for each external
+    /// boundary except the required app-server client.
+    pub(crate) fn new(app_server_client: Arc<dyn app_server::AppServerClient>) -> Self {
+        Self {
+            app_server_client,
+            fs_client: Arc::new(RealFsClient),
+            git_client: Arc::new(RealGitClient),
+            review_request_client: Arc::new(RealReviewRequestClient::default()),
+            sync_main_runner: Arc::new(TokioSyncMainRunner),
+            tmux_client: Arc::new(RealTmuxClient),
+        }
+    }
+
+    /// Replaces the tmux boundary while preserving the remaining clients.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_tmux_client(mut self, tmux_client: Arc<dyn TmuxClient>) -> Self {
+        self.tmux_client = tmux_client;
+
+        self
+    }
 }
 
 // SessionState definition moved to session_state.rs
@@ -307,20 +331,13 @@ impl App {
         db: Database,
         app_server_client: Arc<dyn app_server::AppServerClient>,
     ) -> Self {
-        let clients = AppClients {
-            app_server_client,
-            fs_client: Arc::new(RealFsClient),
-            git_client: Arc::new(RealGitClient),
-            review_request_client: Arc::new(RealReviewRequestClient::default()),
-            sync_main_runner: Arc::new(TokioSyncMainRunner),
-            tmux_client: Arc::new(RealTmuxClient),
-        };
+        let clients = AppClients::new(app_server_client);
 
         Self::new_with_clients(base_path, working_dir, git_branch, db, clients).await
     }
 
     /// Builds app state from persisted data with explicit external clients.
-    async fn new_with_clients(
+    pub(crate) async fn new_with_clients(
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
@@ -1980,7 +1997,7 @@ mod tests {
     use crate::infra::agent::protocol::AgentResponseMessage;
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
-    use crate::infra::tmux::MockTmuxClient;
+    use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::state::app_mode::DoneSessionOutputMode;
 
     /// Builds one mock app-server client wrapped in `Arc`.
@@ -2010,22 +2027,23 @@ mod tests {
         }
     }
 
-    /// Builds a test app rooted at one temporary workspace.
-    async fn new_test_app() -> App {
+    /// Builds a test app rooted at one temporary workspace with an injected
+    /// tmux boundary.
+    async fn new_test_app_with_tmux_client(tmux_client: Arc<dyn TmuxClient>) -> App {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
+        let clients = AppClients::new(mock_app_server()).with_tmux_client(tmux_client);
 
-        App::new(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            mock_app_server(),
-        )
-        .await
+        App::new_with_clients(base_path.clone(), base_path, None, database, clients).await
+    }
+
+    /// Builds a test app rooted at one temporary workspace with a mocked tmux
+    /// boundary.
+    async fn new_test_app() -> App {
+        new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
     /// Replaces the services git client in a test app with a mock while
@@ -2179,14 +2197,15 @@ mod tests {
         );
     }
 
-    /// Builds a test app with one selected session and configurable open
-    /// command.
+    /// Builds a test app with one selected session, configurable open command,
+    /// and injected tmux boundary.
     async fn new_test_app_with_selected_session(
         session_folder: PathBuf,
         open_command: &str,
+        tmux_client: Arc<dyn TmuxClient>,
     ) -> App {
         // Arrange
-        let mut app = new_test_app().await;
+        let mut app = new_test_app_with_tmux_client(tmux_client).await;
 
         // Act
         app.settings.open_command = open_command.to_string();
@@ -2277,8 +2296,6 @@ mod tests {
     async fn open_session_worktree_in_tmux_runs_configured_open_command_when_window_opens() {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-open-command");
-        let mut app =
-            new_test_app_with_selected_session(session_folder.clone(), "  npm run dev  ").await;
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client
             .expect_open_window_for_folder()
@@ -2290,7 +2307,12 @@ mod tests {
             .with(eq("@42".to_string()), eq("npm run dev".to_string()))
             .times(1)
             .returning(|_, _| Box::pin(async {}));
-        app.tmux_client = Arc::new(mock_tmux_client);
+        let app = new_test_app_with_selected_session(
+            PathBuf::from("/tmp/session-open-command"),
+            "  npm run dev  ",
+            Arc::new(mock_tmux_client),
+        )
+        .await;
 
         // Act
         app.open_session_worktree_in_tmux().await;
@@ -2303,7 +2325,6 @@ mod tests {
     async fn open_session_worktree_in_tmux_skips_open_command_when_setting_is_blank() {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-empty-open-command");
-        let mut app = new_test_app_with_selected_session(session_folder.clone(), "   ").await;
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client
             .expect_open_window_for_folder()
@@ -2311,7 +2332,12 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Some("@42".to_string()) }));
         mock_tmux_client.expect_run_command_in_window().times(0);
-        app.tmux_client = Arc::new(mock_tmux_client);
+        let app = new_test_app_with_selected_session(
+            PathBuf::from("/tmp/session-empty-open-command"),
+            "   ",
+            Arc::new(mock_tmux_client),
+        )
+        .await;
 
         // Act
         app.open_session_worktree_in_tmux().await;
@@ -2324,11 +2350,6 @@ mod tests {
     async fn open_session_worktree_in_tmux_uses_first_configured_command() {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-multiple-open-commands");
-        let mut app = new_test_app_with_selected_session(
-            session_folder.clone(),
-            " cargo test \n npm run dev ",
-        )
-        .await;
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client
             .expect_open_window_for_folder()
@@ -2340,7 +2361,12 @@ mod tests {
             .with(eq("@42".to_string()), eq("cargo test".to_string()))
             .times(1)
             .returning(|_, _| Box::pin(async {}));
-        app.tmux_client = Arc::new(mock_tmux_client);
+        let app = new_test_app_with_selected_session(
+            PathBuf::from("/tmp/session-multiple-open-commands"),
+            " cargo test \n npm run dev ",
+            Arc::new(mock_tmux_client),
+        )
+        .await;
 
         // Act
         app.open_session_worktree_in_tmux().await;

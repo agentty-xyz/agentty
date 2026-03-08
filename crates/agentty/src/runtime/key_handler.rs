@@ -222,13 +222,17 @@ async fn handle_merge_confirmation(
 mod tests {
     use std::path::Path;
     use std::process::Command;
+    use std::sync::Arc;
 
     use crossterm::event::KeyModifiers;
+    use mockall::predicate::eq;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::app::AppClients;
     use crate::db::Database;
     use crate::infra::app_server;
+    use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::state::app_mode::{ConfirmationViewMode, DoneSessionOutputMode};
 
     fn setup_test_git_repo(path: &Path) {
@@ -270,41 +274,53 @@ mod tests {
         std::sync::Arc::new(app_server::MockAppServerClient::new())
     }
 
-    async fn new_test_app() -> (App, tempfile::TempDir) {
+    /// Builds one test app with an injected tmux boundary.
+    async fn new_test_app_with_tmux_client(
+        tmux_client: Arc<dyn TmuxClient>,
+    ) -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let app = App::new(
-            base_path.clone(),
-            base_path,
-            None,
-            database,
-            mock_app_server(),
-        )
-        .await;
+        let clients = AppClients::new(mock_app_server()).with_tmux_client(tmux_client);
+        let app =
+            App::new_with_clients(base_path.clone(), base_path, None, database, clients).await;
 
         (app, base_dir)
     }
 
-    async fn new_test_app_with_git() -> (App, tempfile::TempDir) {
+    /// Builds one test app with a strict mocked tmux boundary.
+    async fn new_test_app() -> (App, tempfile::TempDir) {
+        new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
+    }
+
+    /// Builds one git-backed test app with an injected tmux boundary.
+    async fn new_test_app_with_git_and_tmux_client(
+        tmux_client: Arc<dyn TmuxClient>,
+    ) -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         setup_test_git_repo(base_dir.path());
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let app = App::new(
+        let clients = AppClients::new(mock_app_server()).with_tmux_client(tmux_client);
+        let app = App::new_with_clients(
             base_path.clone(),
             base_path,
             Some("main".to_string()),
             database,
-            mock_app_server(),
+            clients,
         )
         .await;
 
         (app, base_dir)
+    }
+
+    /// Builds one git-backed test app with a strict mocked tmux boundary.
+    async fn new_test_app_with_git() -> (App, tempfile::TempDir) {
+        new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
     #[tokio::test]
@@ -649,6 +665,58 @@ mod tests {
                 ref session_id,
                 scroll_offset: Some(4),
             } if session_id == "session-id"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_open_command_selector_key_enter_runs_selected_command_in_tmux() {
+        // Arrange
+        let mut mock_tmux_client = MockTmuxClient::new();
+        mock_tmux_client
+            .expect_open_window_for_folder()
+            .times(1)
+            .returning(|_| Box::pin(async { Some("@24".to_string()) }));
+        mock_tmux_client
+            .expect_run_command_in_window()
+            .with(eq("@24".to_string()), eq("npm run dev".to_string()))
+            .times(1)
+            .returning(|_, _| Box::pin(async {}));
+        let (mut app, _base_dir) =
+            new_test_app_with_git_and_tmux_client(Arc::new(mock_tmux_client)).await;
+        let expected_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.mode = AppMode::OpenCommandSelector {
+            commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: Some(2),
+                session_id: expected_session_id.clone(),
+            },
+            selected_command_index: 1,
+        };
+
+        // Act
+        let event_result = handle_open_command_selector_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                ref session_id,
+                scroll_offset: Some(2),
+            } if session_id == &expected_session_id
         ));
     }
 

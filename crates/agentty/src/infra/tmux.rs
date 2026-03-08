@@ -58,19 +58,39 @@ trait TmuxCommandRunner: Send + Sync {
 struct ProcessTmuxCommandRunner;
 
 impl ProcessTmuxCommandRunner {
-    /// Opens one tmux window in `session_folder`.
-    async fn open_window_impl(session_folder: PathBuf) -> io::Result<TmuxCommandOutput> {
-        let output = tokio::process::Command::new("tmux")
+    /// Builds the `tmux new-window` command for one session folder.
+    fn open_window_command(session_folder: PathBuf) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("tmux");
+        command
             .arg("new-window")
             .arg("-P")
             .arg("-F")
             .arg("#{window_id}")
             .arg("-c")
-            .arg(session_folder)
-            .output()
-            .await?;
+            .arg(session_folder);
+
+        command
+    }
+
+    /// Opens one tmux window in `session_folder`.
+    async fn open_window_impl(session_folder: PathBuf) -> io::Result<TmuxCommandOutput> {
+        let mut command = Self::open_window_command(session_folder);
+        let output = command.output().await?;
 
         Ok(TmuxCommandOutput::from_process_output(output))
+    }
+
+    /// Builds the `tmux send-keys -l` command for one literal command string.
+    fn send_literal_keys_command(window_id: String, command: String) -> tokio::process::Command {
+        let mut tmux_command = tokio::process::Command::new("tmux");
+        tmux_command
+            .arg("send-keys")
+            .arg("-t")
+            .arg(window_id)
+            .arg("-l")
+            .arg(command);
+
+        tmux_command
     }
 
     /// Sends literal `command` bytes to one tmux `window_id`.
@@ -78,27 +98,28 @@ impl ProcessTmuxCommandRunner {
         window_id: String,
         command: String,
     ) -> io::Result<TmuxCommandOutput> {
-        let output = tokio::process::Command::new("tmux")
-            .arg("send-keys")
-            .arg("-t")
-            .arg(window_id)
-            .arg("-l")
-            .arg(command)
-            .output()
-            .await?;
+        let mut tmux_command = Self::send_literal_keys_command(window_id, command);
+        let output = tmux_command.output().await?;
 
         Ok(TmuxCommandOutput::from_process_output(output))
     }
 
-    /// Sends Enter to one tmux `window_id`.
-    async fn send_enter_key_impl(window_id: String) -> io::Result<TmuxCommandOutput> {
-        let output = tokio::process::Command::new("tmux")
+    /// Builds the `tmux send-keys C-m` command for one window id.
+    fn send_enter_key_command(window_id: String) -> tokio::process::Command {
+        let mut tmux_command = tokio::process::Command::new("tmux");
+        tmux_command
             .arg("send-keys")
             .arg("-t")
             .arg(window_id)
-            .arg("C-m")
-            .output()
-            .await?;
+            .arg("C-m");
+
+        tmux_command
+    }
+
+    /// Sends Enter to one tmux `window_id`.
+    async fn send_enter_key_impl(window_id: String) -> io::Result<TmuxCommandOutput> {
+        let mut tmux_command = Self::send_enter_key_command(window_id);
+        let output = tmux_command.output().await?;
 
         Ok(TmuxCommandOutput::from_process_output(output))
     }
@@ -369,6 +390,92 @@ mod tests {
         assert_eq!(window_id, Some("@42".to_string()));
     }
 
+    #[test]
+    fn open_window_command_builds_expected_tmux_invocation() {
+        // Arrange
+        let session_folder = PathBuf::from("/tmp/agentty-session");
+
+        // Act
+        let command = ProcessTmuxCommandRunner::open_window_command(session_folder.clone());
+        let (program, arguments) = command_parts(&command);
+
+        // Assert
+        assert_eq!(program, "tmux");
+        assert_eq!(
+            arguments,
+            vec![
+                "new-window".to_string(),
+                "-P".to_string(),
+                "-F".to_string(),
+                "#{window_id}".to_string(),
+                "-c".to_string(),
+                session_folder.to_string_lossy().into_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn send_literal_keys_command_builds_expected_tmux_invocation() {
+        // Arrange
+        let window_id = "@42".to_string();
+        let command_text = "cargo test".to_string();
+
+        // Act
+        let command = ProcessTmuxCommandRunner::send_literal_keys_command(
+            window_id.clone(),
+            command_text.clone(),
+        );
+        let (program, arguments) = command_parts(&command);
+
+        // Assert
+        assert_eq!(program, "tmux");
+        assert_eq!(
+            arguments,
+            vec![
+                "send-keys".to_string(),
+                "-t".to_string(),
+                window_id,
+                "-l".to_string(),
+                command_text,
+            ]
+        );
+    }
+
+    #[test]
+    fn send_enter_key_command_builds_expected_tmux_invocation() {
+        // Arrange
+        let window_id = "@42".to_string();
+
+        // Act
+        let command = ProcessTmuxCommandRunner::send_enter_key_command(window_id.clone());
+        let (program, arguments) = command_parts(&command);
+
+        // Assert
+        assert_eq!(program, "tmux");
+        assert_eq!(
+            arguments,
+            vec![
+                "send-keys".to_string(),
+                "-t".to_string(),
+                window_id,
+                "C-m".to_string(),
+            ]
+        );
+    }
+
+    /// Extracts one command executable and arguments for exact CLI assertions.
+    fn command_parts(command: &tokio::process::Command) -> (String, Vec<String>) {
+        let std_command = command.as_std();
+        let program = std_command.get_program().to_string_lossy().into_owned();
+        let arguments = std_command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+
+        (program, arguments)
+    }
+
+    /// Builds one successful tmux subprocess output payload for tests.
     fn successful_tmux_output(stdout: &[u8]) -> TmuxCommandOutput {
         TmuxCommandOutput {
             status_success: true,
@@ -376,6 +483,7 @@ mod tests {
         }
     }
 
+    /// Builds one failed tmux subprocess output payload for tests.
     fn failed_tmux_output() -> TmuxCommandOutput {
         TmuxCommandOutput {
             status_success: false,
