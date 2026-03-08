@@ -2022,39 +2022,18 @@ impl App {
     /// Returns sync failure copy with actionable guidance for auth failures.
     ///
     /// Authentication failures show a dismiss-only message so users can fix
-    /// credentials first, then restart sync from the list.
+    /// credentials first, then restart sync from the list. When the failing
+    /// remote host is recognizable, the guidance names the matching forge CLI.
     fn sync_failure_message(sync_error: &SyncSessionStartError) -> String {
         let detail_message = sync_error.detail_message();
-        if !Self::is_sync_push_authentication_error(&detail_message) {
+        if !is_git_push_authentication_error(&detail_message) {
             return detail_message;
         }
 
-        "Git push requires authentication for this repository.\nAuthorize git access, then run \
-         sync again.\nRun `gh auth login`, or configure credentials with a PAT/SSH key."
-            .to_string()
-    }
-
-    /// Returns whether sync error output looks like a push auth failure.
-    fn is_sync_push_authentication_error(detail_message: &str) -> bool {
-        let normalized_detail = detail_message.to_ascii_lowercase();
-
-        let is_push_context = normalized_detail.contains("git push failed")
-            || (normalized_detail.contains("push")
-                && (normalized_detail.contains("remote") || normalized_detail.contains("origin")));
-        if !is_push_context {
-            return false;
-        }
-
-        normalized_detail.contains("authentication failed")
-            || normalized_detail.contains("terminal prompts disabled")
-            || normalized_detail.contains("could not read username")
-            || normalized_detail.contains("could not read password")
-            || normalized_detail.contains("permission denied")
-            || normalized_detail.contains("access denied")
-            || normalized_detail.contains("not authorized")
-            || normalized_detail.contains("support for password authentication was removed")
-            || normalized_detail.contains("the requested url returned error: 403")
-            || normalized_detail.contains("repository not found")
+        git_push_authentication_message(
+            detected_forge_kind_from_git_push_error(&detail_message),
+            "run sync again",
+        )
     }
 
     /// Returns one brief pull/push sentence fragment for sync completion.
@@ -2383,6 +2362,9 @@ async fn run_review_request_action(
 }
 
 /// Creates or links one forge review request for a session snapshot.
+///
+/// The forge remote is resolved before publishing the session branch so push
+/// authentication failures can surface forge-aware guidance.
 async fn create_review_request_for_session(
     review_request_session: &ReviewRequestTaskSession,
     git_client: Arc<dyn GitClient>,
@@ -2409,14 +2391,7 @@ async fn create_review_request_for_session(
         target_branch: review_request_session.base_branch.clone(),
         title: review_request_session.review_request_title(),
     };
-    git_client
-        .push_current_branch(folder.clone())
-        .await
-        .map_err(|error| {
-            ReviewRequestTaskFailure::failed(format!("Failed to publish session branch: {error}"))
-        })?;
-
-    let repo_url = git_client.repo_url(folder).await.map_err(|error| {
+    let repo_url = git_client.repo_url(folder.clone()).await.map_err(|error| {
         ReviewRequestTaskFailure::failed(format!(
             "Failed to resolve repository remote for review request: {error}"
         ))
@@ -2424,6 +2399,10 @@ async fn create_review_request_for_session(
     let remote = review_request_client
         .detect_remote(repo_url)
         .map_err(|error| review_request_task_failure(&error))?;
+    git_client
+        .push_current_branch(folder)
+        .await
+        .map_err(|error| review_request_push_failure(&error, &remote))?;
     let summary = match review_request_client
         .find_by_source_branch(remote.clone(), source_branch)
         .await
@@ -2440,6 +2419,24 @@ async fn create_review_request_for_session(
         action: ReviewRequestAction::Create,
         summary,
     })
+}
+
+/// Maps one review-request branch publish failure into blocked or failed UI
+/// copy.
+fn review_request_push_failure(
+    error: &str,
+    remote: &forge::ForgeRemote,
+) -> ReviewRequestTaskFailure {
+    if !is_git_push_authentication_error(error) {
+        return ReviewRequestTaskFailure::failed(format!(
+            "Failed to publish session branch: {error}"
+        ));
+    }
+
+    ReviewRequestTaskFailure::blocked(git_push_authentication_message(
+        Some(remote.forge_kind),
+        "create the review request again",
+    ))
 }
 
 /// Refreshes one persisted review request from the forge CLI.
@@ -2513,6 +2510,66 @@ fn review_request_task_failure(error: &forge::ReviewRequestError) -> ReviewReque
         forge::ReviewRequestError::OperationFailed { .. } => {
             ReviewRequestTaskFailure::failed(error.detail_message())
         }
+    }
+}
+
+/// Returns whether error output looks like a git push authentication failure.
+fn is_git_push_authentication_error(detail_message: &str) -> bool {
+    let normalized_detail = detail_message.to_ascii_lowercase();
+
+    let is_push_context = normalized_detail.contains("git push failed")
+        || (normalized_detail.contains("push")
+            && (normalized_detail.contains("remote") || normalized_detail.contains("origin")));
+    if !is_push_context {
+        return false;
+    }
+
+    normalized_detail.contains("authentication failed")
+        || normalized_detail.contains("terminal prompts disabled")
+        || normalized_detail.contains("could not read username")
+        || normalized_detail.contains("could not read password")
+        || normalized_detail.contains("permission denied")
+        || normalized_detail.contains("access denied")
+        || normalized_detail.contains("not authorized")
+        || normalized_detail.contains("support for password authentication was removed")
+        || normalized_detail.contains("the requested url returned error: 403")
+        || normalized_detail.contains("repository not found")
+}
+
+/// Attempts to infer one forge kind from a git push authentication failure.
+fn detected_forge_kind_from_git_push_error(detail_message: &str) -> Option<forge::ForgeKind> {
+    let normalized_detail = detail_message.to_ascii_lowercase();
+
+    if normalized_detail.contains("github.com") || normalized_detail.contains(" gh ") {
+        return Some(forge::ForgeKind::GitHub);
+    }
+
+    if normalized_detail.contains("gitlab") || normalized_detail.contains("glab") {
+        return Some(forge::ForgeKind::GitLab);
+    }
+
+    None
+}
+
+/// Returns actionable copy for one git push authentication failure.
+fn git_push_authentication_message(
+    forge_kind: Option<forge::ForgeKind>,
+    retry_action: &str,
+) -> String {
+    match forge_kind {
+        Some(forge::ForgeKind::GitHub) => format!(
+            "Git push requires authentication for this repository.\nAuthorize git access, then \
+             {retry_action}.\nRun `gh auth login`, or configure credentials with a PAT/SSH key."
+        ),
+        Some(forge::ForgeKind::GitLab) => format!(
+            "Git push requires authentication for this repository.\nAuthorize git access, then \
+             {retry_action}.\nRun `glab auth login` for GitLab CLI access, and configure Git \
+             credentials with a PAT/SSH key or credential helper."
+        ),
+        None => format!(
+            "Git push requires authentication for this repository.\nAuthorize git access, then \
+             {retry_action}.\nConfigure Git credentials with a PAT/SSH key or credential helper."
+        ),
     }
 }
 
@@ -2971,6 +3028,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_review_request_for_session_gitlab_push_auth_failure_shows_glab_guidance() {
+        // Arrange
+        let review_session = ReviewRequestTaskSession::from_session(&test_session(PathBuf::from(
+            "/tmp/review-session",
+        )));
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client.expect_repo_url().once().returning(|_| {
+            Box::pin(async { Ok("https://gitlab.com/team/project.git".to_string()) })
+        });
+        mock_git_client
+            .expect_push_current_branch()
+            .once()
+            .returning(|_| {
+                Box::pin(async {
+                    Err("Git push failed: fatal: could not read Username for \
+                         'https://gitlab.com': terminal prompts disabled"
+                        .to_string())
+                })
+            });
+        let mut mock_review_request_client = crate::infra::forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .with(eq("https://gitlab.com/team/project.git".to_string()))
+            .once()
+            .returning(|repo_url| {
+                Ok(forge::ForgeRemote {
+                    forge_kind: ForgeKind::GitLab,
+                    host: "gitlab.com".to_string(),
+                    namespace: "team".to_string(),
+                    project: "project".to_string(),
+                    repo_url,
+                    web_url: "https://gitlab.com/team/project".to_string(),
+                })
+            });
+        let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let review_request_client: Arc<dyn crate::infra::forge::ReviewRequestClient> =
+            Arc::new(mock_review_request_client);
+
+        // Act
+        let result =
+            create_review_request_for_session(&review_session, git_client, review_request_client)
+                .await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(ReviewRequestTaskFailure {
+                ref title,
+                ref message,
+            }) if title == "Review request blocked"
+                && message.contains("`glab auth login`")
+                && message.contains("PAT/SSH key or credential helper")
+        ));
+    }
+
+    #[tokio::test]
     async fn review_request_task_helpers_reject_unsupported_session_states() {
         // Arrange
         let app = new_test_app().await;
@@ -3027,8 +3140,12 @@ mod tests {
     async fn open_review_request_popup_shows_link_above_restored_view_context() {
         // Arrange
         let session_folder = tempdir().expect("failed to create temp dir");
-        let mut app =
-            new_test_app_with_selected_session(session_folder.path().to_path_buf(), "").await;
+        let mut app = new_test_app_with_selected_session(
+            session_folder.path().to_path_buf(),
+            "",
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         app.sessions.sessions[0].review_request =
             Some(review_request_fixture("#42", ReviewRequestState::Open));
         let expected_restore_view = ConfirmationViewMode {
@@ -3068,8 +3185,12 @@ mod tests {
     async fn apply_review_request_action_update_persists_summary_and_sets_popup() {
         // Arrange
         let session_folder = tempdir().expect("failed to create temp dir");
-        let mut app =
-            new_test_app_with_selected_session(session_folder.path().to_path_buf(), "").await;
+        let mut app = new_test_app_with_selected_session(
+            session_folder.path().to_path_buf(),
+            "",
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
         let project_id = app
             .services
             .db()
@@ -3402,6 +3523,40 @@ mod tests {
                 && message.contains("Git push requires authentication")
                 && message.contains("`gh auth login`")
                 && message.contains("then run sync again")
+                && project_name.as_deref() == Some("agentty")
+        ));
+    }
+
+    #[test]
+    fn sync_main_popup_mode_gitlab_auth_failure_shows_gitlab_guidance() {
+        // Arrange
+        let sync_popup_context = SyncPopupContext {
+            default_branch: "main".to_string(),
+            project_name: "agentty".to_string(),
+        };
+        let sync_error = SyncSessionStartError::Other(
+            "Git push failed: fatal: could not read Username for 'https://gitlab.com': terminal \
+             prompts disabled"
+                .to_string(),
+        );
+
+        // Act
+        let mode = App::sync_main_popup_mode(Err(sync_error), &sync_popup_context);
+
+        // Assert
+        assert!(matches!(
+            mode,
+            AppMode::SyncBlockedPopup {
+                ref default_branch,
+                is_loading: false,
+                ref title,
+                ref message,
+                ref project_name,
+            } if title == "Sync failed"
+                && default_branch.as_deref() == Some("main")
+                && message.contains("Git push requires authentication")
+                && message.contains("`glab auth login`")
+                && message.contains("credential helper")
                 && project_name.as_deref() == Some("agentty")
         ));
     }
