@@ -974,57 +974,6 @@ mod tests {
         assert!(app.sessions.sessions.is_empty());
         assert!(matches!(app.mode, AppMode::List));
     }
-
-    #[tokio::test]
-    async fn test_handle_e_key_with_selected_session_keeps_list_mode() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
-        let _session_id = app
-            .create_session()
-            .await
-            .expect("failed to create session");
-        app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
-        app.mode = AppMode::List;
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(app.mode, AppMode::List));
-    }
-
-    #[tokio::test]
-    async fn test_handle_e_key_without_session_selection_keeps_list_mode() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
-        let _session_id = app
-            .create_session()
-            .await
-            .expect("failed to create session");
-        app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(None);
-        app.mode = AppMode::List;
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert!(matches!(app.mode, AppMode::List));
-    }
-
     #[tokio::test]
     async fn test_handle_delete_key_opens_delete_confirmation() {
         // Arrange

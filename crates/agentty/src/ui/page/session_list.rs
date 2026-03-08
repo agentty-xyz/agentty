@@ -710,16 +710,4 @@ mod tests {
         // Assert
         assert!(help_text.contains("Enter: open session"));
     }
-
-    #[test]
-    fn test_session_list_help_line_includes_open_editor_for_selected_session() {
-        // Arrange
-        let session = test_session("session-1", Status::Review);
-
-        // Act
-        let help_text = session_list_help_line(Some(&session)).to_string();
-
-        // Assert
-        assert!(help_text.contains("e: open editor"));
-    }
 }

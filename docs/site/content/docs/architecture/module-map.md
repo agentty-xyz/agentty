@@ -88,7 +88,7 @@ choose the correct module when implementing changes.
 |------|------------------|
 | `crates/agentty/src/runtime.rs` | Runtime module router and public runtime entry re-exports. |
 | `crates/agentty/src/runtime/core.rs` | Terminal lifecycle, event/render loop orchestration, `TerminalGuard`. |
-| `crates/agentty/src/runtime/terminal.rs` | Terminal setup/cleanup plus `EditorLauncher` trait boundary for external editor subprocesses. |
+| `crates/agentty/src/runtime/terminal.rs` | Terminal setup/cleanup and raw-mode lifecycle helpers. |
 | `crates/agentty/src/runtime/event.rs` | `EventSource` trait, event reader spawn, tick processing, and app-event integration. |
 | `crates/agentty/src/runtime/key_handler.rs` | Mode dispatch for key events. |
 | `crates/agentty/src/runtime/mode/` | Key handlers for each `AppMode`: |

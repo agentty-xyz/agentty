@@ -34,12 +34,12 @@ Session statuses and what you can do in each state:
 
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
-| **New** | Session created, prompt not yet sent. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `e` open `nvim`, scroll, help |
-| **InProgress** | Agent is actively working. | `o` open worktree, `e` open `nvim`, scroll, help |
-| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `e` open `nvim`, `d` diff, `f` focused review, `Shift+Tab` permission mode, scroll, help |
+| **New** | Session created, prompt not yet sent. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
+| **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
+| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `d` diff, `f` focused review, `Shift+Tab` permission mode, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Esc` skip, text editing keys) |
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
-| **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, `e` open `nvim`, scroll, help |
+| **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
 | **Merging** | Changes are being merged into the base branch. | read-only view (`q`, scroll, help) |
 | **Done** | Session completed, merged, and its worktree checkout was removed. | `t` toggle summary/output, scroll, help |
 | **Canceled** | Session was canceled by the user and its worktree checkout was removed. | read-only view (`q`, scroll, help) |

@@ -1,6 +1,5 @@
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 
@@ -9,7 +8,7 @@ use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
-use crate::runtime::{EventResult, TuiTerminal, terminal};
+use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
@@ -67,9 +66,9 @@ struct ViewSessionSnapshot {
     is_action_allowed: bool,
     session_folder: PathBuf,
     session_output: String,
-    session_summary: Option<String>,
     session_state: ViewSessionState,
     session_status: Status,
+    session_summary: Option<String>,
 }
 
 /// Prefix for the review loading status while assist output is being
@@ -79,13 +78,12 @@ const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Preparing review with agent help";
 const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
 /// Processes view-mode key presses and keeps shortcut availability aligned with
-/// session status (`o`/`e` disabled for `Done`/`Canceled`/`Merging`/`Queued`,
-/// and diff/review only for `Review`).
+/// session status (`o` disabled for `Done`/`Canceled`/`Merging`/`Queued`, and
+/// diff/review only for `Review`).
 pub(crate) async fn handle(
     app: &mut App,
     terminal: &mut TuiTerminal,
     key: KeyEvent,
-    event_reader_pause: &AtomicBool,
 ) -> io::Result<EventResult> {
     let Some(view_context) = view_context(app) else {
         return Ok(EventResult::Continue);
@@ -102,16 +100,7 @@ pub(crate) async fn handle(
         session_snapshot: &view_session_snapshot,
     };
 
-    if !handle_view_key(
-        app,
-        terminal,
-        key,
-        event_reader_pause,
-        view_key_context,
-        &mut pending_update,
-    )
-    .await
-    {
+    if !handle_view_key(app, key, view_key_context, &mut pending_update).await {
         return Ok(EventResult::Continue);
     }
 
@@ -132,9 +121,7 @@ pub(crate) async fn handle(
 /// applying pending view updates.
 async fn handle_view_key(
     app: &mut App,
-    terminal: &mut TuiTerminal,
     key: KeyEvent,
-    event_reader_pause: &AtomicBool,
     view_key_context: ViewKeyContext<'_>,
     pending_update: &mut ViewPendingUpdate,
 ) -> bool {
@@ -146,14 +133,6 @@ async fn handle_view_key(
         KeyCode::Char('q') => app.mode = AppMode::List,
         KeyCode::Char('o') if view_session_snapshot.can_open_worktree => {
             open_worktree_for_view_session(app, view_context).await;
-        }
-        KeyCode::Char('e') if view_session_snapshot.can_open_worktree => {
-            open_external_editor_for_view_session(
-                terminal,
-                event_reader_pause,
-                &view_session_snapshot.session_folder,
-            )
-            .await;
         }
         KeyCode::Enter if view_session_snapshot.is_action_allowed => {
             switch_view_to_prompt(
@@ -329,9 +308,9 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         is_action_allowed: is_view_action_allowed(session_status),
         session_folder: session.folder.clone(),
         session_output: session.output.clone(),
-        session_summary: session.summary.clone(),
         session_state: view_session_state(session_status),
         session_status,
+        session_summary: session.summary.clone(),
     })
 }
 
@@ -369,7 +348,7 @@ fn is_done_output_toggle_key(status: Status, key: KeyEvent) -> bool {
     status == Status::Done && is_toggle_key && !key.modifiers.contains(event::KeyModifiers::CONTROL)
 }
 
-/// Returns whether `o` and `e` can access the session worktree.
+/// Returns whether `o` can access the session worktree.
 fn is_view_worktree_open_allowed(status: Status) -> bool {
     !matches!(
         status,
@@ -402,17 +381,6 @@ fn is_view_focused_review_allowed(status: Status) -> bool {
     status == Status::Review
 }
 
-/// Opens `nvim` from the currently viewed session worktree root.
-///
-/// Editor launch failures are ignored here so view-mode state remains stable.
-async fn open_external_editor_for_view_session(
-    terminal: &mut TuiTerminal,
-    event_reader_pause: &AtomicBool,
-    session_folder: &std::path::Path,
-) {
-    let _ = terminal::open_nvim(terminal, event_reader_pause, session_folder).await;
-}
-
 /// Switches the TUI mode from session view to the prompt input.
 fn switch_view_to_prompt(
     app: &mut App,
@@ -430,8 +398,8 @@ fn switch_view_to_prompt(
     };
 }
 
-/// Returns whether worktree-dependent shortcuts (`o` and `e`) are enabled for
-/// the provided session status.
+/// Returns whether the worktree-open shortcut (`o`) is enabled for the
+/// provided session status.
 fn can_open_session_worktree(status: Status) -> bool {
     !matches!(
         status,

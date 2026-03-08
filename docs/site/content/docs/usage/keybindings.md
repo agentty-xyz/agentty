@@ -21,7 +21,6 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | `d` | Delete session |
 | `c` | Cancel session |
 | `Enter` | Open session |
-| `e` | Open editor (active project root) |
 | `j` / `k` | Navigate sessions |
 | `Tab` | Switch tab |
 | `?` | Help |
@@ -70,7 +69,6 @@ state:
 | `q` | Back to list |
 | `Enter` | Reply to agent |
 | `o` | Open worktree in tmux |
-| `e` | Open editor (session worktree) |
 | `d` | Show diff |
 | `f` | Show review (read-only) |
 | `m` | Add to merge queue (confirmation popup) |

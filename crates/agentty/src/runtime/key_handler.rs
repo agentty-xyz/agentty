@@ -1,11 +1,10 @@
 use std::io;
-use std::sync::atomic::AtomicBool;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::{App, Tab};
+use crate::app::App;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
-use crate::runtime::{EventResult, TuiTerminal, mode, terminal};
+use crate::runtime::{EventResult, TuiTerminal, mode};
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 
 /// Routes key events to the active mode handler and returns the next runtime
@@ -14,7 +13,6 @@ pub(crate) async fn handle_key_event(
     app: &mut App,
     terminal: &mut TuiTerminal,
     key: KeyEvent,
-    event_reader_pause: &AtomicBool,
 ) -> io::Result<EventResult> {
     if let AppMode::Confirmation {
         selected_confirmation_index,
@@ -30,21 +28,13 @@ pub(crate) async fn handle_key_event(
         return handle_open_command_selector_key(app, key).await;
     }
 
-    if let Some(event_result) =
-        handle_list_external_editor_key(app, terminal, key, event_reader_pause).await
-    {
-        return Ok(event_result);
-    }
-
     match &app.mode {
         AppMode::List => mode::list::handle(app, key).await,
         AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
         AppMode::Confirmation { .. } => {
             unreachable!("confirmation mode is handled before dispatch matching")
         }
-        AppMode::View { .. } => {
-            mode::session_view::handle(app, terminal, key, event_reader_pause).await
-        }
+        AppMode::View { .. } => mode::session_view::handle(app, terminal, key).await,
         AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
         AppMode::Question { .. } => Ok(mode::question::handle(app, key).await),
         AppMode::Diff { .. } => Ok(mode::diff::handle(app, key)),
@@ -128,49 +118,6 @@ fn previous_open_command_index(current_index: usize, commands: &[String]) -> usi
     } else {
         current_index - 1
     }
-}
-
-/// Handles list-mode external open shortcuts for the sessions tab.
-///
-/// The action is available only on the sessions tab when a session row is
-/// selected. Only a plain lowercase `e` key press opens `nvim` in the active
-/// project root so modifier chords, repeats, and release events do not launch
-/// the editor unexpectedly.
-async fn handle_list_external_editor_key(
-    app: &mut App,
-    terminal: &mut TuiTerminal,
-    key: KeyEvent,
-    event_reader_pause: &AtomicBool,
-) -> Option<EventResult> {
-    if !matches!(app.mode, AppMode::List) {
-        return None;
-    }
-
-    if !is_list_external_editor_shortcut(key) || app.tabs.current() != Tab::Sessions {
-        return None;
-    }
-
-    let selected_session_id = app
-        .sessions
-        .table_state
-        .selected()
-        .and_then(|selected_index| app.session_id_for_index(selected_index));
-    if selected_session_id.is_none() {
-        return Some(EventResult::Continue);
-    }
-
-    let project_root = app.projects.working_dir().to_path_buf();
-    let _ = terminal::open_nvim(terminal, event_reader_pause, &project_root).await;
-
-    Some(EventResult::Continue)
-}
-
-/// Returns whether a key event matches the plain `e` shortcut used to open an
-/// editor from the session list.
-fn is_list_external_editor_shortcut(key: KeyEvent) -> bool {
-    key.kind == KeyEventKind::Press
-        && key.modifiers == KeyModifiers::NONE
-        && matches!(key.code, KeyCode::Char('e'))
 }
 
 /// Applies the semantic result of a generic confirmation interaction.
@@ -276,7 +223,7 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    use crossterm::event::{KeyEventKind, KeyEventState};
+    use crossterm::event::KeyModifiers;
     use tempfile::tempdir;
 
     use super::*;
@@ -559,64 +506,6 @@ mod tests {
 
         // Assert
         assert_eq!(index, 1);
-    }
-
-    #[test]
-    fn test_is_list_external_editor_shortcut_accepts_plain_e_press() {
-        // Arrange
-        let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
-
-        // Act
-        let matches_shortcut = is_list_external_editor_shortcut(key);
-
-        // Assert
-        assert!(matches_shortcut);
-    }
-
-    #[test]
-    fn test_is_list_external_editor_shortcut_rejects_modified_e_press() {
-        // Arrange
-        let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
-
-        // Act
-        let matches_shortcut = is_list_external_editor_shortcut(key);
-
-        // Assert
-        assert!(!matches_shortcut);
-    }
-
-    #[test]
-    fn test_is_list_external_editor_shortcut_rejects_release_event() {
-        // Arrange
-        let key = KeyEvent {
-            code: KeyCode::Char('e'),
-            modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Release,
-            state: KeyEventState::empty(),
-        };
-
-        // Act
-        let matches_shortcut = is_list_external_editor_shortcut(key);
-
-        // Assert
-        assert!(!matches_shortcut);
-    }
-
-    #[test]
-    fn test_is_list_external_editor_shortcut_rejects_repeat_event() {
-        // Arrange
-        let key = KeyEvent {
-            code: KeyCode::Char('e'),
-            modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Repeat,
-            state: KeyEventState::empty(),
-        };
-
-        // Act
-        let matches_shortcut = is_list_external_editor_shortcut(key);
-
-        // Assert
-        assert!(!matches_shortcut);
     }
 
     #[tokio::test]

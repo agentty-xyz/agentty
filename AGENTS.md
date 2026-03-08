@@ -257,6 +257,7 @@ git worktree prune
 - **Legacy Retention Approval:** Prefer removing legacy code/behavior during development. If retaining legacy code/behavior for any reason, obtain explicit user approval first.
 - **Diff-First Verification:** In every non-`main` branch, when a user asks for something that is not currently present on `main`, always inspect the full worktree diff against the branch base/fork point (typically `main`) before concluding what changed or what still needs to be implemented. This check must include committed and uncommitted changes, include untracked files, and avoid counting commits already applied to the base branch (for example via squash merge or cherry-pick).
 - Always cover all touched code with auto tests to prevent regressions and ensure stability.
+- When removing behavior, do not add tests or assertions that only verify the removed shortcut, label, or action is absent. Prefer tests that cover the remaining supported behavior.
 - Structure tests using "Arrange, Act, Assert" comments to clearly separate setup, execution, and verification phases.
 - When creating a new `AGENTS.md` file in any directory, always create corresponding symlinks: `ln -s AGENTS.md CLAUDE.md && ln -s AGENTS.md GEMINI.md` in the same directory.
 - Keep the root `README.md` up to date whenever new information is relevant to end users (e.g., new crates, features, usage instructions, or prerequisites).
