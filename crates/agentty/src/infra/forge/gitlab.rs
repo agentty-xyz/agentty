@@ -254,11 +254,17 @@ fn view_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
 /// warning to stdout, which would corrupt JSON responses consumed by the
 /// adapter. `glab` expects `GITLAB_HOST` and `GL_HOST` to carry a raw host or
 /// `host:port` value instead of a full `https://` URL, so the adapter passes
-/// the normalized remote host directly.
+/// the normalized remote host directly. `--hostname` is also set so every call is
+/// explicitly scoped to the target host even when the repository remote contains
+/// mixed or ambiguous forge hosts.
 fn glab_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand {
     let gitlab_host = gitlab_host(remote);
+    let mut command_arguments = Vec::with_capacity(arguments.len() + 2);
+    command_arguments.push("--hostname".to_string());
+    command_arguments.push(gitlab_host.clone());
+    command_arguments.extend(arguments);
 
-    ForgeCommand::new("glab", arguments)
+    ForgeCommand::new("glab", command_arguments)
         .with_environment("CLICOLOR", "0")
         .with_environment("GITLAB_HOST", gitlab_host.clone())
         .with_environment("GL_HOST", gitlab_host)
@@ -657,7 +663,8 @@ mod tests {
 
         // Assert
         assert_eq!(command.executable, "glab");
-        assert!(command.arguments.starts_with(&[
+        assert_eq!(&command.arguments[0..2], ["--hostname".to_string(), "gitlab.example.com".to_string()]);
+        assert!(command.arguments[2..].starts_with(&[
             "mr".to_string(),
             "create".to_string(),
             "--draft".to_string(),
@@ -828,12 +835,8 @@ mod tests {
                 .iter()
                 .any(|(key, _value)| key == "NO_PROMPT")
         );
-        assert!(
-            !command
-                .arguments
-                .iter()
-                .any(|argument| argument == "--hostname")
-        );
+        assert_eq!(command.arguments.get(0), Some(&"--hostname".to_string()));
+        assert_eq!(command.arguments.get(1), Some(&"gitlab.example.com".to_string()));
     }
 
     #[test]
@@ -848,6 +851,8 @@ mod tests {
         assert_eq!(
             command.arguments,
             vec![
+                "--hostname".to_string(),
+                "gitlab.example.com".to_string(),
                 "mr".to_string(),
                 "list".to_string(),
                 "--repo".to_string(),
@@ -891,11 +896,13 @@ mod tests {
             "GITLAB_HOST".to_string(),
             "gitlab.example.com:8443".to_string(),
         )));
-        assert!(
-            !command
-                .arguments
-                .iter()
-                .any(|argument| argument == "--hostname")
+        assert_eq!(
+            command.arguments.get(0),
+            Some(&"--hostname".to_string())
+        );
+        assert_eq!(
+            command.arguments.get(1),
+            Some(&"gitlab.example.com:8443".to_string())
         );
     }
 
