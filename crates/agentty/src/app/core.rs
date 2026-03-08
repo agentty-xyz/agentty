@@ -2547,6 +2547,10 @@ fn is_git_push_authentication_error(detail_message: &str) -> bool {
 fn detected_forge_kind_from_git_push_error(detail_message: &str) -> Option<forge::ForgeKind> {
     let normalized_detail = detail_message.to_ascii_lowercase();
 
+    if let Some(forge_kind) = detected_forge_kind_from_push_auth_url(&normalized_detail) {
+        return Some(forge_kind);
+    }
+
     if normalized_detail.contains("github.com") || normalized_detail.contains(" gh ") {
         return Some(forge::ForgeKind::GitHub);
     }
@@ -2556,6 +2560,69 @@ fn detected_forge_kind_from_git_push_error(detail_message: &str) -> Option<forge
     }
 
     None
+}
+
+/// Returns one forge family from the remote host shown in a credential prompt error.
+fn detected_forge_kind_from_push_auth_url(detail_message: &str) -> Option<forge::ForgeKind> {
+    let host = extract_push_auth_prompt_host(detail_message)?;
+    if host.is_empty() {
+        return None;
+    }
+
+    let host = strip_port(host);
+    if is_github_host(host) {
+        return Some(forge::ForgeKind::GitHub);
+    }
+
+    if is_gitlab_host(host) {
+        return Some(forge::ForgeKind::GitLab);
+    }
+
+    None
+}
+
+/// Returns whether `host` is a GitHub-style forge host.
+fn is_github_host(host: &str) -> bool {
+    host == "github.com" || host.ends_with(".github.com")
+}
+
+/// Returns whether `host` is a GitLab-style forge host.
+fn is_gitlab_host(host: &str) -> bool {
+    host == "gitlab.com"
+        || host.ends_with(".gitlab.com")
+        || host.split('.').any(|segment| segment == "gitlab")
+}
+
+/// Extracts one remote host from one `git push` authentication prompt.
+fn extract_push_auth_prompt_host(detail_message: &str) -> Option<&str> {
+    let username_marker = "could not read username for '";
+    let password_marker = "could not read password for '";
+
+    if let Some(host) = extract_host_from_prompt(detail_message, username_marker) {
+        return Some(host);
+    }
+
+    extract_host_from_prompt(detail_message, password_marker)
+}
+
+/// Extracts the host payload from one quoted credential-prompt URL.
+fn extract_host_from_prompt<'detail>(detail_message: &'detail str, marker: &str) -> Option<&'detail str> {
+    let marker_start = detail_message.find(marker)?;
+    let quoted_host = &detail_message[marker_start + marker.len()..];
+    let host = quoted_host.split('\'').next()?;
+    let host = host.trim().trim_end_matches('/');
+    let host = host
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = host.split('/').next()?;
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+
+    Some(host)
+}
+
+/// Removes one explicit host port, if present.
+fn strip_port(host: &str) -> &str {
+    host.split(':').next().unwrap_or(host)
 }
 
 /// Returns actionable copy for one git push authentication failure.
@@ -3568,6 +3635,57 @@ mod tests {
                 && message.contains("credential helper")
                 && project_name.as_deref() == Some("agentty")
         ));
+    }
+
+    #[test]
+    fn sync_push_auth_error_detects_gitlab_from_prompt_url() {
+        // Arrange
+        let detail = "Git push failed: fatal: could not read Username for 'https://gitlab.com/team/project': terminal \
+                        prompts disabled\nConfigured remotes:\n  github.com";
+
+        // Act
+        let forge_kind = detected_forge_kind_from_git_push_error(detail);
+
+        // Assert
+        assert_eq!(forge_kind, Some(forge::ForgeKind::GitLab));
+    }
+
+    #[test]
+    fn sync_push_auth_error_detects_gitlab_from_prompt_url_with_userinfo() {
+        // Arrange
+        let detail = "Git push failed: fatal: could not read Username for 'https://deploy-user@gitlab.example.com/team/project': terminal \
+                        prompts disabled\nConfigured remotes:\n  github.com";
+
+        // Act
+        let forge_kind = detected_forge_kind_from_git_push_error(detail);
+
+        // Assert
+        assert_eq!(forge_kind, Some(forge::ForgeKind::GitLab));
+    }
+
+    #[test]
+    fn sync_push_auth_error_detects_github_from_prompt_url() {
+        // Arrange
+        let detail = "Git push failed: fatal: could not read Password for 'https://github.com/team/project': terminal \
+                        prompts disabled\nConfigured remotes:\n  gitlab.com";
+
+        // Act
+        let forge_kind = detected_forge_kind_from_git_push_error(detail);
+
+        // Assert
+        assert_eq!(forge_kind, Some(forge::ForgeKind::GitHub));
+    }
+
+    #[test]
+    fn sync_push_auth_error_prefers_github_when_fallback_markers_are_ambiguous() {
+        // Arrange
+        let detail = "Git push failed: authentication failed. Configure remotes:\n  github.com\n  gitlab.com";
+
+        // Act
+        let forge_kind = detected_forge_kind_from_git_push_error(detail);
+
+        // Assert
+        assert_eq!(forge_kind, Some(forge::ForgeKind::GitHub));
     }
 
     #[test]
