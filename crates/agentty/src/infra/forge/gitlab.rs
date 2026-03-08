@@ -177,30 +177,30 @@ impl GitLabReviewRequestAdapter {
     }
 }
 
-/// Builds the `glab api` lookup command for `source_branch`.
+/// Builds the repo-scoped `glab mr list` lookup command for `source_branch`.
+///
+/// Using the merge-request subcommand keeps host and repository resolution on
+/// the same code path as `glab mr create`/`glab mr view`, which avoids
+/// gitlab.com auth mismatches seen with the lower-level `glab api` path.
 fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
     glab_command(
         remote,
         vec![
-            "api".to_string(),
-            "--method".to_string(),
-            "GET".to_string(),
-            format!(
-                "projects/{}/merge_requests",
-                encode_project_path(&remote.project_path())
-            ),
+            "mr".to_string(),
+            "list".to_string(),
+            "--repo".to_string(),
+            remote.web_url.clone(),
+            "--source-branch".to_string(),
+            source_branch.to_string(),
             "--output".to_string(),
             "json".to_string(),
-            "-f".to_string(),
-            format!("source_branch={source_branch}"),
-            "-f".to_string(),
-            "state=all".to_string(),
-            "-f".to_string(),
-            "per_page=1".to_string(),
-            "-f".to_string(),
-            "order_by=created_at".to_string(),
-            "-f".to_string(),
-            "sort=desc".to_string(),
+            "--all".to_string(),
+            "--per-page".to_string(),
+            "1".to_string(),
+            "--order".to_string(),
+            "created_at".to_string(),
+            "--sort".to_string(),
+            "desc".to_string(),
         ],
     )
 }
@@ -355,24 +355,6 @@ fn looks_like_host_resolution_failure(detail: &str) -> bool {
         || normalized_detail.contains("temporary failure in name resolution")
         || normalized_detail.contains("could not resolve host")
         || normalized_detail.contains("lookup ")
-}
-
-/// URL-encodes one GitLab project path so subgroups can be used in API routes.
-fn encode_project_path(project_path: &str) -> String {
-    const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
-
-    let mut encoded = String::new();
-    for byte in project_path.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX_DIGITS[usize::from(byte & 0x0F)]));
-        }
-    }
-
-    encoded
 }
 
 /// Formats one optional provider-specific status summary.
@@ -553,7 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_review_request_builds_api_create_command_for_self_hosted_gitlab() {
+    async fn create_review_request_builds_create_command_for_self_hosted_gitlab() {
         // Arrange
         let remote = gitlab_remote();
         let input = CreateReviewRequestInput {
@@ -842,6 +824,37 @@ mod tests {
                 .arguments
                 .iter()
                 .any(|argument| argument == "--hostname")
+        );
+    }
+
+    #[test]
+    fn lookup_command_uses_repo_scoped_merge_request_listing() {
+        // Arrange
+        let remote = gitlab_remote();
+
+        // Act
+        let command = lookup_command(&remote, "feature/forge");
+
+        // Assert
+        assert_eq!(
+            command.arguments,
+            vec![
+                "mr".to_string(),
+                "list".to_string(),
+                "--repo".to_string(),
+                "https://gitlab.example.com/team/project".to_string(),
+                "--source-branch".to_string(),
+                "feature/forge".to_string(),
+                "--output".to_string(),
+                "json".to_string(),
+                "--all".to_string(),
+                "--per-page".to_string(),
+                "1".to_string(),
+                "--order".to_string(),
+                "created_at".to_string(),
+                "--sort".to_string(),
+                "desc".to_string(),
+            ]
         );
     }
 
