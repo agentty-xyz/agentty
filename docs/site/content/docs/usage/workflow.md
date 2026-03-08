@@ -66,7 +66,7 @@ line), pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open,
 <a id="usage-review-request-flow"></a>
 Session view exposes one forge-generic review-request action on `p`:
 
-- In **Review** without a linked PR/MR, `p` publishes the session branch, then creates or links a GitHub pull request or GitLab merge request.
+- In **Review** without a linked PR/MR, `p` publishes the session branch, then creates or links a draft GitHub pull request or draft GitLab merge request.
 - While a linked PR/MR is still open, `p` shows the canonical forge URL so you can open it in your browser.
 - In **Done**, **Canceled**, or when the stored remote state is no longer open, `p` refreshes the linked PR/MR metadata from the forge CLI and keeps the stored link up to date.
 

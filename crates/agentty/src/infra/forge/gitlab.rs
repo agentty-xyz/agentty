@@ -43,7 +43,7 @@ impl GitLabReviewRequestAdapter {
             .await
     }
 
-    /// Creates one new merge request from `input`.
+    /// Creates one new draft merge request from `input`.
     pub(crate) async fn create_review_request(
         &self,
         remote: ForgeRemote,
@@ -95,7 +95,8 @@ impl GitLabReviewRequestAdapter {
             .map(Some)
     }
 
-    /// Creates one new merge request after authentication has been verified.
+    /// Creates one new draft merge request after authentication has been
+    /// verified.
     async fn create_review_request_after_auth(
         &self,
         remote: ForgeRemote,
@@ -248,7 +249,8 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
 ///
 /// Uses the GitLab API directly so merge-request creation does not depend on
 /// repository-local `glab mr create` state, implicit pushes, or git config
-/// writes in shared worktree metadata.
+/// writes in shared worktree metadata. New merge requests default to draft so
+/// session-published review requests remain explicitly not ready to merge.
 fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> ForgeCommand {
     let mut arguments = vec![
         "api".to_string(),
@@ -265,6 +267,8 @@ fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> For
         format!("target_branch={}", input.target_branch),
         "-f".to_string(),
         format!("title={}", input.title),
+        "-f".to_string(),
+        "draft=true".to_string(),
     ];
 
     if let Some(body) = input.body.as_deref() {
@@ -764,6 +768,30 @@ mod tests {
                 .arguments
                 .iter()
                 .any(|argument| argument.starts_with("description="))
+        );
+    }
+
+    #[test]
+    fn create_command_marks_merge_requests_as_draft_by_default() {
+        // Arrange
+        let remote = gitlab_remote();
+        let input = CreateReviewRequestInput {
+            body: Some("Implements the provider adapters.".to_string()),
+            source_branch: "feature/forge".to_string(),
+            target_branch: "main".to_string(),
+            title: "Add forge review support".to_string(),
+        };
+
+        // Act
+        let command = create_command(&remote, &input);
+
+        // Assert
+        assert_eq!(command.executable, "glab");
+        assert!(
+            command
+                .arguments
+                .iter()
+                .any(|argument| argument == "draft=true")
         );
     }
 

@@ -43,7 +43,7 @@ impl GitHubReviewRequestAdapter {
             .await
     }
 
-    /// Creates one new pull request from `input`.
+    /// Creates one new draft pull request from `input`.
     pub(crate) async fn create_review_request(
         &self,
         remote: ForgeRemote,
@@ -95,7 +95,8 @@ impl GitHubReviewRequestAdapter {
             .map(Some)
     }
 
-    /// Creates one new pull request after authentication has been verified.
+    /// Creates one new draft pull request after authentication has been
+    /// verified.
     async fn create_review_request_after_auth(
         &self,
         remote: ForgeRemote,
@@ -243,12 +244,16 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
 }
 
 /// Builds the `gh pr create` command for `input`.
+///
+/// GitHub pull requests default to draft so session-published review requests
+/// do not appear ready for merge before the user chooses to mark them ready.
 fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> ForgeCommand {
     ForgeCommand::new(
         "gh",
         vec![
             "pr".to_string(),
             "create".to_string(),
+            "--draft".to_string(),
             "--repo".to_string(),
             remote.project_path(),
             "--head".to_string(),
@@ -624,6 +629,30 @@ mod tests {
         assert_eq!(
             review_request.status_summary.as_deref(),
             Some("Approved, Mergeable")
+        );
+    }
+
+    #[test]
+    fn create_command_marks_pull_requests_as_draft_by_default() {
+        // Arrange
+        let remote = github_remote();
+        let input = CreateReviewRequestInput {
+            body: Some("Implements the provider adapters.".to_string()),
+            source_branch: "feature/forge".to_string(),
+            target_branch: "main".to_string(),
+            title: "Add forge review support".to_string(),
+        };
+
+        // Act
+        let command = create_command(&remote, &input);
+
+        // Assert
+        assert_eq!(command.executable, "gh");
+        assert!(
+            command
+                .arguments
+                .iter()
+                .any(|argument| argument == "--draft")
         );
     }
 
