@@ -18,7 +18,10 @@ pub type ForgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub struct ForgeRemote {
     /// Forge family inferred from the repository remote.
     pub forge_kind: ForgeKind,
-    /// Remote hostname, optionally including a port.
+    /// Forge hostname used for browser and API calls.
+    ///
+    /// HTTPS remotes keep any explicit web/API port, while SSH transport ports
+    /// are stripped during remote normalization.
     pub host: String,
     /// Repository namespace or owner path.
     pub namespace: String,

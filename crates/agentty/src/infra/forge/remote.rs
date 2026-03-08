@@ -8,6 +8,10 @@ use super::{
 /// Parsed remote components extracted from one git remote URL.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedRemote {
+    /// Canonical forge host used for browser and API requests.
+    ///
+    /// SSH transport ports are stripped so review-request commands target the
+    /// authenticated HTTPS host instead of the SSH daemon port.
     pub(crate) host: String,
     pub(crate) namespace: String,
     pub(crate) project: String,
@@ -61,14 +65,15 @@ pub(crate) fn parse_remote_url(repo_url: &str) -> Option<ParsedRemote> {
     if let Some(ssh_remote) = trimmed_url.strip_prefix("git@") {
         let (host, path) = ssh_remote.split_once(':')?;
 
-        return parsed_remote_from_parts(trimmed_url, host, path);
+        return parsed_remote_from_parts(trimmed_url, host, path, true);
     }
 
-    let (_, scheme_rest) = trimmed_url.split_once("://")?;
+    let (scheme, scheme_rest) = trimmed_url.split_once("://")?;
     let scheme_rest = scheme_rest.strip_prefix("git@").unwrap_or(scheme_rest);
     let (host, path) = scheme_rest.split_once('/')?;
+    let strip_transport_port = scheme.eq_ignore_ascii_case("ssh");
 
-    parsed_remote_from_parts(trimmed_url, host, path)
+    parsed_remote_from_parts(trimmed_url, host, path, strip_transport_port)
 }
 
 /// Removes any `:port` suffix from `host`.
@@ -77,8 +82,21 @@ pub(crate) fn strip_port(host: &str) -> &str {
 }
 
 /// Builds one parsed remote from extracted host and path components.
-fn parsed_remote_from_parts(repo_url: &str, host: &str, path: &str) -> Option<ParsedRemote> {
+///
+/// When `strip_transport_port` is `true`, the parsed host is normalized for
+/// browser and API access by dropping any SSH transport port.
+fn parsed_remote_from_parts(
+    repo_url: &str,
+    host: &str,
+    path: &str,
+    strip_transport_port: bool,
+) -> Option<ParsedRemote> {
     let host = host.trim().trim_matches('/').to_ascii_lowercase();
+    let host = if strip_transport_port {
+        strip_port(&host).to_string()
+    } else {
+        host
+    };
     let path = path.trim().trim_matches('/').trim_end_matches(".git");
     if host.is_empty() || path.is_empty() {
         return None;
@@ -166,6 +184,39 @@ mod tests {
         assert_eq!(remote.forge_kind, ForgeKind::GitLab);
         assert_eq!(remote.host, "gitlab.example.com");
         assert_eq!(remote.web_url, "https://gitlab.example.com/team/project");
+    }
+
+    #[test]
+    fn detect_remote_strips_ssh_transport_port_from_gitlab_host() {
+        // Arrange
+        let repo_url = "ssh://git@gitlab.example.com:2222/team/project.git";
+
+        // Act
+        let remote =
+            detect_remote(repo_url).expect("gitlab ssh remote with transport port should work");
+
+        // Assert
+        assert_eq!(remote.forge_kind, ForgeKind::GitLab);
+        assert_eq!(remote.host, "gitlab.example.com");
+        assert_eq!(remote.web_url, "https://gitlab.example.com/team/project");
+    }
+
+    #[test]
+    fn detect_remote_preserves_https_port_for_gitlab_origin() {
+        // Arrange
+        let repo_url = "https://gitlab.example.com:8443/team/project.git";
+
+        // Act
+        let remote =
+            detect_remote(repo_url).expect("gitlab https remote with api port should work");
+
+        // Assert
+        assert_eq!(remote.forge_kind, ForgeKind::GitLab);
+        assert_eq!(remote.host, "gitlab.example.com:8443");
+        assert_eq!(
+            remote.web_url,
+            "https://gitlab.example.com:8443/team/project"
+        );
     }
 
     #[test]
