@@ -158,6 +158,7 @@ impl GitHubReviewRequestAdapter {
         }
 
         Err(ReviewRequestError::AuthenticationRequired {
+            detail: Some(command_output_detail(&output)),
             forge_kind: ForgeKind::GitHub,
             host: remote.host.clone(),
         })
@@ -189,6 +190,7 @@ impl GitHubReviewRequestAdapter {
 
         if looks_like_authentication_failure(&detail) {
             return Err(ReviewRequestError::AuthenticationRequired {
+                detail: Some(detail),
                 forge_kind: ForgeKind::GitHub,
                 host: remote.host.clone(),
             });
@@ -689,6 +691,9 @@ mod tests {
         assert_eq!(
             error,
             ReviewRequestError::AuthenticationRequired {
+                detail: Some(
+                    "You are not logged into any GitHub hosts. Run `gh auth login`.".to_string()
+                ),
                 forge_kind: ForgeKind::GitHub,
                 host: "github.com".to_string(),
             }

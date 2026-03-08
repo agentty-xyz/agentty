@@ -3011,6 +3011,7 @@ mod tests {
     fn review_request_task_failure_maps_blocked_and_failed_errors() {
         // Arrange
         let blocked_error = forge::ReviewRequestError::AuthenticationRequired {
+            detail: Some("HTTP 401 Unauthorized. Run `gh auth login`.".to_string()),
             forge_kind: ForgeKind::GitHub,
             host: "github.com".to_string(),
         };
@@ -3026,6 +3027,7 @@ mod tests {
         // Assert
         assert_eq!(blocked.title, "Review request blocked");
         assert!(blocked.message.contains("Run `gh auth login` and retry."));
+        assert!(blocked.message.contains("Original `gh` error:"));
         assert_eq!(failed.title, "Review request failed");
         assert!(
             failed

@@ -165,6 +165,7 @@ impl GitLabReviewRequestAdapter {
 
         if looks_like_authentication_failure(&detail) {
             return Err(ReviewRequestError::AuthenticationRequired {
+                detail: Some(detail),
                 forge_kind: ForgeKind::GitLab,
                 host: remote.host.clone(),
             });
@@ -628,6 +629,9 @@ mod tests {
         assert_eq!(
             error,
             ReviewRequestError::AuthenticationRequired {
+                detail: Some(
+                    "HTTP 401 Unauthorized. Run `glab auth login` to authenticate.".to_string()
+                ),
                 forge_kind: ForgeKind::GitLab,
                 host: "gitlab.example.com".to_string(),
             }
