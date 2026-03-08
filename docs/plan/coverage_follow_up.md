@@ -21,7 +21,7 @@ Baseline captured on March 7, 2026 from `cargo llvm-cov --workspace --json --sum
 |------|---------------------------|--------|
 | Workspace baseline | 87.57% line coverage (`36614/41813`) and 85.30% function coverage (`4137/4850`) | Baseline captured |
 | Runtime/editor boundaries | `crates/agentty/src/runtime/terminal.rs` now has deterministic failure-path tests for setup and restore cleanup branches; `crates/agentty/src/app/task.rs` now covers version-check event emission plus review-assist failure/output formatting branches; and `crates/agentty/src/runtime/event.rs` now covers ignored events, paste routing, shutdown handling, and handler error exits. | Complete |
-| UI overlay and page helpers | `crates/agentty/src/ui/overlay.rs` is at 54.22% line coverage (`114` uncovered), `crates/agentty/src/ui/page/project_list.rs` is at 55.65% (`102` uncovered), and `crates/agentty/src/ui/page/setting.rs` is at 16.39% (`51` uncovered) | Not started |
+| UI overlay and page helpers | `crates/agentty/src/ui/overlay.rs`, `crates/agentty/src/ui/page/project_list.rs`, and `crates/agentty/src/ui/page/setting.rs` now have added deterministic helper/render tests for popup sizing, footer assembly, active-row formatting, and multiline settings rows; the March 7, 2026 coverage figures remain the last recorded baseline until priority 5 reruns `cargo llvm-cov`. | Complete; baseline refresh pending |
 | Workflow hot spots after first pass | `crates/agentty/src/app/session/workflow/merge.rs` remains at 81.08% line coverage (`371` uncovered), `crates/agentty/src/infra/codex_app_server.rs` at 82.98% (`365` uncovered), `crates/agentty/src/runtime/mode/prompt.rs` at 80.46% (`299` uncovered), and `crates/agentty/src/runtime/mode/session_view.rs` at 81.27% (`234` uncovered) | Partial |
 | Settings and git orchestration | `crates/agentty/src/app/setting.rs` is at 75.37% line coverage (`149` uncovered), `crates/agentty/src/infra/git/sync.rs` at 73.99% (`116` uncovered), `crates/agentty/src/infra/git/repo.rs` at 70.95% (`61` uncovered), and `crates/agentty/src/infra/git/merge.rs` at 52.38% (`30` uncovered) | Partial |
 | Coverage ratchet | `.pre-commit-config.yaml` already enforces `--fail-under-lines 87 --fail-under-functions 85`; no threshold change after this step (March 8, 2026). | Healthy |
@@ -53,10 +53,11 @@ Primary files:
 
 **Why now:** The biggest UI gaps are in pure helper logic and small page render branches, which can move coverage quickly without waiting on broader session-view or forge-flow work.
 **Usable outcome:** The overlay, project-list, and settings pages have deterministic branch coverage for their helper logic and footer/render edge cases without introducing brittle frame snapshots.
+**Ratchet note:** Do not raise the coverage thresholds from this slice alone; wait for priority 5 to refresh the full-workspace baseline after the remaining slices land.
 
-- [ ] Add helper-focused tests for popup sizing, content width, and help-background fallback branches in `crates/agentty/src/ui/overlay.rs`.
-- [ ] Expand row/value/formatting coverage in `crates/agentty/src/ui/page/project_list.rs`, especially active-project markers, session count rendering, and footer/help text assembly.
-- [ ] Add page-local tests in `crates/agentty/src/ui/page/setting.rs` for footer mode switching and multiline row rendering; extract reusable helper logic first if assertions would otherwise stay too broad.
+- [x] Add helper-focused tests for popup sizing, content width, and help-background fallback branches in `crates/agentty/src/ui/overlay.rs`.
+- [x] Expand row/value/formatting coverage in `crates/agentty/src/ui/page/project_list.rs`, especially active-project markers, session count rendering, and footer/help text assembly.
+- [x] Add page-local tests in `crates/agentty/src/ui/page/setting.rs` for footer mode switching and multiline row rendering; extract reusable helper logic first if assertions would otherwise stay too broad.
 
 Primary files:
 

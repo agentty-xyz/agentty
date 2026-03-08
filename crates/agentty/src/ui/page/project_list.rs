@@ -239,6 +239,41 @@ mod tests {
     use super::*;
     use crate::domain::project::Project;
 
+    /// Builds one deterministic project row fixture for page and helper tests.
+    fn project_item_fixture(
+        id: i64,
+        display_name: Option<&str>,
+        git_branch: Option<&str>,
+        last_opened_at: Option<i64>,
+        session_count: u32,
+        active_session_count: u32,
+    ) -> ProjectListItem {
+        ProjectListItem {
+            active_session_count,
+            last_session_updated_at: Some(20),
+            project: Project {
+                created_at: 1,
+                display_name: display_name.map(str::to_string),
+                git_branch: git_branch.map(str::to_string),
+                id,
+                is_favorite: true,
+                last_opened_at,
+                path: PathBuf::from(format!("/tmp/project-{id}")),
+                updated_at: 2,
+            },
+            session_count,
+        }
+    }
+
+    /// Flattens a rendered test buffer into plain text for page assertions.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
     #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
         // Arrange
@@ -264,90 +299,36 @@ mod tests {
     }
 
     #[test]
-    fn test_format_last_opened_uses_iso_like_date() {
+    fn test_render_shows_footer_actions_and_active_session_indicator() {
         // Arrange
-        let last_opened_at = Some(1_700_000_000);
+        let projects = vec![project_item_fixture(
+            42,
+            Some("agentty"),
+            Some("main"),
+            Some(1_700_000_000),
+            5,
+            2,
+        )];
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut page = ProjectListPage::new(&projects, &mut table_state, 42);
+        let backend = ratatui::backend::TestBackend::new(160, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
         // Act
-        let formatted = format_last_opened(last_opened_at);
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw project list page");
 
         // Assert
-        assert_eq!(formatted, "2023-11-14");
-    }
-
-    #[test]
-    fn test_project_row_values_show_metadata() {
-        // Arrange
-        let project_item = ProjectListItem {
-            active_session_count: 0,
-            last_session_updated_at: Some(20),
-            project: Project {
-                created_at: 1,
-                display_name: Some("agentty".to_string()),
-                git_branch: Some("main".to_string()),
-                id: 1,
-                is_favorite: true,
-                last_opened_at: Some(1_700_000_000),
-                path: PathBuf::from("/tmp/agentty"),
-                updated_at: 2,
-            },
-            session_count: 3,
-        };
-
-        // Act
-        let values = project_row_values(&project_item, 99);
-
-        // Assert
-        assert_eq!(values.0, "agentty");
-        assert_eq!(values.2, "2023-11-14");
-    }
-
-    #[test]
-    fn test_session_count_line_shows_plain_total_without_active() {
-        // Arrange & Act
-        let line = session_count_line(7, 0);
-
-        // Assert
-        assert_eq!(line.to_string(), "7");
-        assert_eq!(line.spans.len(), 1);
-    }
-
-    #[test]
-    fn test_session_count_line_colors_active_indicator_yellow() {
-        // Arrange & Act
-        let line = session_count_line(5, 2);
-
-        // Assert
-        assert_eq!(line.spans.len(), 2);
-        assert_eq!(line.spans[0].content.as_ref(), "5 ");
-        assert_eq!(line.spans[1].content.as_ref(), "▶ 2");
-        assert_eq!(line.spans[1].style.fg, Some(style::palette::WARNING));
-    }
-
-    #[test]
-    fn test_project_row_values_mark_active_project_title() {
-        // Arrange
-        let project_item = ProjectListItem {
-            active_session_count: 0,
-            last_session_updated_at: Some(20),
-            project: Project {
-                created_at: 1,
-                display_name: Some("agentty".to_string()),
-                git_branch: Some("main".to_string()),
-                id: 42,
-                is_favorite: true,
-                last_opened_at: Some(1_700_000_000),
-                path: PathBuf::from("/tmp/agentty"),
-                updated_at: 2,
-            },
-            session_count: 3,
-        };
-
-        // Act
-        let values = project_row_values(&project_item, 42);
-
-        // Assert
-        assert_eq!(values.0, "* agentty");
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("* agentty"));
+        assert!(text.contains("▶ 2"));
+        assert!(text.contains("q: quit"));
+        assert!(text.contains("Enter: select"));
     }
 
     #[test]
@@ -393,5 +374,117 @@ mod tests {
 
         // Assert
         assert_eq!(actual_width, usize::from(AGENTTY_ASCII_ART_WIDTH));
+    }
+
+    #[test]
+    fn test_project_row_values_show_metadata() {
+        // Arrange
+        let project_item =
+            project_item_fixture(1, Some("agentty"), Some("main"), Some(1_700_000_000), 3, 0);
+
+        // Act
+        let values = project_row_values(&project_item, 99);
+
+        // Assert
+        assert_eq!(values.0, "agentty");
+        assert_eq!(values.1, "main");
+        assert_eq!(values.2, "2023-11-14");
+        assert_eq!(values.3, "/tmp/project-1");
+    }
+
+    #[test]
+    fn test_project_row_values_use_placeholders_when_branch_or_timestamp_are_missing() {
+        // Arrange
+        let project_item = project_item_fixture(7, None, None, None, 1, 0);
+
+        // Act
+        let values = project_row_values(&project_item, 99);
+
+        // Assert
+        assert_eq!(values.0, "project-7");
+        assert_eq!(values.1, "-");
+        assert_eq!(values.2, "Never");
+    }
+
+    #[test]
+    fn test_project_row_style_uses_accent_for_active_project() {
+        // Arrange
+        let project_item = project_item_fixture(42, Some("agentty"), Some("main"), None, 1, 0);
+
+        // Act
+        let row_style = project_row_style(&project_item, 42);
+
+        // Assert
+        assert_eq!(row_style.fg, Some(style::palette::ACCENT_SOFT));
+    }
+
+    #[test]
+    fn test_project_title_marks_active_project() {
+        // Arrange
+        let project_item = project_item_fixture(42, Some("agentty"), Some("main"), None, 1, 0);
+
+        // Act
+        let title = project_title(&project_item, 42);
+
+        // Assert
+        assert_eq!(title, "* agentty");
+    }
+
+    #[test]
+    fn test_session_count_line_shows_plain_total_without_active() {
+        // Arrange & Act
+        let line = session_count_line(7, 0);
+
+        // Assert
+        assert_eq!(line.to_string(), "7");
+        assert_eq!(line.spans.len(), 1);
+    }
+
+    #[test]
+    fn test_session_count_line_colors_active_indicator_yellow() {
+        // Arrange & Act
+        let line = session_count_line(5, 2);
+
+        // Assert
+        assert_eq!(line.spans.len(), 2);
+        assert_eq!(line.spans[0].content.as_ref(), "5 ");
+        assert_eq!(line.spans[1].content.as_ref(), "▶ 2");
+        assert_eq!(line.spans[1].style.fg, Some(style::palette::WARNING));
+    }
+
+    #[test]
+    fn test_format_last_opened_uses_iso_like_date() {
+        // Arrange
+        let last_opened_at = Some(1_700_000_000);
+
+        // Act
+        let formatted = format_last_opened(last_opened_at);
+
+        // Assert
+        assert_eq!(formatted, "2023-11-14");
+    }
+
+    #[test]
+    fn test_format_last_opened_returns_never_without_timestamp() {
+        // Arrange
+        let last_opened_at = None;
+
+        // Act
+        let formatted = format_last_opened(last_opened_at);
+
+        // Assert
+        assert_eq!(formatted, "Never");
+    }
+
+    #[test]
+    fn test_format_last_opened_returns_unknown_for_invalid_timestamp() {
+        // Arrange
+        let last_opened_at = Some(i64::MAX);
+
+        // Act
+        let formatted = format_last_opened(last_opened_at);
+
+        // Assert
+        assert_eq!(formatted, "Unknown");
     }
 }

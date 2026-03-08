@@ -262,8 +262,51 @@ fn render_help_background(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use ratatui::widgets::{Paragraph, TableState};
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
     use super::*;
+    use crate::app::{AppEvent, AppServices, SettingsManager, Tab};
+    use crate::db::Database;
+    use crate::domain::project::ProjectListItem;
+    use crate::domain::session::{DailyActivity, Session};
+    use crate::infra::{app_server, forge, fs, git};
+    use crate::ui::state::app_mode::{DoneSessionOutputMode, HelpContext};
+    use crate::ui::state::help_action::ViewSessionState;
     use crate::ui::style::palette;
+
+    /// Flattens a rendered test buffer into plain text for overlay assertions.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    /// Creates a settings manager fixture without relying on external clients.
+    async fn settings_manager_fixture() -> SettingsManager {
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory database");
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<AppEvent>();
+        let services = AppServices::new(
+            temp_dir.path().to_path_buf(),
+            database,
+            event_tx,
+            Arc::new(fs::MockFsClient::new()),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+            Arc::new(app_server::MockAppServerClient::new()),
+        );
+
+        SettingsManager::new(&services, 1).await
+    }
 
     #[test]
     fn test_sync_popup_message_with_project_and_branch() {
@@ -328,6 +371,31 @@ mod tests {
     }
 
     #[test]
+    fn test_render_overlay_backdrop_applies_dimmed_style() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(8, 4);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_overlay_backdrop(frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let first_cell = terminal
+            .backend()
+            .buffer()
+            .content()
+            .first()
+            .expect("buffer should contain at least one cell");
+        assert_eq!(first_cell.bg, palette::SURFACE_OVERLAY);
+        assert_eq!(first_cell.fg, palette::TEXT_MUTED);
+    }
+
+    #[test]
     fn test_centered_popup_area_centers_within_bounds() {
         // Arrange
         let area = Rect::new(0, 0, 100, 50);
@@ -358,6 +426,21 @@ mod tests {
     }
 
     #[test]
+    fn test_centered_popup_area_uses_minimum_dimensions_when_percentages_are_smaller() {
+        // Arrange
+        let area = Rect::new(10, 5, 100, 40);
+
+        // Act
+        let popup_area = centered_popup_area(area, 10, 10, 30, 7);
+
+        // Assert
+        assert_eq!(popup_area.width, 30);
+        assert_eq!(popup_area.height, 7);
+        assert_eq!(popup_area.x, 45);
+        assert_eq!(popup_area.y, 21);
+    }
+
+    #[test]
     fn test_overlay_content_width_subtracts_shared_frame_chrome() {
         // Arrange
         let popup_width = 40;
@@ -367,6 +450,18 @@ mod tests {
 
         // Assert
         assert_eq!(content_width, 34);
+    }
+
+    #[test]
+    fn test_overlay_content_width_clamps_to_one_for_tiny_popups() {
+        // Arrange
+        let popup_width = 4;
+
+        // Act
+        let content_width = overlay_content_width(popup_width);
+
+        // Assert
+        assert_eq!(content_width, 1);
     }
 
     #[test]
@@ -381,28 +476,101 @@ mod tests {
         assert_eq!(total_height, 12);
     }
 
-    #[test]
-    fn test_render_overlay_backdrop_applies_dimmed_style() {
+    #[tokio::test]
+    async fn test_render_help_background_keeps_existing_buffer_when_view_session_is_missing() {
         // Arrange
-        let backend = ratatui::backend::TestBackend::new(8, 4);
+        let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let help_context = HelpContext::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id: "missing-session".to_string(),
+            session_state: ViewSessionState::Review,
+            scroll_offset: None,
+        };
+        let progress_messages = HashMap::new();
+        let projects: Vec<ProjectListItem> = Vec::new();
+        let sessions: Vec<Session> = Vec::new();
+        let stats_activity: Vec<DailyActivity> = Vec::new();
+        let mut project_table_state = TableState::default();
+        let mut session_table_state = TableState::default();
+        let mut settings = settings_manager_fixture().await;
 
         // Act
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                render_overlay_backdrop(frame, area);
+                frame.render_widget(Paragraph::new("sentinel"), area);
+                render_help_background(
+                    frame,
+                    area,
+                    &help_context,
+                    ListBackgroundRenderContext {
+                        active_project_id: 0,
+                        current_tab: Tab::Sessions,
+                        project_table_state: &mut project_table_state,
+                        projects: &projects,
+                        sessions: &sessions,
+                        settings: &mut settings,
+                        stats_activity: &stats_activity,
+                        table_state: &mut session_table_state,
+                    },
+                    &progress_messages,
+                );
             })
             .expect("failed to draw");
 
         // Assert
-        let first_cell = terminal
-            .backend()
-            .buffer()
-            .content()
-            .first()
-            .expect("buffer should contain at least one cell");
-        assert_eq!(first_cell.bg, palette::SURFACE_OVERLAY);
-        assert_eq!(first_cell.fg, palette::TEXT_MUTED);
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("sentinel"));
+    }
+
+    #[tokio::test]
+    async fn test_render_help_background_keeps_existing_buffer_when_diff_session_is_missing() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(80, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let help_context = HelpContext::Diff {
+            session_id: "missing-session".to_string(),
+            diff: String::new(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 0,
+        };
+        let progress_messages = HashMap::new();
+        let projects: Vec<ProjectListItem> = Vec::new();
+        let sessions: Vec<Session> = Vec::new();
+        let stats_activity: Vec<DailyActivity> = Vec::new();
+        let mut project_table_state = TableState::default();
+        let mut session_table_state = TableState::default();
+        let mut settings = settings_manager_fixture().await;
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame.render_widget(Paragraph::new("sentinel"), area);
+                render_help_background(
+                    frame,
+                    area,
+                    &help_context,
+                    ListBackgroundRenderContext {
+                        active_project_id: 0,
+                        current_tab: Tab::Sessions,
+                        project_table_state: &mut project_table_state,
+                        projects: &projects,
+                        sessions: &sessions,
+                        settings: &mut settings,
+                        stats_activity: &stats_activity,
+                        table_state: &mut session_table_state,
+                    },
+                    &progress_messages,
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("sentinel"));
     }
 }

@@ -93,7 +93,45 @@ fn settings_footer_line(manager: &SettingsManager) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tempfile::{TempDir, tempdir};
+    use tokio::sync::mpsc;
+
     use super::*;
+    use crate::app::{AppEvent, AppServices};
+    use crate::db::Database;
+    use crate::infra::{app_server, forge, fs, git};
+
+    /// Creates app services for settings-page tests without external side
+    /// effects.
+    async fn test_services() -> (TempDir, AppServices) {
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory database");
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<AppEvent>();
+        let services = AppServices::new(
+            temp_dir.path().to_path_buf(),
+            database,
+            event_tx,
+            Arc::new(fs::MockFsClient::new()),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+            Arc::new(app_server::MockAppServerClient::new()),
+        );
+
+        (temp_dir, services)
+    }
+
+    /// Flattens a rendered test buffer into plain text for page assertions.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
 
     #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
@@ -117,5 +155,63 @@ mod tests {
 
         // Assert
         assert_eq!(spacing, expected_spacing);
+    }
+
+    #[tokio::test]
+    async fn test_render_shows_multiline_open_command_rows() {
+        // Arrange
+        let (_temp_dir, services) = test_services().await;
+        let mut manager = SettingsManager::new(&services, 1).await;
+        manager.open_command = "nvim .\nnpm run dev".to_string();
+        let mut page = SettingsPage::new(&mut manager);
+        let backend = ratatui::backend::TestBackend::new(120, 14);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw settings page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Open Commands"));
+        assert!(text.contains("nvim ."));
+        assert!(text.contains("npm run dev"));
+    }
+
+    #[tokio::test]
+    async fn test_settings_footer_line_uses_shared_footer_actions_in_list_mode() {
+        // Arrange
+        let (_temp_dir, services) = test_services().await;
+        let manager = SettingsManager::new(&services, 1).await;
+
+        // Act
+        let footer = settings_footer_line(&manager);
+
+        // Assert
+        assert_eq!(
+            footer.to_string(),
+            help_action::footer_line(&help_action::settings_footer_actions()).to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_settings_footer_line_switches_to_open_command_editing_hint() {
+        // Arrange
+        let (_temp_dir, services) = test_services().await;
+        let mut manager = SettingsManager::new(&services, 1).await;
+        for _ in 0..4 {
+            manager.next();
+        }
+        manager.handle_enter(&services).await;
+
+        // Act
+        let footer = settings_footer_line(&manager);
+
+        // Assert
+        assert_eq!(footer.to_string(), manager.footer_hint());
     }
 }
