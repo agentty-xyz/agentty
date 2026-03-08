@@ -16,6 +16,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Hard cap on the number of question messages extracted from one agent
+/// response. Prevents runaway output from flooding the question UI even when
+/// the agent ignores the prompt-level limit.
+///
+/// This constant is also injected into the protocol instruction prompt
+/// templates so the prompt-level guidance and the server-side cap stay in
+/// sync automatically.
+pub(crate) const MAX_QUESTIONS: usize = 5;
+
 /// Message kind tag used by one [`AgentResponseMessage`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -163,12 +172,16 @@ impl AgentResponse {
         self.messages_by_kind(AgentResponseMessageKind::Answer)
     }
 
-    /// Returns all `question` messages as [`QuestionItem`] values in response
-    /// order.
+    /// Returns up to [`MAX_QUESTIONS`] `question` messages as [`QuestionItem`]
+    /// values in response order.
+    ///
+    /// Enforces a server-side cap so runaway agent output cannot flood the
+    /// question UI regardless of prompt compliance.
     pub fn question_items(&self) -> Vec<QuestionItem> {
         self.messages
             .iter()
             .filter(|message| message.kind == AgentResponseMessageKind::Question)
+            .take(MAX_QUESTIONS)
             .map(|message| QuestionItem {
                 options: message.options.clone().unwrap_or_default(),
                 text: message.text.clone(),
@@ -766,6 +779,27 @@ mod tests {
                     text: "Need migration details?".to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    /// Caps extracted question items at [`MAX_QUESTIONS`].
+    fn test_question_items_caps_at_max_questions() {
+        // Arrange
+        let messages: Vec<AgentResponseMessage> = (0..20)
+            .map(|index| AgentResponseMessage::question(format!("Question {index}?")))
+            .collect();
+        let response = AgentResponse { messages };
+
+        // Act
+        let items = response.question_items();
+
+        // Assert
+        assert_eq!(items.len(), MAX_QUESTIONS);
+        assert_eq!(items[0].text, "Question 0?");
+        assert_eq!(
+            items[MAX_QUESTIONS - 1].text,
+            format!("Question {}?", MAX_QUESTIONS - 1)
         );
     }
 

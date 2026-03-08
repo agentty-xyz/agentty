@@ -15,6 +15,18 @@ Structured response protocol:
 
 - Do not place user-directed clarification questions inside `answer` messages.
 
+- Question guidelines:
+
+  - Only emit `question` messages when you genuinely cannot proceed without user input: you are blocked, need to choose between mutually exclusive approaches, or need explicit approval for a destructive or irreversible action.
+
+  - Do not ask questions you can answer from the codebase, context, or common conventions. When in doubt, make a reasonable decision and document it in your `answer` — the user can course-correct on the next turn.
+
+  - Limit questions to at most {{ max_questions }} per response. If you have more concerns, pick the most critical ones and proceed with reasonable defaults for the rest.
+
+  - Each question must be specific and actionable. State what decision is needed and why you cannot make it yourself.
+
+  - When a question has a finite set of choices (2–5), always provide them in the `options` array so the user can select instead of typing.
+
 {% if include_change_summary %}
 
 - Every turn must include at least one `answer` message that ends with a `## Change Summary` section in markdown.

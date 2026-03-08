@@ -154,6 +154,9 @@ struct ResumeWithSessionOutputPromptTemplate<'a> {
 struct ProtocolInstructionWithSchemaPromptTemplate<'a> {
     /// Whether change-summary instructions are required in the answer text.
     include_change_summary: bool,
+    /// Server-side question cap rendered into the prompt so the limit stays
+    /// in sync with [`protocol::MAX_QUESTIONS`].
+    max_questions: usize,
     /// User prompt appended after protocol instructions.
     prompt: &'a str,
     /// Pretty-printed JSON schema contract injected into the prompt template.
@@ -170,6 +173,9 @@ struct ProtocolInstructionWithSchemaPromptTemplate<'a> {
 struct ProtocolInstructionWithoutSchemaPromptTemplate<'a> {
     /// Whether change-summary instructions are required in the answer text.
     include_change_summary: bool,
+    /// Server-side question cap rendered into the prompt so the limit stays
+    /// in sync with [`protocol::MAX_QUESTIONS`].
+    max_questions: usize,
     /// User prompt appended after protocol instructions.
     prompt: &'a str,
 }
@@ -304,6 +310,7 @@ pub(crate) fn prepend_protocol_instructions(
             let protocol_schema_json = protocol::agent_response_output_schema_json();
             let template = ProtocolInstructionWithSchemaPromptTemplate {
                 include_change_summary,
+                max_questions: protocol::MAX_QUESTIONS,
                 prompt,
                 protocol_schema_json: &protocol_schema_json,
             };
@@ -317,6 +324,7 @@ pub(crate) fn prepend_protocol_instructions(
         ProtocolInstructionMode::WithoutSchema => {
             let template = ProtocolInstructionWithoutSchemaPromptTemplate {
                 include_change_summary,
+                max_questions: protocol::MAX_QUESTIONS,
                 prompt,
             };
 
