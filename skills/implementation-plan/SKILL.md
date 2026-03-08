@@ -50,6 +50,7 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Make the first iteration the smallest end-to-end slice that a user can already try, even if the behavior is basic.
    - Ensure each later iteration extends the working baseline with additional capability, refinement, or hardening.
    - Do not isolate groundwork into a standalone iteration unless that same iteration also delivers visible or testable user value.
+   - Fold required documentation into the same step that introduces or changes the behavior; do not defer documentation to a later catch-up iteration.
    - Prefer fast-feedback sequencing so the user can validate direction early and adjust the next iteration before more code lands.
 
 1. **Create prioritized execution sections**
@@ -58,6 +59,7 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Treat each priority as one iteration in the evolving solution.
    - State the concrete user-visible or operator-visible outcome that exists when that priority is complete.
    - Add task checklists with `- [ ]` / `- [x]` and make each item implementation-ready.
+   - Include the relevant documentation updates in the same priority and checklist item as the implementation work when behavior, workflows, or contributor guidance change.
    - Size each priority section so the full section can land as one commit or pull request with a clear validation story and a usable result.
    - Use checklist items to break down the work inside that priority without forcing each checklist item to be independently shippable.
    - Split or merge priority sections when the current section is too large or too coupled to review and merge independently.
@@ -79,6 +81,7 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Ensure every priority section can be executed, validated, and merged independently.
    - Verify the first priority delivers a minimal but usable slice instead of groundwork alone.
    - Verify later priorities clearly build on the earlier working slice instead of hiding major functionality until the end.
+   - Verify documentation work is attached to the relevant implementation steps instead of being deferred to a later documentation-only iteration.
    - Verify the execution order explains both the merge order and any safe parallel work.
    - Verify the Mermaid dependency graph matches the checklist dependencies and ordered sequence.
    - Verify the final plan reflects the clarified requirements the user provided.
@@ -100,6 +103,7 @@ Use this skeleton when creating a new file in `docs/plan/`:
 ## Status Maintenance Rule
 
 - After implementing any step in this plan, immediately update its status in this document.
+- When a step changes behavior or guidance, update the corresponding documentation in that same step before marking it complete.
 
 ## Current State Snapshot
 
@@ -112,6 +116,7 @@ Use this skeleton when creating a new file in `docs/plan/`:
 - Start with the smallest working slice that a user can already exercise end to end.
 - Make the first iteration intentionally basic if needed, but it must still be usable and demonstrable.
 - Add later iterations only as extensions of the working slice so feedback can arrive before the full feature set is built.
+- Document each iteration as it lands; do not reserve documentation for a separate large-scale cleanup iteration.
 
 ## Updated Priorities
 
