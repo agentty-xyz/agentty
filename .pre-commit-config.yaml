@@ -61,6 +61,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        stages: [manual]
       - id: coverage
         name: coverage
         description: Verify workspace coverage meets ratchet thresholds.
@@ -68,6 +69,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        stages: [manual]
       - id: cargo-shear
         name: cargo-shear
         description: Check for unused dependencies.
@@ -75,6 +77,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        stages: [manual]
       - id: check-indexes
         name: check indexes
         description: Verifies that all AGENTS.md files have an up-to-date Directory Index.

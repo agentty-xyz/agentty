@@ -142,6 +142,7 @@ The project uses `tokio` as its async runtime. The binary entry point uses `#[to
 - Use `#[tokio::test]` for async test functions, not `#[test]`.
 - All `sqlx` operations are async and require `.await`.
 - For sleep/delays in tests, use `tokio::time::sleep` instead of `std::thread::sleep`.
+- Prefer tests to follow the same order as the functions they cover when practical.
 
 ### Anti-Patterns to Avoid
 
@@ -151,29 +152,45 @@ The project uses `tokio` as its async runtime. The binary entry point uses `#[to
 
 ## Quality Gates
 
-To ensure code quality, you must pass both automated and manual gates.
+Use a tiered validation flow so local iteration stays fast without lowering the
+final quality bar.
 
-### Automated Checks
+### Inner Loop
 
-To ensure code quality and consistency, you MUST run the validation and formatting
-tools as part of your "Execution -> Validate" phase.
+Use these while iterating on a change:
+
+1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual`
+1. **Compile:** `cargo check -q --all-targets --all-features`
+1. **Focused Tests:** Run focused tests while iterating when they exercise the touched code paths.
+
+### Final Local Validation
+
+Run this sequence before handoff, commit, or opening a review:
 
 1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
 1. **Validate:** `pre-commit run --all-files`
+1. **Lint:** `pre-commit run clippy --all-files --hook-stage manual`
 1. **Test:** `cargo test -q -- --test-threads=1`
 
-When tests are required, always run the full suite with `cargo test -q -- --test-threads=1`. Do not run focused or narrowed test commands because the suite is fast enough to run end-to-end.
+Focused tests are allowed during development, but they do not replace the final
+full-suite run.
+
+### Periodic / CI
+
+Use these slower hygiene checks in CI or when making broader changes:
+
+1. **Coverage:** `pre-commit run coverage --all-files --hook-stage manual`
+1. **Dependency Hygiene:** `pre-commit run cargo-shear --all-files --hook-stage manual`
 
 The manual-stage autofix hooks apply formatting and fixable clippy lints. The
-validation command then runs non-mutating checks (including formatting and clippy
-lint gates), dependency checks, compilation, and directory index checks with
-minimal output (errors only).
+default validation command keeps feedback relatively fast, while the
+manual-stage strict hooks keep slower lint and hygiene checks available when
+needed.
 
 ### Manual Verification
 
 - **Test Style:** Verify *every* test function uses explicit `// Arrange`, `// Act`, and `// Assert` comments.
   - Combining `Arrange`, `Act`, and `Assert` is allowed when it improves clarity (for very small tests).
-- **Test Ordering:** Verify tests follow the same order as the functions they test.
 - **Dependencies:** Verify all dependencies (including dev/build) are defined in the root `Cargo.toml` and referenced via `workspace = true`.
 - **Boundary Governance:** In `app/` and `runtime/` orchestration code, reject direct `Command::new`, `Instant::now`, `SystemTime::now`, and direct filesystem/process calls unless they are routed behind an explicit trait boundary.
 
