@@ -196,7 +196,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     }
 
     if can_show_focused_review {
-        actions.push(HelpAction::new("review", "f", "Show review (q to close)"));
+        actions.push(HelpAction::new("review", "f", "Toggle focused review"));
     }
 
     if can_edit_session {
@@ -206,7 +206,6 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
             "Add to merge queue",
         ));
         actions.push(HelpAction::new("rebase", "r", "Rebase"));
-        actions.push(HelpAction::new("mode", "S-Tab", "Toggle permission mode"));
     }
 
     if can_toggle_done_output {
@@ -258,7 +257,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     }
 
     if can_show_focused_review {
-        actions.push(HelpAction::new("review", "f", "Show review (q to close)"));
+        actions.push(HelpAction::new("review", "f", "Toggle focused review"));
     }
 
     if state.session_state == ViewSessionState::Done {
@@ -426,6 +425,12 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(!actions.iter().any(|action| action.key == "S-Tab"));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "f" && action.popup_label == "Toggle focused review")
+        );
     }
 
     #[test]

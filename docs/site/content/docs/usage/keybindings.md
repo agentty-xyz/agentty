@@ -46,6 +46,7 @@ accented row text, even while cursor selection moves to other rows.
 | `q` | Quit |
 | `j` / `k` | Navigate settings |
 | `Enter` | Edit setting / finish text edit |
+| `Esc` | Finish text edit |
 | `Alt+Enter` or `Shift+Enter` | Add newline while editing `Open Commands` |
 | `Up` / `Down` / `Left` / `Right` | Move cursor while editing `Open Commands` |
 | `Tab` | Switch tab |
@@ -66,14 +67,13 @@ state:
 
 | Key | Action |
 |-----|--------|
-| `q` | Back to list (or close review) |
+| `q` | Back to list |
 | `Enter` | Reply to agent |
 | `o` | Open worktree in tmux |
 | `d` | Show diff |
-| `f` | Show review (`q` to close) |
+| `f` | Toggle focused review |
 | `m` | Add to merge queue (confirmation popup) |
 | `r` | Rebase |
-| `Shift+Tab` | Toggle permission mode |
 | `j` / `k` | Scroll output |
 | `g` | Scroll to top |
 | `G` | Scroll to bottom |

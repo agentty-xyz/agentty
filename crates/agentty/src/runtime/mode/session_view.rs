@@ -330,7 +330,7 @@ fn is_view_worktree_open_allowed(status: Status) -> bool {
 
 /// Returns whether non-navigation view shortcuts are available.
 ///
-/// This covers `Enter`, `m`, `r`, and `S-Tab`.
+/// This covers `Enter`, `m`, and `r`.
 fn is_view_action_allowed(status: Status) -> bool {
     !matches!(
         status,

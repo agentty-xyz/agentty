@@ -2028,7 +2028,8 @@ mod tests {
         .await
     }
 
-    /// Replaces the services git client in a test app with a mock.
+    /// Replaces the services git client in a test app with a mock while
+    /// preserving the other injected service clients.
     fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
         let mock_git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
         let base_path = app.services.base_path().to_path_buf();
@@ -2036,6 +2037,7 @@ mod tests {
         let event_sender = app.services.event_sender();
         let app_server_client = app.services.app_server_client();
         let fs_client = app.services.fs_client();
+        let review_request_client = app.services.review_request_client();
 
         app.services = AppServices::new(
             base_path,
@@ -2043,6 +2045,7 @@ mod tests {
             event_sender,
             fs_client,
             mock_git_client,
+            review_request_client,
             app_server_client,
         );
     }
