@@ -1,5 +1,4 @@
 use std::io;
-use std::path::PathBuf;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 
@@ -64,11 +63,9 @@ struct ViewKeyContext<'a> {
 struct ViewSessionSnapshot {
     can_open_worktree: bool,
     is_action_allowed: bool,
-    session_folder: PathBuf,
     session_output: String,
     session_state: ViewSessionState,
     session_status: Status,
-    session_summary: Option<String>,
 }
 
 /// Prefix for the review loading status while assist output is being
@@ -283,11 +280,9 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         can_open_worktree: is_view_worktree_open_allowed(session_status)
             && can_open_session_worktree(session_status),
         is_action_allowed: is_view_action_allowed(session_status),
-        session_folder: session.folder.clone(),
         session_output: session.output.clone(),
         session_state: view_session_state(session_status),
         session_status,
-        session_summary: session.summary.clone(),
     })
 }
 
