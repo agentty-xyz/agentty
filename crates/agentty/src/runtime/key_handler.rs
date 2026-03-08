@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn test_next_open_command_index_wraps_to_start() {
         // Arrange
-        let commands = vec!["nvim .".to_string(), "npm run dev".to_string()];
+        let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
 
         // Act
         let index = next_open_command_index(1, &commands);
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn test_previous_open_command_index_wraps_to_end() {
         // Arrange
-        let commands = vec!["nvim .".to_string(), "npm run dev".to_string()];
+        let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
 
         // Act
         let index = previous_open_command_index(0, &commands);
@@ -513,7 +513,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::OpenCommandSelector {
-            commands: vec!["nvim .".to_string(), "npm run dev".to_string()],
+            commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::FocusedReview,
                 focused_review_status_message: Some("Preparing focused review".to_string()),
@@ -552,7 +552,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::OpenCommandSelector {
-            commands: vec!["nvim .".to_string(), "npm run dev".to_string()],
+            commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 focused_review_status_message: None,
@@ -620,7 +620,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::OpenCommandSelector {
-            commands: vec!["nvim .".to_string()],
+            commands: vec!["cargo test".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 focused_review_status_message: None,
@@ -657,7 +657,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::OpenCommandSelector {
-            commands: vec!["nvim .".to_string(), "npm run dev".to_string()],
+            commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::FocusedReview,
                 focused_review_status_message: Some("Preparing focused review".to_string()),
@@ -690,7 +690,7 @@ mod tests {
                         scroll_offset: Some(1),
                         ref session_id,
                     },
-            } if commands == &vec!["nvim .".to_string(), "npm run dev".to_string()]
+            } if commands == &vec!["cargo test".to_string(), "npm run dev".to_string()]
                 && session_id == "session-id"
                 && status_message == "Preparing focused review"
                 && review_text == "Critical finding"

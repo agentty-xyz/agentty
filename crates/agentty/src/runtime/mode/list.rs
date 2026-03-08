@@ -766,7 +766,7 @@ mod tests {
     async fn test_handle_shift_enter_key_inserts_open_command_newline_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "nvim .".to_string();
+        app.settings.open_command = "cargo test".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to start settings editing");
@@ -779,14 +779,14 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "nvim .\n");
+        assert_eq!(app.settings.open_command, "cargo test\n");
     }
 
     #[tokio::test]
     async fn test_handle_alt_enter_key_inserts_open_command_newline_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "nvim .".to_string();
+        app.settings.open_command = "cargo test".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to start settings editing");
@@ -799,14 +799,14 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "nvim .\n");
+        assert_eq!(app.settings.open_command, "cargo test\n");
     }
 
     #[tokio::test]
     async fn test_handle_shift_carriage_return_key_inserts_open_command_newline_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "nvim .".to_string();
+        app.settings.open_command = "cargo test".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to start settings editing");
@@ -822,14 +822,14 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "nvim .\n");
+        assert_eq!(app.settings.open_command, "cargo test\n");
     }
 
     #[tokio::test]
     async fn test_handle_control_j_key_inserts_open_command_newline_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "nvim .".to_string();
+        app.settings.open_command = "cargo test".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to start settings editing");
@@ -845,14 +845,14 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "nvim .\n");
+        assert_eq!(app.settings.open_command, "cargo test\n");
     }
 
     #[tokio::test]
     async fn test_handle_line_feed_key_inserts_open_command_newline_while_editing() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_for_settings().await;
-        app.settings.open_command = "nvim .".to_string();
+        app.settings.open_command = "cargo test".to_string();
         handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await
             .expect("failed to start settings editing");
@@ -868,7 +868,7 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.settings.is_editing_text_input());
-        assert_eq!(app.settings.open_command, "nvim .\n");
+        assert_eq!(app.settings.open_command, "cargo test\n");
     }
 
     #[tokio::test]

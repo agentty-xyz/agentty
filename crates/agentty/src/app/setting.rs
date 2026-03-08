@@ -889,20 +889,20 @@ mod tests {
     fn open_commands_returns_single_trimmed_command() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "  nvim .  ".to_string();
+        manager.open_command = "  cargo test  ".to_string();
 
         // Act
         let open_commands = manager.open_commands();
 
         // Assert
-        assert_eq!(open_commands, vec!["nvim .".to_string()]);
+        assert_eq!(open_commands, vec!["cargo test".to_string()]);
     }
 
     #[test]
     fn open_commands_splits_newline_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = " nvim . \n npm run dev \n".to_string();
+        manager.open_command = " cargo test \n npm run dev \n".to_string();
 
         // Act
         let open_commands = manager.open_commands();
@@ -910,7 +910,7 @@ mod tests {
         // Assert
         assert_eq!(
             open_commands,
-            vec!["nvim .".to_string(), "npm run dev".to_string()]
+            vec!["cargo test".to_string(), "npm run dev".to_string()]
         );
     }
 
@@ -918,13 +918,13 @@ mod tests {
     fn open_commands_does_not_split_double_pipe_entries() {
         // Arrange
         let mut manager = new_settings_manager();
-        manager.open_command = "nvim . || npm run dev".to_string();
+        manager.open_command = "cargo test || npm run dev".to_string();
 
         // Act
         let open_commands = manager.open_commands();
 
         // Assert
-        assert_eq!(open_commands, vec!["nvim . || npm run dev".to_string()]);
+        assert_eq!(open_commands, vec!["cargo test || npm run dev".to_string()]);
     }
 
     #[test]

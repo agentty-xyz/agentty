@@ -2261,7 +2261,7 @@ mod tests {
     async fn configured_open_commands_returns_trimmed_non_empty_entries() {
         // Arrange
         let mut app = new_test_app().await;
-        app.settings.open_command = "  nvim . \n npm run dev \n".to_string();
+        app.settings.open_command = "  cargo test \n npm run dev \n".to_string();
 
         // Act
         let open_commands = app.configured_open_commands();
@@ -2269,7 +2269,7 @@ mod tests {
         // Assert
         assert_eq!(
             open_commands,
-            vec!["nvim .".to_string(), "npm run dev".to_string()]
+            vec!["cargo test".to_string(), "npm run dev".to_string()]
         );
     }
 
@@ -2324,9 +2324,11 @@ mod tests {
     async fn open_session_worktree_in_tmux_uses_first_configured_command() {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-multiple-open-commands");
-        let mut app =
-            new_test_app_with_selected_session(session_folder.clone(), " nvim . \n npm run dev ")
-                .await;
+        let mut app = new_test_app_with_selected_session(
+            session_folder.clone(),
+            " cargo test \n npm run dev ",
+        )
+        .await;
         let mut mock_tmux_client = MockTmuxClient::new();
         mock_tmux_client
             .expect_open_window_for_folder()
@@ -2335,7 +2337,7 @@ mod tests {
             .returning(|_| Box::pin(async { Some("@42".to_string()) }));
         mock_tmux_client
             .expect_run_command_in_window()
-            .with(eq("@42".to_string()), eq("nvim .".to_string()))
+            .with(eq("@42".to_string()), eq("cargo test".to_string()))
             .times(1)
             .returning(|_, _| Box::pin(async {}));
         app.tmux_client = Arc::new(mock_tmux_client);

@@ -201,7 +201,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Codex:** Load usage limits lazily and remove usage panel/polling.
 - **Codex:** Update model defaults and remove `gpt-5.2-codex`.
-- **UI:** Open `nvim` in read-only mode.
 - **UI:** Refine info overlay and session list padding.
 - **Architecture:** Extract process boundaries (tmux, editor, sync) and inject dependencies (clock, sleeper, git) for better testability.
 - **Architecture:** Propagate assistant phase metadata in app-server streams.
@@ -221,7 +220,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **UI:** Support opening nvim (`e` key) from session screens preserving terminal input flow.
 - **UI:** Add Cmd+Backspace current-line deletion in prompt.
 - **Settings:** Add default review model and separate default smart/fast model settings.
 - **Review:** Enforce read-only constraints for focused review assist and refine prompt structure.

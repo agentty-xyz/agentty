@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn test_open_command_overlay_new_stores_default_selection() {
         // Arrange
-        let commands = vec!["nvim .".to_string(), "npm run dev".to_string()];
+        let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
 
         // Act
         let overlay = OpenCommandOverlay::new(&commands);
@@ -157,7 +157,7 @@ mod tests {
         // Arrange
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let commands = vec!["nvim .".to_string(), "npm run dev".to_string()];
+        let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
         let overlay = OpenCommandOverlay::new(&commands).selected_command_index(1);
 
         // Act
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn test_open_command_overlay_lines_selected_row_uses_background_without_marker() {
         // Arrange
-        let commands = vec!["nvim .".to_string(), "npm run dev".to_string()];
+        let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
         let overlay = OpenCommandOverlay::new(&commands).selected_command_index(1);
 
         // Act
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn test_open_command_overlay_lines_center_bottom_help_text() {
         // Arrange
-        let commands = vec!["nvim .".to_string()];
+        let commands = vec!["cargo test".to_string()];
         let overlay = OpenCommandOverlay::new(&commands);
 
         // Act
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_open_command_overlay_lines_center_header_text() {
         // Arrange
-        let commands = vec!["nvim .".to_string()];
+        let commands = vec!["cargo test".to_string()];
         let overlay = OpenCommandOverlay::new(&commands);
 
         // Act

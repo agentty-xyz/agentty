@@ -1405,7 +1405,7 @@ mod tests {
     async fn test_open_worktree_for_view_session_opens_command_selector_for_multiple_commands() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.settings.open_command = "nvim .\nnpm run dev".to_string();
+        app.settings.open_command = "cargo test\nnpm run dev".to_string();
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: Some("Preparing focused review".to_string()),
@@ -1432,7 +1432,7 @@ mod tests {
                         scroll_offset: Some(4),
                     },
                 selected_command_index: 0,
-            } if commands == &vec!["nvim .".to_string(), "npm run dev".to_string()]
+            } if commands == &vec!["cargo test".to_string(), "npm run dev".to_string()]
                 && restored_session_id == &session_id
                 && status_message == "Preparing focused review"
                 && review_text == "Critical finding"
@@ -1443,7 +1443,7 @@ mod tests {
     async fn test_open_worktree_for_view_session_keeps_view_mode_for_single_command() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-        app.settings.open_command = "nvim .".to_string();
+        app.settings.open_command = "cargo test".to_string();
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: None,
