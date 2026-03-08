@@ -3,8 +3,10 @@
 //! This module wires app submodules and exposes [`App`] used by runtime mode
 //! handlers.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -109,11 +111,16 @@ pub(crate) enum AppEvent {
     },
     /// Indicates review assist output became available for a session.
     FocusedReviewPrepared {
+        diff_hash: u64,
         review_text: String,
         session_id: String,
     },
     /// Indicates review assist failed for a session.
-    FocusedReviewPreparationFailed { error: String, session_id: String },
+    FocusedReviewPreparationFailed {
+        diff_hash: u64,
+        error: String,
+        session_id: String,
+    },
     /// Indicates that a session handle snapshot changed in-memory.
     SessionUpdated { session_id: String },
     /// Indicates that an agent turn completed with one structured response
@@ -150,6 +157,8 @@ struct SyncPopupContext {
 /// Aggregated review assist output keyed by session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FocusedReviewUpdate {
+    /// Hash of the diff that triggered this review, carried from the task.
+    diff_hash: u64,
     result: Result<String, String>,
 }
 
@@ -229,11 +238,61 @@ pub struct App {
     pub(crate) services: AppServices,
     pub(crate) sessions: SessionManager,
     event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// Caches generated focused review text per session so it survives
+    /// mode switches and is ready when the user presses `f`.
+    pub(crate) focused_review_cache: HashMap<String, FocusedReviewCacheEntry>,
     latest_available_version: Option<String>,
     merge_queue: MergeQueue,
     session_progress_messages: HashMap<String, String>,
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
     tmux_client: Arc<dyn TmuxClient>,
+}
+
+/// Cached focused review state for a session.
+#[derive(Debug)]
+pub(crate) enum FocusedReviewCacheEntry {
+    /// Review generation is in progress.
+    Loading {
+        /// Hash of the diff text that triggered this review generation.
+        diff_hash: u64,
+    },
+    /// Review text was successfully generated.
+    Ready {
+        /// Hash of the diff text that was reviewed.
+        diff_hash: u64,
+        /// Generated review text.
+        text: String,
+    },
+    /// Review generation failed with an error description.
+    Failed {
+        /// Hash of the diff text that triggered the failed review.
+        diff_hash: u64,
+        /// Human-readable error description.
+        error: String,
+    },
+}
+
+impl FocusedReviewCacheEntry {
+    /// Returns the diff content hash stored in any variant.
+    pub(crate) fn diff_hash(&self) -> u64 {
+        match self {
+            Self::Loading { diff_hash }
+            | Self::Ready { diff_hash, .. }
+            | Self::Failed { diff_hash, .. } => *diff_hash,
+        }
+    }
+}
+
+/// Computes a deterministic hash of the diff text for cache invalidation.
+///
+/// Uses [`DefaultHasher`] which is not guaranteed to produce stable hashes
+/// across Rust versions. This is acceptable because the cache is purely
+/// in-memory and lives only for the duration of the process.
+pub(crate) fn diff_content_hash(diff: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    diff.hash(&mut hasher);
+
+    hasher.finish()
 }
 
 impl App {
@@ -355,6 +414,7 @@ impl App {
             services,
             sessions,
             event_rx,
+            focused_review_cache: HashMap::new(),
             latest_available_version: None,
             merge_queue: MergeQueue::default(),
             session_progress_messages: HashMap::new(),
@@ -614,9 +674,15 @@ impl App {
 
     /// Deletes the selected session and schedules list refresh.
     pub async fn delete_selected_session(&mut self) {
+        let session_id = self.selected_session().map(|session| session.id.clone());
         self.sessions
             .delete_selected_session(&self.projects, &self.services)
             .await;
+
+        if let Some(session_id) = session_id {
+            self.focused_review_cache.remove(&session_id);
+        }
+
         self.process_pending_app_events().await;
         self.reload_projects().await;
     }
@@ -624,9 +690,15 @@ impl App {
     /// Deletes the selected session while deferring worktree filesystem cleanup
     /// to a background task.
     pub async fn delete_selected_session_deferred_cleanup(&mut self) {
+        let session_id = self.selected_session().map(|session| session.id.clone());
         self.sessions
             .delete_selected_session_deferred_cleanup(&self.projects, &self.services)
             .await;
+
+        if let Some(session_id) = session_id {
+            self.focused_review_cache.remove(&session_id);
+        }
+
         self.process_pending_app_events().await;
         self.reload_projects().await;
     }
@@ -792,11 +864,13 @@ impl App {
         &self,
         session_id: &str,
         session_folder: &Path,
+        diff_hash: u64,
         focused_review_diff: &str,
         session_summary: Option<&str>,
     ) {
         task::TaskService::spawn_focused_review_assist_task(task::FocusedReviewAssistTaskInput {
             app_event_tx: self.services.event_sender(),
+            diff_hash,
             focused_review_diff: focused_review_diff.to_string(),
             session_folder: session_folder.to_path_buf(),
             session_id: session_id.to_string(),
@@ -944,6 +1018,9 @@ impl App {
         self.sessions
             .clear_terminal_session_workers(&event_batch.session_ids);
 
+        self.auto_start_focused_reviews(&event_batch.session_ids, &previous_session_states)
+            .await;
+
         if let Some(sync_main_result) = event_batch.sync_main_result {
             let sync_popup_context = self.sync_popup_context();
 
@@ -1055,13 +1132,34 @@ impl App {
     }
 
     /// Applies review assist output to the active view/help mode when
-    /// session identifiers still match.
+    /// session identifiers still match and updates the persistent cache.
     fn apply_focused_review_update(
         &mut self,
         session_id: &str,
         focused_review_update: FocusedReviewUpdate,
     ) {
-        let FocusedReviewUpdate { result } = focused_review_update;
+        let FocusedReviewUpdate { diff_hash, result } = focused_review_update;
+
+        match &result {
+            Ok(review_text) => {
+                self.focused_review_cache.insert(
+                    session_id.to_string(),
+                    FocusedReviewCacheEntry::Ready {
+                        diff_hash,
+                        text: review_text.clone(),
+                    },
+                );
+            }
+            Err(error) => {
+                self.focused_review_cache.insert(
+                    session_id.to_string(),
+                    FocusedReviewCacheEntry::Failed {
+                        diff_hash,
+                        error: error.clone(),
+                    },
+                );
+            }
+        }
 
         match &mut self.mode {
             AppMode::View {
@@ -1136,6 +1234,88 @@ impl App {
                     Some(format!("Review assist unavailable: {}", error.trim()));
                 *focused_review_text = None;
             }
+        }
+    }
+
+    /// Detects sessions that just transitioned to `Review` and automatically
+    /// starts focused review generation so the review text is ready when the
+    /// user presses `f`.
+    ///
+    /// Also invalidates cached reviews when a session returns to
+    /// `InProgress` (user sent a follow-up reply).
+    async fn auto_start_focused_reviews(
+        &mut self,
+        session_ids: &HashSet<String>,
+        previous_session_states: &HashMap<String, Status>,
+    ) {
+        for session_id in session_ids {
+            let Some(session) = self
+                .sessions
+                .sessions
+                .iter()
+                .find(|session| session.id == *session_id)
+            else {
+                continue;
+            };
+
+            let current_status = session.status;
+            let previous_status = previous_session_states.get(session_id).copied();
+
+            if current_status == Status::InProgress {
+                self.focused_review_cache.remove(session_id);
+
+                continue;
+            }
+
+            let transitioned_to_review = current_status == Status::Review
+                && matches!(previous_status, Some(Status::InProgress));
+
+            if !transitioned_to_review {
+                continue;
+            }
+
+            let session_folder = session.folder.clone();
+            let base_branch = session.base_branch.clone();
+            let session_summary = session.summary.clone();
+
+            let diff = self
+                .services
+                .git_client()
+                .diff(session_folder.clone(), base_branch)
+                .await
+                .unwrap_or_default();
+
+            if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
+                continue;
+            }
+
+            let new_hash = diff_content_hash(&diff);
+
+            let existing_hash =
+                self.focused_review_cache
+                    .get(session_id)
+                    .and_then(|entry| match entry {
+                        FocusedReviewCacheEntry::Ready { .. } => Some(entry.diff_hash()),
+                        _ => None,
+                    });
+
+            if existing_hash == Some(new_hash) {
+                continue;
+            }
+
+            self.focused_review_cache.insert(
+                session_id.clone(),
+                FocusedReviewCacheEntry::Loading {
+                    diff_hash: new_hash,
+                },
+            );
+            self.start_focused_review_assist(
+                session_id,
+                &session_folder,
+                new_hash,
+                &diff,
+                session_summary.as_deref(),
+            );
         }
     }
 
@@ -1742,19 +1922,30 @@ impl AppEventBatch {
                 self.sync_main_result = Some(result);
             }
             AppEvent::FocusedReviewPrepared {
+                diff_hash,
                 review_text,
                 session_id,
             } => {
                 self.focused_review_updates.insert(
                     session_id,
                     FocusedReviewUpdate {
+                        diff_hash,
                         result: Ok(review_text),
                     },
                 );
             }
-            AppEvent::FocusedReviewPreparationFailed { error, session_id } => {
-                self.focused_review_updates
-                    .insert(session_id, FocusedReviewUpdate { result: Err(error) });
+            AppEvent::FocusedReviewPreparationFailed {
+                diff_hash,
+                error,
+                session_id,
+            } => {
+                self.focused_review_updates.insert(
+                    session_id,
+                    FocusedReviewUpdate {
+                        diff_hash,
+                        result: Err(error),
+                    },
+                );
             }
             AppEvent::SessionUpdated { session_id } => {
                 self.session_ids.insert(session_id);
@@ -1831,6 +2022,25 @@ mod tests {
             mock_app_server(),
         )
         .await
+    }
+
+    /// Replaces the services git client in a test app with a mock.
+    fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
+        let mock_git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        let app_server_client = app.services.app_server_client();
+        let fs_client = app.services.fs_client();
+
+        app.services = AppServices::new(
+            base_path,
+            db,
+            event_sender,
+            fs_client,
+            mock_git_client,
+            app_server_client,
+        );
     }
 
     #[tokio::test]
@@ -2566,5 +2776,141 @@ mod tests {
     fn create_git_repo_marker(repository_path: &Path) {
         fs::create_dir_all(repository_path.join(".git"))
             .expect("failed to create repository .git marker");
+    }
+
+    #[tokio::test]
+    async fn apply_focused_review_update_stores_success_in_cache() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-review-cache";
+        let review_text = "## Review\nLooks good.";
+
+        // Act
+        app.apply_focused_review_update(
+            session_id,
+            FocusedReviewUpdate {
+                diff_hash: 123,
+                result: Ok(review_text.to_string()),
+            },
+        );
+
+        // Assert
+        assert!(matches!(
+            app.focused_review_cache.get(session_id),
+            Some(FocusedReviewCacheEntry::Ready { text, diff_hash }) if text == review_text && *diff_hash == 123
+        ));
+    }
+
+    #[tokio::test]
+    async fn apply_focused_review_update_stores_failure_in_cache() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-review-fail";
+        let error_message = "Review assist failed with exit code 1";
+
+        // Act
+        app.apply_focused_review_update(
+            session_id,
+            FocusedReviewUpdate {
+                diff_hash: 456,
+                result: Err(error_message.to_string()),
+            },
+        );
+
+        // Assert
+        assert!(matches!(
+            app.focused_review_cache.get(session_id),
+            Some(FocusedReviewCacheEntry::Failed { error, diff_hash }) if error == error_message && *diff_hash == 456
+        ));
+    }
+
+    #[tokio::test]
+    async fn auto_start_focused_reviews_clears_cache_on_in_progress_transition() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-1";
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-cache-clear")));
+        app.sessions.sessions[0].status = Status::InProgress;
+        app.focused_review_cache.insert(
+            session_id.to_string(),
+            FocusedReviewCacheEntry::Ready {
+                diff_hash: 789,
+                text: "old review".to_string(),
+            },
+        );
+        let session_ids = HashSet::from([session_id.to_string()]);
+        let previous_states = HashMap::from([(session_id.to_string(), Status::Review)]);
+
+        // Act
+        app.auto_start_focused_reviews(&session_ids, &previous_states)
+            .await;
+
+        // Assert
+        assert!(!app.focused_review_cache.contains_key(session_id));
+    }
+
+    #[tokio::test]
+    async fn auto_start_focused_reviews_skips_when_diff_hash_unchanged() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-1";
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-hash-skip")));
+        app.sessions.sessions[0].status = Status::Review;
+
+        let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
+        let hash = diff_content_hash(diff_text);
+        app.focused_review_cache.insert(
+            session_id.to_string(),
+            FocusedReviewCacheEntry::Ready {
+                diff_hash: hash,
+                text: "existing review".to_string(),
+            },
+        );
+        let session_ids = HashSet::from([session_id.to_string()]);
+        let previous_states = HashMap::from([(session_id.to_string(), Status::InProgress)]);
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.auto_start_focused_reviews(&session_ids, &previous_states)
+            .await;
+
+        // Assert — cache should remain unchanged (review not regenerated)
+        assert!(matches!(
+            app.focused_review_cache.get(session_id),
+            Some(FocusedReviewCacheEntry::Ready { text, .. }) if text == "existing review"
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_selected_session_clears_focused_review_cache() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-delete-cache")));
+        app.sessions.table_state.select(Some(0));
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.focused_review_cache.insert(
+            session_id.clone(),
+            FocusedReviewCacheEntry::Ready {
+                diff_hash: 42,
+                text: "cached review".to_string(),
+            },
+        );
+
+        // Act
+        app.delete_selected_session().await;
+
+        // Assert
+        assert!(!app.focused_review_cache.contains_key(&session_id));
     }
 }

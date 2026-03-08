@@ -23,6 +23,9 @@ pub(super) struct TaskService;
 /// Inputs needed to generate review assist text in the background.
 pub(super) struct FocusedReviewAssistTaskInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Hash of the diff that triggered this review, threaded back in the
+    /// completion event so the reducer can store it without re-reading cache.
+    pub(super) diff_hash: u64,
     pub(super) focused_review_diff: String,
     pub(super) review_model: AgentModel,
     pub(super) session_folder: PathBuf,
@@ -125,6 +128,7 @@ impl TaskService {
     pub(super) fn spawn_focused_review_assist_task(input: FocusedReviewAssistTaskInput) {
         let FocusedReviewAssistTaskInput {
             app_event_tx,
+            diff_hash,
             focused_review_diff,
             review_model,
             session_folder,
@@ -143,10 +147,15 @@ impl TaskService {
 
             let app_event = match focused_review_result {
                 Ok(review_text) => AppEvent::FocusedReviewPrepared {
+                    diff_hash,
                     review_text,
                     session_id,
                 },
-                Err(error) => AppEvent::FocusedReviewPreparationFailed { error, session_id },
+                Err(error) => AppEvent::FocusedReviewPreparationFailed {
+                    diff_hash,
+                    error,
+                    session_id,
+                },
             };
             let _ = app_event_tx.send(app_event);
         });

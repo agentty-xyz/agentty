@@ -66,11 +66,11 @@ state:
 
 | Key | Action |
 |-----|--------|
-| `q` | Back to list |
+| `q` | Back to list (or close review) |
 | `Enter` | Reply to agent |
 | `o` | Open worktree in tmux |
 | `d` | Show diff |
-| `f` | Show review (read-only) |
+| `f` | Show review (`q` to close) |
 | `m` | Add to merge queue (confirmation popup) |
 | `r` | Rebase |
 | `Shift+Tab` | Toggle permission mode |
