@@ -249,6 +249,7 @@ Project and session git workflows use shared boundaries (`GitClient`, `FsClient`
 - `sync main`: selected project branch pull/rebase/push, optional assisted conflict resolution, popup result summary.
 - session merge: queue-aware workflow, assisted rebase first, squash merge into base branch, worktree cleanup, status `Done` on success.
 - session rebase: assisted rebase of session branch onto base branch, returns to `Review` after completion/failure reporting.
+- review-request publish/refresh: review-ready sessions push the session branch through `GitClient`, resolve the forge adapter through `ReviewRequestClient`, persist normalized PR/MR linkage, and can refresh archived links from stored forge URLs after worktree cleanup.
 
 ## Persistence and Recovery Boundaries
 
@@ -259,4 +260,4 @@ Persistence invariants that shape runtime flow:
 - Session snapshots in memory are authoritative for rendering; DB is authoritative for restart recovery.
 - Shared session handles (`output`, `status`, `child_pid`) provide low-latency updates between DB reloads.
 - Event-driven refresh is primary (`RefreshSessions`); metadata polling is fallback safety only.
-- External integrations (`GitClient`, `AppServerClient`, `AgentChannel`, `EventSource`, `FsClient`, `TmuxClient`) isolate side effects and enable deterministic tests.
+- External integrations (`GitClient`, `ReviewRequestClient`, `AppServerClient`, `AgentChannel`, `EventSource`, `FsClient`, `TmuxClient`) isolate side effects and enable deterministic tests.

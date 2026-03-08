@@ -26,7 +26,7 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/app/assist.rs` | Shared assistance helpers for commit and rebase recovery loops. |
 | `crates/agentty/src/app/merge_queue.rs` | Merge queue state machine (`Queued`/`Merging` progression rules). |
 | `crates/agentty/src/app/project.rs` | `ProjectManager` - project CRUD and selection orchestration. |
-| `crates/agentty/src/app/service.rs` | `AppServices` dependency container (`Database`, `FsClient`, `GitClient`, app-server client, event sender). |
+| `crates/agentty/src/app/service.rs` | `AppServices` dependency container (`Database`, `FsClient`, `GitClient`, `ReviewRequestClient`, app-server client, event sender). |
 | `crates/agentty/src/app/session_state.rs` | `SessionState` - per-session runtime state container. |
 | `crates/agentty/src/app/setting.rs` | `SettingsManager` - settings management and persistence. |
 | `crates/agentty/src/app/tab.rs` | `TabManager` - top-level tab definitions and tab selection state. |
@@ -34,10 +34,10 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/app/session/` | Session-specific orchestration split by concern: |
 | - `core.rs` | `SessionManager`, session clock boundary, shared constants, and session module tests. |
 | - `workflow/access.rs` | Session lookup helpers. |
-| - `workflow/lifecycle.rs` | Session creation, prompt/reply workflows. |
+| - `workflow/lifecycle.rs` | Session creation, prompt/reply workflows, and forge review-request publication/open helpers. |
 | - `workflow/load.rs` | Session snapshot loading. |
 | - `workflow/merge.rs` | Merge/rebase workflows. |
-| - `workflow/refresh.rs` | Periodic refresh scheduling. |
+| - `workflow/refresh.rs` | Periodic refresh scheduling plus on-demand forge review-request refresh. |
 | - `workflow/review.rs` | Review transcript replay and review-mode restoration helpers. |
 | - `workflow/task.rs` | Session process execution and status persistence. |
 | - `workflow/worker.rs` | Per-session command queue orchestration, `AgentChannel` turn dispatch. |

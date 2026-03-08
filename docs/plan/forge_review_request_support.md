@@ -2,6 +2,11 @@
 
 Plan for extending `crates/agentty/src/app`, `crates/agentty/src/infra`, and `crates/agentty/src/ui` so review-ready sessions can publish and track forge review requests across GitHub pull requests and GitLab merge requests.
 
+## Cross-Plan Check Before Implementation
+
+- `docs/plan/coverage_follow_up.md` only tracks coverage-ratchet follow-up work and does not overlap forge review-request sequencing, file ownership, or rollout assumptions.
+- No other active plan in `docs/plan/` currently claims the remaining review-request poller, session-view action, or usage-doc work.
+
 ## Status Maintenance Rule
 
 - After implementing any step in this plan, immediately update its status in this document.
@@ -10,89 +15,44 @@ Plan for extending `crates/agentty/src/app`, `crates/agentty/src/infra`, and `cr
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| Session lifecycle and review actions | `crates/agentty/src/domain/session.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, and `crates/agentty/src/ui/state/help_action.rs` already expose reply, diff, focused-review, rebase, and merge-queue flows for `Review` sessions. | Healthy |
-| Git remote and push foundations | `crates/agentty/src/infra/git/client.rs` exposes `repo_url()` and `push_current_branch()`, `crates/agentty/src/infra/git/repo.rs` normalizes GitHub remotes to HTTPS, and `crates/agentty/src/app/core.rs` already shows actionable push-auth guidance. | Partial |
-| Forge CLI foundations | `crates/agentty/src/infra/forge.rs` and `crates/agentty/src/infra/forge/` now provide a dedicated review-request client boundary plus a mockable forge CLI runner for `gh` and `glab` operations. | Healthy |
-| Background polling infrastructure | `crates/agentty/src/app/task.rs` already runs periodic git-status and version-check jobs, and `crates/agentty/src/app/session/workflow/refresh.rs` performs low-frequency session metadata refresh, but nothing polls remote review-request state or auto-reconciles session statuses from merged or closed outcomes. | Partial |
-| Forge-specific integrations | `crates/agentty/src/infra/forge/github.rs` and `crates/agentty/src/infra/forge/gitlab.rs` now implement create, find, and refresh adapter flows, but session persistence and UI wiring are still pending. | Partial |
-| Session persistence model | `crates/agentty/src/infra/db.rs`, `crates/agentty/migrations/`, `crates/agentty/src/domain/session.rs`, and `crates/agentty/src/app/session/workflow/load.rs` now persist and reload normalized forge review-request linkage metadata through a dedicated `session_review_request` table. | Healthy |
-| User-facing docs | `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` document merge, rebase, diff, and review flows only. | Not started |
+| Manual session review-request workflow | `crates/agentty/src/app/service.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and `crates/agentty/src/app/session/workflow/refresh.rs` now wire `ReviewRequestClient` into publish, open, and refresh helpers that persist normalized PR/MR linkage and can refresh archived sessions from stored forge URLs after worktree cleanup. | Healthy |
+| Forge adapters and persistence | `crates/agentty/src/infra/forge/github.rs`, `crates/agentty/src/infra/forge/gitlab.rs`, `crates/agentty/src/infra/db.rs`, and `crates/agentty/src/app/session/workflow/load.rs` cover normalized create/find/refresh behavior plus durable `session_review_request` loading. | Healthy |
+| Background reconciliation | `crates/agentty/src/app/task.rs` still only runs git-status and version-check jobs, and no app event currently polls linked review requests or reconciles merged or closed remote outcomes back into session status. | Not started |
+| Session view UI | `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/state/help_action.rs`, and `crates/agentty/src/ui/page/session_chat.rs` still expose merge, diff, focused-review, and worktree-open actions only; review-request controls and metadata rendering are not wired yet. | Not started |
+| Documentation coverage | `docs/site/content/docs/architecture/module-map.md`, `docs/site/content/docs/architecture/runtime-flow.md`, and `docs/site/content/docs/architecture/testability-boundaries.md` now describe the manual workflow baseline, but `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` still do not cover review-request actions or automatic reconciliation. | Partial |
+
+## Implementation Approach
+
+- Keep the already-landed manual review-request workflow as the working baseline: a review-ready session can publish its branch, link or create a review request, refresh stored metadata, and open the linked URL.
+- Add automatic reconciliation next so remote merged or closed outcomes become part of the actual session lifecycle instead of a manual-refresh-only detail.
+- Layer the session-view action, rendered metadata, and user-facing docs on top only after the reconciliation semantics are stable.
 
 ## Updated Priorities
 
-## 1) Define a narrow cross-forge review-request boundary
+## 1) Ship Manual Session Review-Request Workflows
 
-**Why now:** The app should depend on one small orchestration contract, not on GitHub- or GitLab-specific endpoint shapes leaking through session workflows.
+**Why now:** This is the smallest usable slice of the feature, and it already exists in the branch as the baseline that all later automation extends.
+**Usable outcome:** A review-ready session can publish its branch, reuse or create its linked PR/MR, refresh the stored summary, and open the linked review request even after worktree cleanup.
 
-- [x] Add a generic boundary such as `ReviewRequestClient` or `ForgeClient` under `crates/agentty/src/infra/` with only the core operations Agentty actually needs.
-- [x] Keep the contract narrow: detect supported forge, find an existing review request by source branch, create one, refresh summary state, and produce an openable web URL.
-- [x] Add concrete adapters for GitHub pull requests and GitLab merge requests instead of a broad lowest-common-denominator abstraction over every provider feature.
-- [x] Route GitHub operations through `gh` and GitLab operations through `glab` so authentication, host selection, and user-local CLI setup stay aligned with each forge's native tooling.
-- [x] Fail fast for unsupported remotes and non-forge repositories with actionable session UI copy.
-- [x] Add focused tests for forge detection and unsupported-remote handling so this boundary can land independently before any provider-specific API work.
-
-Primary files:
-
-- `crates/agentty/src/infra.rs`
-- `crates/agentty/src/infra/forge.rs`
-- `crates/agentty/src/infra/git/repo.rs`
-- `crates/agentty/src/app/core.rs`
-
-## 2) Design provider adapters around realistic API differences
-
-**Why now:** GitHub and GitLab diverge on review metadata, approval models, and checks or pipelines, so the implementation plan needs explicit adapter boundaries before any persistence or UI work starts.
-
-- [x] Implement a GitHub adapter around `gh` commands such as `gh pr create`, `gh pr view`, and `gh api`, reusing the existing `gh auth login` guidance for authentication failures.
-- [x] Implement a GitLab adapter around `glab` commands such as `glab mr create`, `glab mr view`, and `glab api`, with explicit handling for both `gitlab.com` and self-hosted GitLab instances.
-- [x] Keep provider-specific detail mapping inside each adapter and expose only a normalized review-request summary to the app layer.
-- [x] Normalize missing-CLI, unauthenticated-CLI, and host-resolution failures into actionable messages that tell users whether they need `gh auth login`, `glab auth login`, or local CLI installation.
-- [x] Store any unavoidable provider-specific extras in adapter-owned metadata rather than expanding the generic contract for one-off fields.
-- [x] Add adapter-level tests for GitHub and GitLab request construction, response parsing, and provider-specific error mapping so this section can merge without UI or database changes.
+- [x] Keep the cross-forge `ReviewRequestClient` boundary narrow and normalize GitHub and GitLab adapter behavior around create, find, refresh, and openable URLs.
+- [x] Persist normalized review-request linkage on `Session` through `session_review_request` and reload it during session snapshot loading.
+- [x] Add `SessionManager` publish, open, and refresh helpers that reuse stored links, avoid duplicate review-request creation, and refresh archived sessions from stored forge URLs.
+- [x] Cover provider adapters, persistence, and session workflows with mock-driven tests instead of live forge or network calls.
 
 Primary files:
 
 - `crates/agentty/src/infra/forge.rs`
 - `crates/agentty/src/infra/forge/github.rs`
 - `crates/agentty/src/infra/forge/gitlab.rs`
-- `crates/agentty/src/app/core.rs`
-
-## 3) Persist forge review-request linkage on sessions
-
-**Why now:** Session view, refresh, and post-rebase flows need durable review-request identity that works for both GitHub pull requests and GitLab merge requests.
-
-- [x] Add a migration for generic linkage fields on `session`, such as forge kind, display id, web URL, state, source branch, target branch, title, status summary, and last-refresh timestamp.
-- [x] Extend `crates/agentty/src/infra/db.rs::SessionRow`, session update helpers, and `crates/agentty/src/domain/session.rs::Session` to carry the new normalized metadata.
-- [x] Avoid GitHub-only naming such as `pull_request_number`; use generic names that can represent GitHub numbers and GitLab IIDs without ambiguity.
-- [x] Define lifecycle rules for linked review-request metadata when sessions are rebased, merged, canceled, or when the remote review request is already closed or merged.
-- [x] Add database and session-loading tests that prove the new metadata round-trips cleanly without any live forge integration.
-
-Primary files:
-
-- `crates/agentty/migrations/030_create_session_review_request.sql`
 - `crates/agentty/src/infra/db.rs`
-- `crates/agentty/src/domain/session.rs`
 - `crates/agentty/src/app/session/workflow/load.rs`
-
-## 4) Add session workflows for publish, create, refresh, and open
-
-**Why now:** Once the generic boundary and persistence model exist, `SessionManager` needs a single review-request flow that delegates provider specifics to adapters and does not duplicate GitHub and GitLab orchestration logic.
-
-- [ ] Add `SessionManager` helpers that push the session branch when needed, detect the forge from the remote, and either locate or create the session's review request.
-- [ ] Reuse an existing linked review request when one is already stored, and fall back to source-branch lookup before creating a duplicate.
-- [ ] Add a refresh path that reloads normalized state such as open or merged status, approvals or reviews summary, and checks or pipelines summary for the active session.
-- [ ] Decide and document how `Done` sessions should present linked review-request state, and remove any alternate legacy branch of behavior.
-- [ ] Cover publish, create, duplicate-detection, and refresh flows with mock-driven workflow tests that use the git and forge trait boundaries instead of live network calls.
-
-Primary files:
-
-- `crates/agentty/src/app/session/core.rs`
 - `crates/agentty/src/app/session/workflow/lifecycle.rs`
-- `crates/agentty/src/app/session/workflow/merge.rs`
 - `crates/agentty/src/app/session/workflow/refresh.rs`
 
-## 5) Add background review-request status reconciliation
+## 2) Add Background Review-Request Status Reconciliation
 
-**Why now:** Once review requests can be created and refreshed on demand, Agentty still needs an automatic path to detect remote merges or closes and reconcile local session status without user intervention.
+**Why now:** The manual workflow baseline is in place, so the next increment should make remote lifecycle changes visible without requiring manual refreshes or branch inspection.
+**Usable outcome:** Linked sessions automatically reconcile to `Done` or `Canceled` after the remote review request is observed as merged or closed, while transient forge failures stay low-noise.
 
 - [ ] Add an app-scoped background job that periodically checks linked review-request state for active sessions with forge metadata.
 - [ ] Route poller results through `AppEvent` or an equivalent reducer-driven path instead of mutating session state directly inside the task.
@@ -109,9 +69,10 @@ Primary files:
 - `crates/agentty/src/app/session/workflow/task.rs`
 - `crates/agentty/src/domain/session.rs`
 
-## 6) Add discoverable UI actions and docs sync
+## 3) Surface Review-Request Actions and Final Docs
 
-**Why now:** After the orchestration flow exists, the final user-facing step is to surface review-request actions and state without disrupting the existing review, diff, and merge workflows.
+**Why now:** The UI and docs should describe the finished behavior from `2)` instead of an intermediate partial state.
+**Usable outcome:** Session view exposes the review-request action and metadata, and the docs explain both manual actions and automatic reconciliation.
 
 - [ ] Add one session-view action for create, open, or refresh review-request behavior based on the current forge and link state.
 - [ ] Extend `AppMode`, help/footer projections, and view-mode key handling to show loading, success, and blocked states without leaving session context.
@@ -119,7 +80,7 @@ Primary files:
 - [ ] Show actionable blocked states when `gh` or `glab` is missing or unauthenticated so users can fix local CLI setup from the same review flow.
 - [ ] Document that merged review requests automatically move sessions to `Done` and closed review requests automatically move sessions to `Canceled` once the background reconciliation job observes the remote state change.
 - [ ] Add UI-focused tests that keep the new action availability, footer/help text, and session rendering aligned with session status and linked review-request state.
-- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, `docs/site/content/docs/architecture/runtime-flow.md`, `docs/site/content/docs/architecture/testability-boundaries.md`, and `docs/site/content/docs/architecture/module-map.md` when the feature lands.
+- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, `docs/site/content/docs/architecture/runtime-flow.md`, `docs/site/content/docs/architecture/testability-boundaries.md`, and `docs/site/content/docs/architecture/module-map.md` when the user-facing flow lands.
 
 Primary files:
 
@@ -127,7 +88,6 @@ Primary files:
 - `crates/agentty/src/ui/state/app_mode.rs`
 - `crates/agentty/src/ui/state/help_action.rs`
 - `crates/agentty/src/ui/page/session_chat.rs`
-- `crates/agentty/src/infra/forge.rs`
 - `docs/site/content/docs/usage/workflow.md`
 - `docs/site/content/docs/usage/keybindings.md`
 - `docs/site/content/docs/architecture/runtime-flow.md`
@@ -138,21 +98,14 @@ Primary files:
 
 ```mermaid
 graph TD
-    P1[1. Narrow forge boundary] --> P2[2. Provider adapters]
-    P1 --> P3[3. Session persistence]
-    P2 --> P4[4. Session workflows]
-    P3 --> P4
-    P2 --> P5[5. Background reconciliation]
-    P3 --> P5
-    P4 --> P5
-    P5 --> P6[6. UI actions and docs]
+    P1[1. Manual session review-request workflows] --> P2[2. Background reconciliation]
+    P2 --> P3[3. UI actions and final docs]
 ```
 
-1. Start with `1) Define a narrow cross-forge review-request boundary`; it is the prerequisite for both provider adapters and session persistence naming.
-1. Run `2) Design provider adapters around realistic API differences` in parallel with `3) Persist forge review-request linkage on sessions` after `1)` is merged, because the adapter work and storage work validate independently.
-1. Start `4) Add session workflows for publish, create, refresh, and open` only after `2)` and `3)` are merged, because workflow orchestration depends on both the forge client surface and persisted metadata.
-1. Start `5) Add background review-request status reconciliation` only after `2)`, `3)`, and `4)` are merged, because the poller depends on stable forge refresh semantics, persisted linkage, and agreed session transition rules.
-1. Start `6) Add discoverable UI actions and docs sync` only after `5)` is merged, because the user-facing docs and status affordances should describe the final automatic reconciliation behavior instead of an intermediate partial flow.
+1. Treat `1) Ship Manual Session Review-Request Workflows` as the already-landed baseline and use it as the validation target for all remaining work.
+1. Keep `2) Add Background Review-Request Status Reconciliation` sequential after `1)` because the poller depends on the existing manual publish and refresh contract plus persisted linkage semantics.
+1. Start `3) Surface Review-Request Actions and Final Docs` only after `2)` is merged, because the action labels, help text, and docs should describe the final automatic reconciliation behavior.
+1. No top-level priorities are safe to run in parallel right now; only the documentation tasks inside `3)` can trail the UI wiring once the final action and state contract is settled.
 
 ## Out of Scope for This Pass
 

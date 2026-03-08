@@ -34,6 +34,7 @@ use crate::domain::session::{Session, Status};
 use crate::infra::agent::AgentResponse;
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
+use crate::infra::forge::{RealReviewRequestClient, ReviewRequestClient};
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
@@ -222,6 +223,7 @@ struct AppClients {
     app_server_client: Arc<dyn app_server::AppServerClient>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    review_request_client: Arc<dyn ReviewRequestClient>,
     sync_main_runner: Arc<dyn SyncMainRunner>,
     tmux_client: Arc<dyn TmuxClient>,
 }
@@ -309,6 +311,7 @@ impl App {
             app_server_client,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
+            review_request_client: Arc::new(RealReviewRequestClient::default()),
             sync_main_runner: Arc::new(TokioSyncMainRunner),
             tmux_client: Arc::new(RealTmuxClient),
         };
@@ -370,6 +373,7 @@ impl App {
             event_tx.clone(),
             Arc::clone(&clients.fs_client),
             Arc::clone(&clients.git_client),
+            Arc::clone(&clients.review_request_client),
             Arc::clone(&clients.app_server_client),
         );
         let projects = ProjectManager::new(

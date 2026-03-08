@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::db::Database;
 use crate::infra::app_server::AppServerClient;
+use crate::infra::forge::ReviewRequestClient;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
@@ -19,6 +20,7 @@ pub struct AppServices {
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    review_request_client: Arc<dyn ReviewRequestClient>,
 }
 
 impl AppServices {
@@ -30,6 +32,7 @@ impl AppServices {
         event_tx: mpsc::UnboundedSender<AppEvent>,
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn GitClient>,
+        review_request_client: Arc<dyn ReviewRequestClient>,
         app_server_client: Arc<dyn AppServerClient>,
     ) -> Self {
         Self {
@@ -39,6 +42,7 @@ impl AppServices {
             event_tx,
             fs_client,
             git_client,
+            review_request_client,
         }
     }
 
@@ -70,6 +74,11 @@ impl AppServices {
     /// Returns the shared git client for async git operations.
     pub(crate) fn git_client(&self) -> Arc<dyn GitClient> {
         Arc::clone(&self.git_client)
+    }
+
+    /// Returns the shared forge review-request client.
+    pub(crate) fn review_request_client(&self) -> Arc<dyn ReviewRequestClient> {
+        Arc::clone(&self.review_request_client)
     }
 
     /// Returns the shared app-server client used by session workers.

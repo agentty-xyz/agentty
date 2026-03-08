@@ -40,3 +40,8 @@ injectable trait boundaries and `mockall`-based tests over flaky end-to-end
 shell-heavy tests. Add a narrower internal command-runner boundary when a
 public orchestration trait still needs deterministic coverage of subprocess
 sequencing or retry behavior.
+
+Session review-request publication and refresh follow this rule directly:
+`SessionManager` combines `GitClient` with `ReviewRequestClient` so tests can
+cover branch publish, duplicate detection, stored-link reuse, and archived
+session refresh without live forge auth or network state.

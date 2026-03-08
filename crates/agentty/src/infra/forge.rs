@@ -7,6 +7,8 @@ mod gitlab;
 mod model;
 mod remote;
 
+#[cfg(test)]
+pub(crate) use client::MockReviewRequestClient;
 pub use client::{RealReviewRequestClient, ReviewRequestClient};
 #[cfg(test)]
 pub(crate) use command::MockForgeCommandRunner;

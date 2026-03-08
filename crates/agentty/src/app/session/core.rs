@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::widgets::TableState;
 
@@ -191,6 +191,13 @@ pub(crate) fn session_folder(base: &Path, session_id: &str) -> PathBuf {
 pub(crate) fn session_branch(session_id: &str) -> String {
     let len = session_id.len().min(8);
     format!("agentty/{}", &session_id[..len])
+}
+
+/// Converts one wall-clock timestamp into Unix seconds.
+pub(crate) fn unix_timestamp_from_system_time(system_time: SystemTime) -> i64 {
+    system_time
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| i64::try_from(duration.as_secs()).unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -513,6 +520,7 @@ mod tests {
         let event_sender = app.services.event_sender();
         let app_server_client = app.services.app_server_client();
         let fs_client = app.services.fs_client();
+        let review_request_client = app.services.review_request_client();
 
         app.services = AppServices::new(
             base_path,
@@ -520,6 +528,7 @@ mod tests {
             event_sender,
             fs_client,
             Arc::clone(&mock_git_client),
+            review_request_client,
             app_server_client,
         );
         app.sessions.git_client = mock_git_client;
