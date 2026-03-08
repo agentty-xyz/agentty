@@ -252,23 +252,26 @@ fn view_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
 ///
 /// Uses `GLAB_NO_PROMPT` so `glab` does not emit the deprecated `NO_PROMPT`
 /// warning to stdout, which would corrupt JSON responses consumed by the
-/// adapter. `GITLAB_HOST` and `GL_HOST` pin `glab` to the target server URL so
-/// self-managed instances with explicit HTTPS ports do not rely on
-/// `--hostname`, which rejects `host:port` values.
+/// adapter. `glab` expects `GITLAB_HOST` and `GL_HOST` to carry a raw host or
+/// `host:port` value instead of a full `https://` URL, so the adapter passes
+/// the normalized remote host directly.
 fn glab_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand {
-    let server_url = gitlab_server_url(remote);
+    let gitlab_host = gitlab_host(remote);
 
     ForgeCommand::new("glab", arguments)
         .with_environment("CLICOLOR", "0")
-        .with_environment("GITLAB_HOST", server_url.clone())
-        .with_environment("GL_HOST", server_url)
+        .with_environment("GITLAB_HOST", gitlab_host.clone())
+        .with_environment("GL_HOST", gitlab_host)
         .with_environment("GLAB_NO_PROMPT", "1")
         .with_environment("NO_COLOR", "1")
 }
 
-/// Returns the base server URL that `glab` should target for one remote.
-fn gitlab_server_url(remote: &ForgeRemote) -> String {
-    format!("https://{}", remote.host)
+/// Returns the host identifier that `glab` should target for one remote.
+///
+/// The value intentionally omits the `https://` scheme because `glab`
+/// prepends its own protocol while resolving the API endpoint.
+fn gitlab_host(remote: &ForgeRemote) -> String {
+    remote.host.clone()
 }
 
 /// Maps one spawn-time failure into a normalized GitLab review-request error.
@@ -804,19 +807,21 @@ mod tests {
         let command = lookup_command(&remote, "feature/forge");
 
         // Assert
-        assert!(command.environment.contains(&(
-            "GITLAB_HOST".to_string(),
-            "https://gitlab.example.com".to_string()
-        )));
+        assert!(
+            command
+                .environment
+                .contains(&("GITLAB_HOST".to_string(), "gitlab.example.com".to_string()))
+        );
         assert!(
             command
                 .environment
                 .contains(&("GLAB_NO_PROMPT".to_string(), "1".to_string()))
         );
-        assert!(command.environment.contains(&(
-            "GL_HOST".to_string(),
-            "https://gitlab.example.com".to_string()
-        )));
+        assert!(
+            command
+                .environment
+                .contains(&("GL_HOST".to_string(), "gitlab.example.com".to_string()))
+        );
         assert!(
             !command
                 .environment
@@ -884,7 +889,7 @@ mod tests {
         // Assert
         assert!(command.environment.contains(&(
             "GITLAB_HOST".to_string(),
-            "https://gitlab.example.com:8443".to_string(),
+            "gitlab.example.com:8443".to_string(),
         )));
         assert!(
             !command
@@ -892,6 +897,18 @@ mod tests {
                 .iter()
                 .any(|argument| argument == "--hostname")
         );
+    }
+
+    #[test]
+    fn gitlab_host_omits_https_scheme_for_glab_environment_targeting() {
+        // Arrange
+        let remote = gitlab_remote();
+
+        // Act
+        let host = gitlab_host(&remote);
+
+        // Assert
+        assert_eq!(host, "gitlab.example.com");
     }
 
     fn gitlab_remote() -> ForgeRemote {
