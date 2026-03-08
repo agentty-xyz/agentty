@@ -24,8 +24,9 @@ Plan for extending `crates/agentty/src/app`, `crates/agentty/src/infra`, and `cr
 ## Implementation Approach
 
 - Keep the already-landed manual review-request workflow as the working baseline: a review-ready session can publish its branch, link or create a review request, refresh stored metadata, and open the linked URL.
-- Add automatic reconciliation next so remote merged or closed outcomes become part of the actual session lifecycle instead of a manual-refresh-only detail.
-- Layer the session-view action, rendered metadata, and user-facing docs on top only after the reconciliation semantics are stable.
+- Surface session-view actions and rendered metadata next so users can drive the manual workflow from the primary TUI without leaving session context.
+- Keep the first UI slice compatible with explicit refresh; automatic reconciliation can land afterward as an extension of the visible workflow rather than a prerequisite for it.
+- Update usage docs in the same iteration as the session-view action, then update architecture docs when the background reconciliation boundary and reducer flow are stable.
 
 ## Updated Priorities
 
@@ -49,38 +50,17 @@ Primary files:
 - `crates/agentty/src/app/session/workflow/lifecycle.rs`
 - `crates/agentty/src/app/session/workflow/refresh.rs`
 
-## 2) Add Background Review-Request Status Reconciliation
+## 2) Surface Review-Request Actions and Manual Usage Docs
 
-**Why now:** The manual workflow baseline is in place, so the next increment should make remote lifecycle changes visible without requiring manual refreshes or branch inspection.
-**Usable outcome:** Linked sessions automatically reconcile to `Done` or `Canceled` after the remote review request is observed as merged or closed, while transient forge failures stay low-noise.
-
-- [ ] Add an app-scoped background job that periodically checks linked review-request state for active sessions with forge metadata.
-- [ ] Route poller results through `AppEvent` or an equivalent reducer-driven path instead of mutating session state directly inside the task.
-- [ ] Reuse the `gh` and `glab` adapter refresh commands inside the poller instead of introducing a second direct network client for background reconciliation.
-- [ ] Move a session to `Done` when the linked review request is merged and to `Canceled` when it is closed without merge, while preserving explicit local terminal states when no transition is needed.
-- [ ] Define guardrails for polling cadence, unsupported or unauthenticated forge failures, and stale-session behavior so the poller stays low-noise and cheap.
-- [ ] Add deterministic tests for poll scheduling, event reduction, and status-transition rules for merged, closed, reopened, and unavailable review-request states.
-
-Primary files:
-
-- `crates/agentty/src/app/task.rs`
-- `crates/agentty/src/app/core.rs`
-- `crates/agentty/src/app/session/workflow/refresh.rs`
-- `crates/agentty/src/app/session/workflow/task.rs`
-- `crates/agentty/src/domain/session.rs`
-
-## 3) Surface Review-Request Actions and Final Docs
-
-**Why now:** The UI and docs should describe the finished behavior from `2)` instead of an intermediate partial state.
-**Usable outcome:** Session view exposes the review-request action and metadata, and the docs explain both manual actions and automatic reconciliation.
+**Why now:** The manual workflow already works in the branch, but users still cannot discover or drive it from the main session view. Exposing that flow in-app is the smallest remaining end-to-end slice with immediate user value.
+**Usable outcome:** A user can create, open, or refresh a linked PR/MR directly from session view, see the normalized metadata in the TUI, and understand the manual workflow from the usage docs even before automatic reconciliation exists.
 
 - [ ] Add one session-view action for create, open, or refresh review-request behavior based on the current forge and link state.
 - [ ] Extend `AppMode`, help/footer projections, and view-mode key handling to show loading, success, and blocked states without leaving session context.
 - [ ] Render normalized review-request metadata in session UI without displacing existing diff and focused-review behavior.
 - [ ] Show actionable blocked states when `gh` or `glab` is missing or unauthenticated so users can fix local CLI setup from the same review flow.
-- [ ] Document that merged review requests automatically move sessions to `Done` and closed review requests automatically move sessions to `Canceled` once the background reconciliation job observes the remote state change.
 - [ ] Add UI-focused tests that keep the new action availability, footer/help text, and session rendering aligned with session status and linked review-request state.
-- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, `docs/site/content/docs/architecture/runtime-flow.md`, `docs/site/content/docs/architecture/testability-boundaries.md`, and `docs/site/content/docs/architecture/module-map.md` when the user-facing flow lands.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to document the manual session-view review-request flow and its local CLI prerequisites.
 
 Primary files:
 
@@ -90,6 +70,28 @@ Primary files:
 - `crates/agentty/src/ui/page/session_chat.rs`
 - `docs/site/content/docs/usage/workflow.md`
 - `docs/site/content/docs/usage/keybindings.md`
+
+## 3) Add Background Review-Request Status Reconciliation and Final Architecture Docs
+
+**Why now:** Once users can already drive and inspect review requests from session view, the next increment should automate remote lifecycle transitions without hiding the baseline capability behind background infrastructure first.
+**Usable outcome:** Linked sessions automatically reconcile to `Done` or `Canceled` after the remote review request is observed as merged or closed, and the architecture docs describe the final poller and reducer boundaries.
+
+- [ ] Add an app-scoped background job that periodically checks linked review-request state for active sessions with forge metadata.
+- [ ] Route poller results through `AppEvent` or an equivalent reducer-driven path instead of mutating session state directly inside the task.
+- [ ] Reuse the `gh` and `glab` adapter refresh commands inside the poller instead of introducing a second direct network client for background reconciliation.
+- [ ] Move a session to `Done` when the linked review request is merged and to `Canceled` when it is closed without merge, while preserving explicit local terminal states when no transition is needed.
+- [ ] Define guardrails for polling cadence, unsupported or unauthenticated forge failures, and stale-session behavior so the poller stays low-noise and cheap.
+- [ ] Add deterministic tests for poll scheduling, event reduction, and status-transition rules for merged, closed, reopened, and unavailable review-request states.
+- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/architecture/runtime-flow.md`, `docs/site/content/docs/architecture/testability-boundaries.md`, and `docs/site/content/docs/architecture/module-map.md` to describe the automatic reconciliation behavior and its new runtime boundary.
+
+Primary files:
+
+- `crates/agentty/src/app/task.rs`
+- `crates/agentty/src/app/core.rs`
+- `crates/agentty/src/app/session/workflow/refresh.rs`
+- `crates/agentty/src/app/session/workflow/task.rs`
+- `crates/agentty/src/domain/session.rs`
+- `docs/site/content/docs/usage/workflow.md`
 - `docs/site/content/docs/architecture/runtime-flow.md`
 - `docs/site/content/docs/architecture/testability-boundaries.md`
 - `docs/site/content/docs/architecture/module-map.md`
@@ -98,18 +100,18 @@ Primary files:
 
 ```mermaid
 graph TD
-    P1[1. Manual session review-request workflows] --> P2[2. Background reconciliation]
-    P2 --> P3[3. UI actions and final docs]
+    P1[1. Manual session review-request workflows] --> P2[2. Session-view actions and manual docs]
+    P2 --> P3[3. Background reconciliation and final architecture docs]
 ```
 
 1. Treat `1) Ship Manual Session Review-Request Workflows` as the already-landed baseline and use it as the validation target for all remaining work.
-1. Keep `2) Add Background Review-Request Status Reconciliation` sequential after `1)` because the poller depends on the existing manual publish and refresh contract plus persisted linkage semantics.
-1. Start `3) Surface Review-Request Actions and Final Docs` only after `2)` is merged, because the action labels, help text, and docs should describe the final automatic reconciliation behavior.
-1. No top-level priorities are safe to run in parallel right now; only the documentation tasks inside `3)` can trail the UI wiring once the final action and state contract is settled.
+1. Start `2) Surface Review-Request Actions and Manual Usage Docs` immediately after `1)` because it is the next smallest user-visible slice and depends only on the existing manual publish, open, and refresh contract.
+1. Start `3) Add Background Review-Request Status Reconciliation and Final Architecture Docs` only after `2)` is merged, because the poller should extend an already-discoverable session-view workflow instead of defining it.
+1. No top-level priorities are safe to run in parallel right now; the usage-doc tasks inside `2)` can trail the final keybinding and action names, and the architecture-doc tasks inside `3)` can trail the final poller boundary once the reducer flow is settled.
 
 ## Out of Scope for This Pass
 
 - A repository-wide inbox for browsing arbitrary pull requests or merge requests independent of sessions.
 - Inline review-comment authoring, draft review management, or one-click merge parity with forge web UIs.
 - Support for forges beyond GitHub and GitLab.
-- Background polling or webhook infrastructure beyond the existing session refresh cadence.
+- Webhook-driven reconciliation or any server-side push infrastructure beyond the local CLI-based polling planned here.
