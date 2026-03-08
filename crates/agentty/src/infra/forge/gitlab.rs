@@ -469,8 +469,14 @@ struct GitLabUser {
 /// GitLab merge-request JSON payload returned by `glab mr view --output json`.
 #[derive(Deserialize)]
 struct GitLabViewResponse {
+    /// Approval entries reported by `glab`, or an empty list when the field is
+    /// omitted.
+    #[serde(default)]
     approved_by: Vec<GitLabApproval>,
     detailed_merge_status: Option<String>,
+    /// Draft state reported by `glab`, defaulting to `false` when older
+    /// payloads omit it.
+    #[serde(default)]
     draft: bool,
     head_pipeline: Option<GitLabHeadPipeline>,
     iid: u64,
@@ -810,6 +816,36 @@ mod tests {
                 forge_kind: ForgeKind::GitLab,
                 host: "gitlab.example.com".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn parse_view_response_accepts_missing_approved_by_field() {
+        // Arrange
+        let stdout = r#"{
+            "iid": 17,
+            "title": "Add forge review support",
+            "state": "opened",
+            "web_url": "https://gitlab.example.com/team/project/-/merge_requests/17",
+            "source_branch": "feature/forge",
+            "target_branch": "main",
+            "draft": false,
+            "merge_status": "mergeable",
+            "detailed_merge_status": "mergeable",
+            "head_pipeline": {
+                "status": "success"
+            }
+        }"#;
+
+        // Act
+        let review_request =
+            parse_view_response(stdout).expect("missing approvals should default to empty");
+
+        // Assert
+        assert_eq!(review_request.display_id, "!17");
+        assert_eq!(
+            review_request.status_summary.as_deref(),
+            Some("Pipeline Success, Mergeable")
         );
     }
 
