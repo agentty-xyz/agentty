@@ -2,11 +2,10 @@
 
 Second-pass coverage uplift plan for the remaining runtime, UI, settings, and workflow hotspots after the March 7, 2026 `cargo llvm-cov` refresh and ratchet landing.
 
-## Cross-Plan Check Before Implementation
+## Cross-Plan Notes
 
-- Before starting implementation, review other files in `docs/plan/` for overlapping scope, file ownership, sequencing, or dependency conflicts.
-- `continue_in_progress_sessions_after_exit.md` owns behavior changes in `crates/agentty/src/infra/codex_app_server.rs` and related session-runner paths; coverage work here should stay limited to additive tests or narrow testability refactors that do not redefine detached-runner behavior.
-- `forge_review_request_support.md` owns behavior changes in `crates/agentty/src/app/task.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, and related review-request flows; follow-up coverage work there should align to its final reducer and UI behavior instead of introducing alternate control flow.
+- `docs/plan/continue_in_progress_sessions_after_exit.md` owns detached-session behavior in overlapping runner files; this plan should stay limited to tests or narrow testability refactors there.
+- `docs/plan/forge_review_request_support.md` owns active review-request behavior in `crates/agentty/src/app/task.rs` and `crates/agentty/src/runtime/mode/session_view.rs`; coverage work here should follow that behavior rather than redefine it.
 - If another active plan conflicts with this plan and the correct resolution is not explicit, stop and ask the user which plan should control the work.
 
 ## Status Maintenance Rule
@@ -20,12 +19,12 @@ Baseline captured on March 7, 2026 from `cargo llvm-cov --workspace --json --sum
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| Workspace baseline | 87.57% line coverage (`36614/41813`) and 85.30% function coverage (`4137/4850`) | Baseline captured |
-| Runtime/editor boundaries | `crates/agentty/src/runtime/terminal.rs` now has deterministic failure-path tests for setup and restore cleanup branches; `crates/agentty/src/app/task.rs` now covers version-check event emission plus review-assist failure/output formatting branches; and `crates/agentty/src/runtime/event.rs` now covers ignored events, paste routing, shutdown handling, and handler error exits. | Complete |
-| UI overlay and page helpers | `crates/agentty/src/ui/overlay.rs` is at 54.22% line coverage (`114` uncovered), `crates/agentty/src/ui/page/project_list.rs` is at 55.65% (`102` uncovered), and `crates/agentty/src/ui/page/setting.rs` is at 16.39% (`51` uncovered) | Not started |
-| Workflow hot spots after first pass | `crates/agentty/src/app/session/workflow/merge.rs` remains at 81.08% line coverage (`371` uncovered), `crates/agentty/src/infra/codex_app_server.rs` at 82.98% (`365` uncovered), `crates/agentty/src/runtime/mode/prompt.rs` at 80.46% (`299` uncovered), and `crates/agentty/src/runtime/mode/session_view.rs` at 81.27% (`234` uncovered) | Partial |
-| Settings and git orchestration | `crates/agentty/src/app/setting.rs` is at 75.37% line coverage (`149` uncovered), `crates/agentty/src/infra/git/sync.rs` at 73.99% (`116` uncovered), `crates/agentty/src/infra/git/repo.rs` at 70.95% (`61` uncovered), and `crates/agentty/src/infra/git/merge.rs` at 52.38% (`30` uncovered) | Partial |
-| Coverage ratchet | `.pre-commit-config.yaml` already enforces `--fail-under-lines 87 --fail-under-functions 85`; no threshold change after this step (March 8, 2026). | Healthy |
+| Workspace baseline | Workspace coverage is 87.57% lines (`36614/41813`) and 85.30% functions (`4137/4850`). | Baseline captured |
+| Runtime/editor boundaries | `runtime/terminal`, `app/task`, and `runtime/event` already have the first-pass deterministic branch coverage this plan depends on. | Complete |
+| UI overlay and page helpers | `ui/overlay.rs`, `ui/page/project_list.rs`, and `ui/page/setting.rs` remain well below the workspace baseline. | Not started |
+| Workflow hot spots after first pass | `workflow/merge.rs`, `infra/codex_app_server.rs`, `runtime/mode/prompt.rs`, and `runtime/mode/session_view.rs` still hold the largest remaining uncovered branch totals. | Partial |
+| Settings and git orchestration | Settings persistence plus git sync, repo, and merge flows still sit below the workspace baseline. | Partial |
+| Coverage ratchet | `.pre-commit-config.yaml` already enforces the current 87/85 coverage floor, with no threshold change after the March 8, 2026 update. | Healthy |
 
 ## Implementation Approach
 

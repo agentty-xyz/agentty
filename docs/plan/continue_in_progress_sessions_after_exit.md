@@ -2,11 +2,10 @@
 
 Plan for changing `crates/agentty/src/app`, `crates/agentty/src/infra`, and `crates/agentty/src/main.rs` so active session turns keep running after the TUI exits and reconnect cleanly when Agentty starts again.
 
-## Cross-Plan Check Before Implementation
+## Cross-Plan Notes
 
-- Before starting implementation, review other files in `docs/plan/` for overlapping scope, file ownership, sequencing, or dependency conflicts.
-- `coverage_follow_up.md` overlaps only on test ownership for `crates/agentty/src/app/session/workflow/worker.rs`, `crates/agentty/src/infra/codex_app_server.rs`, and related runtime files; keep behavior changes here and leave pure coverage follow-up there.
-- `forge_review_request_support.md` touches `crates/agentty/src/app/core.rs` and session workflow files, but it does not define shutdown or detached-runner behavior; if both plans are active, this plan controls session-execution lifetime rules.
+- `docs/plan/coverage_follow_up.md` may add tests around overlapping files, but detached-session behavior changes stay here.
+- `docs/plan/forge_review_request_support.md` also touches `crates/agentty/src/app/core.rs`; this plan owns detached-runner lifetime and restart rules.
 - If another active plan conflicts with this plan and the correct resolution is not explicit, stop and ask the user which plan should control the work.
 
 ## Status Maintenance Rule
@@ -18,11 +17,11 @@ Plan for changing `crates/agentty/src/app`, `crates/agentty/src/infra`, and `cra
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| Startup recovery | `crates/agentty/src/app/core.rs` calls `SessionManager::fail_unfinished_operations_from_previous_run()` during `App::new_with_clients()`, so every queued or running `session_operation` is marked failed and affected sessions are forced back to `Review` on restart. | Blocking |
-| Session worker lifetime | `crates/agentty/src/app/session/workflow/worker.rs` owns per-session workers in an in-memory `HashMap<String, UnboundedSender<SessionCommand>>` and executes turns inside `tokio::spawn`, so quitting the app drops the only worker orchestration path. | Blocking |
-| Provider runtime lifetime | `crates/agentty/src/infra/codex_app_server.rs` keeps app-server runtimes in an in-memory `AppServerSessionRegistry` and starts `codex app-server` with `kill_on_drop(true)`; CLI turns and Gemini ACP turns are likewise children of the Agentty process that owns the worker task. | Blocking |
-| Persistence available for recovery | `crates/agentty/src/infra/db.rs` and migration `crates/agentty/migrations/012_create_session_operation.sql` already persist queued and running operations plus `heartbeat_at` and `cancel_requested`, but there is no detached-runner ownership or liveness reconciliation yet. | Partial |
-| Session reload behavior | `crates/agentty/src/app/session/workflow/load.rs` can reload persisted `InProgress` sessions when the worktree folder still exists, so DB-driven status and output updates from an external runner would already be renderable after restart. | Partial |
+| Startup recovery | Restart still fails every queued or running `session_operation` and forces affected sessions back to `Review`. | Blocking |
+| Session worker lifetime | Session workers live only in an in-memory map and execute inside `tokio::spawn`, so quitting the app drops the only worker orchestration path. | Blocking |
+| Provider runtime lifetime | App-server, CLI, and Gemini transports still live under the Agentty process that owns the worker task. | Blocking |
+| Persistence available for recovery | The database already persists unfinished operations and heartbeat fields, but it does not yet track detached-runner ownership or liveness. | Partial |
+| Session reload behavior | Reload logic can already render persisted `InProgress` sessions when the worktree still exists. | Partial |
 
 ## Implementation Approach
 

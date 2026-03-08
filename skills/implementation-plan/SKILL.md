@@ -13,77 +13,31 @@ This skill is the source of truth for plan structure and execution-planning requ
 
 1. **Clarify the plan request first**
 
-   - Check whether the user has specified the plan goal, intended outcome, scope boundaries, exclusions, and any delivery constraints.
-   - Clarify dependency, sequencing, or rollout constraints when they affect whether steps can land as separate commits or pull requests.
-   - If any of those requirements are unclear, ask focused follow-up questions before drafting or revising the plan.
-   - Prefer the smallest useful set of questions. Ask about missing scope, success criteria, priority, deadlines, ownership, or non-goals only when they materially affect the plan.
-   - Wait for the user response before continuing when the missing information would change the plan structure or contents.
+   - Confirm the goal, intended outcome, scope boundaries, exclusions, and delivery constraints.
+   - Ask focused follow-up questions only when missing information would change the plan structure or sequencing.
 
 1. **Collect planning context**
 
-   - Read `docs/plan/AGENTS.md` for directory-local context only.
-   - Review related source files and existing plan documents before writing.
-   - Capture concrete constraints from the user request and clarification answers (scope, deadlines, quality gates, excluded work).
+   - Read `docs/plan/AGENTS.md`, related source files, and any overlapping plan documents before writing.
+   - Capture only the constraints that materially affect scope, sequencing, validation, or exclusions.
 
-1. **Check for plan conflicts before drafting or revising**
+1. **Draft a concise, current-state plan**
 
-   - Review other files in `docs/plan/` for overlapping scope, file ownership, sequencing, or dependency assumptions.
-   - When drafting a new plan, compare it against any existing plan that touches the same code paths or user workflow.
-   - Resolve obvious duplication or stale plan content directly when the intended replacement is clear.
-   - If plans conflict and the correct resolution or precedence is not explicit, ask the user before finalizing the plan or starting implementation.
-
-1. **Define scope and success boundaries**
-
-   - Write one concise scope/context line tied to the relevant code area.
-   - Identify what is in scope for this pass and what must remain out of scope.
-   - Preserve only behavior required by the current request; remove stale or legacy plan items unless explicitly requested to keep them.
-
-1. **Build the current-state snapshot**
-
-   - Add a table with `Area`, `Current state in codebase`, and `Status`.
-   - Base each row on observable code or command output.
-   - Use precise status wording such as `Not started`, `Partial`, `Healthy`, or `Baseline captured`.
-
-1. **Define the implementation approach as usable iterations**
-
-   - Plan the work as an evolving solution, not a hidden bulk implementation.
-   - Make the first iteration the smallest end-to-end slice that a user can already try, even if the behavior is basic.
-   - Ensure each later iteration extends the working baseline with additional capability, refinement, or hardening.
-   - Do not isolate groundwork into a standalone iteration unless that same iteration also delivers visible or testable user value.
-   - Fold required documentation into the same step that introduces or changes the behavior; do not defer documentation to a later catch-up iteration.
-   - Prefer fast-feedback sequencing so the user can validate direction early and adjust the next iteration before more code lands.
-
-1. **Create prioritized execution sections**
-
-   - Use numbered priorities with a short `Why now` rationale.
-   - Treat each priority as one iteration in the evolving solution.
-   - State the concrete user-visible or operator-visible outcome that exists when that priority is complete.
-   - Add task checklists with `- [ ]` / `- [x]` and make each item implementation-ready.
-   - Include the relevant documentation updates in the same priority and checklist item as the implementation work when behavior, workflows, or contributor guidance change.
-   - Size each priority section so the full section can land as one commit or pull request with a clear validation story and a usable result.
-   - Use checklist items to break down the work inside that priority without forcing each checklist item to be independently shippable.
-   - Split or merge priority sections when the current section is too large or too coupled to review and merge independently.
-   - List the primary files for each priority using repository-root-relative paths.
+   - Use the plan skeleton below and keep each section focused on repository-observable facts.
+   - Keep cross-plan notes short and include only active overlaps, ownership decisions, or unresolved conflicts.
+   - Keep snapshot rows scannable: one short current-state sentence plus a status, without long file lists in the table cells.
 
 1. **Define execution sequence and guardrails**
 
-   - Add `## Suggested Execution Order` with an ordered sequence.
-   - State explicitly which steps can run in parallel and which must stay sequential because of dependencies.
-   - Add a Mermaid dependency graph that shows the same sequencing constraints as the ordered list.
-   - Add `## Out of Scope for This Pass` with explicit non-goals.
-   - Add `## Status Maintenance Rule` that requires immediate updates after each implemented step.
+   - Make the first priority the smallest usable iteration instead of standalone groundwork.
+   - Ensure later priorities extend that working baseline and fold docs into the same step as the behavior change.
+   - State which priorities can run in parallel and keep the dependency graph aligned with the execution notes.
 
 1. **Quality check before handing off**
 
-   - Confirm the plan structure matches this skill's plan skeleton and workflow requirements.
-   - Remove duplicated or contradictory checklist items.
-   - Verify overlapping plan documents are either aligned, explicitly superseded, or called out for user resolution.
-   - Ensure every priority section can be executed, validated, and merged independently.
-   - Verify the first priority delivers a minimal but usable slice instead of groundwork alone.
-   - Verify later priorities clearly build on the earlier working slice instead of hiding major functionality until the end.
-   - Verify documentation work is attached to the relevant implementation steps instead of being deferred to a later documentation-only iteration.
-   - Verify the execution order explains both the merge order and any safe parallel work.
-   - Verify the Mermaid dependency graph matches the checklist dependencies and ordered sequence.
+   - Remove duplicated or contradictory checklist items and trim stale completed detail when it no longer helps active execution.
+   - Verify every priority can be executed, validated, and merged independently.
+   - Verify overlapping plans are aligned or clearly marked for user resolution.
    - Verify the final plan reflects the clarified requirements the user provided.
 
 ## Plan Skeleton
@@ -95,9 +49,9 @@ Use this skeleton when creating a new file in `docs/plan/`:
 
 <One-sentence scope/context line tied to the relevant code area.>
 
-## Cross-Plan Check Before Implementation
+## Cross-Plan Notes
 
-- Before starting implementation, review other files in `docs/plan/` for overlapping scope, file ownership, sequencing, or dependency conflicts.
+- List only active overlaps, ownership decisions, or unresolved conflicts with other files in `docs/plan/`.
 - If another active plan conflicts with this plan and the correct resolution is not explicit, stop and ask the user which plan should control the work.
 
 ## Status Maintenance Rule
@@ -109,7 +63,7 @@ Use this skeleton when creating a new file in `docs/plan/`:
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| <area> | <observation> | <status> |
+| <area> | <short observable state> | <status> |
 
 ## Implementation Approach
 

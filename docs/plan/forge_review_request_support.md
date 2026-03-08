@@ -2,12 +2,10 @@
 
 Plan for extending `crates/agentty/src/app`, `crates/agentty/src/infra`, and `crates/agentty/src/ui` so review-ready sessions can publish and track forge review requests across GitHub pull requests and GitLab merge requests.
 
-## Cross-Plan Check Before Implementation
+## Cross-Plan Notes
 
-- Before starting implementation, review other files in `docs/plan/` for overlapping scope, file ownership, sequencing, or dependency conflicts.
-- `docs/plan/coverage_follow_up.md` only tracks coverage-ratchet follow-up work and does not overlap forge review-request sequencing, file ownership, or rollout assumptions.
-- `docs/plan/continue_in_progress_sessions_after_exit.md` overlaps on `crates/agentty/src/app/core.rs` and app-level task ownership, but it does not define review-request polling or session-status transitions from forge state; if both plans are active, the detached-session plan controls session-turn lifetime while this plan controls review-request reconciliation behavior.
-- No other active plan in `docs/plan/` currently claims the remaining review-request poller or automatic reconciliation docs work.
+- `docs/plan/coverage_follow_up.md` only adds coverage work and does not change review-request behavior.
+- `docs/plan/continue_in_progress_sessions_after_exit.md` also touches `crates/agentty/src/app/core.rs`; detached-session rules own turn lifetime, while this plan owns review-request reconciliation.
 - If another active plan conflicts with this plan and the correct resolution is not explicit, stop and ask the user which plan should control the work.
 
 ## Status Maintenance Rule
@@ -19,11 +17,11 @@ Plan for extending `crates/agentty/src/app`, `crates/agentty/src/infra`, and `cr
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| Manual session review-request workflow | `crates/agentty/src/app/service.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and `crates/agentty/src/app/session/workflow/refresh.rs` now wire `ReviewRequestClient` into publish, open, and refresh helpers that persist normalized PR/MR linkage and can refresh archived sessions from stored forge URLs after worktree cleanup. | Healthy |
-| Forge adapters and persistence | `crates/agentty/src/infra/forge/github.rs`, `crates/agentty/src/infra/forge/gitlab.rs`, `crates/agentty/src/infra/db.rs`, and `crates/agentty/src/app/session/workflow/load.rs` cover normalized create/find/refresh behavior plus durable `session_review_request` loading. | Healthy |
-| Background reconciliation | `crates/agentty/src/app/task.rs` still only runs git-status and version-check jobs, and no app event currently polls linked review requests or reconciles merged or closed remote outcomes back into session status. | Not started |
-| Session view UI | `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/state/help_action.rs`, and `crates/agentty/src/ui/page/session_chat.rs` now expose session-view review-request create/open/refresh actions, popup feedback, and inline PR/MR metadata without displacing diff or focused-review flows. | Healthy |
-| Documentation coverage | `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, and `docs/site/content/docs/architecture/runtime-flow.md` now document the manual session-view review-request flow; automatic reconciliation docs are still pending step 2. | Partial |
+| Manual session review-request workflow | Publish, open, and refresh already persist normalized PR/MR links and can recover archived-session metadata from stored forge URLs. | Healthy |
+| Forge adapters and persistence | GitHub and GitLab adapters plus `session_review_request` persistence already cover normalized create, find, refresh, and reload flows. | Healthy |
+| Background reconciliation | No app event or background task currently polls linked review requests or reconciles merged or closed remote outcomes back into session status. | Not started |
+| Session view UI | Session view already exposes create, open, and refresh actions with popup feedback and inline PR/MR metadata. | Healthy |
+| Documentation coverage | Manual session-view review-request docs are landed, but automatic reconciliation docs are still pending. | Partial |
 
 ## Implementation Approach
 
