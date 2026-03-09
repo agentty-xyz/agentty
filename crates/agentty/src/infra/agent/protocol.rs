@@ -44,9 +44,11 @@ pub struct AgentResponseMessage {
     pub kind: AgentResponseMessageKind,
     /// Predefined answer choices for `question` messages.
     ///
-    /// Required for questions — the UI always renders a selectable option
-    /// list with a virtual "Type custom answer" entry appended. Users
-    /// navigate options with arrow keys and select with `Enter`.
+    /// The protocol instructs agents to always include options, and the UI
+    /// renders a selectable option list with a virtual "Type custom answer"
+    /// entry appended. The Rust type remains `Option` so non-compliant agent
+    /// output (missing or null `options`) deserializes gracefully instead of
+    /// failing the entire response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<String>>,
     /// Human-readable markdown text for this message.
@@ -64,6 +66,11 @@ impl AgentResponseMessage {
     }
 
     /// Constructs one `question` protocol message without predefined options.
+    ///
+    /// The structured response protocol requires agents to include `options`,
+    /// but not all providers comply. This constructor handles non-compliant
+    /// agent output and provides test convenience for option-independent
+    /// scenarios.
     pub fn question(text: impl Into<String>) -> Self {
         Self {
             kind: AgentResponseMessageKind::Question,
@@ -87,11 +94,11 @@ impl AgentResponseMessage {
     }
 }
 
-/// One extracted question with optional predefined answer choices.
+/// One extracted question with predefined answer choices.
 ///
 /// Produced by [`AgentResponse::question_items`] from the raw protocol
 /// messages. The UI and persistence layers use this as the canonical question
-/// representation.
+/// representation. Options may be empty when a non-compliant agent omits them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestionItem {
     /// Predefined answer choices the user can select from.
