@@ -32,7 +32,7 @@ use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
-use crate::domain::session::{ReviewRequest, ReviewRequestAction, Session, Status};
+use crate::domain::session::{PublishBranchAction, Session, Status};
 use crate::infra::agent::AgentResponse;
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
@@ -111,10 +111,10 @@ pub(crate) enum AppEvent {
     SyncMainCompleted {
         result: Result<SyncMainOutcome, SyncSessionStartError>,
     },
-    /// Indicates completion of a session-view review-request action.
-    ReviewRequestActionCompleted {
+    /// Indicates completion of a session-view branch-publish action.
+    BranchPublishActionCompleted {
         restore_view: ConfirmationViewMode,
-        result: Box<ReviewRequestTaskResult>,
+        result: Box<BranchPublishTaskResult>,
         session_id: String,
     },
     /// Indicates review assist output became available for a session.
@@ -148,7 +148,7 @@ struct AppEventBatch {
     has_git_status_update: bool,
     has_latest_available_version_update: bool,
     latest_available_version_update: Option<String>,
-    review_request_action_update: Option<ReviewRequestActionUpdate>,
+    branch_publish_action_update: Option<BranchPublishActionUpdate>,
     session_ids: HashSet<String>,
     session_model_updates: HashMap<String, AgentModel>,
     session_progress_updates: HashMap<String, Option<String>>,
@@ -171,81 +171,47 @@ struct FocusedReviewUpdate {
     result: Result<String, String>,
 }
 
-/// Session snapshot cloned into a review-request background task.
+/// Session snapshot cloned into a branch-publish background task.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ReviewRequestTaskSession {
-    base_branch: String,
+struct BranchPublishTaskSession {
     folder: PathBuf,
     id: String,
-    prompt: String,
-    review_request: Option<ReviewRequest>,
     status: Status,
-    summary: Option<String>,
-    title: Option<String>,
 }
 
-impl ReviewRequestTaskSession {
+impl BranchPublishTaskSession {
     /// Builds one background-task snapshot from a live session row.
     fn from_session(session: &Session) -> Self {
         Self {
-            base_branch: session.base_branch.clone(),
             folder: session.folder.clone(),
             id: session.id.clone(),
-            prompt: session.prompt.clone(),
-            review_request: session.review_request.clone(),
             status: session.status,
-            summary: session.summary.clone(),
-            title: session.title.clone(),
         }
-    }
-
-    /// Returns the title used when creating a new review request.
-    fn review_request_title(&self) -> String {
-        self.title
-            .as_deref()
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                let prompt = self.prompt.trim();
-
-                (!prompt.is_empty()).then(|| prompt.to_string())
-            })
-            .unwrap_or_else(|| "Agentty review request".to_string())
-    }
-
-    /// Returns the optional body used when creating a new review request.
-    fn review_request_body(&self) -> Option<String> {
-        self.summary
-            .as_deref()
-            .map(str::trim)
-            .filter(|summary| !summary.is_empty())
-            .map(str::to_string)
     }
 }
 
-/// Final reducer payload for a completed review-request background action.
+/// Final reducer payload for a completed branch-publish background action.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ReviewRequestActionUpdate {
+struct BranchPublishActionUpdate {
     restore_view: ConfirmationViewMode,
-    result: ReviewRequestTaskResult,
+    result: BranchPublishTaskResult,
     session_id: String,
 }
 
-/// Error payload shown inside the session-view info popup for review-request
+/// Error payload shown inside the session-view info popup for branch-publish
 /// failures.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ReviewRequestTaskFailure {
+pub(crate) struct BranchPublishTaskFailure {
     message: String,
     title: String,
 }
 
-impl ReviewRequestTaskFailure {
+impl BranchPublishTaskFailure {
     /// Builds one blocked-state popup payload from an actionable message.
     fn blocked(message: String) -> Self {
         Self {
             message,
-            title: "Review request blocked".to_string(),
+            title: "Branch push blocked".to_string(),
         }
     }
 
@@ -253,23 +219,21 @@ impl ReviewRequestTaskFailure {
     fn failed(message: String) -> Self {
         Self {
             message,
-            title: "Review request failed".to_string(),
+            title: "Branch push failed".to_string(),
         }
     }
 }
 
-/// Successful outcome returned by a review-request background action.
+/// Successful outcome returned by a branch-publish background action.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ReviewRequestTaskSuccess {
-    Linked {
-        action: ReviewRequestAction,
-        summary: forge::ReviewRequestSummary,
-    },
+pub(crate) enum BranchPublishTaskSuccess {
+    /// Carries the pushed branch name for popup copy.
+    Pushed { branch_name: String },
 }
 
-/// Reducer-friendly result for a completed review-request background action.
-pub(crate) type ReviewRequestTaskResult =
-    Result<ReviewRequestTaskSuccess, ReviewRequestTaskFailure>;
+/// Reducer-friendly result for a completed branch-publish background action.
+pub(crate) type BranchPublishTaskResult =
+    Result<BranchPublishTaskSuccess, BranchPublishTaskFailure>;
 
 /// Token-usage totals for one model used by the `/stats` prompt command.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -882,22 +846,16 @@ impl App {
             .await;
     }
 
-    /// Starts the session-view review-request action flow for one session.
-    pub(crate) fn start_review_request_action(
+    /// Starts the session-view branch-publish action flow for one session.
+    pub(crate) fn start_publish_branch_action(
         &mut self,
         restore_view: ConfirmationViewMode,
         session_id: &str,
-        review_request_action: ReviewRequestAction,
+        publish_branch_action: PublishBranchAction,
     ) {
-        if review_request_action == ReviewRequestAction::Open {
-            self.open_review_request_popup(restore_view, session_id);
-
-            return;
-        }
-
-        let Some(review_request_session) = self.review_request_task_session(session_id) else {
+        let Some(branch_publish_session) = self.branch_publish_task_session(session_id) else {
             self.mode = Self::view_info_popup_mode(
-                "Review request failed".to_string(),
+                "Branch push failed".to_string(),
                 "Session is no longer available.".to_string(),
                 false,
                 String::new(),
@@ -907,15 +865,13 @@ impl App {
             return;
         };
 
-        let loading_title = Self::review_request_loading_title(review_request_action);
-        let loading_message = Self::review_request_loading_message(review_request_action);
-        let loading_label = Self::review_request_loading_label(review_request_action);
+        let loading_title = Self::branch_publish_loading_title(publish_branch_action);
+        let loading_message = Self::branch_publish_loading_message(publish_branch_action);
+        let loading_label = Self::branch_publish_loading_label(publish_branch_action);
         let event_sender = self.services.event_sender();
-        let fs_client = self.services.fs_client();
         let git_client = self.services.git_client();
-        let review_request_client = self.services.review_request_client();
         let background_restore_view = restore_view.clone();
-        let event_session_id = review_request_session.id.clone();
+        let event_session_id = branch_publish_session.id.clone();
 
         self.mode = Self::view_info_popup_mode(
             loading_title,
@@ -926,83 +882,18 @@ impl App {
         );
 
         tokio::spawn(async move {
-            let result = run_review_request_action(
-                review_request_action,
-                review_request_session,
-                fs_client,
+            let result = run_branch_publish_action(
+                publish_branch_action,
+                branch_publish_session,
                 git_client,
-                review_request_client,
             )
             .await;
-            let _ = event_sender.send(AppEvent::ReviewRequestActionCompleted {
+            let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
                 restore_view: background_restore_view,
                 result: Box::new(result),
                 session_id: event_session_id,
             });
         });
-    }
-
-    /// Opens a session-view popup with the linked review-request URL.
-    pub(crate) fn open_review_request_popup(
-        &mut self,
-        restore_view: ConfirmationViewMode,
-        session_id: &str,
-    ) {
-        let Some(session_index) = self.session_index_for_id(session_id) else {
-            self.mode = Self::view_info_popup_mode(
-                "Review request failed".to_string(),
-                "Session is no longer available.".to_string(),
-                false,
-                String::new(),
-                restore_view,
-            );
-
-            return;
-        };
-        let Some(session) = self.sessions.sessions.get(session_index) else {
-            self.mode = Self::view_info_popup_mode(
-                "Review request failed".to_string(),
-                "Session is no longer available.".to_string(),
-                false,
-                String::new(),
-                restore_view,
-            );
-
-            return;
-        };
-        let Some(review_request) = session.review_request.as_ref() else {
-            self.mode = Self::view_info_popup_mode(
-                "Review request failed".to_string(),
-                "Session has no linked review request.".to_string(),
-                false,
-                String::new(),
-                restore_view,
-            );
-
-            return;
-        };
-
-        let popup_mode = match self
-            .sessions
-            .review_request_web_url(&self.services, session_id)
-        {
-            Ok(web_url) => Self::view_info_popup_mode(
-                "Review request link".to_string(),
-                Self::review_request_open_message(&review_request.summary, &web_url),
-                false,
-                String::new(),
-                restore_view,
-            ),
-            Err(error) => Self::view_info_popup_mode(
-                "Review request failed".to_string(),
-                error,
-                false,
-                String::new(),
-                restore_view,
-            ),
-        };
-
-        self.mode = popup_mode;
     }
 
     /// Returns all configured open commands in user-defined order.
@@ -1253,8 +1144,8 @@ impl App {
 
         self.apply_focused_review_updates(event_batch.focused_review_updates);
 
-        if let Some(review_request_action_update) = event_batch.review_request_action_update {
-            self.apply_review_request_action_update(review_request_action_update)
+        if let Some(branch_publish_action_update) = event_batch.branch_publish_action_update {
+            self.apply_branch_publish_action_update(branch_publish_action_update)
                 .await;
         }
 
@@ -1528,40 +1419,25 @@ impl App {
         }
     }
 
-    /// Applies one completed review-request action and updates the popup.
-    async fn apply_review_request_action_update(
+    /// Applies one completed branch-publish action and updates the popup.
+    async fn apply_branch_publish_action_update(
         &mut self,
-        review_request_action_update: ReviewRequestActionUpdate,
+        branch_publish_action_update: BranchPublishActionUpdate,
     ) {
-        let ReviewRequestActionUpdate {
+        let BranchPublishActionUpdate {
             restore_view,
             result,
             session_id,
-        } = review_request_action_update;
+        } = branch_publish_action_update;
 
         let popup_mode = match result {
-            Ok(ReviewRequestTaskSuccess::Linked { action, summary }) => {
-                match self
-                    .sessions
-                    .store_review_request_summary(&self.services, &session_id, summary.clone())
-                    .await
-                {
-                    Ok(review_request) => Self::view_info_popup_mode(
-                        Self::review_request_success_title(action),
-                        Self::review_request_success_message(action, &review_request.summary),
-                        false,
-                        String::new(),
-                        restore_view,
-                    ),
-                    Err(error) => Self::view_info_popup_mode(
-                        "Review request failed".to_string(),
-                        error,
-                        false,
-                        String::new(),
-                        restore_view,
-                    ),
-                }
-            }
+            Ok(BranchPublishTaskSuccess::Pushed { branch_name }) => Self::view_info_popup_mode(
+                Self::branch_publish_success_title(PublishBranchAction::Push),
+                Self::branch_publish_success_message(&branch_name),
+                false,
+                String::new(),
+                restore_view,
+            ),
             Err(failure) => Self::view_info_popup_mode(
                 failure.title,
                 failure.message,
@@ -1571,6 +1447,7 @@ impl App {
             ),
         };
 
+        let _ = session_id;
         self.mode = popup_mode;
     }
 
@@ -1806,13 +1683,13 @@ impl App {
         });
     }
 
-    /// Builds one background-task snapshot for a review-request action.
-    fn review_request_task_session(&self, session_id: &str) -> Option<ReviewRequestTaskSession> {
+    /// Builds one background-task snapshot for a branch-publish action.
+    fn branch_publish_task_session(&self, session_id: &str) -> Option<BranchPublishTaskSession> {
         self.sessions
             .sessions
             .iter()
             .find(|session| session.id == session_id)
-            .map(ReviewRequestTaskSession::from_session)
+            .map(BranchPublishTaskSession::from_session)
     }
 
     /// Builds a session-view info popup mode with explicit loading metadata.
@@ -1832,118 +1709,42 @@ impl App {
         }
     }
 
-    /// Returns the loading popup title for one review-request action.
-    fn review_request_loading_title(review_request_action: ReviewRequestAction) -> String {
-        match review_request_action {
-            ReviewRequestAction::Create => "Creating review request".to_string(),
-            ReviewRequestAction::Open => "Opening review request".to_string(),
-            ReviewRequestAction::Refresh => "Refreshing review request".to_string(),
+    /// Returns the loading popup title for one branch-publish action.
+    fn branch_publish_loading_title(publish_branch_action: PublishBranchAction) -> String {
+        match publish_branch_action {
+            PublishBranchAction::Push => "Pushing branch".to_string(),
         }
     }
 
-    /// Returns the loading popup body for one review-request action.
-    fn review_request_loading_message(review_request_action: ReviewRequestAction) -> String {
-        match review_request_action {
-            ReviewRequestAction::Create => "Publishing the session branch and linking a pull \
-                                            request or merge request."
-                .to_string(),
-            ReviewRequestAction::Open => {
-                "Resolving the linked pull request or merge request URL.".to_string()
-            }
-            ReviewRequestAction::Refresh => {
-                "Reloading the linked pull request or merge request from the forge CLI.".to_string()
+    /// Returns the loading popup body for one branch-publish action.
+    fn branch_publish_loading_message(publish_branch_action: PublishBranchAction) -> String {
+        match publish_branch_action {
+            PublishBranchAction::Push => {
+                "Publishing the session branch to the configured Git remote.".to_string()
             }
         }
     }
 
-    /// Returns the loading spinner label for one review-request action.
-    fn review_request_loading_label(review_request_action: ReviewRequestAction) -> String {
-        match review_request_action {
-            ReviewRequestAction::Create => "Creating review request...".to_string(),
-            ReviewRequestAction::Open => "Opening review request...".to_string(),
-            ReviewRequestAction::Refresh => "Refreshing review request...".to_string(),
+    /// Returns the loading spinner label for one branch-publish action.
+    fn branch_publish_loading_label(publish_branch_action: PublishBranchAction) -> String {
+        match publish_branch_action {
+            PublishBranchAction::Push => "Pushing branch...".to_string(),
         }
     }
 
-    /// Returns the success popup title for a completed review-request action.
-    fn review_request_success_title(review_request_action: ReviewRequestAction) -> String {
-        match review_request_action {
-            ReviewRequestAction::Create => "Review request ready".to_string(),
-            ReviewRequestAction::Open => "Review request link".to_string(),
-            ReviewRequestAction::Refresh => "Review request refreshed".to_string(),
+    /// Returns the success popup title for a completed branch-publish action.
+    fn branch_publish_success_title(publish_branch_action: PublishBranchAction) -> String {
+        match publish_branch_action {
+            PublishBranchAction::Push => "Branch pushed".to_string(),
         }
     }
 
-    /// Returns the success popup body for one persisted review-request result.
-    fn review_request_success_message(
-        review_request_action: ReviewRequestAction,
-        summary: &forge::ReviewRequestSummary,
-    ) -> String {
-        let lead = match review_request_action {
-            ReviewRequestAction::Create => format!(
-                "Linked {} review request `{}`.",
-                summary.forge_kind.display_name(),
-                summary.display_id,
-            ),
-            ReviewRequestAction::Open => format!(
-                "Open {} review request `{}` in your browser.",
-                summary.forge_kind.display_name(),
-                summary.display_id,
-            ),
-            ReviewRequestAction::Refresh => format!(
-                "Reloaded {} review request `{}`.",
-                summary.forge_kind.display_name(),
-                summary.display_id,
-            ),
-        };
-
-        Self::review_request_message_body(summary, &lead)
-    }
-
-    /// Returns the popup body shown when opening a linked review-request URL.
-    fn review_request_open_message(summary: &forge::ReviewRequestSummary, web_url: &str) -> String {
-        let lead = format!(
-            "Open {} review request `{}` in your browser.",
-            summary.forge_kind.display_name(),
-            summary.display_id,
-        );
-        let mut lines = Self::review_request_detail_lines(summary, &lead);
-        if let Some(last_line) = lines.last_mut() {
-            *last_line = format!("URL: {web_url}");
-        }
-
-        lines.join("\n")
-    }
-
-    /// Builds shared review-request popup lines from normalized summary data.
-    fn review_request_message_body(summary: &forge::ReviewRequestSummary, lead: &str) -> String {
-        Self::review_request_detail_lines(summary, lead).join("\n")
-    }
-
-    /// Returns the normalized review-request detail lines used in popups.
-    fn review_request_detail_lines(
-        summary: &forge::ReviewRequestSummary,
-        lead: &str,
-    ) -> Vec<String> {
-        let mut lines = vec![
-            lead.to_string(),
-            String::new(),
-            format!("State: `{}`", summary.state),
-            format!("Target: `{}`", summary.target_branch),
-        ];
-
-        if let Some(status_summary) = summary
-            .status_summary
-            .as_deref()
-            .map(str::trim)
-            .filter(|status_summary| !status_summary.is_empty())
-        {
-            lines.push(format!("Status: {status_summary}"));
-        }
-
-        lines.push(format!("URL: {}", summary.web_url));
-
-        lines
+    /// Returns the success popup body for one completed branch push.
+    fn branch_publish_success_message(branch_name: &str) -> String {
+        format!(
+            "Pushed session branch `{branch_name}`.\n\nCreate the pull request or merge request \
+             manually from your forge UI."
+        )
     }
 
     /// Builds final sync popup mode from background sync completion result.
@@ -2367,188 +2168,51 @@ impl App {
     }
 }
 
-/// Executes one background review-request action for a session snapshot.
-async fn run_review_request_action(
-    review_request_action: ReviewRequestAction,
-    review_request_session: ReviewRequestTaskSession,
-    fs_client: Arc<dyn FsClient>,
+/// Executes one background branch-publish action for a session snapshot.
+async fn run_branch_publish_action(
+    publish_branch_action: PublishBranchAction,
+    branch_publish_session: BranchPublishTaskSession,
     git_client: Arc<dyn GitClient>,
-    review_request_client: Arc<dyn ReviewRequestClient>,
-) -> ReviewRequestTaskResult {
-    match review_request_action {
-        ReviewRequestAction::Create => {
-            create_review_request_for_session(
-                &review_request_session,
-                git_client,
-                review_request_client,
-            )
-            .await
-        }
-        ReviewRequestAction::Open => Err(ReviewRequestTaskFailure::failed(
-            "Open review-request actions should resolve synchronously.".to_string(),
-        )),
-        ReviewRequestAction::Refresh => {
-            refresh_review_request_for_session(
-                &review_request_session,
-                fs_client,
-                git_client,
-                review_request_client,
-            )
-            .await
-        }
+) -> BranchPublishTaskResult {
+    match publish_branch_action {
+        PublishBranchAction::Push => push_session_branch(&branch_publish_session, git_client).await,
     }
 }
 
-/// Creates or links one forge review request for a session snapshot.
-///
-/// The forge remote is resolved before publishing the session branch so push
-/// authentication failures can surface forge-aware guidance.
-async fn create_review_request_for_session(
-    review_request_session: &ReviewRequestTaskSession,
+/// Pushes one session branch to the configured Git remote.
+async fn push_session_branch(
+    branch_publish_session: &BranchPublishTaskSession,
     git_client: Arc<dyn GitClient>,
-    review_request_client: Arc<dyn ReviewRequestClient>,
-) -> ReviewRequestTaskResult {
-    if review_request_session.status != Status::Review {
-        return Err(ReviewRequestTaskFailure::failed(
-            "Session must be in review to create a review request.".to_string(),
+) -> BranchPublishTaskResult {
+    if branch_publish_session.status != Status::Review {
+        return Err(BranchPublishTaskFailure::failed(
+            "Session must be in review to push the branch.".to_string(),
         ));
     }
 
-    if let Some(review_request) = &review_request_session.review_request {
-        return Ok(ReviewRequestTaskSuccess::Linked {
-            action: ReviewRequestAction::Create,
-            summary: review_request.summary.clone(),
-        });
-    }
+    let folder = branch_publish_session.folder.clone();
+    let branch_name = session::session_branch(&branch_publish_session.id);
 
-    let folder = review_request_session.folder.clone();
-    let source_branch = session::session_branch(&review_request_session.id);
-    let create_input = forge::CreateReviewRequestInput {
-        body: review_request_session.review_request_body(),
-        source_branch: source_branch.clone(),
-        target_branch: review_request_session.base_branch.clone(),
-        title: review_request_session.review_request_title(),
-    };
-    let repo_url = git_client.repo_url(folder.clone()).await.map_err(|error| {
-        ReviewRequestTaskFailure::failed(format!(
-            "Failed to resolve repository remote for review request: {error}"
-        ))
-    })?;
-    let remote = review_request_client
-        .detect_remote(repo_url)
-        .map_err(|error| review_request_task_failure(&error))?;
     git_client
         .push_current_branch(folder)
         .await
-        .map_err(|error| review_request_push_failure(&error, &remote))?;
-    let summary = match review_request_client
-        .find_by_source_branch(remote.clone(), source_branch)
-        .await
-        .map_err(|error| review_request_task_failure(&error))?
-    {
-        Some(existing_review_request) => existing_review_request,
-        None => review_request_client
-            .create_review_request(remote, create_input)
-            .await
-            .map_err(|error| review_request_task_failure(&error))?,
-    };
+        .map_err(|error| branch_push_failure(&error))?;
 
-    Ok(ReviewRequestTaskSuccess::Linked {
-        action: ReviewRequestAction::Create,
-        summary,
-    })
+    Ok(BranchPublishTaskSuccess::Pushed { branch_name })
 }
 
-/// Maps one review-request branch publish failure into blocked or failed UI
-/// copy.
-fn review_request_push_failure(
-    error: &str,
-    remote: &forge::ForgeRemote,
-) -> ReviewRequestTaskFailure {
+/// Maps one branch-publish failure into blocked or failed popup copy.
+fn branch_push_failure(error: &str) -> BranchPublishTaskFailure {
     if !is_git_push_authentication_error(error) {
-        return ReviewRequestTaskFailure::failed(format!(
+        return BranchPublishTaskFailure::failed(format!(
             "Failed to publish session branch: {error}"
         ));
     }
 
-    ReviewRequestTaskFailure::blocked(git_push_authentication_message(
-        Some(remote.forge_kind),
-        "create the review request again",
+    BranchPublishTaskFailure::blocked(git_push_authentication_message(
+        None,
+        "push the branch again",
     ))
-}
-
-/// Refreshes one persisted review request from the forge CLI.
-async fn refresh_review_request_for_session(
-    review_request_session: &ReviewRequestTaskSession,
-    fs_client: Arc<dyn FsClient>,
-    git_client: Arc<dyn GitClient>,
-    review_request_client: Arc<dyn ReviewRequestClient>,
-) -> ReviewRequestTaskResult {
-    let Some(review_request) = &review_request_session.review_request else {
-        return Err(ReviewRequestTaskFailure::failed(
-            "Session has no linked review request.".to_string(),
-        ));
-    };
-    let repo_url = if fs_client.is_dir(review_request_session.folder.clone()) {
-        Some(
-            git_client
-                .repo_url(review_request_session.folder.clone())
-                .await
-                .map_err(|error| {
-                    ReviewRequestTaskFailure::failed(format!(
-                        "Failed to resolve repository remote for linked review request: {error}"
-                    ))
-                })?,
-        )
-    } else {
-        review_request_repo_url(review_request)
-    }
-    .ok_or_else(|| {
-        ReviewRequestTaskFailure::failed(
-            "Failed to resolve repository remote for linked review request.".to_string(),
-        )
-    })?;
-    let remote = review_request_client
-        .detect_remote(repo_url)
-        .map_err(|error| review_request_task_failure(&error))?;
-    let summary = review_request_client
-        .refresh_review_request(remote, review_request.summary.display_id.clone())
-        .await
-        .map_err(|error| review_request_task_failure(&error))?;
-
-    Ok(ReviewRequestTaskSuccess::Linked {
-        action: ReviewRequestAction::Refresh,
-        summary,
-    })
-}
-
-/// Returns the repository URL implied by a persisted review-request URL.
-fn review_request_repo_url(review_request: &ReviewRequest) -> Option<String> {
-    let web_url = review_request.summary.web_url.trim_end_matches('/');
-
-    match review_request.summary.forge_kind {
-        forge::ForgeKind::GitHub => web_url
-            .split_once("/pull/")
-            .map(|(repo_url, _)| repo_url.to_string()),
-        forge::ForgeKind::GitLab => web_url
-            .split_once("/-/merge_requests/")
-            .map(|(repo_url, _)| repo_url.to_string()),
-    }
-}
-
-/// Maps normalized forge errors to blocked or failed popup payloads.
-fn review_request_task_failure(error: &forge::ReviewRequestError) -> ReviewRequestTaskFailure {
-    match error {
-        forge::ReviewRequestError::CliNotInstalled { .. }
-        | forge::ReviewRequestError::AuthenticationRequired { .. }
-        | forge::ReviewRequestError::HostResolutionFailed { .. }
-        | forge::ReviewRequestError::UnsupportedRemote { .. } => {
-            ReviewRequestTaskFailure::blocked(error.detail_message())
-        }
-        forge::ReviewRequestError::OperationFailed { .. } => {
-            ReviewRequestTaskFailure::failed(error.detail_message())
-        }
-    }
 }
 
 /// Returns whether error output looks like a git push authentication failure.
@@ -2720,12 +2384,12 @@ impl AppEventBatch {
             AppEvent::SyncMainCompleted { result } => {
                 self.sync_main_result = Some(result);
             }
-            AppEvent::ReviewRequestActionCompleted {
+            AppEvent::BranchPublishActionCompleted {
                 restore_view,
                 result,
                 session_id,
             } => {
-                self.review_request_action_update = Some(ReviewRequestActionUpdate {
+                self.branch_publish_action_update = Some(BranchPublishActionUpdate {
                     restore_view,
                     result: *result,
                     session_id,
@@ -2776,16 +2440,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use ag_forge as forge;
     use mockall::predicate::eq;
     use tempfile::tempdir;
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session::{
-        ForgeKind, ReviewRequest, ReviewRequestAction, ReviewRequestState, ReviewRequestSummary,
-        SESSION_DATA_DIR, Session, SessionSize, SessionStats, Status,
-    };
+    use crate::domain::session::{SESSION_DATA_DIR, Session, SessionSize, SessionStats, Status};
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::AgentResponseMessage;
     use crate::infra::db::Database;
@@ -2876,52 +2536,6 @@ mod tests {
             review_request_client,
             app_server_client,
         );
-    }
-
-    /// Replaces the services review-request client in a test app with a mock
-    /// while preserving the other injected service clients.
-    fn install_mock_review_request_client(
-        app: &mut App,
-        mock_review_request_client: forge::MockReviewRequestClient,
-    ) {
-        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
-            Arc::new(mock_review_request_client);
-        let base_path = app.services.base_path().to_path_buf();
-        let db = app.services.db().clone();
-        let event_sender = app.services.event_sender();
-        let app_server_client = app.services.app_server_client();
-        let fs_client = app.services.fs_client();
-        let git_client = app.services.git_client();
-
-        app.services = AppServices::new(
-            base_path,
-            db,
-            event_sender,
-            fs_client,
-            git_client,
-            review_request_client,
-            app_server_client,
-        );
-    }
-
-    /// Returns deterministic persisted review-request metadata for app tests.
-    fn review_request_fixture(display_id: &str, state: ReviewRequestState) -> ReviewRequest {
-        ReviewRequest {
-            last_refreshed_at: 77,
-            summary: ReviewRequestSummary {
-                display_id: display_id.to_string(),
-                forge_kind: ForgeKind::GitHub,
-                source_branch: "agentty/session-1".to_string(),
-                state,
-                status_summary: Some("Checks pending".to_string()),
-                target_branch: "main".to_string(),
-                title: "Review request".to_string(),
-                web_url: format!(
-                    "https://github.com/agentty-xyz/agentty/pull/{}",
-                    &display_id[1..]
-                ),
-            },
-        }
     }
 
     #[tokio::test]
@@ -3073,7 +2687,7 @@ mod tests {
     }
 
     #[test]
-    fn review_request_popup_helpers_format_copy_and_repo_urls() {
+    fn branch_publish_popup_helpers_format_copy() {
         // Arrange
         let expected_restore_view = ConfirmationViewMode {
             done_session_output_mode: DoneSessionOutputMode::Summary,
@@ -3082,36 +2696,31 @@ mod tests {
             scroll_offset: Some(2),
             session_id: "session-1".to_string(),
         };
-        let review_request = review_request_fixture("#24", ReviewRequestState::Merged);
-        let summary = review_request.summary.clone();
 
         // Act
-        let loading_title = App::review_request_loading_title(ReviewRequestAction::Create);
-        let loading_message = App::review_request_loading_message(ReviewRequestAction::Refresh);
-        let loading_label = App::review_request_loading_label(ReviewRequestAction::Create);
+        let loading_title = App::branch_publish_loading_title(PublishBranchAction::Push);
+        let loading_message = App::branch_publish_loading_message(PublishBranchAction::Push);
+        let loading_label = App::branch_publish_loading_label(PublishBranchAction::Push);
+        let success_title = App::branch_publish_success_title(PublishBranchAction::Push);
+        let success_message = App::branch_publish_success_message("agentty/session-1");
         let popup_mode = App::view_info_popup_mode(
             "Working".to_string(),
-            "Linking review request".to_string(),
+            "Publishing branch".to_string(),
             true,
-            "Creating review request...".to_string(),
+            "Pushing branch...".to_string(),
             expected_restore_view.clone(),
         );
-        let open_message = App::review_request_open_message(&summary, &summary.web_url);
-        let repo_url = review_request_repo_url(&review_request);
 
         // Assert
-        assert_eq!(loading_title, "Creating review request");
+        assert_eq!(loading_title, "Pushing branch");
         assert_eq!(
             loading_message,
-            "Reloading the linked pull request or merge request from the forge CLI."
+            "Publishing the session branch to the configured Git remote."
         );
-        assert_eq!(loading_label, "Creating review request...");
-        assert!(open_message.contains("Open GitHub review request `#24` in your browser."));
-        assert!(open_message.contains("State: `Merged`"));
-        assert_eq!(
-            repo_url,
-            Some("https://github.com/agentty-xyz/agentty".to_string())
-        );
+        assert_eq!(loading_label, "Pushing branch...");
+        assert_eq!(success_title, "Branch pushed");
+        assert!(success_message.contains("Pushed session branch `agentty/session-1`."));
+        assert!(success_message.contains("Create the pull request or merge request manually"));
         assert!(matches!(
             popup_mode,
             AppMode::ViewInfoPopup {
@@ -3121,152 +2730,102 @@ mod tests {
                 ref restore_view,
                 ref title,
             } if title == "Working"
-                && message == "Linking review request"
-                && loading_label == "Creating review request..."
+                && message == "Publishing branch"
+                && loading_label == "Pushing branch..."
                 && restore_view == &expected_restore_view
         ));
     }
 
     #[test]
-    fn review_request_task_failure_maps_blocked_and_failed_errors() {
+    fn branch_push_failure_maps_blocked_and_failed_errors() {
         // Arrange
-        let blocked_error = forge::ReviewRequestError::AuthenticationRequired {
-            detail: Some("HTTP 401 Unauthorized. Run `gh auth login`.".to_string()),
-            forge_kind: ForgeKind::GitHub,
-            host: "github.com".to_string(),
-        };
-        let failed_error = forge::ReviewRequestError::OperationFailed {
-            forge_kind: ForgeKind::GitLab,
-            message: "command failed".to_string(),
-        };
+        let auth_error =
+            "Git push failed: fatal: could not read Username for 'https://github.com': terminal \
+             prompts disabled";
+        let failed_error = "remote rejected";
 
         // Act
-        let blocked = review_request_task_failure(&blocked_error);
-        let failed = review_request_task_failure(&failed_error);
+        let blocked = branch_push_failure(auth_error);
+        let failed = branch_push_failure(failed_error);
 
         // Assert
-        assert_eq!(blocked.title, "Review request blocked");
-        assert!(blocked.message.contains("Run `gh auth login` and retry."));
-        assert!(blocked.message.contains("Original `gh` error:"));
-        assert_eq!(failed.title, "Review request failed");
+        assert_eq!(blocked.title, "Branch push blocked");
+        assert!(blocked.message.contains("Configure Git credentials"));
+        assert_eq!(failed.title, "Branch push failed");
         assert!(
             failed
                 .message
-                .contains("GitLab review-request operation failed")
+                .contains("Failed to publish session branch: remote rejected")
         );
     }
 
     #[tokio::test]
-    async fn create_review_request_for_session_gitlab_push_auth_failure_shows_glab_guidance() {
+    async fn push_session_branch_auth_failure_shows_git_guidance() {
         // Arrange
-        let review_session = ReviewRequestTaskSession::from_session(&test_session(PathBuf::from(
+        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
             "/tmp/review-session",
         )));
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
-        mock_git_client.expect_repo_url().once().returning(|_| {
-            Box::pin(async { Ok("https://gitlab.com/team/project.git".to_string()) })
-        });
         mock_git_client
             .expect_push_current_branch()
             .once()
             .returning(|_| {
                 Box::pin(async {
                     Err("Git push failed: fatal: could not read Username for \
-                         'https://gitlab.com': terminal prompts disabled"
+                         'https://github.com': terminal prompts disabled"
                         .to_string())
                 })
             });
-        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_detect_remote()
-            .with(eq("https://gitlab.com/team/project.git".to_string()))
-            .once()
-            .returning(|repo_url| {
-                Ok(forge::ForgeRemote {
-                    forge_kind: ForgeKind::GitLab,
-                    host: "gitlab.com".to_string(),
-                    namespace: "team".to_string(),
-                    project: "project".to_string(),
-                    repo_url,
-                    web_url: "https://gitlab.com/team/project".to_string(),
-                })
-            });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
-            Arc::new(mock_review_request_client);
 
         // Act
-        let result =
-            create_review_request_for_session(&review_session, git_client, review_request_client)
-                .await;
+        let result = push_session_branch(&branch_session, git_client).await;
 
         // Assert
         assert!(matches!(
             result,
-            Err(ReviewRequestTaskFailure {
+            Err(BranchPublishTaskFailure {
                 ref title,
                 ref message,
-            }) if title == "Review request blocked"
-                && message.contains("`glab auth login`")
-                && message.contains("PAT/SSH key or credential helper")
+            }) if title == "Branch push blocked"
+                && message.contains("Configure Git credentials")
         ));
     }
 
     #[tokio::test]
-    async fn review_request_task_helpers_reject_unsupported_session_states() {
+    async fn branch_publish_task_helpers_reject_unsupported_session_states() {
         // Arrange
         let app = new_test_app().await;
         let mut review_session = test_session(PathBuf::from("/tmp/review-session"));
-        let open_snapshot = ReviewRequestTaskSession::from_session(&review_session);
         review_session.status = Status::Done;
-        let done_snapshot = ReviewRequestTaskSession::from_session(&review_session);
+        let done_snapshot = BranchPublishTaskSession::from_session(&review_session);
 
         // Act
-        let open_result = run_review_request_action(
-            ReviewRequestAction::Open,
-            open_snapshot.clone(),
-            app.services.fs_client(),
+        let push_result = run_branch_publish_action(
+            PublishBranchAction::Push,
+            done_snapshot.clone(),
             app.services.git_client(),
-            app.services.review_request_client(),
         )
         .await;
-        let create_result = create_review_request_for_session(
-            &done_snapshot,
-            app.services.git_client(),
-            app.services.review_request_client(),
-        )
-        .await;
-        let refresh_result = refresh_review_request_for_session(
-            &open_snapshot,
-            app.services.fs_client(),
-            app.services.git_client(),
-            app.services.review_request_client(),
-        )
-        .await;
+        let helper_result = push_session_branch(&done_snapshot, app.services.git_client()).await;
 
         // Assert
         assert_eq!(
-            open_result,
-            Err(ReviewRequestTaskFailure::failed(
-                "Open review-request actions should resolve synchronously.".to_string(),
+            push_result,
+            Err(BranchPublishTaskFailure::failed(
+                "Session must be in review to push the branch.".to_string(),
             ))
         );
         assert_eq!(
-            create_result,
-            Err(ReviewRequestTaskFailure::failed(
-                "Session must be in review to create a review request.".to_string(),
-            ))
-        );
-        assert_eq!(
-            refresh_result,
-            Err(ReviewRequestTaskFailure::failed(
-                "Session has no linked review request.".to_string(),
+            helper_result,
+            Err(BranchPublishTaskFailure::failed(
+                "Session must be in review to push the branch.".to_string(),
             ))
         );
     }
 
     #[tokio::test]
-    async fn open_review_request_popup_shows_link_above_restored_view_context() {
+    async fn apply_branch_publish_action_update_sets_success_popup() {
         // Arrange
         let session_folder = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_selected_session(
@@ -3275,68 +2834,6 @@ mod tests {
             Arc::new(MockTmuxClient::new()),
         )
         .await;
-        app.sessions.sessions[0].review_request =
-            Some(review_request_fixture("#42", ReviewRequestState::Open));
-        let expected_restore_view = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
-            scroll_offset: Some(3),
-            session_id: "session-1".to_string(),
-        };
-        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
-        mock_review_request_client
-            .expect_review_request_web_url()
-            .once()
-            .returning(|summary| Ok(summary.web_url.clone()));
-        install_mock_review_request_client(&mut app, mock_review_request_client);
-
-        // Act
-        app.open_review_request_popup(expected_restore_view.clone(), "session-1");
-
-        // Assert
-        assert!(matches!(
-            app.mode,
-            AppMode::ViewInfoPopup {
-                is_loading: false,
-                ref message,
-                ref restore_view,
-                ref title,
-                ..
-            } if title == "Review request link"
-                && message.contains("Open GitHub review request `#42` in your browser.")
-                && message.contains("https://github.com/agentty-xyz/agentty/pull/42")
-                && restore_view == &expected_restore_view
-        ));
-    }
-
-    #[tokio::test]
-    async fn apply_review_request_action_update_persists_summary_and_sets_popup() {
-        // Arrange
-        let session_folder = tempdir().expect("failed to create temp dir");
-        let mut app = new_test_app_with_selected_session(
-            session_folder.path().to_path_buf(),
-            "",
-            Arc::new(MockTmuxClient::new()),
-        )
-        .await;
-        let project_id = app
-            .services
-            .db()
-            .upsert_project(&app.services.base_path().to_string_lossy(), Some("main"))
-            .await
-            .expect("failed to upsert project");
-        app.services
-            .db()
-            .insert_session(
-                "session-1",
-                AgentModel::Gemini3FlashPreview.as_str(),
-                "main",
-                &Status::Review.to_string(),
-                project_id,
-            )
-            .await
-            .expect("failed to insert session");
         let expected_restore_view = ConfirmationViewMode {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: None,
@@ -3344,27 +2841,18 @@ mod tests {
             scroll_offset: Some(1),
             session_id: "session-1".to_string(),
         };
-        let summary = review_request_fixture("#24", ReviewRequestState::Merged).summary;
 
         // Act
-        app.apply_review_request_action_update(ReviewRequestActionUpdate {
+        app.apply_branch_publish_action_update(BranchPublishActionUpdate {
             restore_view: expected_restore_view.clone(),
-            result: Ok(ReviewRequestTaskSuccess::Linked {
-                action: ReviewRequestAction::Refresh,
-                summary: summary.clone(),
+            result: Ok(BranchPublishTaskSuccess::Pushed {
+                branch_name: "agentty/session-1".to_string(),
             }),
             session_id: "session-1".to_string(),
         })
         .await;
 
         // Assert
-        assert_eq!(
-            app.sessions.sessions[0]
-                .review_request
-                .as_ref()
-                .map(|review_request| review_request.summary.clone()),
-            Some(summary.clone())
-        );
         assert!(matches!(
             app.mode,
             AppMode::ViewInfoPopup {
@@ -3373,9 +2861,8 @@ mod tests {
                 ref restore_view,
                 ref title,
                 ..
-            } if title == "Review request refreshed"
-                && message.contains("Reloaded GitHub review request `#24`.")
-                && message.contains("State: `Merged`")
+            } if title == "Branch pushed"
+                && message.contains("Pushed session branch `agentty/session-1`.")
                 && restore_view == &expected_restore_view
         ));
     }

@@ -4,9 +4,9 @@
 
 Agentty is an **ADE (Agentic Development Environment) for structured, controllable AI-assisted software development**. It is itself developed with Agentty, built with Rust and [Ratatui](https://ratatui.rs), and designed around a deeply integrated workflow.
 
-Session view includes first-class review workflows for linked GitHub pull
-requests and GitLab merge requests, including create/link, open-link, and
-manual refresh actions from the TUI.
+Session view includes a manual branch-publish workflow so reviewed session
+branches can be pushed from the TUI before you open a pull request or merge
+request yourself.
 
 ## Installation
 

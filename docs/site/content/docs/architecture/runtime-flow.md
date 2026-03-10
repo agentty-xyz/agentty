@@ -88,7 +88,7 @@ Flow:
 Reducer behaviors that matter for data flow:
 
 - `RefreshSessions` sets `should_force_reload`, which triggers `refresh_sessions_now()` and `reload_projects()`.
-- `ReviewRequestActionCompleted` persists refreshed PR/MR linkage when needed, then swaps the session-view popup from loading to success or blocked/failure copy.
+- `BranchPublishActionCompleted` swaps the session-view popup from loading to success or blocked/failure copy after a manual branch push finishes.
 - `SessionUpdated` marks touched sessions so reducer can call `sync_session_from_handle()` selectively.
 - `SessionProgressUpdated` updates transient progress labels used by UI.
 - `AgentResponseReceived` routes question-mode transitions for active view sessions.
@@ -237,7 +237,7 @@ Detached/background execution paths and their trigger conditions:
 | Session title generation | First `Start` turn, before main turn execution | `spawn_start_turn_title_generation` | DB title + `AppEvent::RefreshSessions` | Runs one-shot title prompt in background and persists generated title if valid. |
 | At-mention file indexing | Prompt input activates `@` mention mode | `runtime/mode/prompt::activate_at_mention` | `AppEvent::AtMentionEntriesLoaded` | Lists session files (`spawn_blocking`) and updates mention picker entries. |
 | Background session-size refresh | Enter on session in list mode | `App::refresh_session_size_in_background` | DB size + `AppEvent::RefreshSessions` | Computes diff-size bucket without blocking key handling path. |
-| Session-view review-request action | Session view `p` for create/refresh | `App::start_review_request_action` | `AppEvent::ReviewRequestActionCompleted` | Runs forge CLI publish/refresh work in the background and updates the session-view popup plus persisted PR/MR metadata. |
+| Session-view branch-publish action | Session view `p` in `Review` | `App::start_publish_branch_action` | `AppEvent::BranchPublishActionCompleted` | Runs `git push` for the session branch in the background and updates the session-view popup with success or recovery guidance. |
 | Deferred session cleanup | Delete with deferred cleanup path | `delete_selected_session_deferred_cleanup` | Filesystem/git side effects | Removes worktree folder and branch asynchronously after DB deletion. |
 | Focused review assist | View mode focused-review open when diff is reviewable | `TaskService::spawn_focused_review_assist_task` | `FocusedReviewPrepared` / `FocusedReviewPreparationFailed` | Runs model review prompt and stores final review text or error. |
 | Sync-main workflow task | List-mode sync action (`s`) | `TokioSyncMainRunner::start_sync_main` | `AppEvent::SyncMainCompleted` | Pull-rebase/push selected project branch, with assisted conflict flow. |
@@ -252,7 +252,7 @@ Project and session git workflows use shared boundaries (`GitClient`, `FsClient`
 - `sync main`: selected project branch pull/rebase/push, optional assisted conflict resolution, popup result summary.
 - session merge: queue-aware workflow, assisted rebase first, squash merge into base branch, worktree cleanup, status `Done` on success.
 - session rebase: assisted rebase of session branch onto base branch, returns to `Review` after completion/failure reporting.
-- review-request publish/refresh: review-ready sessions push the session branch through `GitClient`, resolve the forge adapter through `ReviewRequestClient`, persist normalized PR/MR linkage, and can refresh archived links from stored forge URLs after worktree cleanup.
+- session branch publish: review-ready sessions push the session branch through `GitClient`; pull request or merge request creation is left to the user's manual forge workflow.
 
 ## Persistence and Recovery Boundaries
 

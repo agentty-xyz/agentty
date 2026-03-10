@@ -96,7 +96,7 @@ mod tests {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 focused_review_status_message: None,
                 focused_review_text: None,
-                review_request_action: None,
+                publish_branch_action: None,
                 session_id: "s1".to_string(),
                 session_state: ViewSessionState::Interactive,
                 scroll_offset: Some(5),

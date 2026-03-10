@@ -5,7 +5,7 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 use crate::app::{App, FocusedReviewCacheEntry, diff_content_hash};
 use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
-use crate::domain::session::{ReviewRequestAction, Status};
+use crate::domain::session::{PublishBranchAction, Status};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::{EventResult, TuiTerminal};
 use crate::ui::page::session_chat::SessionChatPage;
@@ -63,7 +63,7 @@ struct ViewKeyContext<'a> {
 struct ViewSessionSnapshot {
     can_open_worktree: bool,
     is_action_allowed: bool,
-    review_request_action: Option<ReviewRequestAction>,
+    publish_branch_action: Option<PublishBranchAction>,
     session_output: String,
     session_state: ViewSessionState,
     session_status: Status,
@@ -179,12 +179,12 @@ async fn handle_view_key(
         }
         KeyCode::Char('p')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.review_request_action.is_some() =>
+                && view_session_snapshot.publish_branch_action.is_some() =>
         {
-            let Some(review_request_action) = view_session_snapshot.review_request_action else {
+            let Some(publish_branch_action) = view_session_snapshot.publish_branch_action else {
                 return true;
             };
-            start_view_review_request_action(app, view_context, review_request_action);
+            start_view_publish_branch_action(app, view_context, publish_branch_action);
 
             return false;
         }
@@ -210,7 +210,7 @@ async fn handle_view_key(
             open_view_help_overlay(
                 app,
                 view_context,
-                view_session_snapshot.review_request_action,
+                view_session_snapshot.publish_branch_action,
                 view_session_snapshot.session_state,
             );
             return false;
@@ -323,7 +323,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         can_open_worktree: is_view_worktree_open_allowed(session_status)
             && can_open_session_worktree(session_status),
         is_action_allowed: is_view_action_allowed(session_status),
-        review_request_action: session.review_request_action(),
+        publish_branch_action: session.publish_branch_action(),
         session_output: session.output.clone(),
         session_state: view_session_state(session_status),
         session_status,
@@ -440,7 +440,7 @@ fn view_session_state(status: Status) -> ViewSessionState {
 fn open_view_help_overlay(
     app: &mut App,
     view_context: &ViewContext,
-    review_request_action: Option<ReviewRequestAction>,
+    publish_branch_action: Option<PublishBranchAction>,
     session_state: ViewSessionState,
 ) {
     app.mode = AppMode::Help {
@@ -448,7 +448,7 @@ fn open_view_help_overlay(
             done_session_output_mode: view_context.done_session_output_mode,
             focused_review_status_message: view_context.focused_review_status_message.clone(),
             focused_review_text: view_context.focused_review_text.clone(),
-            review_request_action,
+            publish_branch_action,
             session_id: view_context.session_id.clone(),
             session_state,
             scroll_offset: view_context.scroll_offset,
@@ -457,17 +457,17 @@ fn open_view_help_overlay(
     };
 }
 
-/// Starts the session-view review-request action and switches into a
+/// Starts the session-view branch-publish action and switches into a
 /// view-scoped informational popup.
-fn start_view_review_request_action(
+fn start_view_publish_branch_action(
     app: &mut App,
     view_context: &ViewContext,
-    review_request_action: ReviewRequestAction,
+    publish_branch_action: PublishBranchAction,
 ) {
-    app.start_review_request_action(
+    app.start_publish_branch_action(
         confirmation_view_mode(view_context),
         &view_context.session_id,
-        review_request_action,
+        publish_branch_action,
     );
 }
 
@@ -1681,7 +1681,7 @@ mod tests {
         open_view_help_overlay(
             &mut app,
             &view_context,
-            Some(ReviewRequestAction::Create),
+            Some(PublishBranchAction::Push),
             ViewSessionState::Review,
         );
 
@@ -1693,7 +1693,7 @@ mod tests {
                     done_session_output_mode: DoneSessionOutputMode::FocusedReview,
                     focused_review_status_message: Some(ref status_message),
                     focused_review_text: Some(ref review_text),
-                    review_request_action: Some(ReviewRequestAction::Create),
+                    publish_branch_action: Some(PublishBranchAction::Push),
                     session_id: ref session_id_in_mode,
                     session_state: ViewSessionState::Review,
                     scroll_offset: Some(3),

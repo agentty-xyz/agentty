@@ -1,7 +1,7 @@
 use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
 use super::prompt::{PromptAtMentionState, PromptHistoryState, PromptSlashState};
 use crate::domain::input::InputState;
-use crate::domain::session::ReviewRequestAction;
+use crate::domain::session::PublishBranchAction;
 use crate::infra::agent::protocol::QuestionItem;
 
 /// Selects the visible panel content for session view output.
@@ -174,7 +174,7 @@ pub enum HelpContext {
         done_session_output_mode: DoneSessionOutputMode,
         focused_review_status_message: Option<String>,
         focused_review_text: Option<String>,
-        review_request_action: Option<ReviewRequestAction>,
+        publish_branch_action: Option<PublishBranchAction>,
         session_id: String,
         session_state: ViewSessionState,
         scroll_offset: Option<u16>,
@@ -192,11 +192,11 @@ impl HelpContext {
     pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
             HelpContext::View {
-                review_request_action,
+                publish_branch_action,
                 session_state,
                 ..
             } => help_action::view_actions(ViewHelpState {
-                review_request_action: *review_request_action,
+                publish_branch_action: *publish_branch_action,
                 session_state: *session_state,
             }),
             HelpContext::List { keybindings } => keybindings.clone(),
@@ -212,7 +212,7 @@ impl HelpContext {
                 done_session_output_mode,
                 focused_review_status_message,
                 focused_review_text,
-                review_request_action: _,
+                publish_branch_action: _,
                 session_id,
                 scroll_offset,
                 ..
@@ -246,7 +246,7 @@ impl HelpContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::session::ReviewRequestAction;
+    use crate::domain::session::PublishBranchAction;
 
     #[test]
     fn test_done_session_output_mode_toggle_switches_between_variants() {
@@ -302,7 +302,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: None,
             focused_review_text: None,
-            review_request_action: None,
+            publish_branch_action: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(2),
@@ -330,7 +330,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: Some("Preparing review...".to_string()),
             focused_review_text: Some("Ready".to_string()),
-            review_request_action: Some(ReviewRequestAction::Open),
+            publish_branch_action: Some(PublishBranchAction::Push),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(4),
@@ -355,13 +355,13 @@ mod tests {
     }
 
     #[test]
-    fn test_help_context_view_keybindings_include_review_request_action() {
+    fn test_help_context_view_keybindings_include_publish_branch_action() {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             focused_review_status_message: None,
             focused_review_text: None,
-            review_request_action: Some(ReviewRequestAction::Open),
+            publish_branch_action: Some(PublishBranchAction::Push),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::Interactive,
             scroll_offset: None,

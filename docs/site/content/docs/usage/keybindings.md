@@ -70,7 +70,7 @@ state:
 | `q` | Exit focused review (when viewing) / Back to list |
 | `Enter` | Reply to agent |
 | `o` | Open worktree in tmux |
-| `p` | Create, open, or refresh linked PR/MR |
+| `p` | Push session branch |
 | `d` | Show diff |
 | `f` | Focused review (regenerate if already viewing) |
 | `m` | Add to merge queue (confirmation popup) |
@@ -88,9 +88,8 @@ Additional notes:
 - **Open command behavior**: `o` always opens the session worktree in tmux.
   If one `Open Commands` entry is configured for the active project, it runs immediately.
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
-- **Review requests**: `p` is state-aware. In **Review** without a link it creates or links a draft PR/MR; with an open link it shows the forge URL; in **Done** or **Canceled** it refreshes the stored PR/MR metadata.
-- **Review-request prerequisites**: GitHub remotes require `gh auth login`; GitLab remotes require `glab auth login`. Missing or unauthenticated CLI state is reported in the session-view popup.
-- **Branch publish auth**: creating a review request first pushes the session branch with regular Git auth. HTTPS remotes need a credential helper or PAT, and SSH remotes need a working SSH key.
+- **Branch publish**: `p` is available in **Review** and pushes the session branch to the configured Git remote. Create the pull request or merge request manually after the push succeeds.
+- **Branch publish auth**: `p` uses regular Git authentication only. HTTPS remotes need a credential helper or PAT, and SSH remotes need a working SSH key.
 - **Question**: opening the session enters Question Input mode until all prompts are answered or skipped.
 - **Done**: `t` toggles between summary and full output.
 - **Review**: Runs in read-only review mode. It can use internet lookup

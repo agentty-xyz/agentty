@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::domain::session::ReviewRequestAction;
+use crate::domain::session::PublishBranchAction;
 
 /// One user-visible shortcut entry that can be rendered in the footer and
 /// in the help popup.
@@ -56,7 +56,7 @@ pub enum ViewSessionState {
 /// Action availability snapshot for view-mode help projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ViewHelpState {
-    pub(crate) review_request_action: Option<ReviewRequestAction>,
+    pub(crate) publish_branch_action: Option<PublishBranchAction>,
     pub(crate) session_state: ViewSessionState,
 }
 
@@ -205,8 +205,8 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
-    if let Some(review_request_action) = state.review_request_action {
-        actions.push(review_request_help_action(review_request_action));
+    if let Some(publish_branch_action) = state.publish_branch_action {
+        actions.push(publish_branch_help_action(publish_branch_action));
     }
 
     if can_edit_session {
@@ -270,8 +270,8 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
-    if let Some(review_request_action) = state.review_request_action {
-        actions.push(review_request_help_action(review_request_action));
+    if let Some(publish_branch_action) = state.publish_branch_action {
+        actions.push(publish_branch_help_action(publish_branch_action));
     }
 
     if state.session_state == ViewSessionState::Done {
@@ -344,17 +344,11 @@ fn list_base_actions() -> Vec<HelpAction> {
     ]
 }
 
-/// Returns the view-mode shortcut entry for the current review-request action.
-fn review_request_help_action(action: ReviewRequestAction) -> HelpAction {
+/// Returns the view-mode shortcut entry for the current branch-publish action.
+fn publish_branch_help_action(action: PublishBranchAction) -> HelpAction {
     match action {
-        ReviewRequestAction::Create => {
-            HelpAction::new("create PR/MR", "p", "Create pull or merge request")
-        }
-        ReviewRequestAction::Open => {
-            HelpAction::new("open PR/MR", "p", "Show linked pull or merge request")
-        }
-        ReviewRequestAction::Refresh => {
-            HelpAction::new("refresh PR/MR", "p", "Refresh linked pull or merge request")
+        PublishBranchAction::Push => {
+            HelpAction::new("push branch", "p", "Push session branch to remote")
         }
     }
 }
@@ -362,7 +356,7 @@ fn review_request_help_action(action: ReviewRequestAction) -> HelpAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::session::ReviewRequestAction;
+    use crate::domain::session::PublishBranchAction;
 
     #[test]
     fn test_session_list_actions_hide_enter_without_openable_session() {
@@ -393,7 +387,7 @@ mod tests {
     fn test_view_actions_in_progress_shows_open_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: None,
+            publish_branch_action: None,
             session_state: ViewSessionState::InProgress,
         };
 
@@ -411,7 +405,7 @@ mod tests {
     fn test_view_actions_rebasing_shows_open_without_stop() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: None,
+            publish_branch_action: None,
             session_state: ViewSessionState::Rebasing,
         };
 
@@ -429,7 +423,7 @@ mod tests {
     fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: None,
+            publish_branch_action: None,
             session_state: ViewSessionState::MergeQueue,
         };
 
@@ -447,7 +441,7 @@ mod tests {
     fn test_view_actions_review_shows_diff() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: Some(ReviewRequestAction::Create),
+            publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Review,
         };
 
@@ -460,7 +454,7 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|action| action.key == "p" && action.footer_label == "create PR/MR")
+                .any(|action| action.key == "p" && action.footer_label == "push branch")
         );
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
@@ -476,7 +470,7 @@ mod tests {
     fn test_view_actions_interactive_hides_diff() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: None,
+            publish_branch_action: None,
             session_state: ViewSessionState::Interactive,
         };
 
@@ -493,7 +487,7 @@ mod tests {
     fn test_view_actions_done_shows_toggle_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: Some(ReviewRequestAction::Refresh),
+            publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Done,
         };
 
@@ -514,7 +508,7 @@ mod tests {
     fn test_view_footer_actions_review_shows_advanced_actions() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: Some(ReviewRequestAction::Create),
+            publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Review,
         };
 
@@ -534,7 +528,7 @@ mod tests {
     fn test_view_footer_actions_rebasing_shows_open_without_stop() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: Some(ReviewRequestAction::Open),
+            publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Rebasing,
         };
 
@@ -552,7 +546,7 @@ mod tests {
     fn test_view_footer_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: None,
+            publish_branch_action: None,
             session_state: ViewSessionState::MergeQueue,
         };
 
@@ -568,10 +562,10 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_canceled_can_show_review_request_refresh() {
+    fn test_view_actions_canceled_without_branch_publish_action() {
         // Arrange
         let state = ViewHelpState {
-            review_request_action: Some(ReviewRequestAction::Refresh),
+            publish_branch_action: None,
             session_state: ViewSessionState::Canceled,
         };
 
@@ -579,7 +573,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(actions.iter().any(|action| action.key == "p"));
+        assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "t"));

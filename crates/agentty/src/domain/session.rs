@@ -206,15 +206,12 @@ pub struct ReviewRequest {
     pub summary: ReviewRequestSummary,
 }
 
-/// Session-view action currently available for forge review-request workflows.
+/// Session-view action currently available for manual session-branch
+/// publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReviewRequestAction {
-    /// Publish the session branch and create or link a forge review request.
-    Create,
-    /// Show the linked forge review-request URL for manual browser opening.
-    Open,
-    /// Refresh persisted forge review-request metadata from the remote.
-    Refresh,
+pub enum PublishBranchAction {
+    /// Pushes the session branch to the configured Git remote.
+    Push,
 }
 
 /// Per-session token statistics.
@@ -283,19 +280,9 @@ impl Session {
         self.title.as_deref().unwrap_or("No title")
     }
 
-    /// Returns the review-request action currently available in session view.
-    pub fn review_request_action(&self) -> Option<ReviewRequestAction> {
-        if let Some(review_request) = &self.review_request {
-            if matches!(self.status, Status::Done | Status::Canceled)
-                || review_request.summary.state != ReviewRequestState::Open
-            {
-                return Some(ReviewRequestAction::Refresh);
-            }
-
-            return Some(ReviewRequestAction::Open);
-        }
-
-        (self.status == Status::Review).then_some(ReviewRequestAction::Create)
+    /// Returns the session-branch action currently available in session view.
+    pub fn publish_branch_action(&self) -> Option<PublishBranchAction> {
+        (self.status == Status::Review).then_some(PublishBranchAction::Push)
     }
 }
 
@@ -420,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn test_review_request_action_returns_create_for_review_session_without_link() {
+    fn test_publish_branch_action_returns_push_for_review_session() {
         // Arrange
         let session = Session {
             base_branch: "main".to_string(),
@@ -442,14 +429,14 @@ mod tests {
         };
 
         // Act
-        let action = session.review_request_action();
+        let action = session.publish_branch_action();
 
         // Assert
-        assert_eq!(action, Some(ReviewRequestAction::Create));
+        assert_eq!(action, Some(PublishBranchAction::Push));
     }
 
     #[test]
-    fn test_review_request_action_returns_open_for_linked_active_session() {
+    fn test_publish_branch_action_returns_none_for_in_progress_session() {
         // Arrange
         let session = Session {
             base_branch: "main".to_string(),
@@ -483,14 +470,14 @@ mod tests {
         };
 
         // Act
-        let action = session.review_request_action();
+        let action = session.publish_branch_action();
 
         // Assert
-        assert_eq!(action, Some(ReviewRequestAction::Open));
+        assert_eq!(action, None);
     }
 
     #[test]
-    fn test_review_request_action_returns_refresh_for_done_session_with_link() {
+    fn test_publish_branch_action_returns_none_for_done_session() {
         // Arrange
         let session = Session {
             base_branch: "main".to_string(),
@@ -524,9 +511,9 @@ mod tests {
         };
 
         // Act
-        let action = session.review_request_action();
+        let action = session.publish_branch_action();
 
         // Assert
-        assert_eq!(action, Some(ReviewRequestAction::Refresh));
+        assert_eq!(action, None);
     }
 }
