@@ -13,13 +13,15 @@ be tested deterministically.
 ## Testability and Boundaries
 
 <a id="architecture-testability-boundaries"></a>
-All traits below use `#[cfg_attr(test, mockall::automock)]`:
+The traits below are mocked with `mockall`. Most use
+`#[cfg_attr(test, mockall::automock)]`; shared workspace crates such as
+`ag-forge` also expose test mocks through crate features for downstream tests.
 
 | Trait | Module | Boundary |
 |-------|--------|----------|
 | `SyncMainRunner` | `app/core.rs` | App-level async sync orchestration trigger used by list-mode sync flows. |
-| `ReviewRequestClient` | `infra/forge.rs` | Cross-forge review-request detection and provider-specific `gh`/`glab` orchestration boundary. |
-| `ForgeCommandRunner` | `infra/forge/command.rs` | Provider CLI command execution boundary used to unit-test GitHub and GitLab review-request adapters without live `gh` or `glab` binaries. |
+| `ReviewRequestClient` | `crates/ag-forge/src/client.rs` | Cross-forge review-request detection and provider-specific `gh`/`glab` orchestration boundary. |
+| `ForgeCommandRunner` | `crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to unit-test GitHub and GitLab review-request adapters without live `gh` or `glab` binaries. |
 | `GitClient` | `infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push, pull). |
 | `FsClient` | `infra/fs.rs` | Filesystem operations used by app orchestration (create/remove/read workflow files). |
 | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and dispatching open commands. |

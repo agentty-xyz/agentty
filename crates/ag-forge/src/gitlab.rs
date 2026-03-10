@@ -492,7 +492,7 @@ mod tests {
     use mockall::Sequence;
 
     use super::*;
-    use crate::infra::forge::MockForgeCommandRunner;
+    use crate::command::MockForgeCommandRunner;
 
     #[tokio::test]
     async fn find_by_source_branch_builds_lookup_and_refresh_commands() {
@@ -838,7 +838,7 @@ mod tests {
                 .iter()
                 .any(|(key, _value)| key == "NO_PROMPT")
         );
-        assert_eq!(command.arguments.get(0), Some(&"--hostname".to_string()));
+        assert_eq!(command.arguments.first(), Some(&"--hostname".to_string()));
         assert_eq!(
             command.arguments.get(1),
             Some(&"gitlab.example.com".to_string())
@@ -902,7 +902,7 @@ mod tests {
             "GITLAB_HOST".to_string(),
             "gitlab.example.com:8443".to_string(),
         )));
-        assert_eq!(command.arguments.get(0), Some(&"--hostname".to_string()));
+        assert_eq!(command.arguments.first(), Some(&"--hostname".to_string()));
         assert_eq!(
             command.arguments.get(1),
             Some(&"gitlab.example.com:8443".to_string())

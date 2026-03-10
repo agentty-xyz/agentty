@@ -3,10 +3,11 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
+use ag_forge as forge;
+
 use super::SESSION_REFRESH_INTERVAL;
 use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::{ForgeKind, ReviewRequest};
-use crate::infra::forge;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode};
 
 impl SessionManager {
@@ -258,6 +259,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant, SystemTime};
 
+    use ag_forge as forge;
     use ratatui::widgets::TableState;
     use tempfile::tempdir;
     use tokio::sync::mpsc;

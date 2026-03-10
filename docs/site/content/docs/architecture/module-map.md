@@ -10,12 +10,21 @@ choose the correct module when implementing changes.
 
 <!-- more -->
 
+## Workspace Crates
+
+| Path | What lives here |
+|------|------------------|
+| `crates/ag-forge/` | Shared forge review-request library crate with normalized review-request types, remote detection, and provider-specific `gh`/`glab` adapters. |
+| `crates/agentty/` | Main TUI application crate with composition root, application, domain, infrastructure, runtime, and UI layers. |
+| `crates/ag-xtask/` | Workspace maintenance commands and automation helpers. |
+
 ## Composition Root
 
 | Path | What lives here |
 |------|------------------|
 | `crates/agentty/src/main.rs` | Binary entry point: database bootstrap, `RoutingAppServerClient` creation, `App` construction, runtime launch. |
 | `crates/agentty/src/lib.rs` | Public module exports and crate-level re-exports. |
+| `crates/ag-forge/src/lib.rs` | Shared workspace crate for forge review-request types, CLI boundaries, remote detection, and GitHub/GitLab adapters. |
 
 ## Application Layer (`app/`)
 
@@ -50,7 +59,7 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/domain/input.rs` | Input state management. |
 | `crates/agentty/src/domain/permission.rs` | `PermissionMode` and permission logic. |
 | `crates/agentty/src/domain/project.rs` | Project entities and display helpers. |
-| `crates/agentty/src/domain/session.rs` | Session entities, statuses, sizes, and stats-focused domain types. |
+| `crates/agentty/src/domain/session.rs` | Session entities, statuses, sizes, stats, persisted review-request linkage wrappers, and re-exports of shared forge review-request types from `ag-forge`. |
 | `crates/agentty/src/domain/setting.rs` | Shared persisted setting keys used across app and infrastructure layers. |
 
 ## Infrastructure Layer (`infra/`)
@@ -59,7 +68,6 @@ choose the correct module when implementing changes.
 |------|------------------|
 | `crates/agentty/src/infra/db.rs` | SQLite persistence and queries; database open config enables `WAL` and foreign keys. |
 | `crates/agentty/src/infra/fs.rs` | `FsClient` trait and production async filesystem adapter used by app orchestration. |
-| `crates/agentty/src/infra/forge.rs` + `infra/forge/` | Forge review-request router plus submodules for normalized types, remote detection, mockable CLI execution, and GitHub/GitLab adapter parsing. |
 | `crates/agentty/src/infra/git.rs` + `infra/git/` | Git module router plus async git workflow commands (`merge.rs`, `rebase.rs`, `repo.rs`, `sync.rs`, `worktree.rs`). |
 | `crates/agentty/src/infra/git/client.rs` | `GitClient` trait boundary, `RealGitClient` production adapter, and git client integration tests. |
 | `crates/agentty/src/infra/channel.rs` + `infra/channel/` | `AgentChannel` trait and provider-agnostic turn execution: |
@@ -81,6 +89,18 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/infra/file_index.rs` | Gitignore-aware file indexing and fuzzy filtering for `@` mentions in prompts. |
 | `crates/agentty/src/infra/tmux.rs` | `TmuxClient` trait and tmux subprocess adapter used by `App` worktree-open orchestration. |
 | `crates/agentty/src/infra/version.rs` | Version checking infrastructure. |
+
+## Forge Library (`ag-forge`)
+
+| Path | What lives here |
+|------|------------------|
+| `crates/ag-forge/src/lib.rs` | Forge crate router and public re-exports for review-request APIs shared with `agentty`. |
+| `crates/ag-forge/src/client.rs` | `ReviewRequestClient` trait and `RealReviewRequestClient` provider dispatch. |
+| `crates/ag-forge/src/command.rs` | `ForgeCommandRunner`, command output normalization, and subprocess execution boundary. |
+| `crates/ag-forge/src/github.rs` | GitHub pull-request adapter routed through `gh`. |
+| `crates/ag-forge/src/gitlab.rs` | GitLab merge-request adapter routed through `glab`. |
+| `crates/ag-forge/src/model.rs` | Shared forge domain types (`ForgeKind`, `ReviewRequestSummary`, errors, and create input). |
+| `crates/ag-forge/src/remote.rs` | Repository remote parsing and forge detection helpers. |
 
 ## Runtime Layer (`runtime/`)
 

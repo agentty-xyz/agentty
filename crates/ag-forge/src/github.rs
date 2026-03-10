@@ -493,7 +493,7 @@ mod tests {
     use mockall::Sequence;
 
     use super::*;
-    use crate::infra::forge::MockForgeCommandRunner;
+    use crate::command::MockForgeCommandRunner;
 
     #[tokio::test]
     async fn find_by_source_branch_builds_lookup_and_refresh_commands() {

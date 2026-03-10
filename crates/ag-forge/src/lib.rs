@@ -1,4 +1,4 @@
-//! Forge review-request module router.
+//! Forge review-request adapters, normalized types, and remote detection.
 
 mod client;
 mod command;
@@ -7,11 +7,9 @@ mod gitlab;
 mod model;
 mod remote;
 
-#[cfg(test)]
-pub(crate) use client::MockReviewRequestClient;
+#[cfg(any(test, feature = "test-utils"))]
+pub use client::MockReviewRequestClient;
 pub use client::{RealReviewRequestClient, ReviewRequestClient};
-#[cfg(test)]
-pub(crate) use command::MockForgeCommandRunner;
 pub(crate) use command::{
     ForgeCommand, ForgeCommandError, ForgeCommandOutput, ForgeCommandRunner,
     RealForgeCommandRunner, command_output_detail,

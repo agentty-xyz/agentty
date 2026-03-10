@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "ag-forge"
+version = "0.5.6"
+dependencies = [
+ "mockall",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ag-xtask"
 version = "0.5.6"
 dependencies = [
@@ -49,6 +59,7 @@ dependencies = [
 name = "agentty"
 version = "0.5.6"
 dependencies = [
+ "ag-forge",
  "agent-client-protocol",
  "askama",
  "crossterm",

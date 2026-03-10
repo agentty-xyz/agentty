@@ -22,5 +22,8 @@ jobs:
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
 
+      - name: Publish `ag-forge` to crates.io
+        run: cargo publish -p ag-forge
+
       - name: Publish `agentty` to crates.io
         run: cargo publish -p agentty

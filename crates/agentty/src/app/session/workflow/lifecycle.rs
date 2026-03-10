@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use ag_forge as forge;
 use askama::Template;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -16,7 +17,7 @@ use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::channel::TurnMode;
 use crate::infra::fs::FsClient;
-use crate::infra::{agent, db, forge, git};
+use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
 
 /// Maximum stored length for generated session titles.
@@ -1304,6 +1305,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use ag_forge as forge;
     use ratatui::widgets::TableState;
 
     use super::*;
@@ -1314,7 +1316,7 @@ mod tests {
         SessionStats,
     };
     use crate::infra::db::{self, Database};
-    use crate::infra::{app_server, forge, fs};
+    use crate::infra::{app_server, fs};
 
     /// Builds a session manager with one session for reply-context tests.
     fn session_manager_with_one_session(session: Session) -> SessionManager {

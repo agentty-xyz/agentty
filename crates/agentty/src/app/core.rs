@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use ag_forge as forge;
+use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::service::AppServices;
@@ -34,7 +36,6 @@ use crate::domain::session::{ReviewRequest, ReviewRequestAction, Session, Status
 use crate::infra::agent::AgentResponse;
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
-use crate::infra::forge::{self, RealReviewRequestClient, ReviewRequestClient};
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::git::{GitClient, RealGitClient, detect_git_info};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
@@ -2745,6 +2746,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use ag_forge as forge;
     use mockall::predicate::eq;
     use tempfile::tempdir;
 
@@ -2833,9 +2835,9 @@ mod tests {
     /// while preserving the other injected service clients.
     fn install_mock_review_request_client(
         app: &mut App,
-        mock_review_request_client: crate::infra::forge::MockReviewRequestClient,
+        mock_review_request_client: forge::MockReviewRequestClient,
     ) {
-        let review_request_client: Arc<dyn crate::infra::forge::ReviewRequestClient> =
+        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
             Arc::new(mock_review_request_client);
         let base_path = app.services.base_path().to_path_buf();
         let db = app.services.db().clone();
@@ -3127,7 +3129,7 @@ mod tests {
                         .to_string())
                 })
             });
-        let mut mock_review_request_client = crate::infra::forge::MockReviewRequestClient::new();
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
         mock_review_request_client
             .expect_detect_remote()
             .with(eq("https://gitlab.com/team/project.git".to_string()))
@@ -3143,7 +3145,7 @@ mod tests {
                 })
             });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let review_request_client: Arc<dyn crate::infra::forge::ReviewRequestClient> =
+        let review_request_client: Arc<dyn forge::ReviewRequestClient> =
             Arc::new(mock_review_request_client);
 
         // Act
@@ -3235,7 +3237,7 @@ mod tests {
             scroll_offset: Some(3),
             session_id: "session-1".to_string(),
         };
-        let mut mock_review_request_client = crate::infra::forge::MockReviewRequestClient::new();
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
         mock_review_request_client
             .expect_review_request_web_url()
             .once()

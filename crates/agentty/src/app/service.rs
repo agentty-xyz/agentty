@@ -3,12 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_forge::ReviewRequestClient;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::db::Database;
 use crate::infra::app_server::AppServerClient;
-use crate::infra::forge::ReviewRequestClient;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 

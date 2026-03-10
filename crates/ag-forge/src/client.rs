@@ -12,7 +12,7 @@ use super::{
 ///
 /// The app layer depends on this narrow contract so provider-specific request
 /// formats remain isolated inside concrete adapters.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 pub trait ReviewRequestClient: Send + Sync {
     /// Detects whether `repo_url` belongs to one supported forge.
     ///
@@ -161,7 +161,7 @@ impl ReviewRequestClient for RealReviewRequestClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::forge::{ForgeKind, ReviewRequestState};
+    use crate::{ForgeKind, ReviewRequestState};
 
     #[test]
     fn review_request_web_url_returns_error_when_summary_is_missing_url() {

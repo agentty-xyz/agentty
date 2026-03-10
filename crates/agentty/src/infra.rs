@@ -13,8 +13,6 @@ pub mod codex_app_server;
 pub mod db;
 /// Gitignore-aware file indexing and fuzzy path filtering.
 pub mod file_index;
-/// Cross-forge review-request boundary and remote detection helpers.
-pub mod forge;
 /// Filesystem trait boundary used by app orchestration.
 pub mod fs;
 /// Gemini ACP-backed app-server client implementation.
