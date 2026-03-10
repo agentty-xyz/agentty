@@ -3,6 +3,7 @@
 Internal planning documents and UI design notes.
 
 Use `skills/implementation-plan/SKILL.md` for plan structure and implementation-planning requirements.
+Priority sections should render `Why now` and `Usable outcome` as separate subtopics on their own lines, not as inline bold labels.
 
 ## Directory Index
 

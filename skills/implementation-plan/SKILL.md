@@ -26,6 +26,7 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Use the plan skeleton below and keep each section focused on repository-observable facts.
    - Keep cross-plan notes short and include only active overlaps, ownership decisions, or unresolved conflicts.
    - Keep snapshot rows scannable: one short current-state sentence plus a status, without long file lists in the table cells.
+   - In each priority, render `Why now` and `Usable outcome` as their own subtopics on separate lines instead of inline bold labels.
 
 1. **Define execution sequence and guardrails**
 
@@ -76,8 +77,12 @@ Use this skeleton when creating a new file in `docs/plan/`:
 
 ## 1) <Priority Title>
 
-**Why now:** <rationale>
-**Usable outcome:**
+### Why now
+
+<rationale>
+
+### Usable outcome
+
 <what the user can do after this iteration lands>
 
 - [ ] <implementation task within this priority>

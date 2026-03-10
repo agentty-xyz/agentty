@@ -34,8 +34,12 @@ Plan for organizing `crates/agentty/tests/`, selected source-level tests, and co
 
 ## 1) Establish a shared deterministic scenario harness
 
-**Why now:** The current suite has strong low-level coverage but no reusable integration harness for app-level user journeys, so each higher-level test would otherwise reinvent temp repo and fake CLI setup.
-**Usable outcome:**
+### Why now
+
+The current suite has strong low-level coverage but no reusable integration harness for app-level user journeys, so each higher-level test would otherwise reinvent temp repo and fake CLI setup.
+
+### Usable outcome
+
 One shared harness can create disposable repos, install scripted fake agent and forge binaries on `PATH`, boot the app-facing workflow entrypoints, and assert transcript, status, and persisted side effects.
 
 - [ ] Add a `crates/agentty/tests/support/` harness module that creates isolated repo fixtures, temp `AGENTTY_ROOT` state, and reusable session setup helpers.
@@ -50,8 +54,12 @@ Primary files:
 
 ## 2) Land one local end-to-end session workflow slice
 
-**Why now:** The first working slice should prove the harness by covering a real user journey end to end rather than stopping at test infrastructure.
-**Usable outcome:**
+### Why now
+
+The first working slice should prove the harness by covering a real user journey end to end rather than stopping at test infrastructure.
+
+### Usable outcome
+
 A deterministic test verifies that starting a session inside a git repo creates the worktree, runs a scripted agent turn, persists transcript output, auto-commits changes, and moves the session into `Review`.
 
 - [ ] Add a local scenario test that drives one session workflow through the app-facing boundary using a temp git repo and a scripted fake agent CLI.
@@ -66,8 +74,12 @@ Primary files:
 
 ## 3) Add deterministic PR/MR workflow scenarios on top of the harness
 
-**Why now:** Review-request flows are one of the main user journeys the harness needs to prove, and they can extend the same temp-repo and fake-CLI setup established in priorities 1 and 2.
-**Usable outcome:**
+### Why now
+
+Review-request flows are one of the main user journeys the harness needs to prove, and they can extend the same temp-repo and fake-CLI setup established in priorities 1 and 2.
+
+### Usable outcome
+
 Deterministic tests cover publish, existing-link reuse, create-on-miss, refresh-after-cleanup, and actionable forge CLI failures without depending on live `gh` or `glab` authentication.
 
 - [ ] Add local GitHub and GitLab scenario tests that script fake forge CLIs and assert persisted PR/MR metadata from the session workflow boundary.
@@ -82,8 +94,12 @@ Primary files:
 
 ## 4) Isolate and document live smoke suites
 
-**Why now:** Once deterministic coverage exists for the main journeys, the live tests can shrink to a clear smoke layer instead of carrying broad behavioral responsibility.
-**Usable outcome:**
+### Why now
+
+Once deterministic coverage exists for the main journeys, the live tests can shrink to a clear smoke layer instead of carrying broad behavioral responsibility.
+
+### Usable outcome
+
 Real provider and forge smoke tests are clearly named, ignored by default, and documented with their prerequisites and intended failure domain.
 
 - [ ] Rename or reorganize `crates/agentty/tests/protocol_compliance_e2e.rs` into an explicit live-smoke naming pattern and add a matching live forge smoke file if needed.

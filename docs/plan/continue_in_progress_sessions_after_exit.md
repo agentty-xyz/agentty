@@ -59,8 +59,12 @@ A `AGENTTY_DETACH=0` environment variable disables detached execution and falls 
 
 ## 1) Ship detached execution with restart-safe reconciliation
 
-**Why now:** Detached execution is not actually user-usable until restart stops failing healthy unfinished work, so the first landed slice needs both the runner and the reconciliation path together.
-**Usable outcome:**
+### Why now
+
+Detached execution is not actually user-usable until restart stops failing healthy unfinished work, so the first landed slice needs both the runner and the reconciliation path together.
+
+### Usable outcome
+
 A user can start a session turn, close Agentty, reopen it later, and still find the same turn running or completed because execution survives outside the TUI and restart preserves healthy work.
 
 - [ ] Add a new migration extending `session_operation` with `runner_pid INTEGER` and `runner_heartbeat_at INTEGER` columns for liveness tracking. Do not edit `012_create_session_operation.sql`.
@@ -93,8 +97,12 @@ Primary files:
 
 ## 2) Preserve cancel, stop, and resume safety across detached execution
 
-**Why now:** Keeping work alive after exit must not regress explicit user stop behavior, duplicate-runner protection, or provider resume correctness.
-**Usable outcome:**
+### Why now
+
+Keeping work alive after exit must not regress explicit user stop behavior, duplicate-runner protection, or provider resume correctness.
+
+### Usable outcome
+
 Cancel still stops detached work, reopening the app does not start duplicate runners, and follow-up replies continue using the right provider-native conversation state.
 
 - [ ] Rework cancel and stop flows so app exit is no longer treated as a cancel signal, while explicit user-driven cancel still propagates through persisted `cancel_requested` flags and the detached runner's process boundary (e.g., `SIGTERM` to `runner_pid`).
@@ -119,8 +127,12 @@ Primary files:
 
 ## 3) Validate detached session lifetime end to end
 
-**Why now:** The detached-runner model changes failure recovery and restart semantics, so one end-to-end regression pass is needed before treating the behavior as stable.
-**Usable outcome:**
+### Why now
+
+The detached-runner model changes failure recovery and restart semantics, so one end-to-end regression pass is needed before treating the behavior as stable.
+
+### Usable outcome
+
 The repository has regression coverage for close-and-reopen behavior and the full validation gates confirm the final detached-session flow is ready to ship.
 
 - [ ] Add an integration-style regression test that starts a turn, simulates TUI shutdown while the runner continues, and verifies that a fresh `App` instance observes either continued `InProgress` output or the final `Review` state from persistence.
