@@ -70,7 +70,7 @@ state:
 | `q` | Exit focused review (when viewing) / Back to list |
 | `Enter` | Reply to agent |
 | `o` | Open worktree in tmux |
-| `p` | Push session branch |
+| `p` | Publish session branch |
 | `d` | Show diff |
 | `f` | Focused review (regenerate if already viewing) |
 | `m` | Add to merge queue (confirmation popup) |
@@ -88,13 +88,25 @@ Additional notes:
 - **Open command behavior**: `o` always opens the session worktree in tmux.
   If one `Open Commands` entry is configured for the active project, it runs immediately.
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
-- **Branch publish**: `p` is available in **Review** and pushes the session branch to the configured Git remote. Create the pull request or merge request manually after the push succeeds.
+- **Branch publish**: `p` is available in **Review** and opens a publish popup. Press `Enter` with an empty field to keep the default session branch target, or type a custom remote branch name first.
+- **Branch publish lock**: once a session branch already tracks a remote branch, Agentty locks the popup field and re-publishes to that same remote branch only.
 - **Branch publish auth**: `p` uses regular Git authentication only. HTTPS remotes need a credential helper or PAT, and SSH remotes need a working SSH key.
 - **Question**: opening the session enters Question Input mode until all prompts are answered or skipped.
 - **Done**: `t` toggles between summary and full output.
 - **Review**: Runs in read-only review mode. It can use internet lookup
   and non-editing verification commands, but it should not edit files or
   mutate git/workspace state.
+
+## Publish Branch Popup
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Publish using the typed branch name, or the default session branch target when left blank |
+| `Esc` / `q` | Cancel and return to session view |
+| `Left` / `Right` / `Home` / `End` | Move cursor |
+| `Up` / `Down` | Move cursor across wrapped lines |
+| `Backspace` / `Delete` | Delete character |
+| text keys | Edit remote branch name |
 
 ## Open Command Selector
 

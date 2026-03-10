@@ -856,6 +856,7 @@ impl App {
         restore_view: ConfirmationViewMode,
         session_id: &str,
         publish_branch_action: PublishBranchAction,
+        remote_branch_name: Option<String>,
     ) {
         let Some(branch_publish_session) = self.branch_publish_task_session(session_id) else {
             self.mode = Self::view_info_popup_mode(
@@ -870,7 +871,10 @@ impl App {
         };
 
         let loading_title = Self::branch_publish_loading_title(publish_branch_action);
-        let loading_message = Self::branch_publish_loading_message(publish_branch_action);
+        let loading_message = Self::branch_publish_loading_message(
+            publish_branch_action,
+            remote_branch_name.as_deref(),
+        );
         let loading_label = Self::branch_publish_loading_label(publish_branch_action);
         let db = self.services.db().clone();
         let event_sender = self.services.event_sender();
@@ -892,6 +896,7 @@ impl App {
                 branch_publish_session,
                 db,
                 git_client,
+                remote_branch_name,
             )
             .await;
             let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
@@ -1234,6 +1239,14 @@ impl App {
                     },
                 ..
             }
+            | AppMode::PublishBranchInput {
+                restore_view:
+                    ConfirmationViewMode {
+                        session_id: view_id,
+                        ..
+                    },
+                ..
+            }
             | AppMode::ViewInfoPopup {
                 restore_view:
                     ConfirmationViewMode {
@@ -1377,6 +1390,22 @@ impl App {
                     result,
                 );
             }
+            AppMode::PublishBranchInput {
+                restore_view:
+                    ConfirmationViewMode {
+                        focused_review_status_message,
+                        focused_review_text,
+                        session_id: view_session_id,
+                        ..
+                    },
+                ..
+            } if view_session_id == session_id => {
+                Self::apply_focused_review_result(
+                    focused_review_status_message,
+                    focused_review_text,
+                    result,
+                );
+            }
             AppMode::ViewInfoPopup {
                 restore_view:
                     ConfirmationViewMode {
@@ -1401,6 +1430,7 @@ impl App {
             | AppMode::Diff { .. }
             | AppMode::Help { .. }
             | AppMode::OpenCommandSelector { .. }
+            | AppMode::PublishBranchInput { .. }
             | AppMode::ViewInfoPopup { .. }
             | AppMode::View { .. } => {}
         }
@@ -1731,9 +1761,16 @@ impl App {
     }
 
     /// Returns the loading popup body for one branch-publish action.
-    fn branch_publish_loading_message(publish_branch_action: PublishBranchAction) -> String {
-        match publish_branch_action {
-            PublishBranchAction::Push => {
+    fn branch_publish_loading_message(
+        publish_branch_action: PublishBranchAction,
+        remote_branch_name: Option<&str>,
+    ) -> String {
+        match (publish_branch_action, remote_branch_name) {
+            (PublishBranchAction::Push, Some(remote_branch_name)) => format!(
+                "Publishing the session branch to `{remote_branch_name}` on the configured Git \
+                 remote."
+            ),
+            (PublishBranchAction::Push, None) => {
                 "Publishing the session branch to the configured Git remote.".to_string()
             }
         }
@@ -2188,10 +2225,17 @@ async fn run_branch_publish_action(
     branch_publish_session: BranchPublishTaskSession,
     db: db::Database,
     git_client: Arc<dyn GitClient>,
+    remote_branch_name: Option<String>,
 ) -> BranchPublishTaskResult {
     match publish_branch_action {
         PublishBranchAction::Push => {
-            push_session_branch(&branch_publish_session, db, git_client).await
+            push_session_branch(
+                &branch_publish_session,
+                db,
+                git_client,
+                remote_branch_name.as_deref(),
+            )
+            .await
         }
     }
 }
@@ -2201,6 +2245,7 @@ async fn push_session_branch(
     branch_publish_session: &BranchPublishTaskSession,
     db: db::Database,
     git_client: Arc<dyn GitClient>,
+    remote_branch_name: Option<&str>,
 ) -> BranchPublishTaskResult {
     if branch_publish_session.status != Status::Review {
         return Err(BranchPublishTaskFailure::failed(
@@ -2209,11 +2254,18 @@ async fn push_session_branch(
     }
 
     let folder = branch_publish_session.folder.clone();
-    let branch_name = session::session_branch(&branch_publish_session.id);
-    let upstream_reference = git_client
-        .push_current_branch(folder)
-        .await
-        .map_err(|error| branch_push_failure(&error))?;
+    let branch_name = remote_branch_name
+        .map(str::to_string)
+        .unwrap_or_else(|| session::session_branch(&branch_publish_session.id));
+    let upstream_reference = match remote_branch_name {
+        Some(remote_branch_name) => {
+            git_client
+                .push_current_branch_to_remote_branch(folder, remote_branch_name.to_string())
+                .await
+        }
+        None => git_client.push_current_branch(folder).await,
+    }
+    .map_err(|error| branch_push_failure(&error))?;
 
     db.update_session_published_upstream_ref(&branch_publish_session.id, Some(&upstream_reference))
         .await
@@ -2729,7 +2781,11 @@ mod tests {
 
         // Act
         let loading_title = App::branch_publish_loading_title(PublishBranchAction::Push);
-        let loading_message = App::branch_publish_loading_message(PublishBranchAction::Push);
+        let loading_message = App::branch_publish_loading_message(PublishBranchAction::Push, None);
+        let custom_loading_message = App::branch_publish_loading_message(
+            PublishBranchAction::Push,
+            Some("review/custom-branch"),
+        );
         let loading_label = App::branch_publish_loading_label(PublishBranchAction::Push);
         let success_title = App::branch_publish_success_title(PublishBranchAction::Push);
         let success_message = App::branch_publish_success_message("agentty/session-1");
@@ -2746,6 +2802,10 @@ mod tests {
         assert_eq!(
             loading_message,
             "Publishing the session branch to the configured Git remote."
+        );
+        assert_eq!(
+            custom_loading_message,
+            "Publishing the session branch to `review/custom-branch` on the configured Git remote."
         );
         assert_eq!(loading_label, "Pushing branch...");
         assert_eq!(success_title, "Branch pushed");
@@ -2812,7 +2872,7 @@ mod tests {
             .expect("failed to open in-memory db");
 
         // Act
-        let result = push_session_branch(&branch_session, database, git_client).await;
+        let result = push_session_branch(&branch_session, database, git_client, None).await;
 
         // Assert
         assert!(matches!(
@@ -2839,12 +2899,14 @@ mod tests {
             done_snapshot.clone(),
             app.services.db().clone(),
             app.services.git_client(),
+            None,
         )
         .await;
         let helper_result = push_session_branch(
             &done_snapshot,
             app.services.db().clone(),
             app.services.git_client(),
+            None,
         )
         .await;
 
@@ -2860,6 +2922,45 @@ mod tests {
             Err(BranchPublishTaskFailure::failed(
                 "Session must be in review to push the branch.".to_string(),
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn push_session_branch_uses_custom_remote_branch_name_when_provided() {
+        // Arrange
+        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
+            "/tmp/review-session",
+        )));
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .with(
+                mockall::predicate::eq(PathBuf::from("/tmp/review-session")),
+                mockall::predicate::eq("review/custom-branch".to_string()),
+            )
+            .once()
+            .returning(|_, _| Box::pin(async { Ok("origin/review/custom-branch".to_string()) }));
+        let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let database = crate::infra::db::Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        let result = push_session_branch(
+            &branch_session,
+            database.clone(),
+            git_client,
+            Some("review/custom-branch"),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result,
+            Ok(BranchPublishTaskSuccess::Pushed {
+                branch_name: "review/custom-branch".to_string(),
+                upstream_reference: "origin/review/custom-branch".to_string(),
+            })
         );
     }
 

@@ -15,8 +15,8 @@ use super::{
     find_git_repo_root, get_ahead_behind, has_unmerged_paths, head_short_hash,
     is_rebase_in_progress, is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
-    push_current_branch, rebase, rebase_continue, rebase_start, remove_worktree, repo_url,
-    squash_merge, squash_merge_diff, stage_all,
+    push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
+    rebase_start, remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -220,6 +220,17 @@ pub trait GitClient: Send + Sync {
     /// Returns an error when remote push fails.
     fn push_current_branch(&self, repo_path: PathBuf) -> GitFuture<Result<String, String>>;
 
+    /// Pushes the current branch for `repo_path` to one explicit remote branch
+    /// name and returns the configured upstream reference after the push.
+    ///
+    /// # Errors
+    /// Returns an error when remote push fails.
+    fn push_current_branch_to_remote_branch(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<String, String>>;
+
     /// Resolves the current upstream reference for `repo_path`.
     ///
     /// # Errors
@@ -411,6 +422,16 @@ impl GitClient for RealGitClient {
 
     fn push_current_branch(&self, repo_path: PathBuf) -> GitFuture<Result<String, String>> {
         Box::pin(async move { push_current_branch(repo_path).await })
+    }
+
+    fn push_current_branch_to_remote_branch(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<String, String>> {
+        Box::pin(async move {
+            push_current_branch_to_remote_branch(repo_path, remote_branch_name).await
+        })
     }
 
     fn current_upstream_reference(&self, repo_path: PathBuf) -> GitFuture<Result<String, String>> {
@@ -1089,6 +1110,28 @@ mod tests {
 
         // Assert
         assert_eq!(upstream_reference, "origin/main");
+    }
+
+    #[tokio::test]
+    async fn test_push_current_branch_to_remote_branch_returns_upstream_reference() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(dir.path(), &["remote", "add", "origin", &remote_path]);
+
+        // Act
+        let upstream_reference = push_current_branch_to_remote_branch(
+            dir.path().to_path_buf(),
+            "review/custom-branch".to_string(),
+        )
+        .await
+        .expect("push should set a custom upstream");
+
+        // Assert
+        assert_eq!(upstream_reference, "origin/review/custom-branch");
     }
 
     #[test]

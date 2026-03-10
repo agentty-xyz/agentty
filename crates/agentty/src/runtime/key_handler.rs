@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, FocusedReviewCacheEntry, diff_content_hash};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
@@ -30,6 +30,10 @@ pub(crate) async fn handle_key_event(
         return handle_open_command_selector_key(app, key).await;
     }
 
+    if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
+        return Ok(handle_publish_branch_input_key(app, key));
+    }
+
     match &app.mode {
         AppMode::List => mode::list::handle(app, key).await,
         AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
@@ -44,6 +48,9 @@ pub(crate) async fn handle_key_event(
         AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
         AppMode::OpenCommandSelector { .. } => {
             unreachable!("open-command selector mode is handled before dispatch matching")
+        }
+        AppMode::PublishBranchInput { .. } => {
+            unreachable!("publish-branch input mode is handled before dispatch matching")
         }
     }
 }
@@ -74,6 +81,150 @@ fn handle_view_info_popup_key(app: &mut App, key: KeyEvent) -> EventResult {
     }
 
     EventResult::Continue
+}
+
+/// Handles key input while the publish-branch input overlay is visible.
+fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult {
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+    let AppMode::PublishBranchInput {
+        default_branch_name,
+        mut input,
+        locked_upstream_ref,
+        publish_branch_action,
+        restore_view,
+    } = mode
+    else {
+        unreachable!("mode must be publish-branch input in this handler");
+    };
+    let input_locked = locked_upstream_ref.is_some();
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.mode = restore_view.into_view_mode();
+        }
+        KeyCode::Enter => {
+            let remote_branch_name = if input_locked {
+                Some(input.text().trim().to_string())
+            } else {
+                (!input.text().trim().is_empty()).then(|| input.text().trim().to_string())
+            };
+            let session_id = restore_view.session_id.clone();
+
+            app.start_publish_branch_action(
+                restore_view,
+                &session_id,
+                publish_branch_action,
+                remote_branch_name,
+            );
+        }
+        KeyCode::Left if !input_locked => {
+            input.move_left();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Right if !input_locked => {
+            input.move_right();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Up if !input_locked => {
+            input.move_up();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Down if !input_locked => {
+            input.move_down();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Home if !input_locked => {
+            input.move_home();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::End if !input_locked => {
+            input.move_end();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Backspace if !input_locked => {
+            input.delete_backward();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Delete if !input_locked => {
+            input.delete_forward();
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        KeyCode::Char(character) if !input_locked && is_publish_branch_input_text_key(key) => {
+            input.insert_char(character);
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+        _ => {
+            app.mode = AppMode::PublishBranchInput {
+                default_branch_name,
+                input,
+                locked_upstream_ref,
+                publish_branch_action,
+                restore_view,
+            };
+        }
+    }
+
+    EventResult::Continue
+}
+
+/// Returns whether one key event should insert text into the publish-branch
+/// input field.
+fn is_publish_branch_input_text_key(key: KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
 }
 
 /// Handles key input while the app is in open-command selector overlay mode.
@@ -658,6 +809,123 @@ mod tests {
         app.sessions.sync_from_handles();
         let output = app.sessions.sessions[0].output.clone();
         assert!(output.contains("[Merge Error]"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_publish_branch_input_key_escape_restores_view_mode() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "agentty/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review/custom".to_string()),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                focused_review_status_message: Some("Preparing focused review".to_string()),
+                focused_review_text: Some("Critical finding".to_string()),
+                scroll_offset: Some(7),
+                session_id: "session-id".to_string(),
+            },
+        };
+
+        // Act
+        let event_result = handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                focused_review_status_message: Some(ref status_message),
+                focused_review_text: Some(ref review_text),
+                ref session_id,
+                scroll_offset: Some(7),
+            } if session_id == "session-id"
+                && status_message == "Preparing focused review"
+                && review_text == "Critical finding"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_publish_branch_input_key_char_updates_input_state() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "agentty/session".to_string(),
+            input: crate::domain::input::InputState::default(),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: None,
+                session_id: "session-id".to_string(),
+            },
+        };
+
+        // Act
+        let event_result = handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::PublishBranchInput {
+                input: ref input_state,
+                ..
+            } if input_state.cursor == 1 && input_state.text() == "r"
+        ));
+        let AppMode::PublishBranchInput { input, .. } = &app.mode else {
+            unreachable!("mode should remain publish-branch input");
+        };
+        assert_eq!(input.text(), "r");
+    }
+
+    #[tokio::test]
+    async fn test_handle_publish_branch_input_key_char_keeps_locked_branch_name() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "agentty/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review/custom".to_string()),
+            locked_upstream_ref: Some("origin/review/custom".to_string()),
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: None,
+                session_id: "session-id".to_string(),
+            },
+        };
+
+        // Act
+        let event_result = handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        let AppMode::PublishBranchInput {
+            input,
+            locked_upstream_ref,
+            ..
+        } = &app.mode
+        else {
+            unreachable!("mode should remain publish-branch input");
+        };
+        assert_eq!(locked_upstream_ref.as_deref(), Some("origin/review/custom"));
+        assert_eq!(input.text(), "review/custom");
     }
 
     #[test]

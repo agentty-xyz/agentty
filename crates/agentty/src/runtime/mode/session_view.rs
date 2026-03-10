@@ -184,7 +184,7 @@ async fn handle_view_key(
             let Some(publish_branch_action) = view_session_snapshot.publish_branch_action else {
                 return true;
             };
-            start_view_publish_branch_action(app, view_context, publish_branch_action);
+            open_publish_branch_input(app, view_context, publish_branch_action);
 
             return false;
         }
@@ -457,18 +457,37 @@ fn open_view_help_overlay(
     };
 }
 
-/// Starts the session-view branch-publish action and switches into a
-/// view-scoped informational popup.
-fn start_view_publish_branch_action(
+/// Opens the session-view branch-publish popup and preserves the current view
+/// state for cancel or submit.
+fn open_publish_branch_input(
     app: &mut App,
     view_context: &ViewContext,
     publish_branch_action: PublishBranchAction,
 ) {
-    app.start_publish_branch_action(
-        confirmation_view_mode(view_context),
-        &view_context.session_id,
+    let session = &app.sessions.sessions[view_context.session_index];
+    let default_branch_name = crate::app::session::session_branch(&session.id);
+    let locked_upstream_ref = session.published_upstream_ref.clone();
+    let input = locked_upstream_ref
+        .as_deref()
+        .map(remote_branch_name_from_upstream_ref)
+        .map(InputState::with_text)
+        .unwrap_or_default();
+
+    app.mode = AppMode::PublishBranchInput {
+        default_branch_name,
+        input,
+        locked_upstream_ref,
         publish_branch_action,
-    );
+        restore_view: confirmation_view_mode(view_context),
+    };
+}
+
+/// Extracts the remote branch portion from one upstream reference.
+fn remote_branch_name_from_upstream_ref(upstream_ref: &str) -> String {
+    upstream_ref.split_once('/').map_or_else(
+        || upstream_ref.to_string(),
+        |(_, branch_name)| branch_name.to_string(),
+    )
 }
 
 fn view_context(app: &mut App) -> Option<ViewContext> {
@@ -1702,6 +1721,76 @@ mod tests {
             } if session_id_in_mode == &session_id
                 && status_message == "Preparing focused review"
                 && review_text == "Critical finding"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_open_publish_branch_input_preserves_view_context() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let view_context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+            focused_review_status_message: Some("Preparing focused review".to_string()),
+            focused_review_text: Some("Critical finding".to_string()),
+            scroll_offset: Some(5),
+            session_id: session_id.clone(),
+            session_index: 0,
+        };
+
+        // Act
+        open_publish_branch_input(&mut app, &view_context, PublishBranchAction::Push);
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::PublishBranchInput {
+                ref default_branch_name,
+                input: ref input_state,
+                locked_upstream_ref: None,
+                publish_branch_action: PublishBranchAction::Push,
+                restore_view:
+                    ConfirmationViewMode {
+                        done_session_output_mode: DoneSessionOutputMode::FocusedReview,
+                        focused_review_status_message: Some(ref status_message),
+                        focused_review_text: Some(ref review_text),
+                        session_id: ref restored_session_id,
+                        scroll_offset: Some(5),
+                    },
+            } if default_branch_name == &crate::app::session::session_branch(&session_id)
+                && input_state.cursor == 0
+                && input_state.text().is_empty()
+                && restored_session_id == &session_id
+                && status_message == "Preparing focused review"
+                && review_text == "Critical finding"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].published_upstream_ref = Some("origin/review/custom".to_string());
+        let view_context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: Some(1),
+            session_id: session_id.clone(),
+            session_index: 0,
+        };
+
+        // Act
+        open_publish_branch_input(&mut app, &view_context, PublishBranchAction::Push);
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::PublishBranchInput {
+                input: ref input_state,
+                locked_upstream_ref: Some(ref upstream_ref),
+                ..
+            } if upstream_ref == "origin/review/custom"
+                && input_state.text() == "review/custom"
         ));
     }
 

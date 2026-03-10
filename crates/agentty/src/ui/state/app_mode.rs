@@ -117,6 +117,22 @@ pub enum AppMode {
         /// Highlighted command index in `commands`.
         selected_command_index: usize,
     },
+    /// Session-view popup that collects an optional remote branch name before
+    /// publishing the current session branch.
+    PublishBranchInput {
+        /// Default remote branch name used when users leave the field blank.
+        default_branch_name: String,
+        /// Editable remote branch name. An empty value keeps the default push
+        /// target for the session branch.
+        input: InputState,
+        /// Existing upstream reference, when the session branch already tracks
+        /// one remote branch and the input must stay locked.
+        locked_upstream_ref: Option<String>,
+        /// Publish action that will run when users confirm the popup.
+        publish_branch_action: PublishBranchAction,
+        /// View state restored after publish or cancel.
+        restore_view: ConfirmationViewMode,
+    },
     Prompt {
         at_mention_state: Option<PromptAtMentionState>,
         history_state: PromptHistoryState,

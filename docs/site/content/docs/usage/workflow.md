@@ -36,7 +36,7 @@ Session statuses and what you can do in each state:
 |--------|-------------|-------------------|
 | **New** | Session created, prompt not yet sent. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
 | **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
-| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `p` push branch, `d` diff, `f` focused review, scroll, help |
+| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Esc` skip, text editing keys) |
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
@@ -65,11 +65,13 @@ line), pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open,
 <a id="usage-review-request-flow"></a>
 Session view exposes one manual branch-publish action on `p`:
 
-- In **Review**, `p` pushes the session branch to the configured Git remote.
+- In **Review**, `p` opens a publish popup for the session branch.
+- Leave the field empty to keep the default branch target for that session, or type a custom remote branch name before pressing `Enter`.
+- After the session branch already tracks a remote branch, Agentty locks the popup to that same remote branch instead of allowing renames.
 - After the push succeeds, Agentty shows the branch name and leaves pull request or merge request creation to the forge web UI or your own CLI workflow.
 
-Branch-publish actions stay inside session view by using an informational popup
-for loading, success, and blocked states.
+Branch-publish actions stay inside session view by using a publish input popup
+followed by informational popups for loading, success, and blocked states.
 
 <a id="usage-review-request-prerequisites"></a>
 Branch publishing on `p` uses regular Git authentication only:

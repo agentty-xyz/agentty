@@ -106,6 +106,10 @@ fn render_footer_bar(
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
         }
+        | AppMode::PublishBranchInput {
+            restore_view: ConfirmationViewMode { session_id, .. },
+            ..
+        }
         | AppMode::Help {
             context: HelpContext::View { session_id, .. } | HelpContext::Diff { session_id, .. },
             ..

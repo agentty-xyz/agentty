@@ -199,6 +199,7 @@ fn render_list_or_overlay_mode(
         AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
+        | AppMode::PublishBranchInput { .. }
         | AppMode::OpenCommandSelector { .. }
         | AppMode::Diff { .. } => {
             return false;
@@ -305,6 +306,22 @@ fn render_session_or_diff_mode(
             commands,
             *selected_command_index,
         ),
+        AppMode::PublishBranchInput {
+            default_branch_name,
+            input,
+            locked_upstream_ref,
+            restore_view,
+            ..
+        } => render_publish_branch_overlay(
+            f,
+            area,
+            sessions,
+            aux.session_progress_messages,
+            restore_view,
+            default_branch_name,
+            input,
+            locked_upstream_ref.as_deref(),
+        ),
         AppMode::Diff {
             diff,
             file_explorer_selected_index,
@@ -355,6 +372,41 @@ fn render_open_command_selector_overlay(
     component::open_command_overlay::OpenCommandOverlay::new(commands)
         .selected_command_index(selected_command_index)
         .render(f, area);
+}
+
+/// Renders the publish-branch input overlay above the originating session
+/// chat.
+fn render_publish_branch_overlay(
+    f: &mut Frame,
+    area: Rect,
+    sessions: &[Session],
+    session_progress_messages: &HashMap<String, String>,
+    restore_view: &ConfirmationViewMode,
+    default_branch_name: &str,
+    input: &crate::domain::input::InputState,
+    locked_upstream_ref: Option<&str>,
+) {
+    let background_mode = restore_view.clone().into_view_mode();
+
+    render_session_chat(
+        f,
+        area,
+        SessionChatRenderContext {
+            mode: &background_mode,
+            session_id: &restore_view.session_id,
+            session_progress_messages,
+            sessions,
+            scroll_offset: restore_view.scroll_offset,
+        },
+    );
+    overlay::render_overlay_backdrop(f, area);
+
+    component::publish_branch_overlay::PublishBranchOverlay::new(
+        input,
+        default_branch_name,
+        locked_upstream_ref,
+    )
+    .render(f, area);
 }
 
 /// Renders the session chat page for all session-chat modes.

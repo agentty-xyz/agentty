@@ -82,7 +82,8 @@ impl<'a> SessionChatPage<'a> {
                 done_session_output_mode,
                 ..
             } => *done_session_output_mode,
-            AppMode::OpenCommandSelector { restore_view, .. } => {
+            AppMode::OpenCommandSelector { restore_view, .. }
+            | AppMode::PublishBranchInput { restore_view, .. } => {
                 restore_view.done_session_output_mode
             }
             AppMode::ViewInfoPopup { restore_view, .. } => restore_view.done_session_output_mode,
@@ -104,6 +105,7 @@ impl<'a> SessionChatPage<'a> {
                 ..
             } => focused_review_status_message.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
+            | AppMode::PublishBranchInput { restore_view, .. }
             | AppMode::ViewInfoPopup { restore_view, .. } => {
                 restore_view.focused_review_status_message.as_deref()
             }
@@ -125,6 +127,7 @@ impl<'a> SessionChatPage<'a> {
                 ..
             } => focused_review_text.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
+            | AppMode::PublishBranchInput { restore_view, .. }
             | AppMode::ViewInfoPopup { restore_view, .. } => {
                 restore_view.focused_review_text.as_deref()
             }
@@ -1133,7 +1136,7 @@ mod tests {
         let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
 
         // Assert
-        assert!(help_text.contains("p: push branch"));
+        assert!(help_text.contains("p: publish branch"));
     }
 
     #[test]

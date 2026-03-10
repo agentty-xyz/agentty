@@ -348,7 +348,7 @@ fn list_base_actions() -> Vec<HelpAction> {
 fn publish_branch_help_action(action: PublishBranchAction) -> HelpAction {
     match action {
         PublishBranchAction::Push => {
-            HelpAction::new("push branch", "p", "Push session branch to remote")
+            HelpAction::new("publish branch", "p", "Publish session branch to remote")
         }
     }
 }
@@ -454,7 +454,7 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|action| action.key == "p" && action.footer_label == "push branch")
+                .any(|action| action.key == "p" && action.footer_label == "publish branch")
         );
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));

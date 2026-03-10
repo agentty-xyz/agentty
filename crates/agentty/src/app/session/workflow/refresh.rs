@@ -230,6 +230,10 @@ impl SessionManager {
             | AppMode::OpenCommandSelector {
                 restore_view: ConfirmationViewMode { session_id, .. },
                 ..
+            }
+            | AppMode::PublishBranchInput {
+                restore_view: ConfirmationViewMode { session_id, .. },
+                ..
             } => Some(session_id),
             _ => None,
         };

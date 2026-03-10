@@ -34,7 +34,7 @@ pub use sync::{
     PullRebaseResult, commit_all, commit_all_preserving_single_commit, current_upstream_reference,
     delete_branch, diff, fetch_remote, get_ahead_behind, head_short_hash, is_worktree_clean,
     list_local_commit_titles, list_upstream_commit_titles, pull_rebase, push_current_branch,
-    stage_all,
+    push_current_branch_to_remote_branch, stage_all,
 };
 /// Re-exported worktree and branch-detection APIs.
 pub use worktree::{create_worktree, detect_git_info, find_git_repo_root, remove_worktree};

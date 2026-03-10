@@ -404,6 +404,43 @@ pub async fn push_current_branch(repo_path: PathBuf) -> Result<String, String> {
     .map_err(|error| format!("Join error: {error}"))?
 }
 
+/// Pushes the current branch to one explicit remote branch name and returns
+/// the resulting upstream reference.
+///
+/// When the current branch already tracks a remote, that remote name is
+/// reused. Otherwise this falls back to `origin`.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `remote_branch_name` - Target branch name to create or update on the
+///   remote
+///
+/// # Returns
+/// The upstream reference on success, for example `origin/feature/review`.
+///
+/// # Errors
+/// Returns an error if `git push` fails.
+pub async fn push_current_branch_to_remote_branch(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+) -> Result<String, String> {
+    spawn_blocking(move || {
+        let remote_name =
+            current_branch_remote_name(&repo_path).unwrap_or_else(|_| "origin".to_string());
+        let push_refspec = format!("HEAD:{remote_branch_name}");
+
+        run_git_command_sync(
+            &repo_path,
+            &["push", "--set-upstream", &remote_name, &push_refspec],
+            "Git push failed",
+        )?;
+
+        Ok(format!("{remote_name}/{remote_branch_name}"))
+    })
+    .await
+    .map_err(|error| format!("Join error: {error}"))?
+}
+
 /// Returns the current upstream reference for `HEAD`.
 ///
 /// # Arguments
@@ -942,6 +979,28 @@ mod tests {
         let error = result.expect_err("non-fast-forward push should fail");
         assert!(error.contains("Git push failed:"));
         assert!(error.contains("rejected") || error.contains("fetch first"));
+    }
+
+    #[tokio::test]
+    async fn push_current_branch_to_remote_branch_returns_custom_upstream_reference() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(temp_dir.path(), &["remote", "add", "origin", &remote_path]);
+
+        // Act
+        let upstream_reference = push_current_branch_to_remote_branch(
+            temp_dir.path().to_path_buf(),
+            "review/custom-branch".to_string(),
+        )
+        .await
+        .expect("failed to push current branch to custom remote branch");
+
+        // Assert
+        assert_eq!(upstream_reference, "origin/review/custom-branch");
     }
 
     #[tokio::test]
