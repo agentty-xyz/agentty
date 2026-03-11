@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "ag-forge"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "mockall",
  "serde",
@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "ag-xtask"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "clap",
  "mockall",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "agentty"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "ag-forge",
  "agent-client-protocol",
