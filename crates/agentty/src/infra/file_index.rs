@@ -98,30 +98,61 @@ fn sort_and_limit_entries(entries: &mut Vec<FileEntry>, max_entries: Option<usiz
 /// Query characters must appear in order (case-insensitive) within the
 /// path. Results are ranked by: consecutive-character runs, matches at
 /// the start of path segments (`/`, `.`), and a basename-substring bonus
-/// for intuitive file-name-first matches. If the query ends with `/`,
-/// directory entries are prioritized before files.
+/// for intuitive file-name-first matches. Equal scores prefer shallower
+/// and shorter paths before alphabetical order. If the query ends with
+/// `/`, directory entries are prioritized before files.
 pub fn filter_entries<'a>(entries: &'a [FileEntry], query: &str) -> Vec<&'a FileEntry> {
     if query.is_empty() {
         return entries.iter().collect();
     }
 
     let query_chars: Vec<char> = query.to_lowercase().chars().collect();
-    let mut scored: Vec<(&FileEntry, i32)> = entries
+    let mut scored: Vec<ScoredEntry<'_>> = entries
         .iter()
-        .filter_map(|entry| fuzzy_score_for_entry(entry, &query_chars).map(|score| (entry, score)))
+        .filter_map(|entry| {
+            fuzzy_score_for_entry(entry, &query_chars).map(|score| ScoredEntry {
+                depth: path_depth(&entry.path),
+                entry,
+                path_len: entry.path.len(),
+                score,
+            })
+        })
         .collect();
 
-    scored.sort_by(|first, second| {
-        second
-            .1
-            .cmp(&first.1)
-            .then(first.0.path.cmp(&second.0.path))
-    });
+    scored.sort_by(compare_scored_entries);
 
-    let mut filtered: Vec<&FileEntry> = scored.into_iter().map(|(entry, _)| entry).collect();
+    let mut filtered: Vec<&FileEntry> = scored.into_iter().map(|entry| entry.entry).collect();
     prioritize_directories_for_trailing_slash(&mut filtered, query);
 
     filtered
+}
+
+/// Cached fuzzy-match metadata used when ordering file mention results.
+struct ScoredEntry<'a> {
+    /// The underlying file or directory entry.
+    entry: &'a FileEntry,
+    /// The number of path separators in the entry path.
+    depth: usize,
+    /// The UTF-8 byte length of the entry path.
+    path_len: usize,
+    /// The fuzzy-match relevance score.
+    score: i32,
+}
+
+/// Orders scored fuzzy matches so equally relevant results prefer root-level
+/// and shorter paths before falling back to alphabetical ordering.
+fn compare_scored_entries(first: &ScoredEntry<'_>, second: &ScoredEntry<'_>) -> std::cmp::Ordering {
+    second
+        .score
+        .cmp(&first.score)
+        .then_with(|| first.depth.cmp(&second.depth))
+        .then_with(|| first.path_len.cmp(&second.path_len))
+        .then(first.entry.path.cmp(&second.entry.path))
+}
+
+/// Returns the number of path separators in one relative path.
+fn path_depth(path: &str) -> usize {
+    path.bytes().filter(|&byte| byte == b'/').count()
 }
 
 fn fuzzy_score_for_entry(entry: &FileEntry, query_chars: &[char]) -> Option<i32> {
@@ -628,6 +659,32 @@ mod tests {
         // Assert
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].path, "crates/agentty/src/app/setting.rs");
+    }
+
+    #[test]
+    fn test_filter_entries_exact_basename_prefers_shallower_path() {
+        // Arrange
+        let entries = vec![
+            FileEntry {
+                is_dir: false,
+                path: ".codex/AGENTS.md".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "docs/AGENTS.md".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "AGENTS.md".to_string(),
+            },
+        ];
+
+        // Act
+        let filtered = filter_entries(&entries, "agents.md");
+
+        // Assert
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered[0].path, "AGENTS.md");
     }
 
     #[test]
