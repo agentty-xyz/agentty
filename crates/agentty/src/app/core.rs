@@ -180,8 +180,14 @@ struct FocusedReviewUpdate {
 /// Session snapshot cloned into a branch-publish background task.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BranchPublishTaskSession {
+    /// Base branch used as the review-request target when a forge link is
+    /// generated after push.
+    base_branch: String,
+    /// Session worktree used for git push and remote inspection.
     folder: PathBuf,
+    /// Stable session identifier.
     id: String,
+    /// Current session lifecycle state checked before push.
     status: Status,
 }
 
@@ -189,6 +195,7 @@ impl BranchPublishTaskSession {
     /// Builds one background-task snapshot from a live session row.
     fn from_session(session: &Session) -> Self {
         Self {
+            base_branch: session.base_branch.clone(),
             folder: session.folder.clone(),
             id: session.id.clone(),
             status: session.status,
@@ -236,7 +243,12 @@ pub(crate) enum BranchPublishTaskSuccess {
     /// Carries the pushed branch name and persisted upstream reference for
     /// popup copy and session state updates.
     Pushed {
+        /// Remote branch name that was pushed successfully.
         branch_name: String,
+        /// Optional forge-native URL that opens a new review-request flow for
+        /// the pushed branch.
+        review_request_creation_url: Option<String>,
+        /// Persisted upstream ref recorded after the successful push.
         upstream_reference: String,
     },
 }
@@ -1480,6 +1492,7 @@ impl App {
         let popup_mode = match result {
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name,
+                review_request_creation_url,
                 upstream_reference,
             }) => {
                 self.sessions
@@ -1487,7 +1500,10 @@ impl App {
 
                 Self::view_info_popup_mode(
                     Self::branch_publish_success_title(PublishBranchAction::Push),
-                    Self::branch_publish_success_message(&branch_name),
+                    Self::branch_publish_success_message(
+                        &branch_name,
+                        review_request_creation_url.as_deref(),
+                    ),
                     false,
                     String::new(),
                     restore_view,
@@ -1802,11 +1818,20 @@ impl App {
     }
 
     /// Returns the success popup body for one completed branch push.
-    fn branch_publish_success_message(branch_name: &str) -> String {
-        format!(
-            "Pushed session branch `{branch_name}`.\n\nCreate the pull request or merge request \
-             manually from your forge UI."
-        )
+    fn branch_publish_success_message(
+        branch_name: &str,
+        review_request_creation_url: Option<&str>,
+    ) -> String {
+        match review_request_creation_url {
+            Some(review_request_creation_url) => format!(
+                "Pushed session branch `{branch_name}`.\n\nOpen this link to create the pull \
+                 request or merge request:\n{review_request_creation_url}"
+            ),
+            None => format!(
+                "Pushed session branch `{branch_name}`.\n\nCreate the pull request or merge \
+                 request manually from your forge UI."
+            ),
+        }
     }
 
     /// Builds final sync popup mode from background sync completion result.
@@ -2286,11 +2311,32 @@ async fn push_session_branch(
                  {error}"
             ))
         })?;
+    let review_request_creation_url =
+        branch_review_request_creation_url(branch_publish_session, git_client, &branch_name).await;
 
     Ok(BranchPublishTaskSuccess::Pushed {
         branch_name,
+        review_request_creation_url,
         upstream_reference,
     })
+}
+
+/// Returns one forge-native review-request creation URL for a pushed session
+/// branch when the repository remote maps to a supported forge.
+async fn branch_review_request_creation_url(
+    branch_publish_session: &BranchPublishTaskSession,
+    git_client: Arc<dyn GitClient>,
+    branch_name: &str,
+) -> Option<String> {
+    let repo_url = git_client
+        .repo_url(branch_publish_session.folder.clone())
+        .await
+        .ok()?;
+    let remote = forge::detect_remote(&repo_url).ok()?;
+
+    remote
+        .review_request_creation_url(branch_name, &branch_publish_session.base_branch)
+        .ok()
 }
 
 /// Maps one branch-publish failure into blocked or failed popup copy.
@@ -2805,7 +2851,12 @@ mod tests {
         );
         let loading_label = App::branch_publish_loading_label(PublishBranchAction::Push);
         let success_title = App::branch_publish_success_title(PublishBranchAction::Push);
-        let success_message = App::branch_publish_success_message("agentty/session-1");
+        let success_message = App::branch_publish_success_message(
+            "agentty/session-1",
+            Some("https://github.com/org/repo/compare/main...agentty%2Fsession-1?expand=1"),
+        );
+        let fallback_success_message =
+            App::branch_publish_success_message("agentty/session-1", None);
         let popup_mode = App::view_info_popup_mode(
             "Working".to_string(),
             "Publishing branch".to_string(),
@@ -2827,7 +2878,17 @@ mod tests {
         assert_eq!(loading_label, "Pushing branch...");
         assert_eq!(success_title, "Branch pushed");
         assert!(success_message.contains("Pushed session branch `agentty/session-1`."));
-        assert!(success_message.contains("Create the pull request or merge request manually"));
+        assert!(
+            success_message.contains("Open this link to create the pull request or merge request")
+        );
+        assert!(
+            success_message.contains(
+                "https://github.com/org/repo/compare/main...agentty%2Fsession-1?expand=1"
+            )
+        );
+        assert!(
+            fallback_success_message.contains("Create the pull request or merge request manually")
+        );
         assert!(matches!(
             popup_mode,
             AppMode::ViewInfoPopup {
@@ -2957,6 +3018,13 @@ mod tests {
             )
             .once()
             .returning(|_, _| Box::pin(async { Ok("origin/review/custom-branch".to_string()) }));
+        mock_git_client
+            .expect_repo_url()
+            .with(mockall::predicate::eq(PathBuf::from("/tmp/review-session")))
+            .once()
+            .returning(|_| {
+                Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+            });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
         let database = crate::infra::db::Database::open_in_memory()
             .await
@@ -2976,7 +3044,48 @@ mod tests {
             result,
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name: "review/custom-branch".to_string(),
+                review_request_creation_url: Some(
+                    "https://github.com/agentty-xyz/agentty/compare/main...review%2Fcustom-branch?expand=1"
+                        .to_string()
+                ),
                 upstream_reference: "origin/review/custom-branch".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn push_session_branch_succeeds_without_review_request_link_for_unsupported_remote() {
+        // Arrange
+        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
+            "/tmp/review-session",
+        )));
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch()
+            .once()
+            .returning(|_| Box::pin(async { Ok("origin/agentty/session-1".to_string()) }));
+        mock_git_client
+            .expect_repo_url()
+            .with(mockall::predicate::eq(PathBuf::from("/tmp/review-session")))
+            .once()
+            .returning(|_| {
+                Box::pin(async { Ok("https://example.com/team/project.git".to_string()) })
+            });
+        let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let database = crate::infra::db::Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        let result = push_session_branch(&branch_session, database, git_client, None).await;
+
+        // Assert
+        assert_eq!(
+            result,
+            Ok(BranchPublishTaskSuccess::Pushed {
+                branch_name: session::session_branch("session-1"),
+                review_request_creation_url: None,
+                upstream_reference: "origin/agentty/session-1".to_string(),
             })
         );
     }
@@ -3004,6 +3113,10 @@ mod tests {
             restore_view: expected_restore_view.clone(),
             result: Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name: "agentty/session-1".to_string(),
+                review_request_creation_url: Some(
+                    "https://github.com/agentty-xyz/agentty/compare/main...agentty%2Fsession-1?expand=1"
+                        .to_string()
+                ),
                 upstream_reference: "origin/agentty/session-1".to_string(),
             }),
             session_id: "session-1".to_string(),
@@ -3021,6 +3134,7 @@ mod tests {
                 ..
             } if title == "Branch pushed"
                 && message.contains("Pushed session branch `agentty/session-1`.")
+                && message.contains("https://github.com/agentty-xyz/agentty/compare/main...agentty%2Fsession-1?expand=1")
                 && restore_view == &expected_restore_view
         ));
         assert_eq!(

@@ -45,7 +45,11 @@ impl ParsedRemote {
 }
 
 /// Detects one supported forge remote from `repo_url`.
-pub(crate) fn detect_remote(repo_url: &str) -> Result<ForgeRemote, ReviewRequestError> {
+///
+/// # Errors
+/// Returns [`ReviewRequestError::UnsupportedRemote`] when the repository
+/// remote does not map to GitHub or GitLab.
+pub fn detect_remote(repo_url: &str) -> Result<ForgeRemote, ReviewRequestError> {
     if let Some(remote) = GitHubReviewRequestAdapter::detect_remote(repo_url) {
         return Ok(remote);
     }

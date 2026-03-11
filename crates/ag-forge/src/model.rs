@@ -6,6 +6,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 
+use url::Url;
+
 /// Shared forge family enum reused by persistence and forge adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ForgeKind {
@@ -163,6 +165,28 @@ impl ForgeRemote {
     pub fn project_path(&self) -> String {
         format!("{}/{}", self.namespace, self.project)
     }
+
+    /// Returns the browser-openable URL that starts one new pull request or
+    /// merge request for `source_branch` into `target_branch`.
+    ///
+    /// # Errors
+    /// Returns [`ReviewRequestError::OperationFailed`] when the stored
+    /// repository web URL is invalid or cannot be converted into a forge
+    /// review-request creation URL.
+    pub fn review_request_creation_url(
+        &self,
+        source_branch: &str,
+        target_branch: &str,
+    ) -> Result<String, ReviewRequestError> {
+        match self.forge_kind {
+            ForgeKind::GitHub => {
+                github_review_request_creation_url(self, source_branch, target_branch)
+            }
+            ForgeKind::GitLab => {
+                gitlab_review_request_creation_url(self, source_branch, target_branch)
+            }
+        }
+    }
 }
 
 /// Input required to create a review request on one forge.
@@ -275,6 +299,75 @@ fn non_empty_detail(detail: Option<&str>) -> Option<&str> {
     })
 }
 
+/// Builds one GitHub compare URL that opens the new pull-request flow.
+fn github_review_request_creation_url(
+    remote: &ForgeRemote,
+    source_branch: &str,
+    target_branch: &str,
+) -> Result<String, ReviewRequestError> {
+    let mut url = parsed_remote_web_url(remote)?;
+    let compare_target = if target_branch.trim().is_empty() {
+        source_branch.to_string()
+    } else {
+        format!("{target_branch}...{source_branch}")
+    };
+
+    {
+        let mut path_segments = url
+            .path_segments_mut()
+            .map_err(|()| invalid_web_url_error(remote))?;
+        path_segments.pop_if_empty();
+        path_segments.push("compare");
+        path_segments.push(&compare_target);
+    }
+
+    url.query_pairs_mut().append_pair("expand", "1");
+
+    Ok(url.into())
+}
+
+/// Builds one GitLab merge-request URL with pre-filled source and target
+/// branch query parameters.
+fn gitlab_review_request_creation_url(
+    remote: &ForgeRemote,
+    source_branch: &str,
+    target_branch: &str,
+) -> Result<String, ReviewRequestError> {
+    let mut url = parsed_remote_web_url(remote)?;
+
+    {
+        let mut path_segments = url
+            .path_segments_mut()
+            .map_err(|()| invalid_web_url_error(remote))?;
+        path_segments.pop_if_empty();
+        path_segments.push("-");
+        path_segments.push("merge_requests");
+        path_segments.push("new");
+    }
+
+    url.query_pairs_mut()
+        .append_pair("merge_request[source_branch]", source_branch)
+        .append_pair("merge_request[target_branch]", target_branch);
+
+    Ok(url.into())
+}
+
+/// Parses the stored repository web URL for one forge remote.
+fn parsed_remote_web_url(remote: &ForgeRemote) -> Result<Url, ReviewRequestError> {
+    Url::parse(&remote.web_url).map_err(|_| invalid_web_url_error(remote))
+}
+
+/// Returns one normalized invalid-remote-url error for review-request links.
+fn invalid_web_url_error(remote: &ForgeRemote) -> ReviewRequestError {
+    ReviewRequestError::OperationFailed {
+        forge_kind: remote.forge_kind,
+        message: format!(
+            "repository remote is missing a valid web URL: `{}`",
+            remote.web_url
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +407,80 @@ mod tests {
         // Assert
         assert!(message.contains("Run `gh auth login` and retry."));
         assert!(!message.contains("Original `gh` error:"));
+    }
+
+    #[test]
+    fn review_request_creation_url_returns_github_compare_link() {
+        // Arrange
+        let remote = ForgeRemote {
+            forge_kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "git@github.com:agentty-xyz/agentty.git".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+        };
+
+        // Act
+        let url = remote
+            .review_request_creation_url("review/custom-branch", "main")
+            .expect("github compare URL should be created");
+
+        // Assert
+        assert_eq!(
+            url,
+            "https://github.com/agentty-xyz/agentty/compare/main...review%2Fcustom-branch?expand=1"
+        );
+    }
+
+    #[test]
+    fn review_request_creation_url_returns_gitlab_merge_request_link() {
+        // Arrange
+        let remote = ForgeRemote {
+            forge_kind: ForgeKind::GitLab,
+            host: "gitlab.com".to_string(),
+            namespace: "group/subgroup".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "git@gitlab.com:group/subgroup/agentty.git".to_string(),
+            web_url: "https://gitlab.com/group/subgroup/agentty".to_string(),
+        };
+
+        // Act
+        let url = remote
+            .review_request_creation_url("review/custom-branch", "master")
+            .expect("gitlab merge-request URL should be created");
+
+        // Assert
+        assert_eq!(
+            url,
+            "https://gitlab.com/group/subgroup/agentty/-/merge_requests/new?merge_request%5Bsource_branch%5D=review%2Fcustom-branch&merge_request%5Btarget_branch%5D=master"
+        );
+    }
+
+    #[test]
+    fn review_request_creation_url_rejects_invalid_web_url() {
+        // Arrange
+        let remote = ForgeRemote {
+            forge_kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "git@github.com:agentty-xyz/agentty.git".to_string(),
+            web_url: "not a url".to_string(),
+        };
+
+        // Act
+        let error = remote
+            .review_request_creation_url("review/custom-branch", "main")
+            .expect_err("invalid web URL should be rejected");
+
+        // Assert
+        assert_eq!(
+            error,
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitHub,
+                message: "repository remote is missing a valid web URL: `not a url`".to_string(),
+            }
+        );
     }
 }

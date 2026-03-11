@@ -73,7 +73,7 @@ Session view exposes one manual branch-publish action on `p`:
 - In **Review**, `p` opens a publish popup for the session branch.
 - Leave the field empty to keep the default branch target for that session, or type a custom remote branch name before pressing `Enter`.
 - After the session branch already tracks a remote branch, Agentty locks the popup to that same remote branch instead of allowing renames.
-- After the push succeeds, Agentty shows the branch name and leaves pull request or merge request creation to the forge web UI or your own CLI workflow.
+- After the push succeeds, Agentty shows the branch name and, for GitHub or GitLab remotes, a forge-native link you can open to start the pull request or merge request.
 
 Branch-publish actions stay inside session view by using a publish input popup
 followed by informational popups for loading, success, and blocked states.

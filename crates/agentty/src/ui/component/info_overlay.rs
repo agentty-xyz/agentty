@@ -3,6 +3,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::icon::Icon;
 use crate::ui::markdown::render_markdown;
@@ -11,7 +12,9 @@ use crate::ui::{Component, overlay};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;
 const MIN_OVERLAY_WIDTH: u16 = 44;
+const OVERLAY_HORIZONTAL_CHROME: u16 = 6;
 const OVERLAY_HEIGHT_PERCENT: u16 = 26;
+const OVERLAY_MAX_WIDTH_PERCENT: u16 = 96;
 const OVERLAY_WIDTH_PERCENT: u16 = 52;
 
 /// Centered informational popup used for non-destructive workflow guidance.
@@ -182,10 +185,48 @@ impl<'a> InfoOverlay<'a> {
     }
 
     /// Returns popup width constrained by overlay defaults and frame bounds.
-    fn popup_width(area: Rect) -> u16 {
-        (area.width * OVERLAY_WIDTH_PERCENT / 100)
+    fn popup_width(&self, area: Rect) -> u16 {
+        let default_width = (area.width * OVERLAY_WIDTH_PERCENT / 100)
             .max(MIN_OVERLAY_WIDTH)
-            .min(area.width)
+            .min(area.width);
+        let max_width = (area.width * OVERLAY_MAX_WIDTH_PERCENT / 100)
+            .max(MIN_OVERLAY_WIDTH)
+            .min(area.width);
+        let preferred_width = self.preferred_popup_width(max_width);
+
+        default_width.max(preferred_width).min(max_width)
+    }
+
+    /// Returns the popup width preferred by the current message content.
+    fn preferred_popup_width(&self, max_width: u16) -> u16 {
+        let longest_line_width = self.longest_unwrapped_line_width();
+        let preferred_content_width = u16::try_from(longest_line_width)
+            .unwrap_or(u16::MAX)
+            .saturating_add(1);
+
+        preferred_content_width
+            .saturating_add(OVERLAY_HORIZONTAL_CHROME)
+            .min(max_width)
+    }
+
+    /// Returns the terminal display width of the longest unwrapped message or
+    /// action row line before the paragraph widget applies wrapping.
+    fn longest_unwrapped_line_width(&self) -> usize {
+        let message = Self::markdown_message_with_block_headers(self.message);
+        let message_width = message
+            .lines()
+            .map(UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0);
+        let action_width = if self.is_loading {
+            UnicodeWidthStr::width(
+                format!("{} {}", Icon::current_spinner(), self.loading_label).as_str(),
+            )
+        } else {
+            UnicodeWidthStr::width(" OK ")
+        };
+
+        message_width.max(action_width)
     }
 
     /// Returns popup height sized to keep wrapped body content and the action
@@ -205,7 +246,7 @@ impl<'a> InfoOverlay<'a> {
 
 impl Component for InfoOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let width = Self::popup_width(area);
+        let width = self.popup_width(area);
         let message_width = overlay::overlay_content_width(width);
         let border_color = self.border_color();
         let paragraph = Paragraph::new(self.body_lines(message_width))
@@ -486,6 +527,68 @@ mod tests {
         assert_eq!(loading_header_column, blocked_header_column);
         assert!(blocked_header_column > blocked_detail_column);
         assert!(loading_loader_column > blocked_header_column);
+    }
+
+    #[test]
+    fn test_popup_width_expands_for_long_link_lines() {
+        // Arrange
+        let review_request_url = "https://gitlab.com/minev.dev/gitlab-agentty/-/merge_requests/new?merge_request%5Bsource_branch%5D=test&merge_request%5Btarget_branch%5D=master";
+        let message = format!(
+            "Open this link to create the pull request or merge request:\n{review_request_url}"
+        );
+        let overlay = InfoOverlay::new("Branch pushed", &message);
+        let area = Rect::new(0, 0, 160, 20);
+
+        // Act
+        let popup_width = overlay.popup_width(area);
+        let content_width = overlay::overlay_content_width(popup_width);
+
+        // Assert
+        assert!(popup_width > (area.width * OVERLAY_WIDTH_PERCENT / 100));
+        assert!(content_width >= review_request_url.len());
+    }
+
+    #[test]
+    fn test_longest_unwrapped_line_width_uses_terminal_display_width() {
+        // Arrange
+        let overlay = InfoOverlay::new("Branch pushed", "PR表");
+
+        // Act
+        let longest_line_width = overlay.longest_unwrapped_line_width();
+
+        // Assert
+        assert_eq!(longest_line_width, UnicodeWidthStr::width("PR表"));
+        assert_eq!(longest_line_width, 4);
+    }
+
+    #[test]
+    fn test_info_overlay_render_keeps_long_link_on_one_row_when_terminal_is_wide_enough() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(160, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let review_request_url = "https://gitlab.com/minev.dev/gitlab-agentty/-/merge_requests/new?merge_request%5Bsource_branch%5D=test&merge_request%5Btarget_branch%5D=master";
+        let message = format!(
+            "Open this link to create the pull request or merge request:\n{review_request_url}"
+        );
+        let overlay = InfoOverlay::new("Branch pushed", &message);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Component::render(&overlay, frame, area);
+            })
+            .expect("failed to draw");
+
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = buffer
+            .content()
+            .chunks(160)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
+            .collect();
+
+        // Assert
+        assert!(rows.iter().any(|row| row.contains(review_request_url)));
     }
 
     /// Renders one overlay and returns text rows for column-position

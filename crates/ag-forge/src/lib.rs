@@ -20,4 +20,5 @@ pub use model::{
     CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, ReviewRequestError,
     ReviewRequestState, ReviewRequestSummary,
 };
-pub(crate) use remote::{detect_remote, parse_remote_url, strip_port};
+pub use remote::detect_remote;
+pub(crate) use remote::{parse_remote_url, strip_port};

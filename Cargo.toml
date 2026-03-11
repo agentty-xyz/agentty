@@ -38,6 +38,7 @@ pulldown-cmark = "0.13.1"
 time = { version = "0.3", default-features = false, features = ["local-offset", "std"] }
 uuid = { version = "1", features = ["v4"] }
 unicode-width = "0.2"
+url = "2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
