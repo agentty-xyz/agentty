@@ -65,7 +65,7 @@ repos:
       - id: coverage
         name: coverage
         description: Verify workspace coverage meets ratchet thresholds.
-        entry: cargo llvm-cov --workspace --summary-only --fail-under-lines 87 --fail-under-functions 85
+        entry: cargo llvm-cov --workspace --summary-only --fail-under-lines 89 --fail-under-functions 86
         language: system
         types: [rust]
         pass_filenames: false

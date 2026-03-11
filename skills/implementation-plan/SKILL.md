@@ -43,6 +43,11 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Verify overlapping plans are aligned or clearly marked for user resolution.
    - Verify the final plan reflects the clarified requirements the user provided.
 
+1. **Close out implemented plans**
+
+   - When a plan is fully implemented and no further tracked work remains, delete the completed file from `docs/plan/` instead of keeping it as permanent inventory.
+   - If follow-up work is still needed after a plan is otherwise complete, create a new follow-up plan file with its own scope and checklist instead of extending the completed plan indefinitely.
+
 ## Plan Skeleton
 
 Use this skeleton when creating a new file in `docs/plan/`:
@@ -78,6 +83,7 @@ Use this skeleton when creating a new file in `docs/plan/`:
 
 - After implementing any step in this plan, immediately update its status in this document.
 - When a step changes behavior or guidance, update the corresponding documentation in that same step before marking it complete.
+- When the full plan is complete, remove the implemented plan file; if more work remains, move that work into a new follow-up plan file before deleting the completed one.
 
 ## Current State Snapshot
 

@@ -57,7 +57,7 @@ cargo test -q -- --test-threads=1
 ```
 
 `pre-commit run --all-files` now includes the workspace coverage ratchet via
-`cargo llvm-cov --workspace --summary-only --fail-under-lines 87 --fail-under-functions 85`.
+`cargo llvm-cov --workspace --summary-only --fail-under-lines 89 --fail-under-functions 86`.
 
 ## Architecture Documentation
 

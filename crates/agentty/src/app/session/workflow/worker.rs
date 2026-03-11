@@ -363,13 +363,19 @@ impl SessionWorkerService {
         )
         .await;
 
-        SessionTaskService::refresh_persisted_session_size(
+        if let Some(session_size) = SessionTaskService::refresh_persisted_session_size(
             &context.db,
             context.git_client.as_ref(),
             &context.session_id,
             &context.folder,
         )
-        .await;
+        .await
+        {
+            let _ = context.app_event_tx.send(AppEvent::SessionSizeUpdated {
+                session_id: context.session_id.clone(),
+                session_size,
+            });
+        }
 
         let target_status = match &result {
             Ok(status) => *status,

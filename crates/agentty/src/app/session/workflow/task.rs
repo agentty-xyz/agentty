@@ -13,7 +13,7 @@ use crate::app::assist::{
 };
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::Status;
+use crate::domain::session::{SessionSize, Status};
 use crate::infra::agent;
 use crate::infra::db::Database;
 use crate::infra::git::{self as git, GitClient};
@@ -73,20 +73,25 @@ pub(crate) struct RunAgentAssistTaskInput {
 impl SessionTaskService {
     /// Recomputes and persists one session size using the session worktree
     /// diff.
+    ///
+    /// Returns the recomputed bucket when the base-branch lookup and
+    /// persistence both succeed.
     pub(crate) async fn refresh_persisted_session_size(
         db: &Database,
         git_client: &dyn GitClient,
         session_id: &str,
         folder: &Path,
-    ) {
+    ) -> Option<SessionSize> {
         let Some(base_branch) = db.get_session_base_branch(session_id).await.ok().flatten() else {
-            return;
+            return None;
         };
         let computed_size =
             SessionManager::session_size_for_folder(git_client, folder, &base_branch).await;
-        let _ = db
-            .update_session_size(session_id, &computed_size.to_string())
-            .await;
+        db.update_session_size(session_id, &computed_size.to_string())
+            .await
+            .ok()?;
+
+        Some(computed_size)
     }
 
     /// Commits pending worktree changes and appends user-visible outcomes.

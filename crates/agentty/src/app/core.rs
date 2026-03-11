@@ -32,7 +32,7 @@ use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
-use crate::domain::session::{PublishBranchAction, Session, Status};
+use crate::domain::session::{PublishBranchAction, Session, SessionSize, Status};
 use crate::infra::agent::AgentResponse;
 use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
@@ -111,6 +111,11 @@ pub(crate) enum AppEvent {
     SyncMainCompleted {
         result: Result<SyncMainOutcome, SyncSessionStartError>,
     },
+    /// Indicates a recomputed session-size bucket for one session.
+    SessionSizeUpdated {
+        session_id: String,
+        session_size: SessionSize,
+    },
     /// Indicates completion of a session-view branch-publish action.
     BranchPublishActionCompleted {
         restore_view: ConfirmationViewMode,
@@ -151,6 +156,7 @@ struct AppEventBatch {
     branch_publish_action_update: Option<BranchPublishActionUpdate>,
     session_ids: HashSet<String>,
     session_model_updates: HashMap<String, AgentModel>,
+    session_size_updates: HashMap<String, SessionSize>,
     session_progress_updates: HashMap<String, Option<String>>,
     should_force_reload: bool,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
@@ -1147,6 +1153,11 @@ impl App {
         for (session_id, session_model) in event_batch.session_model_updates {
             self.sessions
                 .apply_session_model_updated(&session_id, session_model);
+        }
+
+        for (session_id, session_size) in event_batch.session_size_updates {
+            self.sessions
+                .apply_session_size_updated(&session_id, session_size);
         }
 
         for (session_id, entries) in event_batch.at_mention_entries_updates {
@@ -2464,6 +2475,12 @@ impl AppEventBatch {
             }
             AppEvent::SyncMainCompleted { result } => {
                 self.sync_main_result = Some(result);
+            }
+            AppEvent::SessionSizeUpdated {
+                session_id,
+                session_size,
+            } => {
+                self.session_size_updates.insert(session_id, session_size);
             }
             AppEvent::BranchPublishActionCompleted {
                 restore_view,

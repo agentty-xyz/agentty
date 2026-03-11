@@ -5,7 +5,7 @@ use std::time::Instant;
 use ratatui::widgets::TableState;
 
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
-use crate::domain::session::{Session, SessionHandles};
+use crate::domain::session::{Session, SessionHandles, SessionSize};
 
 /// Holds all in-memory state related to session listing and refresh tracking.
 pub struct SessionState {
@@ -73,6 +73,19 @@ impl SessionState {
 
             Self::sync_session_with_handles(session, session_handles);
         }
+    }
+
+    /// Applies one recomputed session-size bucket to the matching snapshot.
+    pub fn apply_session_size_updated(&mut self, session_id: &str, session_size: SessionSize) {
+        let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+
+        session.size = session_size;
     }
 
     /// Synchronizes one session snapshot from shared runtime handles.
@@ -262,6 +275,46 @@ mod tests {
         // Assert
         assert_eq!(session.output, "first line\nsecond line\n");
         assert_eq!(session.status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies explicit size updates patch the in-memory session snapshot.
+    fn apply_session_size_updated_updates_matching_session() {
+        // Arrange
+        let session_id = "session-3".to_string();
+        let session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            folder: std::env::temp_dir(),
+            id: session_id.clone(),
+            model: AgentKind::Gemini.default_model(),
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            published_upstream_ref: None,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Review,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let mut state = SessionState::new(
+            HashMap::new(),
+            vec![session],
+            TableState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+
+        // Act
+        state.apply_session_size_updated(&session_id, SessionSize::S);
+
+        // Assert
+        assert_eq!(state.sessions[0].size, SessionSize::S);
     }
 
     #[test]
