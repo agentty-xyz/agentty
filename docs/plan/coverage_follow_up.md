@@ -79,9 +79,11 @@ After the smaller slices land, the highest uncovered totals concentrate in workf
 
 The remaining merge, app-server, prompt, and session-view hotspots only retain genuinely hard-to-reach branches, making the next baseline and ratchet increase credible.
 
-- [ ] Add remaining no-progress, cleanup-failure, and retry-exhaustion tests in `crates/agentty/src/app/session/workflow/merge.rs`.
-- [ ] Expand `crates/agentty/src/infra/codex_app_server.rs` coverage for restart, resume, timeout, and compaction branches using transport fixtures instead of live subprocesses.
-- [ ] Add residual branch tests in `crates/agentty/src/runtime/mode/prompt.rs` and `crates/agentty/src/runtime/mode/session_view.rs` for stale selections, empty states, and status-gated actions still left uncovered.
+- [x] Add remaining no-progress, cleanup-failure, and retry-exhaustion tests in `crates/agentty/src/app/session/workflow/merge.rs`.
+- [x] Expand `crates/agentty/src/infra/codex_app_server.rs` coverage for restart, resume, timeout, and compaction branches using transport fixtures instead of live subprocesses.
+- [x] Add residual branch tests in `crates/agentty/src/runtime/mode/prompt.rs` and `crates/agentty/src/runtime/mode/session_view.rs` for stale selections, empty states, and status-gated actions still left uncovered.
+
+Ratchet note: No threshold change after priority 4 alone on March 10, 2026. Priority 5 still owns the next `.pre-commit-config.yaml` ratchet update after a refreshed workspace baseline.
 
 Primary files:
 
@@ -130,7 +132,7 @@ Baseline captured on March 7, 2026 from `cargo llvm-cov --workspace --json --sum
 | Workspace baseline | Workspace coverage is 87.57% lines (`36614/41813`) and 85.30% functions (`4137/4850`). | Baseline captured |
 | Runtime/editor boundaries | `runtime/terminal`, `app/task`, and `runtime/event` already have the first-pass deterministic branch coverage this plan depends on. | Complete |
 | UI overlay and page helpers | `ui/overlay.rs`, `ui/page/project_list.rs`, and `ui/page/setting.rs` now have focused helper and render-branch coverage for popup sizing, footer assembly, and multiline row behavior; full baseline impact still rolls into the next `cargo llvm-cov` refresh. | Complete |
-| Workflow hot spots after first pass | `workflow/merge.rs`, `infra/codex_app_server.rs`, `runtime/mode/prompt.rs`, and `runtime/mode/session_view.rs` still hold the largest remaining uncovered branch totals. | Partial |
+| Workflow hot spots after first pass | `workflow/merge.rs`, `infra/codex_app_server.rs`, `runtime/mode/prompt.rs`, and `runtime/mode/session_view.rs` now have deterministic coverage for retry/no-progress cleanup paths, Codex runtime restart-resume-timeout-compaction branches, and stale-selection/status-gated mode handling; remaining baseline impact still rolls into the next `cargo llvm-cov` refresh. | Complete |
 | Settings and git orchestration | `app/setting.rs`, `infra/git/sync.rs`, `infra/git/repo.rs`, and `infra/git/merge.rs` now have deterministic fallback and unhappy-path coverage for persisted defaults, edit lifecycles, branch validation, and git command detail reporting; full baseline impact still rolls into the next `cargo llvm-cov` refresh. | Complete |
 | Coverage ratchet | `.pre-commit-config.yaml` already enforces the current 87/85 coverage floor, with no threshold change after the March 8, 2026 update. | Healthy |
 

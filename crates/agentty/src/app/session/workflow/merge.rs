@@ -2123,6 +2123,122 @@ mod tests {
         assert_eq!(error, "failed to list conflicts");
     }
 
+    /// Verifies session rebase assistance stops when the same conflict detail
+    /// repeats after the initial conflict state.
+    #[tokio::test]
+    async fn test_run_rebase_assist_loop_core_stops_on_repeated_conflict_detail() {
+        // Arrange
+        let repeated_detail = "CONFLICT (content): Merge conflict in src/lib.rs".to_string();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_list_conflicted_files()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+        mock_git_client
+            .expect_list_staged_conflict_marker_files()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+        mock_git_client
+            .expect_rebase_continue()
+            .times(REBASE_ASSIST_POLICY.max_attempts)
+            .returning({
+                let repeated_detail = repeated_detail.clone();
+
+                move |_| {
+                    let repeated_detail = repeated_detail.clone();
+
+                    Box::pin(async move {
+                        Ok(git::RebaseStepResult::Conflict {
+                            detail: repeated_detail,
+                        })
+                    })
+                }
+            });
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+        // Act
+        let result = SessionManager::run_rebase_assist_loop_core(
+            RebaseAssistLoopInput::Session(input),
+            Some(repeated_detail.clone()),
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("assist loop should stop on repeated conflict detail");
+        assert_eq!(
+            error,
+            format!(
+                "Rebase assistance made no progress: repeated identical conflict state. Last \
+                 detail: {repeated_detail}"
+            )
+        );
+    }
+
+    /// Verifies session rebase assistance surfaces the final conflict detail
+    /// when every retry hits a distinct conflict state until the retry budget
+    /// is exhausted.
+    #[tokio::test]
+    async fn test_run_rebase_assist_loop_core_reports_retry_exhaustion_detail() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        for detail in [
+            "CONFLICT (content): Merge conflict in src/lib.rs",
+            "CONFLICT (content): Merge conflict in src/main.rs",
+            "CONFLICT (content): Merge conflict in README.md",
+        ] {
+            mock_git_client
+                .expect_list_conflicted_files()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+            mock_git_client
+                .expect_list_staged_conflict_marker_files()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+            mock_git_client
+                .expect_rebase_continue()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning({
+                    let detail = detail.to_string();
+
+                    move |_| {
+                        let detail = detail.clone();
+
+                        Box::pin(async move { Ok(git::RebaseStepResult::Conflict { detail }) })
+                    }
+                });
+        }
+        mock_git_client
+            .expect_abort_rebase()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let (_temp_dir, input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+        // Act
+        let result = SessionManager::run_rebase_assist_loop_core(
+            RebaseAssistLoopInput::Session(input),
+            None,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("assist loop should report the final retry conflict");
+        assert_eq!(
+            error,
+            "Rebase still has conflicts after assistance: CONFLICT (content): Merge conflict in \
+             README.md"
+        );
+    }
+
     #[tokio::test]
     async fn test_run_rebase_start_recovers_stale_rebase_state_and_retries() {
         // Arrange
@@ -2194,6 +2310,41 @@ mod tests {
             error.contains("Cleanup with `git rebase --abort` failed: abort failed"),
             "error should include abort failure detail"
         );
+    }
+
+    /// Verifies merged-session cleanup surfaces branch deletion failures after
+    /// the worktree itself has already been removed.
+    #[tokio::test]
+    async fn test_cleanup_merged_session_worktree_reports_delete_branch_failure() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let folder = temp_dir.path().join("session-worktree");
+        let repo_root = temp_dir.path().join("repo-root");
+        let source_branch = "agentty/session-123".to_string();
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_git_client
+            .expect_remove_worktree()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_delete_branch()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Err("delete failed".to_string()) }));
+        mock_fs_client.expect_remove_dir_all().times(0);
+
+        // Act
+        let result = SessionManager::cleanup_merged_session_worktree(
+            folder,
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            source_branch,
+            Some(repo_root),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Err("delete failed".to_string()));
     }
 
     #[test]

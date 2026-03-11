@@ -1604,6 +1604,25 @@ mod tests {
         }
     }
 
+    /// Verifies slash navigation leaves selection unchanged when the current
+    /// command text matches no slash-command options.
+    #[tokio::test]
+    async fn test_advance_prompt_slash_selection_ignores_empty_command_matches() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/x", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.selected_index = 2;
+        }
+
+        // Act
+        advance_prompt_slash_selection(&mut app);
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.selected_index, 2);
+        }
+    }
+
     #[tokio::test]
     async fn test_handle_prompt_slash_submit_advances_model_command_to_agent_stage() {
         // Arrange
@@ -1696,6 +1715,27 @@ mod tests {
             assert_eq!(*slash_state, PromptSlashState::new());
         }
         assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
+    }
+
+    /// Verifies slash submit ignores unmatched commands and preserves the
+    /// prompt state.
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_ignores_unknown_command() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/x", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt {
+            input, slash_state, ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "/x");
+            assert_eq!(*slash_state, PromptSlashState::new());
+        }
     }
 
     #[tokio::test]
@@ -1972,6 +2012,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_prompt_context_falls_back_to_list_when_session_is_missing() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("follow up", None).await;
+        app.mode = AppMode::Prompt {
+            at_mention_state: None,
+            history_state: PromptHistoryState::new(Vec::new()),
+            input: InputState::with_text("follow up".to_string()),
+            session_id: "missing-session".to_string(),
+            slash_state: PromptSlashState::new(),
+            scroll_offset: Some(2),
+        };
+
+        // Act
+        let context = prompt_context(&mut app);
+
+        // Assert
+        assert!(context.is_none());
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
     async fn test_handle_at_mention_select_dismisses_stale_mention_state() {
         // Arrange
         let state = PromptAtMentionState::new(vec![FileEntry {
@@ -2012,6 +2073,39 @@ mod tests {
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
         if let AppMode::Prompt { input, .. } = &app.mode {
             assert_eq!(input.text(), "@src/ ");
+        }
+    }
+
+    /// Verifies stale at-mention selections are clamped to the filtered entry
+    /// list before insertion.
+    #[tokio::test]
+    async fn test_handle_at_mention_select_clamps_stale_selected_index() {
+        // Arrange
+        let mut state = PromptAtMentionState::new(vec![
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "tests/main.rs".to_string(),
+            },
+        ]);
+        state.selected_index = 9;
+        let (mut app, _base_dir) = new_test_prompt_app("@src/ma", Some(state)).await;
+
+        // Act
+        handle_at_mention_select(&mut app);
+
+        // Assert
+        if let AppMode::Prompt {
+            at_mention_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert!(at_mention_state.is_none());
+            assert_eq!(input.text(), "@src/main.rs ");
         }
     }
 
@@ -2060,6 +2154,21 @@ mod tests {
         // Assert
         assert!(matches!(app.mode, AppMode::List));
         assert!(app.sessions.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_submit_key_ignores_empty_prompt() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(app.sessions.sessions[0].prompt, "");
     }
 
     #[test]

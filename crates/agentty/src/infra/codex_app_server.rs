@@ -113,7 +113,20 @@ impl RealCodexAppServerClient {
 
     /// Starts `codex app-server`, initializes it, and creates a thread.
     async fn start_runtime(request: &AppServerTurnRequest) -> Result<CodexSessionRuntime, String> {
-        let mut command = tokio::process::Command::new("codex");
+        Self::start_runtime_with_command(Path::new("codex"), request).await
+    }
+
+    /// Starts one app-server executable, initializes it, and creates or
+    /// resumes a thread for the requested session.
+    ///
+    /// Tests use this helper with a scripted binary path so lifecycle
+    /// branches stay deterministic without depending on a real `codex`
+    /// installation.
+    async fn start_runtime_with_command(
+        executable: &Path,
+        request: &AppServerTurnRequest,
+    ) -> Result<CodexSessionRuntime, String> {
+        let mut command = tokio::process::Command::new(executable);
         command.arg("--model").arg(&request.model);
 
         command
@@ -149,27 +162,12 @@ impl RealCodexAppServerClient {
         };
 
         Self::initialize_runtime(&mut session).await?;
-        let (thread_id, restored_context) =
-            if let Some(provider_conversation_id) = request.provider_conversation_id.as_deref() {
-                match Self::resume_thread(
-                    &mut session,
-                    provider_conversation_id,
-                    request.reasoning_level,
-                )
-                .await
-                {
-                    Ok(thread_id) => (thread_id, true),
-                    Err(_) => (
-                        Self::start_thread(&mut session, request.reasoning_level).await?,
-                        false,
-                    ),
-                }
-            } else {
-                (
-                    Self::start_thread(&mut session, request.reasoning_level).await?,
-                    false,
-                )
-            };
+        let (thread_id, restored_context) = Self::start_or_resume_thread(
+            &mut session,
+            request.provider_conversation_id.as_deref(),
+            request.reasoning_level,
+        )
+        .await?;
         session.thread_id = thread_id;
         session.restored_context = restored_context;
 
@@ -205,6 +203,31 @@ impl RealCodexAppServerClient {
         write_json_line(Self::runtime_stdin(session)?, &runtime_initialized_payload).await?;
 
         Ok(())
+    }
+
+    /// Restores a known thread when possible and otherwise starts a fresh
+    /// thread for the runtime.
+    ///
+    /// Returns the active thread id plus a flag indicating whether provider
+    /// context was restored.
+    ///
+    /// # Errors
+    /// Returns an error when a new thread cannot be started.
+    async fn start_or_resume_thread(
+        session: &mut CodexSessionRuntime,
+        provider_conversation_id: Option<&str>,
+        reasoning_level: ReasoningLevel,
+    ) -> Result<(String, bool), String> {
+        if let Some(provider_conversation_id) = provider_conversation_id {
+            match Self::resume_thread(session, provider_conversation_id, reasoning_level).await {
+                Ok(thread_id) => return Ok((thread_id, true)),
+                Err(_) => {}
+            }
+        }
+
+        let thread_id = Self::start_thread(session, reasoning_level).await?;
+
+        Ok((thread_id, false))
     }
 
     /// Starts one Codex thread and returns its identifier.
@@ -399,6 +422,15 @@ impl RealCodexAppServerClient {
     /// a `turn/completed` notification is received, indicating compaction has
     /// finished. On success, the runtime's cumulative token counter is reset.
     async fn send_compact_request(session: &mut CodexSessionRuntime) -> Result<(), String> {
+        Self::send_compact_request_with_timeout(session, CODEX_TURN_TIMEOUT).await
+    }
+
+    /// Sends `thread/compact/start` and waits for compaction to complete
+    /// within one caller-provided timeout window.
+    async fn send_compact_request_with_timeout(
+        session: &mut CodexSessionRuntime,
+        turn_timeout: Duration,
+    ) -> Result<(), String> {
         let compact_id = format!("compact-{}", uuid::Uuid::new_v4());
         let compact_payload = serde_json::json!({
             "method": "thread/compact/start",
@@ -411,8 +443,6 @@ impl RealCodexAppServerClient {
         write_json_line(Self::runtime_stdin(session)?, &compact_payload).await?;
         app_server_transport::wait_for_response_line(&mut session.stdout_lines, &compact_id)
             .await?;
-
-        let turn_timeout = CODEX_TURN_TIMEOUT;
 
         tokio::time::timeout(turn_timeout, async {
             loop {
@@ -479,6 +509,25 @@ impl RealCodexAppServerClient {
         reasoning_level: ReasoningLevel,
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> Result<(String, u64, u64), String> {
+        Self::execute_turn_event_loop_with_timeout(
+            session,
+            prompt,
+            reasoning_level,
+            stream_tx,
+            CODEX_TURN_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Sends one `turn/start` request and processes the event stream using a
+    /// caller-provided timeout window.
+    async fn execute_turn_event_loop_with_timeout(
+        session: &mut CodexSessionRuntime,
+        prompt: &str,
+        reasoning_level: ReasoningLevel,
+        stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+        turn_timeout: Duration,
+    ) -> Result<(String, u64, u64), String> {
         let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
         let turn_start_payload = Self::build_turn_start_payload(
             &session.folder,
@@ -496,8 +545,6 @@ impl RealCodexAppServerClient {
         let mut waiting_for_handoff_turn_completion = false;
         let mut latest_stream_usage: Option<(u64, u64)> = None;
         let mut completed_turn_usage: Option<(u64, u64)> = None;
-        let turn_timeout = CODEX_TURN_TIMEOUT;
-
         tokio::time::timeout(turn_timeout, async {
             loop {
                 let stdout_line = session
@@ -1568,6 +1615,8 @@ fn extract_thread_token_usage_for_turn(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::process::Stdio;
 
     use tempfile::{TempDir, tempdir};
@@ -1589,6 +1638,40 @@ mod tests {
         command
             .spawn()
             .expect("failed to spawn scripted Codex runtime")
+    }
+
+    /// Writes one executable fake `codex` binary that runs the provided shell
+    /// body when invoked by lifecycle tests.
+    fn write_fake_codex_binary(script_body: &str) -> (TempDir, std::path::PathBuf) {
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let executable = temp_dir.path().join("fake-codex");
+        let script = format!("#!/bin/sh\n{script_body}\n");
+        fs::write(&executable, script).expect("failed to write fake codex binary");
+        let mut permissions = fs::metadata(&executable)
+            .expect("failed to stat fake codex binary")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions)
+            .expect("failed to mark fake codex binary executable");
+
+        (temp_dir, executable)
+    }
+
+    /// Builds a minimal turn request used by runtime lifecycle tests.
+    fn build_turn_request(
+        folder: std::path::PathBuf,
+        provider_conversation_id: Option<&str>,
+    ) -> AppServerTurnRequest {
+        AppServerTurnRequest {
+            reasoning_level: ReasoningLevel::default(),
+            folder,
+            live_session_output: None,
+            model: AgentModel::Gpt53Codex.as_str().to_string(),
+            prompt: "Implement the task".to_string(),
+            provider_conversation_id: provider_conversation_id.map(ToString::to_string),
+            session_id: "session-123".to_string(),
+            session_output: None,
+        }
     }
 
     /// Builds a `CodexSessionRuntime` backed by a scripted shell child for
@@ -1754,6 +1837,69 @@ cat >/dev/null
         app_server_transport::shutdown_child(&mut session.child).await;
     }
 
+    /// Verifies runtime startup keeps provider context when
+    /// `thread/resume` succeeds.
+    #[tokio::test]
+    async fn start_runtime_with_command_marks_restored_context_after_resume() {
+        // Arrange
+        let script = r#"
+read initialize_request
+initialize_id=$(printf '%s\n' "$initialize_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$initialize_id"
+read initialized_notification
+read resume_request
+resume_id=$(printf '%s\n' "$resume_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"thread":{"id":"thread-resumed"}}}\n' "$resume_id"
+cat >/dev/null
+"#;
+        let (temp_dir, executable) = write_fake_codex_binary(script);
+        let request = build_turn_request(temp_dir.path().to_path_buf(), Some("thread-existing"));
+
+        // Act
+        let mut session =
+            RealCodexAppServerClient::start_runtime_with_command(&executable, &request)
+                .await
+                .expect("runtime should start");
+
+        // Assert
+        assert_eq!(session.thread_id, "thread-resumed");
+        assert!(session.restored_context);
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies runtime startup falls back to `thread/start` when
+    /// `thread/resume` cannot restore the prior provider thread.
+    #[tokio::test]
+    async fn start_runtime_with_command_falls_back_to_thread_start_after_resume_failure() {
+        // Arrange
+        let script = r#"
+read initialize_request
+initialize_id=$(printf '%s\n' "$initialize_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$initialize_id"
+read initialized_notification
+read resume_request
+resume_id=$(printf '%s\n' "$resume_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"thread":{}}}\n' "$resume_id"
+read start_request
+start_id=$(printf '%s\n' "$start_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"thread":{"id":"thread-started"}}}\n' "$start_id"
+cat >/dev/null
+"#;
+        let (temp_dir, executable) = write_fake_codex_binary(script);
+        let request = build_turn_request(temp_dir.path().to_path_buf(), Some("thread-existing"));
+
+        // Act
+        let mut session =
+            RealCodexAppServerClient::start_runtime_with_command(&executable, &request)
+                .await
+                .expect("runtime should start");
+
+        // Assert
+        assert_eq!(session.thread_id, "thread-started");
+        assert!(!session.restored_context);
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
     /// Verifies context compaction resets cumulative input tokens after the
     /// runtime confirms successful completion.
     #[tokio::test]
@@ -1800,6 +1946,171 @@ cat >/dev/null
             Err("Codex context compaction failed: compaction boom".to_string())
         );
         assert_eq!(session.latest_input_tokens, 450_000);
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies compaction waits fail with the configured timeout message
+    /// when no `turn/completed` event ever arrives.
+    #[tokio::test]
+    async fn send_compact_request_with_timeout_reports_missing_completion() {
+        // Arrange
+        let script = r#"
+read request
+request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$request_id"
+sleep 5
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "thread-1", 450_000);
+
+        // Act
+        let compact_result = RealCodexAppServerClient::send_compact_request_with_timeout(
+            &mut session,
+            Duration::from_millis(10),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            compact_result,
+            Err(
+                "Timed out waiting for Codex app-server compaction to complete after 0 seconds"
+                    .to_string()
+            )
+        );
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies proactive compaction runs before the turn event loop when the
+    /// accumulated input token count already exceeds the model threshold.
+    #[tokio::test]
+    async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
+        // Arrange
+        let script = r#"
+read compact_request
+compact_id=$(printf '%s\n' "$compact_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$compact_id"
+printf '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}\n'
+read turn_request
+turn_id=$(printf '%s\n' "$turn_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"turn":{"id":"turn-123"}}}\n' "$turn_id"
+printf '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"Completed after compact"}}}\n'
+printf '{"method":"turn/completed","params":{"turn":{"id":"turn-123","status":"completed","usage":{"inputTokens":12,"outputTokens":3}}}}\n'
+cat >/dev/null
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(
+            script,
+            "thread-1",
+            AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT,
+        );
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = RealCodexAppServerClient::run_turn_with_runtime(
+            &mut session,
+            "Implement the task",
+            ReasoningLevel::default(),
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Ok(("Completed after compact".to_string(), 12, 3)));
+        assert_eq!(session.latest_input_tokens, 12);
+        assert_eq!(
+            stream_rx.try_recv().ok(),
+            Some(AppServerStreamEvent::ProgressUpdate(
+                "Compacting context".to_string()
+            ))
+        );
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies a `ContextWindowExceeded` turn failure triggers reactive
+    /// compaction and retries the turn once.
+    #[tokio::test]
+    async fn run_turn_with_runtime_retries_after_context_window_exceeded() {
+        // Arrange
+        let script = r#"
+read first_turn_request
+first_turn_id=$(printf '%s\n' "$first_turn_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"turn":{"id":"turn-1"}}}\n' "$first_turn_id"
+printf '{"method":"turn/completed","params":{"turn":{"id":"turn-1","status":"failed","error":{"message":"Token limit exceeded","codexErrorInfo":"ContextWindowExceeded"}}}}\n'
+read compact_request
+compact_id=$(printf '%s\n' "$compact_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{}}\n' "$compact_id"
+printf '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}\n'
+read second_turn_request
+second_turn_id=$(printf '%s\n' "$second_turn_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"turn":{"id":"turn-2"}}}\n' "$second_turn_id"
+printf '{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"Recovered response"}}}\n'
+printf '{"method":"turn/completed","params":{"turn":{"id":"turn-2","status":"completed","usage":{"inputTokens":25,"outputTokens":5}}}}\n'
+cat >/dev/null
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "thread-1", 0);
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = RealCodexAppServerClient::run_turn_with_runtime(
+            &mut session,
+            "Implement the task",
+            ReasoningLevel::default(),
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(result, Ok(("Recovered response".to_string(), 25, 5)));
+        assert_eq!(session.latest_input_tokens, 25);
+        assert_eq!(
+            stream_rx.try_recv().ok(),
+            Some(AppServerStreamEvent::AssistantMessage {
+                is_delta: false,
+                message: "[Codex app-server] [ContextWindowExceeded] Token limit exceeded"
+                    .to_string(),
+                phase: None,
+            })
+        );
+        assert_eq!(
+            stream_rx.try_recv().ok(),
+            Some(AppServerStreamEvent::ProgressUpdate(
+                "Compacting context".to_string()
+            ))
+        );
+        app_server_transport::shutdown_child(&mut session.child).await;
+    }
+
+    /// Verifies turn execution reports the configured timeout when the runtime
+    /// never emits a terminal `turn/completed` event.
+    #[tokio::test]
+    async fn execute_turn_event_loop_with_timeout_reports_missing_completion() {
+        // Arrange
+        let script = r#"
+read turn_request
+turn_id=$(printf '%s\n' "$turn_request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","result":{"turn":{"id":"turn-123"}}}\n' "$turn_id"
+sleep 5
+"#;
+        let (_temp_dir, mut session) = build_scripted_runtime_session(script, "thread-1", 0);
+        let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = RealCodexAppServerClient::execute_turn_event_loop_with_timeout(
+            &mut session,
+            "Implement the task",
+            ReasoningLevel::default(),
+            stream_tx,
+            Duration::from_millis(10),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(
+                "Timed out waiting for Codex app-server `turn/completed` after 0 seconds"
+                    .to_string()
+            )
+        );
         app_server_transport::shutdown_child(&mut session.child).await;
     }
 

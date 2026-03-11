@@ -1123,6 +1123,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_view_session_snapshot_returns_none_for_stale_session_index() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id,
+            scroll_offset: Some(1),
+        };
+        let mut context = view_context(&mut app).expect("expected view context");
+        context.session_index = 99;
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context);
+
+        // Assert
+        assert!(snapshot.is_none());
+    }
+
+    #[tokio::test]
     async fn test_view_total_lines_counts_wrapped_output_lines() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -1477,6 +1498,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_focused_review_output_mode_clears_stale_session_selection() {
+        // Arrange
+        let (app, _base_dir, session_id) = new_test_app_with_session().await;
+        let view_context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: None,
+            session_id,
+            session_index: 99,
+        };
+        let mut app = app;
+        let mut next_done_session_output_mode = DoneSessionOutputMode::Summary;
+        let mut next_focused_review_status_message = None;
+        let mut next_focused_review_text = None;
+
+        // Act
+        open_focused_review_output_mode(
+            &mut app,
+            &view_context,
+            &mut next_done_session_output_mode,
+            &mut next_focused_review_status_message,
+            &mut next_focused_review_text,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            next_done_session_output_mode,
+            DoneSessionOutputMode::FocusedReview
+        );
+        assert_eq!(next_focused_review_status_message, None);
+        assert_eq!(next_focused_review_text, Some(String::new()));
+    }
+
+    #[tokio::test]
     async fn test_show_diff_for_view_session_switches_mode_to_diff() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -1531,6 +1588,28 @@ mod tests {
                 ..
             } if session_id == &context.session_id && diff.contains("Failed to run git diff:")
         ));
+    }
+
+    /// Verifies diff loading returns an empty string when the viewed session
+    /// disappears before diff generation starts.
+    #[tokio::test]
+    async fn test_load_view_session_diff_returns_empty_string_for_stale_session_index() {
+        // Arrange
+        let (app, _base_dir, session_id) = new_test_app_with_session().await;
+        let context = ViewContext {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            scroll_offset: Some(0),
+            session_id,
+            session_index: 99,
+        };
+
+        // Act
+        let diff = load_view_session_diff(&app, &context).await;
+
+        // Assert
+        assert!(diff.is_empty());
     }
 
     #[tokio::test]
@@ -2062,6 +2141,125 @@ mod tests {
             pending_update.focused_review_status_message,
             Some(loading_message)
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_view_key_ignores_diff_for_non_review_status() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id: session_id.clone(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot = ViewSessionSnapshot {
+            can_open_worktree: false,
+            is_action_allowed: false,
+            publish_branch_action: None,
+            session_output: String::new(),
+            session_state: ViewSessionState::Done,
+            session_status: Status::Done,
+        };
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ViewMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
+        };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                scroll_offset: Some(2),
+                ..
+            } if session_id == &view_context.session_id
+        ));
+        assert_eq!(pending_update.scroll_offset, Some(2));
+        assert_eq!(
+            pending_update.done_session_output_mode,
+            DoneSessionOutputMode::Summary
+        );
+    }
+
+    /// Verifies session-view action keys are ignored when the current session
+    /// status does not allow those actions.
+    #[tokio::test]
+    async fn test_handle_view_key_ignores_status_gated_actions() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id: session_id.clone(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let view_metrics = ViewMetrics {
+            total_lines: 10,
+            view_height: 5,
+        };
+
+        // Act
+        for key in [
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+        ] {
+            let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+            let view_session_snapshot = ViewSessionSnapshot {
+                can_open_worktree: false,
+                is_action_allowed: false,
+                publish_branch_action: None,
+                session_output: String::new(),
+                session_state: ViewSessionState::Done,
+                session_status: Status::Done,
+            };
+            let view_key_context = ViewKeyContext {
+                context: &view_context,
+                metrics: view_metrics,
+                session_snapshot: &view_session_snapshot,
+            };
+            let should_apply =
+                handle_view_key(&mut app, key, view_key_context, &mut pending_update).await;
+
+            // Assert
+            assert!(should_apply);
+            assert!(matches!(
+                app.mode,
+                AppMode::View {
+                    ref session_id,
+                    scroll_offset: Some(2),
+                    ..
+                } if session_id == &view_context.session_id
+            ));
+            assert_eq!(pending_update.scroll_offset, Some(2));
+            assert_eq!(
+                pending_update.done_session_output_mode,
+                DoneSessionOutputMode::Summary
+            );
+        }
     }
 
     #[tokio::test]
