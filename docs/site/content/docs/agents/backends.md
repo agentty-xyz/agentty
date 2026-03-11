@@ -51,7 +51,7 @@ envelope:
 - `## Change Summary` must contain `### Current Turn` (what changed in this
   turn only) and `### Session Changes` (the cumulative session-branch diff)
 
-One-shot utility prompts, such as title generation, merge commit-message
+One-shot utility prompts, such as title generation, session commit-message
 generation, focused review preparation, auto-commit assistance, and rebase
 conflict assistance, still return the same protocol JSON shape but skip the
 change-summary footer so the answer text stays usable as a machine-readable

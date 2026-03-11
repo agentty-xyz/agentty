@@ -13,4 +13,3 @@ Do not add `Primary files` blocks inside priorities. Mention every file needed f
 - [`end_to_end_test_structure.md`](end_to_end_test_structure.md) - Implementation plan for organizing deterministic local scenario tests and thin live smoke suites around git, forge, and agent workflows.
 - [`forge_review_request_support.md`](forge_review_request_support.md) - Implementation plan for adding forge-generic review request workflows across GitHub and GitLab.
 - [`prompt_image_paste.md`](prompt_image_paste.md) - Implementation plan for pasting clipboard images into session prompts and rendering pending attachments in the chat composer.
-- [`session_commit_message_flow.md`](session_commit_message_flow.md) - Implementation plan for making the session branch commit message authoritative and reusing it during merge.
