@@ -80,7 +80,7 @@ choose the correct module when implementing changes.
 | - `gemini.rs` | Gemini backend implementation. |
 | - `protocol.rs` | Structured response contract (`AgentResponse`, `AgentResponseMessage`, `AgentResponseMessageKind`), JSON-schema generation, parsing, stream normalization, and repair prompt helpers. |
 | - `response_parser.rs` | Provider-specific final/stream output parsing and usage extraction for Claude, Gemini, and Codex. |
-| - `submission.rs` | Shared one-shot prompt execution and strict protocol repair for generated titles, session/merge commit messages, assist prompts, and review text. |
+| - `submission.rs` | Shared one-shot prompt execution and strict protocol repair for generated titles, session commit messages, assist prompts, and review text. |
 | `crates/agentty/src/infra/app_server.rs` | `AppServerClient` trait and shared request/response stream types. |
 | `crates/agentty/src/infra/app_server_router.rs` | `RoutingAppServerClient` - provider routing for app-server models (Codex/Gemini). |
 | `crates/agentty/src/infra/app_server_transport.rs` | Shared stdio JSON-RPC transport utilities for app-server processes. |

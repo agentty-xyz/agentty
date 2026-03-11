@@ -56,10 +56,10 @@ at one evolving commit. It regenerates that commit message from the cumulative
 session diff, amends `HEAD`, and refreshes the session title and summary from
 the same commit text before merge begins.
 
-When a session enters **Merging**, Agentty generates the squash commit message
-through the configured agent model. If that message cannot be produced, the
-merge stops, the session returns to **Review**, and the output panel shows the
-merge error instead of using a fallback commit message.
+When a session enters **Merging**, Agentty reuses the session branch `HEAD`
+commit message for the final squash commit on the base branch. Merge still
+stops and returns the session to **Review** if rebase or squash-merge git steps
+fail, but it no longer runs a separate merge-only commit-message prompt.
 
 When `Open Commands` in Settings contains multiple entries (one command per
 line), pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open,

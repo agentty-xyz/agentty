@@ -149,6 +149,24 @@ mod tests {
         );
     }
 
+    /// Runs `git` in `repo_path` and returns trimmed stdout.
+    fn run_git_stdout(repo_path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to run git command");
+
+        assert!(
+            output.status.success(),
+            "git command {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     /// Creates a committed repository rooted at `repo_path`.
     fn setup_test_git_repo(repo_path: &Path) {
         run_git_command(repo_path, &["init", "-b", "main"]);
@@ -179,6 +197,72 @@ mod tests {
         let error = result.expect_err("branch mismatch should fail");
         assert!(error.contains("repository is on 'feature-branch'"));
         assert!(error.contains("Switch to 'main' first."));
+    }
+
+    #[tokio::test]
+    async fn squash_merge_commits_the_provided_multiline_message() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(temp_dir.path(), &["checkout", "-b", "feature-branch"]);
+        fs::write(temp_dir.path().join("feature.txt"), "feature content")
+            .expect("failed to write feature file");
+        run_git_command(temp_dir.path(), &["add", "feature.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "Add feature"]);
+        run_git_command(temp_dir.path(), &["checkout", "main"]);
+        let commit_message = "Refine merge flow\n\n- Reuse the session commit body".to_string();
+
+        // Act
+        let result = squash_merge(
+            temp_dir.path().to_path_buf(),
+            "feature-branch".to_string(),
+            "main".to_string(),
+            commit_message.clone(),
+        )
+        .await;
+        let head_message = run_git_stdout(temp_dir.path(), &["log", "-1", "--pretty=%B"]);
+
+        // Assert
+        assert_eq!(result, Ok(SquashMergeOutcome::Committed));
+        assert_eq!(head_message, commit_message);
+    }
+
+    #[tokio::test]
+    async fn squash_merge_skips_commit_creation_when_changes_are_already_present() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(temp_dir.path(), &["checkout", "-b", "session-branch"]);
+        fs::write(temp_dir.path().join("session.txt"), "session change")
+            .expect("failed to write session file");
+        run_git_command(temp_dir.path(), &["add", "session.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "Session change"]);
+        run_git_command(temp_dir.path(), &["checkout", "main"]);
+        fs::write(temp_dir.path().join("session.txt"), "session change")
+            .expect("failed to write main file");
+        run_git_command(temp_dir.path(), &["add", "session.txt"]);
+        run_git_command(
+            temp_dir.path(),
+            &["commit", "-m", "Apply same change on main"],
+        );
+        let commit_count_before = run_git_stdout(temp_dir.path(), &["rev-list", "--count", "HEAD"]);
+        let head_message_before = run_git_stdout(temp_dir.path(), &["log", "-1", "--pretty=%B"]);
+
+        // Act
+        let result = squash_merge(
+            temp_dir.path().to_path_buf(),
+            "session-branch".to_string(),
+            "main".to_string(),
+            "Merge session".to_string(),
+        )
+        .await;
+        let commit_count_after = run_git_stdout(temp_dir.path(), &["rev-list", "--count", "HEAD"]);
+        let head_message_after = run_git_stdout(temp_dir.path(), &["log", "-1", "--pretty=%B"]);
+
+        // Assert
+        assert_eq!(result, Ok(SquashMergeOutcome::AlreadyPresentInTarget));
+        assert_eq!(commit_count_after, commit_count_before);
+        assert_eq!(head_message_after, head_message_before);
     }
 
     #[tokio::test]

@@ -6,7 +6,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use askama::Template;
 use tokio::sync::mpsc;
@@ -25,7 +24,6 @@ use crate::infra::db::Database;
 use crate::infra::fs::{self as fs, FsClient};
 use crate::infra::git::{self as git, GitClient};
 
-const MERGE_COMMIT_MESSAGE_TIMEOUT: Duration = Duration::from_mins(2);
 const REBASE_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_attempts: 3,
     // Allow up to 3 consecutive identical-content observations before
@@ -44,13 +42,6 @@ pub(crate) struct SessionMergeService;
 struct RebaseAssistPromptTemplate<'a> {
     base_branch: &'a str,
     conflicted_files: &'a str,
-}
-
-/// Askama view model for rendering squash commit-message generation prompts.
-#[derive(Template)]
-#[template(path = "merge_commit_message_prompt.md", escape = "none")]
-struct MergeCommitMessagePromptTemplate<'a> {
-    diff: &'a str,
 }
 
 /// Boxed async result used by sync conflict assistance boundary methods.
@@ -586,8 +577,9 @@ impl SessionManager {
     /// Executes the merge workflow for one session branch.
     ///
     /// # Errors
-    /// Returns an error when the rebase step fails, squash-merge git commands
-    /// fail, status transitions are invalid, or worktree cleanup fails.
+    /// Returns an error when the rebase step fails, the canonical session
+    /// commit message cannot be loaded, squash-merge git commands fail, status
+    /// transitions are invalid, or worktree cleanup fails.
     async fn execute_merge_workflow(input: MergeTaskInput) -> Result<String, String> {
         let rebase_input = Self::merge_rebase_input(&input);
         let MergeTaskInput {
@@ -600,7 +592,6 @@ impl SessionManager {
             id,
             output: _,
             repo_root,
-            session_model,
             source_branch,
             status,
             ..
@@ -620,32 +611,28 @@ impl SessionManager {
             base_branch.clone(),
         )
         .await?;
-        let (merge_outcome, commit_message) = if squash_diff.trim().is_empty() {
-            (git::SquashMergeOutcome::AlreadyPresentInTarget, None)
+        let authoritative_commit_message = if squash_diff.trim().is_empty() {
+            None
         } else {
-            let commit_message = {
-                let folder = folder.clone();
-                let squash_diff = squash_diff.clone();
-
-                Self::generate_merge_commit_message(
-                    folder.as_path(),
-                    session_model,
-                    squash_diff.as_str(),
+            Some(
+                Self::load_authoritative_session_commit_message(
+                    git_client.as_ref(),
+                    folder.clone(),
                 )
+                .await?,
+            )
+        };
+        let merge_outcome = if let Some(commit_message) = authoritative_commit_message.as_ref() {
+            let repo_root = repo_root.clone();
+            let source_branch = source_branch.clone();
+            let base_branch = base_branch.clone();
+            let commit_message = commit_message.clone();
+
+            git_client
+                .squash_merge(repo_root, source_branch, base_branch, commit_message)
                 .await?
-            };
-
-            let merge_outcome = {
-                let repo_root = repo_root.clone();
-                let source_branch = source_branch.clone();
-                let base_branch = base_branch.clone();
-                let commit_message = commit_message.clone();
-                git_client
-                    .squash_merge(repo_root, source_branch, base_branch, commit_message)
-                    .await?
-            };
-
-            (merge_outcome, Some(commit_message))
+        } else {
+            git::SquashMergeOutcome::AlreadyPresentInTarget
         };
 
         Self::cleanup_merged_session_worktree(
@@ -658,7 +645,7 @@ impl SessionManager {
         .await
         .map_err(|error| format!("Merged successfully but failed to remove worktree: {error}"))?;
 
-        if let Some(commit_message) = commit_message {
+        if let Some(commit_message) = authoritative_commit_message {
             Self::update_session_title_and_summary_from_commit_message(
                 &db,
                 &id,
@@ -712,42 +699,26 @@ impl SessionManager {
             .map_err(|error| format!("Failed to inspect merge diff: {error}"))
     }
 
-    /// Generates the squash-merge commit message and fails if the agent does
-    /// not return one before the timeout expires.
+    /// Loads the canonical session commit message from the worktree `HEAD` for
+    /// reuse during squash merge.
     ///
     /// # Errors
-    /// Returns an error when prompt rendering fails, the one-shot agent call
-    /// fails, the agent returns blank answer text, or generation exceeds the
-    /// timeout.
-    async fn generate_merge_commit_message(
-        folder: &Path,
-        session_model: AgentModel,
-        diff: &str,
+    /// Returns an error when `HEAD` cannot be inspected or does not contain a
+    /// non-blank commit message.
+    async fn load_authoritative_session_commit_message(
+        git_client: &dyn GitClient,
+        folder: PathBuf,
     ) -> Result<String, String> {
-        Self::run_merge_commit_message_generation_with_timeout(
-            MERGE_COMMIT_MESSAGE_TIMEOUT,
-            Self::generate_merge_commit_message_from_diff(folder, session_model, diff),
-        )
-        .await
-    }
-
-    /// Waits for commit-message generation to finish before the caller's
-    /// timeout deadline.
-    ///
-    /// # Errors
-    /// Returns an error when the inner generation future fails or does not
-    /// complete before `timeout_duration`.
-    async fn run_merge_commit_message_generation_with_timeout<F>(
-        timeout_duration: Duration,
-        generate_message: F,
-    ) -> Result<String, String>
-    where
-        F: Future<Output = Result<String, String>>,
-    {
-        match tokio::time::timeout(timeout_duration, generate_message).await {
-            Ok(result) => result,
-            Err(_) => Err(Self::merge_commit_message_timeout_error(timeout_duration)),
+        let commit_message = git_client.head_commit_message(folder).await?;
+        let Some(commit_message) = commit_message else {
+            return Err("Session branch has no commit message to reuse for merge".to_string());
+        };
+        let trimmed_commit_message = commit_message.trim();
+        if trimmed_commit_message.is_empty() {
+            return Err("Session branch has a blank commit message to reuse for merge".to_string());
         }
+
+        Ok(trimmed_commit_message.to_string())
     }
 
     async fn finalize_merge_task(
@@ -1632,89 +1603,6 @@ impl SessionManager {
         let _ = input.git_client.abort_rebase(folder).await;
     }
 
-    /// Renders the squash-merge prompt, submits it to the one-shot agent, and
-    /// returns the normalized commit message text.
-    ///
-    /// # Errors
-    /// Returns an error when prompt rendering fails, the one-shot agent call
-    /// fails, or the returned `answer` text is blank.
-    async fn generate_merge_commit_message_from_diff(
-        folder: &Path,
-        session_model: AgentModel,
-        diff: &str,
-    ) -> Result<String, String> {
-        let prompt = Self::merge_commit_message_prompt(diff)?;
-        let answer_text =
-            Self::generate_merge_commit_message_with_model(folder, session_model, &prompt).await?;
-
-        Self::merge_commit_message_from_answer_text(&answer_text)
-    }
-
-    /// Executes one isolated merge commit-message prompt and returns the
-    /// answer text.
-    ///
-    /// # Errors
-    /// Returns an error when the one-shot prompt cannot run or produces an
-    /// empty `answer` payload.
-    async fn generate_merge_commit_message_with_model(
-        folder: &Path,
-        session_model: AgentModel,
-        prompt: &str,
-    ) -> Result<String, String> {
-        let response = agent::submit_one_shot(agent::OneShotRequest {
-            child_pid: None,
-            folder,
-            model: session_model,
-            prompt,
-            reasoning_level: ReasoningLevel::default(),
-        })
-        .await?;
-        let content = response.to_answer_display_text();
-        let content = content.trim().to_string();
-
-        if content.is_empty() {
-            return Err("Merge commit message model returned empty output".to_string());
-        }
-
-        Ok(content)
-    }
-
-    /// Normalizes merge commit-message answer text returned by the one-shot
-    /// protocol runner.
-    ///
-    /// # Errors
-    /// Returns an error when the agent does not provide any non-whitespace
-    /// answer text.
-    fn merge_commit_message_from_answer_text(answer_text: &str) -> Result<String, String> {
-        let trimmed_answer_text = answer_text.trim();
-        if trimmed_answer_text.is_empty() {
-            return Err("Merge commit message model returned blank answer text".to_string());
-        }
-
-        Ok(trimmed_answer_text.to_string())
-    }
-
-    /// Formats a user-visible timeout error for commit-message generation.
-    fn merge_commit_message_timeout_error(timeout_duration: Duration) -> String {
-        if timeout_duration.as_secs() > 0 {
-            let seconds = timeout_duration.as_secs();
-            let unit = if seconds == 1 { "second" } else { "seconds" };
-
-            return format!(
-                "Timed out after {seconds} {unit} while generating merge commit message"
-            );
-        }
-
-        let milliseconds = timeout_duration.as_millis();
-        let unit = if milliseconds == 1 {
-            "millisecond"
-        } else {
-            "milliseconds"
-        };
-
-        format!("Timed out after {milliseconds} {unit} while generating merge commit message")
-    }
-
     /// Removes a merged session worktree and deletes its source branch.
     ///
     /// When `repo_root` is not provided, this resolves the shared repository
@@ -1744,25 +1632,12 @@ impl SessionManager {
 
         Ok(())
     }
-
-    /// Renders the merge commit-message prompt from the markdown template.
-    ///
-    /// # Errors
-    /// Returns an error if Askama template rendering fails.
-    pub(crate) fn merge_commit_message_prompt(diff: &str) -> Result<String, String> {
-        let template = MergeCommitMessagePromptTemplate { diff };
-
-        template
-            .render()
-            .map_err(|error| format!("Failed to render `merge_commit_message_prompt.md`: {error}"))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use mockall::Sequence;
     use tempfile::{TempDir, tempdir};
-    use tokio::time::sleep;
 
     use super::*;
 
@@ -1829,6 +1704,37 @@ mod tests {
                 id: "session-123".to_string(),
                 output: Arc::new(Mutex::new(String::new())),
                 session_model: AgentModel::Gemini3FlashPreview,
+            },
+        )
+    }
+
+    /// Builds merge-task input with injected git client for deterministic
+    /// workflow tests.
+    async fn build_merge_task_input_for_test(
+        git_client: Arc<dyn GitClient>,
+    ) -> (TempDir, MergeTaskInput) {
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let folder = temp_dir.path().join("session-worktree");
+        let repo_root = temp_dir.path().join("repo-root");
+
+        (
+            temp_dir,
+            MergeTaskInput {
+                app_event_tx,
+                base_branch: "main".to_string(),
+                child_pid: Arc::new(Mutex::new(None)),
+                db,
+                folder,
+                fs_client: test_fs_client(),
+                git_client,
+                id: "session-123".to_string(),
+                output: Arc::new(Mutex::new(String::new())),
+                repo_root,
+                session_model: AgentModel::Gemini3FlashPreview,
+                source_branch: "agentty/session-123".to_string(),
+                status: Arc::new(Mutex::new(Status::Merging)),
             },
         )
     }
@@ -1968,88 +1874,130 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_merge_commit_message_from_answer_text_accepts_plain_answer_text() {
+    #[tokio::test]
+    async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
         // Arrange
-        let answer_text = "Refine merge flow\n\n- Keep generated title";
+        let canonical_commit_message = "Refine merge flow\n\n- Reuse the session commit body";
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_is_rebase_in_progress()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_rebase_start()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_squash_merge_diff()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _, _| Box::pin(async { Ok("diff --git a/file b/file".to_string()) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning({
+                let canonical_commit_message = canonical_commit_message.to_string();
+
+                move |_| {
+                    let canonical_commit_message = canonical_commit_message.clone();
+
+                    Box::pin(async move { Ok(Some(canonical_commit_message)) })
+                }
+            });
+        mock_git_client
+            .expect_squash_merge()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning({
+                let canonical_commit_message = canonical_commit_message.to_string();
+
+                move |_, _, _, commit_message| {
+                    let canonical_commit_message = canonical_commit_message.clone();
+
+                    Box::pin(async move {
+                        assert_eq!(commit_message, canonical_commit_message);
+
+                        Ok(git::SquashMergeOutcome::Committed)
+                    })
+                }
+            });
+        mock_git_client
+            .expect_remove_worktree()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_delete_branch()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
 
         // Act
-        let commit_message = SessionManager::merge_commit_message_from_answer_text(answer_text);
+        let result = SessionManager::execute_merge_workflow(input).await;
 
         // Assert
         assert_eq!(
-            commit_message.as_deref(),
-            Ok("Refine merge flow\n\n- Keep generated title")
+            result,
+            Ok("Successfully merged agentty/session-123 into main".to_string())
         );
     }
 
-    #[test]
-    fn test_merge_commit_message_from_answer_text_rejects_blank_answer_text() {
+    #[tokio::test]
+    async fn test_execute_merge_workflow_skips_commit_creation_for_empty_squash_diff() {
         // Arrange
-        let answer_text = "   \n";
+        let mut mock_git_client = git::MockGitClient::new();
+        let mut sequence = Sequence::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_is_rebase_in_progress()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(false) }));
+        mock_git_client
+            .expect_rebase_start()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        mock_git_client
+            .expect_squash_merge_diff()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _, _| Box::pin(async { Ok("   ".to_string()) }));
+        mock_git_client.expect_head_commit_message().times(0);
+        mock_git_client.expect_squash_merge().times(0);
+        mock_git_client
+            .expect_remove_worktree()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_delete_branch()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
 
         // Act
-        let commit_message = SessionManager::merge_commit_message_from_answer_text(answer_text);
+        let result = SessionManager::execute_merge_workflow(input).await;
 
         // Assert
         assert_eq!(
-            commit_message,
-            Err("Merge commit message model returned blank answer text".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_run_merge_commit_message_generation_with_timeout_returns_message() {
-        // Arrange
-        let generate_message = async { Ok("Refine merge flow".to_string()) };
-
-        // Act
-        let commit_message = SessionManager::run_merge_commit_message_generation_with_timeout(
-            Duration::from_millis(10),
-            generate_message,
-        )
-        .await;
-
-        // Assert
-        assert_eq!(commit_message, Ok("Refine merge flow".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_run_merge_commit_message_generation_with_timeout_returns_inner_error() {
-        // Arrange
-        let generate_message = async { Err("agent failed".to_string()) };
-
-        // Act
-        let commit_message = SessionManager::run_merge_commit_message_generation_with_timeout(
-            Duration::from_millis(10),
-            generate_message,
-        )
-        .await;
-
-        // Assert
-        assert_eq!(commit_message, Err("agent failed".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_run_merge_commit_message_generation_with_timeout_reports_elapsed_timeout() {
-        // Arrange
-        let generate_message = async {
-            sleep(Duration::from_millis(20)).await;
-
-            Ok("late reply".to_string())
-        };
-
-        // Act
-        let commit_message = SessionManager::run_merge_commit_message_generation_with_timeout(
-            Duration::from_millis(1),
-            generate_message,
-        )
-        .await;
-
-        // Assert
-        assert_eq!(
-            commit_message,
-            Err("Timed out after 1 millisecond while generating merge commit message".to_string())
+            result,
+            Ok("Session changes from agentty/session-123 are already present in main".to_string(),)
         );
     }
 

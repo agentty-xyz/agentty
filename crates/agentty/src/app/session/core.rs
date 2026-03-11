@@ -2545,6 +2545,10 @@ mod tests {
             .expect_head_short_hash()
             .times(1)
             .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         install_mock_git_client(&mut app, mock_git_client);
 
         // Create a session that writes a file so commit_all has something to commit
@@ -2718,6 +2722,10 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_diff()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         install_mock_git_client(&mut app, mock_git_client);
 
         // Agent that produces no file changes
@@ -3816,36 +3824,6 @@ mod tests {
 
         // Assert
         assert!(parsed.is_none());
-    }
-
-    #[test]
-    fn test_merge_commit_message_prompt_uses_git_commit_default_format() {
-        // Arrange
-        let diff = "diff --git a/file.txt b/file.txt\n+change";
-
-        // Act
-        let prompt = SessionManager::merge_commit_message_prompt(diff)
-            .expect("merge commit message prompt should render");
-
-        // Assert
-        assert!(prompt.contains(
-            "Return one plain-text commit message in the protocol `answer` message text."
-        ));
-        assert!(prompt.contains(
-            "The first line is the commit title and must be one line, concise, and in present \
-             simple tense."
-        ));
-        assert!(prompt.contains("Do not use Conventional Commit prefixes like `feat:` or `fix:`."));
-        assert!(prompt.contains("add one empty line after the title"));
-        assert!(prompt.contains("use `-` bullets when listing multiple points."));
-        assert!(prompt.contains(
-            "Include `Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)` at the \
-             end of the final message."
-        ));
-        assert!(
-            prompt
-                .contains("Use repository default commit format unless explicit user instructions")
-        );
     }
 
     // --- session_folder / session_branch ---

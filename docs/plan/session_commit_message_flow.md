@@ -35,11 +35,11 @@ Merging still rebases the session branch and lands one commit on the base branch
 
 ### Substeps
 
-- [ ] Remove the merge-time one-shot commit-message generation path from `crates/agentty/src/app/session/workflow/merge.rs` and replace it with loading the session branch `HEAD` commit message after the pre-merge auto-commit/rebase step.
-- [ ] Add the minimal git-client support needed to read the authoritative session commit message from the worktree and pass it through to `squash_merge`.
-- [ ] Keep `git merge --squash` in `crates/agentty/src/infra/git/merge.rs` as the merge mechanism unless implementation work reveals a concrete blocker; do not switch to rebase/fast-forward merge in this pass.
-- [ ] Delete any now-obsolete merge-message prompt/template code and parsing-only tests under `crates/agentty/resources/`, including `crates/agentty/resources/merge_commit_message_prompt.md`, once merge no longer calls that utility path.
-- [ ] Add merge-focused tests that verify the base-branch squash commit reuses the session commit title/body and that the empty-diff/already-present branch still skips commit creation cleanly.
+- [x] Remove the merge-time one-shot commit-message generation path from `crates/agentty/src/app/session/workflow/merge.rs` and replace it with loading the session branch `HEAD` commit message after the pre-merge auto-commit/rebase step.
+- [x] Add the minimal git-client support needed to read the authoritative session commit message from the worktree and pass it through to `squash_merge`.
+- [x] Keep `git merge --squash` in `crates/agentty/src/infra/git/merge.rs` as the merge mechanism unless implementation work reveals a concrete blocker; do not switch to rebase/fast-forward merge in this pass.
+- [x] Delete any now-obsolete merge-message prompt/template code and parsing-only tests under `crates/agentty/resources/`, including `crates/agentty/resources/merge_commit_message_prompt.md`, once merge no longer calls that utility path.
+- [x] Add merge-focused tests that verify the base-branch squash commit reuses the session commit title/body and that the empty-diff/already-present branch still skips commit creation cleanly.
 
 ## 3) Sync docs and validation with the new single-message flow
 
@@ -53,8 +53,8 @@ Contributor and user docs describe the session commit message as the canonical s
 
 ### Substeps
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` so review/merge behavior explains that session turns keep one evolving commit message and merge reuses it.
-- [ ] Update `docs/site/content/docs/architecture/runtime-flow.md` and `docs/site/content/docs/architecture/module-map.md` so the one-shot utility list and merge-task description no longer claim merge-time commit-message generation.
+- [x] Update `docs/site/content/docs/usage/workflow.md` so review/merge behavior explains that session turns keep one evolving commit message and merge reuses it.
+- [x] Update `docs/site/content/docs/architecture/runtime-flow.md` and `docs/site/content/docs/architecture/module-map.md` so the one-shot utility list and merge-task description no longer claim merge-time commit-message generation.
 - [ ] Update `docs/site/content/docs/agents/backends.md` to remove merge-message generation from the examples of one-shot internal prompts if that utility path is removed.
 - [ ] Run focused tests while iterating, then finish with the repository validation gates once implementation lands across `crates/agentty/src/app/session/core.rs`, `crates/agentty/src/app/session/workflow/merge.rs`, `crates/agentty/src/infra/git/client.rs`, and `crates/agentty/src/infra/git/sync.rs`.
 
@@ -74,9 +74,9 @@ Contributor and user docs describe the session commit message as the canonical s
 |------|---------------------------|--------|
 | Session worktree commits | Auto-commit now derives one evolving session commit message from the cumulative session diff and rewrites `HEAD` with that title/body while keeping the branch to one session commit. | Completed |
 | Session metadata | Session `title` and `summary` now refresh from the current session commit message after turn auto-commit and pre-merge rebase auto-commit work. | Completed |
-| Merge message source | `SessionMergeService` renders `merge_commit_message_prompt.md` and asks the model for a squash-merge commit message right before `git merge --squash`. | Not Started |
-| Merge strategy | The current merge path already does rebase-first, squash-merge second, then worktree cleanup, and it has tests around empty-diff and already-present cases. | In Progress |
-| Documentation | User and architecture docs still describe merge-time commit-message generation as part of the `Merging` state. | Not Started |
+| Merge message source | `SessionMergeService` now reads the session branch `HEAD` commit message after the pre-merge rebase flow and passes that message straight through to `git merge --squash`. | Completed |
+| Merge strategy | Merge still keeps the rebase-first, squash-merge-second flow, and tests now cover commit-message reuse plus no-op/already-present merge outcomes. | Completed |
+| Documentation | Usage and architecture docs now describe merge reusing the canonical session commit message, while the remaining backend-doc sweep is still pending. | In Progress |
 
 ## Design Decisions
 
