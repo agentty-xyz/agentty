@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.0] - 2026-03-11
+
+### Added
+
+- Support pasted prompt images across all session backends.
+- Add auto-update implementation plan.
+
+### Changed
+
+- Session prompt footer uses shared help styling.
+- Simplify auto-update plan to background npm install with status bar progress.
+- Add test failure protocol to quality gates in AGENTS.md.
+- Update test prompt assignments to use `.into()` conversion.
+- Plan docs omit rendered size sections.
+- Stream Claude and Gemini prompts through stdin.
+- Surface Claude auth guidance for command failures.
+- Harden prompt image workflow lifecycle.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.5.11] - 2026-03-11
 
 ### Changed
