@@ -3,6 +3,7 @@
 Internal planning documents and UI design notes.
 
 Use `skills/implementation-plan/SKILL.md` for plan structure and implementation-planning requirements.
+Keep size budgeting in the skill workflow only; do not render `### Size` sections inside `docs/plan/*.md` files.
 
 ## Directory Index
 

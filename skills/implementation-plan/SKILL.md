@@ -32,8 +32,8 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Keep cross-plan notes short and include only active overlaps, ownership decisions, or unresolved conflicts.
    - Keep snapshot rows scannable: one short current-state sentence plus a status, without long file lists in the table cells.
    - Keep the `## Steps` section near the top of the plan, immediately after the title and scope/context line.
-   - In each step, render `Why now`, `Usable outcome`, `Size`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
-   - Use size budgeting during plan creation, not after the fact. Before finalizing the plan, estimate the changed-line scope for each step, split oversized work into additional steps, and only then record the resulting `### Size` entry for each slice.
+   - In each step, render `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
+   - Use size budgeting during plan creation, not after the fact. Before finalizing the plan, estimate the changed-line scope for each step, split oversized work into additional steps, and keep those size estimates in planning notes or reviewer reasoning rather than rendering a `### Size` block in `docs/plan/` files.
    - Treat each step as one mergeable planned slice. Keep every planned step at `XL` or smaller, and split any step that would be `XXL` before handing off the plan.
    - Use this size table when labeling a planned step:
 
@@ -61,7 +61,7 @@ This skill is the source of truth for plan structure and execution-planning requ
 
    - Remove duplicated or contradictory checklist items and trim stale completed detail when it no longer helps active execution.
    - Verify every step can be executed, validated, and merged independently.
-   - Verify every step includes a `### Size` estimate and that the estimate reflects how the task was split during planning, not a retrospective label added after writing the step.
+   - Verify every step was split using the size table below before handoff, even though the resulting plan should not render a `### Size` section.
    - Verify no planned step is larger than `XL`; split oversized work before handoff.
    - Verify every step has explicit `### Tests` and `### Docs` sections when they are required by that slice.
    - Verify every `### Substeps` checklist item starts with a human-readable title while keeping the detailed implementation guidance in the same item.
@@ -95,10 +95,6 @@ Use this skeleton when creating a new file in `docs/plan/`:
 ### Usable outcome
 
 <what the user can do after this iteration lands>
-
-### Size
-
-<target size label and changed-line estimate for this step; if the estimate exceeds XL, split the work into additional steps before finalizing the plan>
 
 ### Substeps
 

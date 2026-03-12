@@ -16,10 +16,6 @@ Automatic status gathering should extend a workflow users can already trigger an
 
 Linked sessions automatically reconcile to `Done` or `Canceled` after the remote review request is observed as merged or closed, and architecture docs describe the final poller and reducer boundaries.
 
-### Size
-
-Target: `XL` (`201..=500` changed lines). Keep this slice scoped to reconciliation polling, reducer flow, and the matching docs updates.
-
 ### Substeps
 
 - [ ] **Add an app-scoped review-request poller.** Add an app-scoped background job in `crates/agentty/src/app/task.rs` and `crates/agentty/src/app/core.rs` that periodically checks linked review-request state for active sessions with forge metadata.
