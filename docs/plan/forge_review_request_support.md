@@ -18,11 +18,11 @@ Linked sessions automatically reconcile to `Done` or `Canceled` after the remote
 
 ### Substeps
 
-- [ ] Add an app-scoped background job in `crates/agentty/src/app/task.rs` and `crates/agentty/src/app/core.rs` that periodically checks linked review-request state for active sessions with forge metadata.
-- [ ] Route poller results through `AppEvent` or an equivalent reducer-driven path instead of mutating session state directly inside the task, keeping the reducer wiring in `crates/agentty/src/app/core.rs`.
-- [ ] Reuse the `gh` and `glab` adapter refresh commands inside the poller from `crates/agentty/src/app/session/workflow/refresh.rs` and `crates/agentty/src/app/session/workflow/task.rs` instead of introducing a second direct network client for background reconciliation.
-- [ ] Move a session to `Done` when the linked review request is merged and to `Canceled` when it is closed without merge in `crates/agentty/src/domain/session.rs`, while preserving explicit local terminal states when no transition is needed.
-- [ ] Define guardrails for polling cadence, unsupported or unauthenticated forge failures, and stale-session behavior so the poller stays low-noise and cheap.
+- [ ] **Add an app-scoped review-request poller.** Add an app-scoped background job in `crates/agentty/src/app/task.rs` and `crates/agentty/src/app/core.rs` that periodically checks linked review-request state for active sessions with forge metadata.
+- [ ] **Route reconciliation through reducer events.** Route poller results through `AppEvent` or an equivalent reducer-driven path instead of mutating session state directly inside the task, keeping the reducer wiring in `crates/agentty/src/app/core.rs`.
+- [ ] **Reuse existing forge refresh adapters in the poller.** Reuse the `gh` and `glab` adapter refresh commands inside the poller from `crates/agentty/src/app/session/workflow/refresh.rs` and `crates/agentty/src/app/session/workflow/task.rs` instead of introducing a second direct network client for background reconciliation.
+- [ ] **Reconcile merged and closed review requests into session status.** Move a session to `Done` when the linked review request is merged and to `Canceled` when it is closed without merge in `crates/agentty/src/domain/session.rs`, while preserving explicit local terminal states when no transition is needed.
+- [ ] **Define cheap, low-noise polling guardrails.** Define guardrails for polling cadence, unsupported or unauthenticated forge failures, and stale-session behavior so the poller stays low-noise and cheap.
 
 ### Tests
 

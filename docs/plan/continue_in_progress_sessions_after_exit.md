@@ -16,14 +16,14 @@ A user can start a session turn, close Agentty, reopen it after the turn finishe
 
 ### Substeps
 
-- [ ] Add a new migration in `crates/agentty/migrations/` extending `session_operation` with the immutable turn payload a detached runner needs (`prompt`, `model`, `turn_mode`, `resume_output`) and the future liveness fields (`runner_pid INTEGER`, reusing `heartbeat_at`). Do not edit `012_create_session_operation.sql`.
-- [ ] Add a typed detached-operation model plus the minimum DB methods in `crates/agentty/src/infra/db.rs` to insert, load, and finalize a persisted turn so `agentty run-turn` can execute from storage instead of TUI memory.
-- [ ] Add a `RunnerSpawner` trait boundary in `crates/agentty/src/infra/runner.rs` that launches `agentty run-turn <operation-id>` after operation persistence succeeds.
-- [ ] Add the `agentty run-turn` subcommand in `crates/agentty/src/main.rs` that opens the DB, loads one persisted operation by ID, and executes the shared turn-runner flow without starting the Ratatui runtime.
-- [ ] Ensure the detached runner, not the TUI process, owns CLI child processes and app-server runtimes for the duration of the turn so closing the TUI no longer tears down active provider work.
-- [ ] Persist the final transcript, terminal session status, and durable `session.output` state back through `crates/agentty/src/app/session/workflow/worker.rs` or a new `crates/agentty/src/app/session/workflow/turn_runner.rs` path before the detached runner exits.
-- [ ] Stop blanket startup failure from corrupting detached-enabled unfinished work in `crates/agentty/src/app/core.rs`; until full reconciliation lands, reopening during an active detached turn may be stale but it must not force the operation into `failed`.
-- [ ] Support `AGENTTY_DETACH=0` to disable detached execution and fall back to the current in-process worker model for rollback safety while the detached path stabilizes.
+- [ ] **Persist detached turn payload fields in `session_operation`.** Add a new migration in `crates/agentty/migrations/` extending `session_operation` with the immutable turn payload a detached runner needs (`prompt`, `model`, `turn_mode`, `resume_output`) and the future liveness fields (`runner_pid INTEGER`, reusing `heartbeat_at`). Do not edit `012_create_session_operation.sql`.
+- [ ] **Add detached-operation models and DB accessors.** Add a typed detached-operation model plus the minimum DB methods in `crates/agentty/src/infra/db.rs` to insert, load, and finalize a persisted turn so `agentty run-turn` can execute from storage instead of TUI memory.
+- [ ] **Spawn persisted turns through a `RunnerSpawner` boundary.** Add a `RunnerSpawner` trait boundary in `crates/agentty/src/infra/runner.rs` that launches `agentty run-turn <operation-id>` after operation persistence succeeds.
+- [ ] **Add the `agentty run-turn` entrypoint.** Add the `agentty run-turn` subcommand in `crates/agentty/src/main.rs` that opens the DB, loads one persisted operation by ID, and executes the shared turn-runner flow without starting the Ratatui runtime.
+- [ ] **Move long-lived provider ownership to the detached runner.** Ensure the detached runner, not the TUI process, owns CLI child processes and app-server runtimes for the duration of the turn so closing the TUI no longer tears down active provider work.
+- [ ] **Persist final turn state before runner exit.** Persist the final transcript, terminal session status, and durable `session.output` state back through `crates/agentty/src/app/session/workflow/worker.rs` or a new `crates/agentty/src/app/session/workflow/turn_runner.rs` path before the detached runner exits.
+- [ ] **Stop startup recovery from failing detached work.** Stop blanket startup failure from corrupting detached-enabled unfinished work in `crates/agentty/src/app/core.rs`; until full reconciliation lands, reopening during an active detached turn may be stale but it must not force the operation into `failed`.
+- [ ] **Add `AGENTTY_DETACH=0` as the rollback switch.** Support `AGENTTY_DETACH=0` to disable detached execution and fall back to the current in-process worker model for rollback safety while the detached path stabilizes.
 
 ### Tests
 
@@ -46,11 +46,11 @@ A user can reopen Agentty while a detached runner is still active and see the se
 
 ### Substeps
 
-- [ ] Add a `ProcessInspector` trait in `crates/agentty/src/infra/process.rs` with `fn is_alive(&self, pid: u32) -> bool`, a production implementation using OS-level process checks, and `#[cfg_attr(test, mockall::automock)]`.
-- [ ] Extend `crates/agentty/src/infra/db.rs` with claim, heartbeat refresh, stale-failure, and owner-clear flows so `session_operation` can distinguish healthy detached runners from abandoned work.
-- [ ] Replace `SessionManager::fail_unfinished_operations_from_previous_run()` in `crates/agentty/src/app/core.rs` with reconciliation in `crates/agentty/src/app/session/workflow/reconcile.rs` that uses `ProcessInspector`, `runner_pid`, and the 60-second heartbeat staleness threshold to decide whether to keep each unfinished operation active, reclaim it, or mark it failed.
-- [ ] Split `crates/agentty/src/app/session/workflow/worker.rs` into focused modules only where it reduces coupling between queueing, detached execution, and restart reconciliation; keep `worker.rs` queue-focused and move restart-specific logic into `reconcile.rs`.
-- [ ] Keep reopened sessions renderable from persisted `InProgress` state in `crates/agentty/src/app/session/workflow/load.rs` and `crates/agentty/src/app/session/workflow/refresh.rs` even before live output tailing lands.
+- [ ] **Add `ProcessInspector` live-process checks.** Add a `ProcessInspector` trait in `crates/agentty/src/infra/process.rs` with `fn is_alive(&self, pid: u32) -> bool`, a production implementation using OS-level process checks, and `#[cfg_attr(test, mockall::automock)]`.
+- [ ] **Persist ownership, heartbeat, and reclamation flows.** Extend `crates/agentty/src/infra/db.rs` with claim, heartbeat refresh, stale-failure, and owner-clear flows so `session_operation` can distinguish healthy detached runners from abandoned work.
+- [ ] **Reconcile unfinished operations during app startup.** Replace `SessionManager::fail_unfinished_operations_from_previous_run()` in `crates/agentty/src/app/core.rs` with reconciliation in `crates/agentty/src/app/session/workflow/reconcile.rs` that uses `ProcessInspector`, `runner_pid`, and the 60-second heartbeat staleness threshold to decide whether to keep each unfinished operation active, reclaim it, or mark it failed.
+- [ ] **Split restart reconciliation out of `worker.rs`.** Split `crates/agentty/src/app/session/workflow/worker.rs` into focused modules only where it reduces coupling between queueing, detached execution, and restart reconciliation; keep `worker.rs` queue-focused and move restart-specific logic into `reconcile.rs`.
+- [ ] **Keep reopened `InProgress` sessions renderable.** Keep reopened sessions renderable from persisted `InProgress` state in `crates/agentty/src/app/session/workflow/load.rs` and `crates/agentty/src/app/session/workflow/refresh.rs` even before live output tailing lands.
 
 ### Tests
 
@@ -72,9 +72,9 @@ A user can reopen Agentty during an active detached turn and watch fresh output 
 
 ### Substeps
 
-- [ ] Add `crates/agentty/src/app/session/workflow/output_replica.rs` and have the detached runner mirror incremental output into `<session-folder>/.agentty-output.log` instead of a worktree-only path so non-git sessions stay covered.
-- [ ] Update `crates/agentty/src/app/session/workflow/load.rs` and `crates/agentty/src/app/session/workflow/refresh.rs` to attach and detach output-tail tasks through `output_replica.rs`, feeding the log into `SessionHandles.output` while a detached runner is live and falling back to DB `output` when no live runner remains.
-- [ ] Import any remaining log tail before finalization or stale-runner failure so reconciliation does not discard already-streamed transcript content.
+- [ ] **Mirror streamed output into a session log.** Add `crates/agentty/src/app/session/workflow/output_replica.rs` and have the detached runner mirror incremental output into `<session-folder>/.agentty-output.log` instead of a worktree-only path so non-git sessions stay covered.
+- [ ] **Tail live output into reopened sessions.** Update `crates/agentty/src/app/session/workflow/load.rs` and `crates/agentty/src/app/session/workflow/refresh.rs` to attach and detach output-tail tasks through `output_replica.rs`, feeding the log into `SessionHandles.output` while a detached runner is live and falling back to DB `output` when no live runner remains.
+- [ ] **Import buffered log output during finalization.** Import any remaining log tail before finalization or stale-runner failure so reconciliation does not discard already-streamed transcript content.
 
 ### Tests
 
@@ -96,11 +96,11 @@ A user can explicitly stop detached work, reopen Agentty without stale-output dr
 
 ### Substeps
 
-- [ ] Rework stop flows in `crates/agentty/src/app/session/workflow/lifecycle.rs` so app exit is no longer treated as a cancel signal, while explicit user-driven in-progress stop still propagates through persisted `cancel_requested` flags.
-- [ ] Add the process-control boundary needed to terminate a live detached runner from `crates/agentty/src/infra/process.rs` before any stop flow depends on platform-specific signals such as `SIGTERM` to `runner_pid`.
-- [ ] Keep review-session cancel and in-progress stop as separate workflows: review cancel still cleans worktrees, while in-progress stop terminates the detached runner and preserves transcript/output for review-state recovery.
-- [ ] Keep provider conversation identifiers and transcript replay rules correct in `crates/agentty/src/infra/channel/app_server.rs`, `crates/agentty/src/infra/channel/cli.rs`, `crates/agentty/src/infra/codex_app_server.rs`, and `crates/agentty/src/infra/gemini_acp.rs` when a detached runner restarts an app-server runtime or a resumed reply happens after the user reopens Agentty.
-- [ ] Define guardrails for persisted `cancel_requested` handling, detached-runner signal delivery, and transcript replay ownership so restart-safe stop behavior stays deterministic across transports.
+- [ ] **Separate app exit from explicit stop requests.** Rework stop flows in `crates/agentty/src/app/session/workflow/lifecycle.rs` so app exit is no longer treated as a cancel signal, while explicit user-driven in-progress stop still propagates through persisted `cancel_requested` flags.
+- [ ] **Add process control for detached-runner termination.** Add the process-control boundary needed to terminate a live detached runner from `crates/agentty/src/infra/process.rs` before any stop flow depends on platform-specific signals such as `SIGTERM` to `runner_pid`.
+- [ ] **Preserve distinct review cancel and in-progress stop flows.** Keep review-session cancel and in-progress stop as separate workflows: review cancel still cleans worktrees, while in-progress stop terminates the detached runner and preserves transcript/output for review-state recovery.
+- [ ] **Keep provider resume state correct after restart.** Keep provider conversation identifiers and transcript replay rules correct in `crates/agentty/src/infra/channel/app_server.rs`, `crates/agentty/src/infra/channel/cli.rs`, `crates/agentty/src/infra/codex_app_server.rs`, and `crates/agentty/src/infra/gemini_acp.rs` when a detached runner restarts an app-server runtime or a resumed reply happens after the user reopens Agentty.
+- [ ] **Define deterministic detached-stop ownership rules.** Define guardrails for persisted `cancel_requested` handling, detached-runner signal delivery, and transcript replay ownership so restart-safe stop behavior stays deterministic across transports.
 
 ### Tests
 
@@ -122,8 +122,8 @@ The repository has close-and-reopen regression coverage that exercises detached 
 
 ### Substeps
 
-- [ ] Add an integration-style regression test in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/core.rs`, `crates/agentty/src/app/session/workflow/reconcile.rs`, `crates/agentty/src/app/session/workflow/turn_runner.rs`, and `crates/agentty/src/app/session/workflow/output_replica.rs` that starts a turn, simulates TUI shutdown while the runner continues, and verifies that a fresh `App` instance observes continued `InProgress` output or the final `Review` or `Question` state from persistence.
-- [ ] Add a regression test in `crates/agentty/src/app/core.rs` and `crates/agentty/src/app/session/core.rs` that completes a turn entirely while Agentty is closed and verifies the next app launch loads the final transcript, terminal operation state, and session status without replaying the turn.
+- [ ] **Add close-and-reopen detached lifetime coverage.** Add an integration-style regression test in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/core.rs`, `crates/agentty/src/app/session/workflow/reconcile.rs`, `crates/agentty/src/app/session/workflow/turn_runner.rs`, and `crates/agentty/src/app/session/workflow/output_replica.rs` that starts a turn, simulates TUI shutdown while the runner continues, and verifies that a fresh `App` instance observes continued `InProgress` output or the final `Review` or `Question` state from persistence.
+- [ ] **Add finish-while-closed regression coverage.** Add a regression test in `crates/agentty/src/app/core.rs` and `crates/agentty/src/app/session/core.rs` that completes a turn entirely while Agentty is closed and verifies the next app launch loads the final transcript, terminal operation state, and session status without replaying the turn.
 
 ### Tests
 

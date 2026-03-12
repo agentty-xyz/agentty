@@ -3,9 +3,6 @@
 Internal planning documents and UI design notes.
 
 Use `skills/implementation-plan/SKILL.md` for plan structure and implementation-planning requirements.
-Keep the `## Priorities` section near the top of each plan, immediately after the title and scope/context line. Do not rename it to `Updated Priorities`.
-Priority sections should render `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as separate subtopics on their own lines, not as inline bold labels.
-Do not add `Primary files` blocks inside priorities. Mention every file needed for a priority directly in the checklist text for its substeps.
 
 ## Directory Index
 

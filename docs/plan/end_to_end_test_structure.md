@@ -16,9 +16,9 @@ A deterministic scenario test can create a disposable repo, run a scripted local
 
 ### Substeps
 
-- [ ] Add the minimal `crates/agentty/tests/support/` harness needed for one full local session journey, centered on `crates/agentty/tests/support/harness.rs`, `crates/agentty/tests/support/fake_cli.rs`, and `crates/agentty/tests/support/assert.rs`.
-- [ ] Add `crates/agentty/tests/local_session_workflow.rs` to drive one session workflow through the app-facing boundary using a temp git repo and a scripted fake agent CLI.
-- [ ] Fold any small boundary refactors needed in `crates/agentty/src/app/session/workflow/task.rs` and `crates/agentty/src/app/session/workflow/worker.rs` into this slice, keeping multi-command flows behind explicit traits instead of shell-heavy test-only helpers.
+- [ ] **Add the minimal local-session harness.** Add the minimal `crates/agentty/tests/support/` harness needed for one full local session journey, centered on `crates/agentty/tests/support/harness.rs`, `crates/agentty/tests/support/fake_cli.rs`, and `crates/agentty/tests/support/assert.rs`.
+- [ ] **Add one deterministic local session workflow scenario.** Add `crates/agentty/tests/local_session_workflow.rs` to drive one session workflow through the app-facing boundary using a temp git repo and a scripted fake agent CLI.
+- [ ] **Refactor workflow boundaries only where the scenario needs them.** Fold any small boundary refactors needed in `crates/agentty/src/app/session/workflow/task.rs` and `crates/agentty/src/app/session/workflow/worker.rs` into this slice, keeping multi-command flows behind explicit traits instead of shell-heavy test-only helpers.
 
 ### Tests
 
@@ -40,9 +40,9 @@ Deterministic local scenarios cover publish, existing-link reuse, create-on-miss
 
 ### Substeps
 
-- [ ] Extend `crates/agentty/tests/support/fake_cli.rs` and `crates/agentty/tests/support/assert.rs` so review-request scenarios can script forge responses and assert persisted PR/MR metadata from the session workflow boundary.
-- [ ] Add local GitHub and GitLab scenario coverage in `crates/agentty/tests/local_review_request_workflow.rs` for create, reuse, refresh-after-cleanup, and actionable CLI failure paths.
-- [ ] Keep source-level mock-based tests for edge sequencing in `crates/agentty/src/app/session/workflow/lifecycle.rs`, but move the highest-value review-request journeys into the crate-level deterministic scenarios.
+- [ ] **Extend the harness for review-request scripting.** Extend `crates/agentty/tests/support/fake_cli.rs` and `crates/agentty/tests/support/assert.rs` so review-request scenarios can script forge responses and assert persisted PR/MR metadata from the session workflow boundary.
+- [ ] **Add deterministic GitHub and GitLab review-request scenarios.** Add local GitHub and GitLab scenario coverage in `crates/agentty/tests/local_review_request_workflow.rs` for create, reuse, refresh-after-cleanup, and actionable CLI failure paths.
+- [ ] **Keep edge sequencing in source-level workflow tests.** Keep source-level mock-based tests for edge sequencing in `crates/agentty/src/app/session/workflow/lifecycle.rs`, but move the highest-value review-request journeys into the crate-level deterministic scenarios.
 
 ### Tests
 
@@ -64,8 +64,8 @@ Real provider and forge smoke suites are clearly named, ignored by default, and 
 
 ### Substeps
 
-- [ ] Rename or reorganize `crates/agentty/tests/protocol_compliance_e2e.rs` into an explicit live-smoke naming pattern at `crates/agentty/tests/live_provider_protocol.rs` and add a matching live forge smoke file at `crates/agentty/tests/live_forge_review_request.rs` if needed.
-- [ ] Keep the live smoke files thin and purpose-specific so failures point at provider or forge integration health rather than deterministic workflow ownership.
+- [ ] **Rename live provider coverage into explicit smoke files.** Rename or reorganize `crates/agentty/tests/protocol_compliance_e2e.rs` into an explicit live-smoke naming pattern at `crates/agentty/tests/live_provider_protocol.rs` and add a matching live forge smoke file at `crates/agentty/tests/live_forge_review_request.rs` if needed.
+- [ ] **Keep live smoke coverage thin and purpose-specific.** Keep the live smoke files thin and purpose-specific so failures point at provider or forge integration health rather than deterministic workflow ownership.
 
 ### Tests
 

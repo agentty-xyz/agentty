@@ -33,6 +33,7 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Keep snapshot rows scannable: one short current-state sentence plus a status, without long file lists in the table cells.
    - Keep the `## Priorities` section near the top of the plan, immediately after the title and scope/context line.
    - In each priority, render `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
+   - Write each checklist item under `### Substeps` as a short human-readable title followed by the detailed implementation guidance for that item, preserving the concrete file and constraint details instead of collapsing them into the title alone.
    - Structure priorities as evolving usable slices. Each priority must include the implementation work plus the tests and documentation needed for that slice before it can be considered complete.
    - Keep implementation checklist items under `### Substeps`, then extract validation work into `### Tests` and documentation work into `### Docs` immediately after `### Substeps`.
    - Mention every required file directly in the checklist text for the relevant substep instead of adding a trailing `Primary files` block.
@@ -49,6 +50,7 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Remove duplicated or contradictory checklist items and trim stale completed detail when it no longer helps active execution.
    - Verify every priority can be executed, validated, and merged independently.
    - Verify every priority has explicit `### Tests` and `### Docs` sections when they are required by that slice.
+   - Verify every `### Substeps` checklist item starts with a human-readable title while keeping the detailed implementation guidance in the same item.
    - Reject plans that save most tests/docs for the last priority instead of keeping them attached to the relevant behavior changes.
    - When this skill changed, verify the active plan files in `docs/plan/` were reviewed and updated to match the new rules unless the user explicitly excluded them.
    - Verify overlapping plans are aligned or clearly marked for user resolution.
@@ -82,7 +84,7 @@ Use this skeleton when creating a new file in `docs/plan/`:
 
 ### Substeps
 
-- [ ] <implementation task within this priority>
+- [ ] **<Human-readable substep title>.** <Detailed implementation task within this priority, including files and constraints>
 
 ### Tests
 
