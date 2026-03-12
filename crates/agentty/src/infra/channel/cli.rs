@@ -692,7 +692,7 @@ mod tests {
         };
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
         let mut req = make_turn_request(dir.path().to_path_buf());
-        req.prompt = "x".repeat(512 * 1024);
+        req.prompt = "x".repeat(512 * 1024).into();
 
         // Act
         let result = tokio::time::timeout(
@@ -760,7 +760,7 @@ mod tests {
         };
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
         let mut req = make_turn_request(dir.path().to_path_buf());
-        req.prompt = "x".repeat(512 * 1024);
+        req.prompt = "x".repeat(512 * 1024).into();
 
         // Act
         let error = channel
