@@ -14,6 +14,10 @@ The first slice needs to prove end-to-end value, not just infrastructure, becaus
 
 A deterministic scenario test can create a disposable repo, run a scripted local agent turn through the app-facing workflow, and assert the resulting worktree, commit, transcript output, and terminal session state.
 
+### Size
+
+Target: `L` (`81..=200` changed lines). Keep this slice to the minimum harness and one local session scenario.
+
 ### Substeps
 
 - [ ] **Add the minimal local-session harness.** Add the minimal `crates/agentty/tests/support/` harness needed for one full local session journey, centered on `crates/agentty/tests/support/harness.rs`, `crates/agentty/tests/support/fake_cli.rs`, and `crates/agentty/tests/support/assert.rs`.
@@ -38,6 +42,10 @@ Once one local session journey is stable, the next high-value extension is revie
 
 Deterministic local scenarios cover publish, existing-link reuse, create-on-miss, refresh-after-cleanup, and actionable forge CLI failures without relying on live `gh` or `glab` authentication.
 
+### Size
+
+Target: `XL` (`201..=500` changed lines). If the review-request matrix grows beyond that range, split extra scenarios into a follow-up priority.
+
 ### Substeps
 
 - [ ] **Extend the harness for review-request scripting.** Extend `crates/agentty/tests/support/fake_cli.rs` and `crates/agentty/tests/support/assert.rs` so review-request scenarios can script forge responses and assert persisted PR/MR metadata from the session workflow boundary.
@@ -61,6 +69,10 @@ After deterministic local coverage owns the main user journeys, the remaining wo
 ### Usable outcome
 
 Real provider and forge smoke suites are clearly named, ignored by default, and documented with their prerequisites and intended failure domain.
+
+### Size
+
+Target: `M` (`31..=80` changed lines). Keep this slice to smoke-suite naming, minimal wiring, and contributor guidance.
 
 ### Substeps
 

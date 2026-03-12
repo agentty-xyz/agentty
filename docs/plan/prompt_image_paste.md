@@ -16,6 +16,10 @@ The current prompt flow is text-only from the terminal event layer through sessi
 
 While composing a new session prompt or reply, a user can trigger image paste from the clipboard, see a highlighted inline placeholder such as `[Image #1]` inserted directly into the prompt field, submit it with the message, and get an explicit error when the active model/backend cannot accept images.
 
+### Size
+
+Target: `XL` (`201..=500` changed lines). If the first end-to-end image path grows beyond that range, move remaining backend or UI polish into a follow-up priority.
+
 ### Substeps
 
 - [ ] **Add prompt attachment state for inline image tokens.** Add prompt attachment state alongside `InputState` in `crates/agentty/src/ui/state/app_mode.rs` and `crates/agentty/src/ui/state/prompt.rs` so prompt mode can track pasted local images, the ordered inline `[Image #n]` placeholders inserted into the composer, and their mapping separately from plain text and at-mention/slash-menu state.
@@ -43,6 +47,10 @@ Once one prompt flow works end to end, the next risk is scope drift: cleanup and
 ### Usable outcome
 
 Attachment handling remains scoped to the session chat composer for initial prompts and replies, unsupported providers are gated consistently, and the session transcript preserves enough context to explain when a turn included pasted images.
+
+### Size
+
+Target: `L` (`81..=200` changed lines). Keep this hardening slice focused on capability checks, cleanup ownership, and transcript behavior.
 
 ### Substeps
 

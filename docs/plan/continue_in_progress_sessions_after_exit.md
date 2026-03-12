@@ -14,6 +14,10 @@ The first slice needs to prove that turn execution can outlive the TUI at all, b
 
 A user can start a session turn, close Agentty, reopen it after the turn finishes, and find the final `Review` or `Question` state persisted from a detached runner instead of losing the turn when the TUI exits.
 
+### Size
+
+Target: `XL` (`201..=500` changed lines). If detached-runner wiring grows beyond that range, split follow-up work into a new priority instead of widening this slice.
+
 ### Substeps
 
 - [ ] **Persist detached turn payload fields in `session_operation`.** Add a new migration in `crates/agentty/migrations/` extending `session_operation` with the immutable turn payload a detached runner needs (`prompt`, `model`, `turn_mode`, `resume_output`) and the future liveness fields (`runner_pid INTEGER`, reusing `heartbeat_at`). Do not edit `012_create_session_operation.sql`.
@@ -44,6 +48,10 @@ Once basic reopen safety exists, the next gap is distinguishing healthy detached
 
 A user can reopen Agentty while a detached runner is still active and see the session remain `InProgress` only when a real live runner still owns it, while stale work is reclaimed deterministically.
 
+### Size
+
+Target: `XL` (`201..=500` changed lines). Keep restart reconciliation scoped to ownership, heartbeat, and renderable reopen behavior for this slice.
+
 ### Substeps
 
 - [ ] **Add `ProcessInspector` live-process checks.** Add a `ProcessInspector` trait in `crates/agentty/src/infra/process.rs` with `fn is_alive(&self, pid: u32) -> bool`, a production implementation using OS-level process checks, and `#[cfg_attr(test, mockall::automock)]`.
@@ -70,6 +78,10 @@ State-only recovery is usable, but it still leaves reopened sessions blind while
 
 A user can reopen Agentty during an active detached turn and watch fresh output continue in the session view instead of waiting only for terminal DB state.
 
+### Size
+
+Target: `L` (`81..=200` changed lines). Limit this slice to output mirroring and log-tail handoff without expanding stop or resume semantics.
+
 ### Substeps
 
 - [ ] **Mirror streamed output into a session log.** Add `crates/agentty/src/app/session/workflow/output_replica.rs` and have the detached runner mirror incremental output into `<session-folder>/.agentty-output.log` instead of a worktree-only path so non-git sessions stay covered.
@@ -93,6 +105,10 @@ After detached execution and output bridging work, the remaining risk is behavio
 ### Usable outcome
 
 A user can explicitly stop detached work, reopen Agentty without stale-output drift, and continue follow-up replies using the correct provider-native conversation state.
+
+### Size
+
+Target: `XL` (`201..=500` changed lines). If transport-specific resume handling pushes this beyond `XL`, move the overflow into a follow-up priority.
 
 ### Substeps
 
@@ -119,6 +135,10 @@ The detached-runner model changes failure recovery, restart semantics, and user-
 ### Usable outcome
 
 The repository has close-and-reopen regression coverage that exercises detached lifetime from persisted state, and the final validation gates confirm the shipped behavior is stable.
+
+### Size
+
+Target: `L` (`81..=200` changed lines). Keep this slice focused on end-to-end validation and the remaining regression coverage.
 
 ### Substeps
 

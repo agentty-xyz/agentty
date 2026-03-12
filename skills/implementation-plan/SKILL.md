@@ -32,7 +32,19 @@ This skill is the source of truth for plan structure and execution-planning requ
    - Keep cross-plan notes short and include only active overlaps, ownership decisions, or unresolved conflicts.
    - Keep snapshot rows scannable: one short current-state sentence plus a status, without long file lists in the table cells.
    - Keep the `## Steps` section near the top of the plan, immediately after the title and scope/context line.
-   - In each step, render `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
+   - In each step, render `Why now`, `Usable outcome`, `Size`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
+   - Use size budgeting during plan creation, not after the fact. Before finalizing the plan, estimate the changed-line scope for each step, split oversized work into additional steps, and only then record the resulting `### Size` entry for each slice.
+   - Treat each step as one mergeable planned slice. Keep every planned step at `XL` or smaller, and split any step that would be `XXL` before handing off the plan.
+   - Use this size table when labeling a planned step:
+
+     | Size | Changed lines |
+     |------|---------------|
+     | `XS` | `0..=10` |
+     | `S` | `11..=30` |
+     | `M` | `31..=80` |
+     | `L` | `81..=200` |
+     | `XL` | `201..=500` |
+     | `XXL` | `501+` |
    - Write each checklist item under `### Substeps` as a short human-readable title followed by the detailed implementation guidance for that item, preserving the concrete file and constraint details instead of collapsing them into the title alone.
    - Structure steps as evolving usable slices. Each step must include the implementation work plus the tests and documentation needed for that slice before it can be considered complete.
    - Keep implementation checklist items under `### Substeps`, then extract validation work into `### Tests` and documentation work into `### Docs` immediately after `### Substeps`.
@@ -49,6 +61,8 @@ This skill is the source of truth for plan structure and execution-planning requ
 
    - Remove duplicated or contradictory checklist items and trim stale completed detail when it no longer helps active execution.
    - Verify every step can be executed, validated, and merged independently.
+   - Verify every step includes a `### Size` estimate and that the estimate reflects how the task was split during planning, not a retrospective label added after writing the step.
+   - Verify no planned step is larger than `XL`; split oversized work before handoff.
    - Verify every step has explicit `### Tests` and `### Docs` sections when they are required by that slice.
    - Verify every `### Substeps` checklist item starts with a human-readable title while keeping the detailed implementation guidance in the same item.
    - Reject plans that save most tests/docs for the last step instead of keeping them attached to the relevant behavior changes.
@@ -81,6 +95,10 @@ Use this skeleton when creating a new file in `docs/plan/`:
 ### Usable outcome
 
 <what the user can do after this iteration lands>
+
+### Size
+
+<target size label and changed-line estimate for this step; if the estimate exceeds XL, split the work into additional steps before finalizing the plan>
 
 ### Substeps
 
@@ -122,13 +140,13 @@ Use this skeleton when creating a new file in `docs/plan/`:
 
 ```mermaid
 graph TD
-    P1[1. <Priority Title>] --> P3[3. <Priority Title>]
-    P2[2. <Priority Title>] --> P3
+    P1[1. <Step Title>] --> P3[3. <Step Title>]
+    P2[2. <Step Title>] --> P3
 ```
 
-1. Start with `<Priority 1>`; it is a prerequisite for `<Priority 3>`.
-1. Run `<Priority 2>` in parallel with `<Priority 1>` because they touch independent files and validation paths.
-1. Start `<Priority 3>` only after `<Priority 1>` and `<Priority 2>` are merged.
+1. Start with `<Step 1>`; it is a prerequisite for `<Step 3>`.
+1. Run `<Step 2>` in parallel with `<Step 1>` because they touch independent files and validation paths.
+1. Start `<Step 3>` only after `<Step 1>` and `<Step 2>` are merged.
 
 ## Out of Scope for This Pass
 
