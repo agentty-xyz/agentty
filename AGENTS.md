@@ -218,7 +218,6 @@ When adding, removing, or changing user-facing features (agent backends, models,
 | `docs/site/content/docs/usage/workflow.md` | Session lifecycle, workflow, slash commands, and data location. |
 | `docs/site/content/docs/usage/keybindings.md` | Keybindings across lists, session view, diff mode, and prompt input. |
 | `docs/site/content/docs/getting-started/overview.md` | High-level concepts and worktree isolation. |
-| `docs/site/content/docs/architecture/guide-map.md` | Guide index and deep-link entry points. |
 | `docs/site/content/docs/architecture/runtime-flow.md` | Architecture goals, workspace map, runtime flow, and channel transport model. |
 | `docs/site/content/docs/architecture/module-map.md` | Module boundaries and path ownership across layers. |
 | `docs/site/content/docs/architecture/change-recipes.md` | Change-path recipes and architecture-safe contributor checklist. |

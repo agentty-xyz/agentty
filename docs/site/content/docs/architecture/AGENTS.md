@@ -6,7 +6,6 @@ Design and architecture guides for the `docs` section under
 ## Directory Index
 
 - [`_index.md`](_index.md) - Architecture section metadata and landing content.
-- [`guide-map.md`](guide-map.md) - Guide index with stable deep-link entry points.
 - [`runtime-flow.md`](runtime-flow.md) - Goals, workspace map, runtime event flow, and agent channel routing.
 - [`module-map.md`](module-map.md) - Path-by-path ownership map across composition root, `app`, `domain`, `infra`, `runtime`, and `ui`.
 - [`change-recipes.md`](change-recipes.md) - Change-path recipes and architecture-safe contributor checklist.
