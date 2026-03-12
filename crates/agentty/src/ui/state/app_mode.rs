@@ -66,6 +66,16 @@ impl ConfirmationViewMode {
     }
 }
 
+/// Tracks which panel has input focus during question-answer mode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum QuestionFocus {
+    /// Question panel is focused for option navigation or free-text input.
+    #[default]
+    Answer,
+    /// Chat output area is focused for scrolling.
+    Chat,
+}
+
 /// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
@@ -182,8 +192,13 @@ pub enum AppMode {
         responses: Vec<String>,
         /// Active question index inside `questions`.
         current_index: usize,
+        /// Which panel currently owns keyboard focus.
+        focus: QuestionFocus,
         /// Editable response input for the active question.
         input: InputState,
+        /// Scroll position applied to the session transcript above the
+        /// question panel.
+        scroll_offset: Option<u16>,
         /// Highlighted option index when the current question has predefined
         /// options. `None` means free-text input is active.
         selected_option_index: Option<usize>,

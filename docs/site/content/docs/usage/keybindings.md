@@ -157,6 +157,7 @@ When predefined options are shown (including "Type custom answer"):
 |-----|--------|
 | `j` / `k` / `Up` / `Down` | Navigate options |
 | `Enter` | Choose highlighted option (or enter free-text mode for "Type custom answer") |
+| `Tab` | Switch focus to chat output for scrolling |
 | `Esc` | Skip current question (`no answer`) |
 
 ## Question Input — Free Text
@@ -172,7 +173,20 @@ After selecting "Type custom answer", or when no predefined options exist:
 | `Backspace` / `Delete` | Delete character |
 | `Home` / `End` | Move cursor to start/end |
 | `Ctrl+u` | Delete current line |
-| `Tab` | Insert tab |
+| `Tab` | Switch focus to chat output for scrolling |
+
+## Question Input — Chat Scroll
+
+When chat output is focused (press `Tab` to switch):
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` / `Up` / `Down` | Scroll chat output |
+| `g` | Scroll to top |
+| `G` | Scroll to bottom |
+| `Ctrl+d` | Half page down |
+| `Ctrl+u` | Half page up |
+| `Tab` | Switch focus back to answer input |
 
 <a id="usage-question-input-submit-flow"></a>
 After the last question is answered (or skipped), Agentty sends one follow-up

@@ -271,6 +271,11 @@ fn render_session_or_diff_mode(
             session_id,
             scroll_offset,
             ..
+        }
+        | AppMode::Question {
+            session_id,
+            scroll_offset,
+            ..
         } => render_session_chat(
             f,
             area,
@@ -280,17 +285,6 @@ fn render_session_or_diff_mode(
                 session_progress_messages: aux.session_progress_messages,
                 sessions,
                 scroll_offset: *scroll_offset,
-            },
-        ),
-        AppMode::Question { session_id, .. } => render_session_chat(
-            f,
-            area,
-            SessionChatRenderContext {
-                mode,
-                session_id,
-                session_progress_messages: aux.session_progress_messages,
-                sessions,
-                scroll_offset: None,
             },
         ),
         AppMode::OpenCommandSelector {

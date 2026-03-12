@@ -43,7 +43,7 @@ use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{app_server, db};
 use crate::runtime::mode::{question, sync_blocked};
 use crate::ui::page::session_list::preferred_initial_session_index;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext, QuestionFocus};
 use crate::ui::state::prompt::PromptAtMentionState;
 use crate::{app, ui};
 
@@ -1304,7 +1304,9 @@ impl App {
                 questions,
                 responses: Vec::new(),
                 current_index: 0,
+                focus: QuestionFocus::Answer,
                 input: InputState::default(),
+                scroll_offset: None,
             };
         }
     }
@@ -3631,6 +3633,7 @@ mod tests {
                 current_index: 0,
                 ref input,
                 selected_option_index: Some(0),
+                ..
             } if session_id == "session-1"
                 && questions == &expected_questions
                 && responses.is_empty()

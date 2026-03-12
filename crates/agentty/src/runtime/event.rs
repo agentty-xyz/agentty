@@ -224,7 +224,7 @@ mod tests {
     use crate::domain::input::InputState;
     use crate::infra::agent::protocol::QuestionItem;
     use crate::infra::app_server;
-    use crate::ui::state::app_mode::AppMode;
+    use crate::ui::state::app_mode::{AppMode, QuestionFocus};
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
     /// Returns a mock app-server client wrapped in `Arc` for runtime tests.
@@ -422,7 +422,9 @@ mod tests {
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             questions: vec![QuestionItem {
                 options: vec!["yes".to_string()],
                 text: "Is this enough?".to_string(),

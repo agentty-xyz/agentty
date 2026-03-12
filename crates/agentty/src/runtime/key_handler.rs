@@ -1,6 +1,7 @@
 use std::io;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
 
 use crate::app::{App, FocusedReviewCacheEntry, diff_content_hash};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
@@ -43,7 +44,12 @@ pub(crate) async fn handle_key_event(
         }
         AppMode::View { .. } => mode::session_view::handle(app, terminal, key).await,
         AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
-        AppMode::Question { .. } => Ok(mode::question::handle(app, key).await),
+        AppMode::Question { .. } => {
+            let size = terminal.size()?;
+            let terminal_rect = Rect::new(0, 0, size.width, size.height);
+
+            Ok(mode::question::handle(app, terminal_rect, key).await)
+        }
         AppMode::Diff { .. } => Ok(mode::diff::handle(app, key)),
         AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
         AppMode::OpenCommandSelector { .. } => {

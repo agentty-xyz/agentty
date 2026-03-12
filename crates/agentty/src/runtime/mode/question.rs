@@ -1,11 +1,13 @@
 use crossterm::event::{self, KeyCode, KeyEvent};
+use ratatui::layout::Rect;
 
 use crate::app::App;
 use crate::domain::input::InputState;
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPrompt;
 use crate::runtime::EventResult;
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
+use crate::ui::page::session_chat::SessionChatPage;
+use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 
 /// Default response stored when users skip one model question.
 const NO_ANSWER: &str = "no answer";
@@ -16,9 +18,19 @@ pub(crate) const TYPE_CUSTOM_ANSWER: &str = "Type custom answer";
 
 /// Applies one key event in question-answer mode.
 ///
-/// `Enter` submits the typed answer (or `no answer` when blank), `Esc` skips
-/// the current question, and text-editing keys update the active input.
-pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> EventResult {
+/// `Tab` toggles focus between the question panel and the chat output for
+/// scrolling. When chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
+/// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
+/// typed answer (or `no answer` when blank), `Esc` skips the current question.
+pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
+    if handle_focus_toggle(app, key) {
+        return EventResult::Continue;
+    }
+
+    if handle_chat_scroll(app, terminal_size, key) {
+        return EventResult::Continue;
+    }
+
     let Some(action) = resolve_question_action(app, key) else {
         return EventResult::Continue;
     };
@@ -28,6 +40,141 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> EventResult {
     }
 
     EventResult::Continue
+}
+
+/// Toggles focus between the question panel and chat output on `Tab`.
+///
+/// Returns `true` when the key was consumed as a focus toggle.
+fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
+    if key.code != KeyCode::Tab {
+        return false;
+    }
+
+    let AppMode::Question { focus, .. } = &mut app.mode else {
+        return false;
+    };
+
+    *focus = match *focus {
+        QuestionFocus::Answer => QuestionFocus::Chat,
+        QuestionFocus::Chat => QuestionFocus::Answer,
+    };
+
+    true
+}
+
+/// Applies scroll keys when the chat output area is focused.
+///
+/// Returns `true` when the key was consumed as a scroll action. `Enter` and
+/// `Esc` are not intercepted — they always reach the question handler so
+/// users can submit or skip regardless of focus.
+fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool {
+    if !matches!(
+        &app.mode,
+        AppMode::Question {
+            focus: QuestionFocus::Chat,
+            ..
+        }
+    ) {
+        return false;
+    }
+
+    let metrics = question_view_metrics(app, terminal_size);
+
+    let AppMode::Question { scroll_offset, .. } = &mut app.mode else {
+        return false;
+    };
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            *scroll_offset = scroll_offset_down(*scroll_offset, metrics, 1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            *scroll_offset = Some(scroll_offset_up(*scroll_offset, metrics, 1));
+        }
+        KeyCode::Char('g') => *scroll_offset = Some(0),
+        KeyCode::Char('G') => *scroll_offset = None,
+        KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            let step = metrics.view_height / 2;
+            *scroll_offset = scroll_offset_down(*scroll_offset, metrics, step);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            let step = metrics.view_height / 2;
+            *scroll_offset = Some(scroll_offset_up(*scroll_offset, metrics, step));
+        }
+        _ => return false,
+    }
+
+    true
+}
+
+/// Scroll metrics for the chat output area in question mode.
+#[derive(Clone, Copy)]
+struct QuestionViewMetrics {
+    total_lines: u16,
+    view_height: u16,
+}
+
+/// Computes scroll metrics for the chat output area above the question panel.
+fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics {
+    let view_height = terminal_size.height.saturating_sub(5);
+    let output_width = terminal_size.width.saturating_sub(2);
+
+    let AppMode::Question { session_id, .. } = &app.mode else {
+        return QuestionViewMetrics {
+            total_lines: 0,
+            view_height,
+        };
+    };
+
+    let session_index = app
+        .sessions
+        .sessions
+        .iter()
+        .position(|session| session.id == *session_id);
+
+    let total_lines = session_index
+        .and_then(|index| app.sessions.sessions.get(index))
+        .map_or(0, |session| {
+            let active_progress = app.session_progress_message(session_id);
+
+            SessionChatPage::rendered_output_line_count(
+                session,
+                output_width,
+                DoneSessionOutputMode::Summary,
+                None,
+                None,
+                active_progress,
+            )
+        });
+
+    QuestionViewMetrics {
+        total_lines,
+        view_height,
+    }
+}
+
+/// Returns the next scroll offset after scrolling down by `step` lines.
+fn scroll_offset_down(
+    scroll_offset: Option<u16>,
+    metrics: QuestionViewMetrics,
+    step: u16,
+) -> Option<u16> {
+    let current_offset = scroll_offset?;
+    let next_offset = current_offset.saturating_add(step.max(1));
+
+    if next_offset >= metrics.total_lines.saturating_sub(metrics.view_height) {
+        return None;
+    }
+
+    Some(next_offset)
+}
+
+/// Returns the next scroll offset after scrolling up by `step` lines.
+fn scroll_offset_up(scroll_offset: Option<u16>, metrics: QuestionViewMetrics, step: u16) -> u16 {
+    let current_offset =
+        scroll_offset.unwrap_or_else(|| metrics.total_lines.saturating_sub(metrics.view_height));
+
+    current_offset.saturating_sub(step.max(1))
 }
 
 /// Inserts pasted text into the active question response input.
@@ -189,7 +336,7 @@ fn resolve_free_text_key(input: &mut InputState, key: KeyEvent) -> QuestionActio
         KeyCode::Down => input.move_down(),
         KeyCode::Home => input.move_home(),
         KeyCode::End => input.move_end(),
-        KeyCode::Tab => input.insert_char('\t'),
+        // KeyCode::Tab is handled by the focus toggle at the top level.
         KeyCode::Char('u') if key.modifiers == event::KeyModifiers::CONTROL => {
             input.delete_current_line();
         }
@@ -263,6 +410,7 @@ fn store_question_response(
         responses,
         selected_option_index,
         session_id,
+        ..
     } = &mut app.mode
     else {
         return None;
@@ -320,6 +468,10 @@ mod tests {
     use super::*;
     use crate::infra::app_server;
     use crate::infra::db::Database;
+    use crate::ui::state::app_mode::QuestionFocus;
+
+    /// Fake terminal size used by tests that don't exercise scrolling.
+    const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 24);
 
     /// Builds one mock app-server client wrapped in `Arc`.
     fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
@@ -363,12 +515,19 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: None,
         };
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -400,12 +559,19 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text("typed answer".to_string()),
+            scroll_offset: None,
             selected_option_index: Some(0),
         };
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -431,12 +597,19 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text("March 4, 2026".to_string()),
+            scroll_offset: None,
             selected_option_index: None,
         };
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -461,7 +634,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: None,
         };
 
@@ -512,7 +687,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: Some(0),
         }
     }
@@ -524,7 +701,12 @@ mod tests {
         app.mode = question_mode_with_options();
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -543,7 +725,12 @@ mod tests {
         app.mode = question_mode_with_options();
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -569,7 +756,12 @@ mod tests {
         }
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -595,7 +787,12 @@ mod tests {
         }
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -625,12 +822,19 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: Some(1),
         };
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -660,6 +864,7 @@ mod tests {
         // Act
         let _ = handle(
             &mut app,
+            TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         )
         .await;
@@ -689,7 +894,12 @@ mod tests {
         }
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert — transitions to free-text mode.
         assert!(matches!(
@@ -718,6 +928,7 @@ mod tests {
         // Act
         let _ = handle(
             &mut app,
+            TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
         )
         .await;
@@ -742,6 +953,7 @@ mod tests {
         // Act
         let _ = handle(
             &mut app,
+            TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         )
         .await;
@@ -772,6 +984,7 @@ mod tests {
         // Act
         let _ = handle(
             &mut app,
+            TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
         )
         .await;
@@ -804,12 +1017,19 @@ mod tests {
             ],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text("answer".to_string()),
+            scroll_offset: None,
             selected_option_index: None,
         };
 
         // Act
-        let _ = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).await;
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
 
         // Assert
         assert!(matches!(
@@ -854,6 +1074,185 @@ mod tests {
 
         // Act & Assert
         assert_eq!(default_option_index(&questions, 0), None);
+    }
+
+    #[tokio::test]
+    async fn test_handle_tab_toggles_focus_from_answer_to_chat() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Chat,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_tab_toggles_focus_from_chat_to_answer() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question { focus, .. } = &mut app.mode {
+            *focus = QuestionFocus::Chat;
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Answer,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_scroll_down_in_chat_focus_updates_scroll_offset() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question {
+            focus,
+            scroll_offset,
+            ..
+        } = &mut app.mode
+        {
+            *focus = QuestionFocus::Chat;
+            *scroll_offset = Some(0);
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — offset incremented (or set to None if at bottom, since no
+        // session content exists in test).
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Chat,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_scroll_keys_ignored_in_answer_focus() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+
+        // Act — 'j' in answer focus navigates options, not scroll.
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — selected_option_index moved, not scroll.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Answer,
+                selected_option_index: Some(1),
+                scroll_offset: None,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_jump_to_top_in_chat_focus_sets_offset_zero() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question {
+            focus,
+            scroll_offset,
+            ..
+        } = &mut app.mode
+        {
+            *focus = QuestionFocus::Chat;
+            *scroll_offset = None;
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Chat,
+                scroll_offset: Some(0),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_jump_to_bottom_in_chat_focus_sets_offset_none() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question {
+            focus,
+            scroll_offset,
+            ..
+        } = &mut app.mode
+        {
+            *focus = QuestionFocus::Chat;
+            *scroll_offset = Some(5);
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Chat,
+                scroll_offset: None,
+                ..
+            }
+        ));
     }
 
     #[test]

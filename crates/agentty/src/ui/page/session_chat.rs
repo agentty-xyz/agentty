@@ -12,7 +12,7 @@ use crate::infra::file_index;
 use crate::runtime::mode::question;
 use crate::ui::component::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::component::session_output::SessionOutput;
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
+use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::{
@@ -441,6 +441,7 @@ impl<'a> SessionChatPage<'a> {
         }
 
         if let AppMode::Question {
+            focus,
             questions,
             current_index,
             input,
@@ -453,6 +454,7 @@ impl<'a> SessionChatPage<'a> {
                 bottom_area,
                 questions,
                 *current_index,
+                *focus,
                 input,
                 *selected_option_index,
             );
@@ -550,6 +552,7 @@ fn render_question_panel(
     bottom_area: Rect,
     questions: &[QuestionItem],
     current_index: usize,
+    focus: QuestionFocus,
     input: &input::InputState,
     selected_option_index: Option<usize>,
 ) {
@@ -611,8 +614,12 @@ fn render_question_panel(
         }
     }
 
+    let is_chat_focused = focus == QuestionFocus::Chat;
     let mut help_actions = Vec::new();
-    if is_free_text_mode {
+
+    if is_chat_focused {
+        help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
+    } else if is_free_text_mode {
         help_actions.push(help_action::HelpAction::new(
             "send",
             "Enter",
@@ -630,11 +637,17 @@ fn render_question_panel(
             "Choose option",
         ));
     }
-    help_actions.push(help_action::HelpAction::new(
-        "skip",
-        "Esc",
-        "Skip (no answer)",
-    ));
+
+    let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
+    help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
+
+    if !is_chat_focused {
+        help_actions.push(help_action::HelpAction::new(
+            "skip",
+            "Esc",
+            "Skip (no answer)",
+        ));
+    }
     if panel_layout.help_height > 0 {
         let help_para = Paragraph::new(help_action::footer_line(&help_actions))
             .alignment(ratatui::layout::Alignment::Right);
@@ -747,6 +760,7 @@ mod tests {
     use crate::domain::session::{SessionSize, SessionStats};
     use crate::infra::agent::protocol::QuestionItem;
     use crate::infra::file_index::FileEntry;
+    use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
     fn session_fixture() -> Session {
@@ -1340,7 +1354,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text(answer.to_string()),
+            scroll_offset: None,
             selected_option_index: None,
         };
         let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
@@ -1380,7 +1396,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text("answer\n".repeat(50)),
+            scroll_offset: None,
             selected_option_index: None,
         };
         let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
@@ -1405,7 +1423,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: None,
         };
         let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
@@ -1525,7 +1545,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text("typed answer".to_string()),
+            scroll_offset: None,
             selected_option_index: None,
         };
         let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
@@ -1558,7 +1580,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::with_text("typed answer".to_string()),
+            scroll_offset: None,
             selected_option_index: None,
         };
         let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
@@ -1604,7 +1628,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: Some(0),
         };
         let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
@@ -1646,7 +1672,9 @@ mod tests {
             }],
             responses: Vec::new(),
             current_index: 0,
+            focus: QuestionFocus::Answer,
             input: InputState::default(),
+            scroll_offset: None,
             selected_option_index: None,
         };
         let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);

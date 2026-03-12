@@ -8,7 +8,9 @@ use crate::domain::session::Status;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::question;
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, DoneSessionOutputMode, HelpContext};
+use crate::ui::state::app_mode::{
+    AppMode, ConfirmationIntent, DoneSessionOutputMode, HelpContext, QuestionFocus,
+};
 use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, stats_actions,
 };
@@ -116,7 +118,9 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                         questions,
                         responses: Vec::new(),
                         current_index: 0,
+                        focus: QuestionFocus::Answer,
                         input: InputState::default(),
+                        scroll_offset: None,
                         selected_option_index,
                     };
                 } else {
@@ -562,6 +566,7 @@ mod tests {
                 ref responses,
                 ref input,
                 selected_option_index: Some(0),
+                ..
             } if session_id == &expected_session_id
                 && questions == &expected_questions
                 && responses.is_empty()

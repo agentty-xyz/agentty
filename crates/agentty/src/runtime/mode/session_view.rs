@@ -1855,7 +1855,7 @@ mod tests {
             focused_review_status_message: None,
             focused_review_text: None,
             scroll_offset: Some(1),
-            session_id: session_id.clone(),
+            session_id,
             session_index: 0,
         };
 
