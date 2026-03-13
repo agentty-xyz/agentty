@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.1] - 2026-03-12
+
+### Added
+
+- Add background auto-update with status bar progress and `--no-update` flag.
+- Add codecov badge to README.
+- Add postsubmit coverage workflow.
+- Add chat output scrolling to question-answer mode.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.6.0] - 2026-03-11
 
 ### Added
