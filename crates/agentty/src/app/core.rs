@@ -3748,7 +3748,7 @@ mod tests {
             },
         });
 
-        // Assert — last event wins
+        // Assert
         assert_eq!(
             event_batch.update_status,
             Some(UpdateStatus::Complete {
@@ -4180,7 +4180,6 @@ mod tests {
             app_server_client,
         );
     }
-
     #[tokio::test]
     async fn apply_focused_review_update_stores_success_in_cache() {
         // Arrange
@@ -4320,7 +4319,7 @@ mod tests {
         app.auto_start_focused_reviews(&session_ids, &previous_states)
             .await;
 
-        // Assert — cache should remain unchanged (review not regenerated)
+        // Assert
         assert!(matches!(
             app.focused_review_cache.get(session_id),
             Some(FocusedReviewCacheEntry::Ready { text, .. }) if text == "existing review"

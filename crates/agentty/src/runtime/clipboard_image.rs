@@ -1,12 +1,12 @@
 //! Clipboard image capture helpers for prompt-mode pasted attachments.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use arboard::Clipboard;
 use image::{ExtendedColorType, ImageFormat};
 
-use crate::app;
+use crate::app::{self, session};
 
 /// Persisted clipboard image metadata used by prompt-mode attachment flows.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,7 +118,24 @@ pub(crate) fn build_clipboard_image_path(
     session_id: &str,
     attachment_number: usize,
 ) -> Result<PathBuf, String> {
-    let timestamp_millis = SystemTime::now()
+    let clock = session::RealClock;
+
+    build_clipboard_image_path_with_clock(session_id, attachment_number, &clock)
+}
+
+/// Builds a stable unique PNG path for one pasted image capture using the
+/// provided time source.
+///
+/// # Errors
+/// Returns an error when the session id cannot be used as a temp directory
+/// name or when the clock returns a pre-Unix-epoch timestamp.
+fn build_clipboard_image_path_with_clock(
+    session_id: &str,
+    attachment_number: usize,
+    clock: &dyn session::Clock,
+) -> Result<PathBuf, String> {
+    let timestamp_millis = clock
+        .now_system_time()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("System clock is before the Unix epoch: {error}"))?
         .as_millis();
@@ -192,6 +209,20 @@ fn canonicalize_persisted_image_path(image_output_path: &Path) -> Result<PathBuf
 mod tests {
     use super::*;
 
+    struct FixedClock {
+        system_time: std::time::SystemTime,
+    }
+
+    impl session::Clock for FixedClock {
+        fn now_instant(&self) -> std::time::Instant {
+            std::time::Instant::now()
+        }
+
+        fn now_system_time(&self) -> std::time::SystemTime {
+            self.system_time
+        }
+    }
+
     #[test]
     fn test_clipboard_image_directory_uses_agentty_tmp_path_for_session_id() {
         // Arrange
@@ -217,17 +248,36 @@ mod tests {
             .join("tmp")
             .join("session-123")
             .join("images");
+        let clock = FixedClock {
+            system_time: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(42),
+        };
 
         // Act
-        let image_path =
-            build_clipboard_image_path(session_id, 2).expect("image path should resolve");
+        let image_path = build_clipboard_image_path_with_clock(session_id, 2, &clock)
+            .expect("image path should resolve");
 
         // Assert
         assert_eq!(image_path.parent(), Some(expected_directory.as_path()));
-        assert!(image_path.file_name().is_some_and(|name| {
-            name.to_string_lossy().starts_with("image-002-")
-                && name.to_string_lossy().ends_with(".png")
-        }));
+        assert!(
+            image_path
+                .file_name()
+                .is_some_and(|name| { name.to_string_lossy() == "image-002-42.png" })
+        );
+    }
+
+    #[test]
+    fn test_build_clipboard_image_path_rejects_pre_epoch_clock_values() {
+        // Arrange
+        let session_id = "session-123";
+        let clock = FixedClock {
+            system_time: std::time::SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        };
+
+        // Act
+        let result = build_clipboard_image_path_with_clock(session_id, 2, &clock);
+
+        // Assert
+        assert!(result.is_err());
     }
 
     #[test]

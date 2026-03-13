@@ -30,6 +30,7 @@ The traits below are mocked with `mockall`. Most use
 | `AgentBackend` | `infra/agent/backend.rs` | Per-provider CLI command construction and one-time setup. |
 | `AppServerClient` | `infra/app_server.rs` | App-server RPC execution (provider routing, JSON-RPC transport). |
 | `EventSource` | `runtime/event.rs` | Terminal event polling for deterministic event-loop tests. |
+| `Clock` | `app/session/core.rs` | Shared wall-clock and monotonic time boundary used by session orchestration and runtime helpers such as pasted-image file naming. |
 | `TerminalOperation` | `runtime/terminal.rs` | Terminal raw-mode and alternate-screen transitions for deterministic setup and restore failure-path tests. |
 | `Sleeper` | `lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase assistance. |
 | `UpdateRunner` | `infra/version.rs` | npm install command execution for background auto-updates. |
@@ -44,6 +45,11 @@ injectable trait boundaries and `mockall`-based tests over flaky end-to-end
 shell-heavy tests. Add a narrower internal command-runner boundary when a
 public orchestration trait still needs deterministic coverage of subprocess
 sequencing or retry behavior.
+
+Use the same pattern for time access in `app/` and `runtime/`: if orchestration
+logic needs `Instant::now()` or `SystemTime::now()`, route that call through
+the shared `Clock` boundary instead of calling the clock API directly in
+production logic.
 
 Session review-request publication and refresh follow this rule directly:
 `SessionManager` combines `GitClient` with `ReviewRequestClient` so tests can

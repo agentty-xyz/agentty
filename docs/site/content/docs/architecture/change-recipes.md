@@ -53,6 +53,7 @@ layer boundaries.
 1. Keep external integrations in `infra/` behind traits.
 1. Keep business entities and enums in `domain/`.
 1. In `app/` and `runtime/` orchestration, avoid direct `Command::new`, `Instant::now`, `SystemTime::now`, and direct filesystem/process calls unless they run behind trait boundaries.
+1. For helpers that need timestamps in `app/` or `runtime/`, reuse the shared `app/session/core.rs` `Clock` boundary instead of adding direct `Instant::now()` or `SystemTime::now()` calls.
 1. New external boundaries should get a trait with `#[cfg_attr(test, mockall::automock)]`.
 1. Update docs in `docs/site/content/docs/` whenever user-facing behavior changes.
 1. Update `docs/site/content/docs/architecture/module-map.md`, `docs/site/content/docs/architecture/runtime-flow.md`, and `docs/site/content/docs/architecture/testability-boundaries.md` when architecture responsibilities change.
