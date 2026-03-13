@@ -2730,45 +2730,6 @@ mod tests {
         new_test_app_with_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
-    /// Creates one aggregated project-row fixture with a caller-provided path.
-    fn project_list_row_fixture(id: i64, path: String) -> db::ProjectListRow {
-        db::ProjectListRow {
-            active_session_count: 0,
-            created_at: 1,
-            display_name: None,
-            git_branch: Some("main".to_string()),
-            id,
-            is_favorite: false,
-            last_opened_at: None,
-            last_session_updated_at: None,
-            path,
-            session_count: 0,
-            updated_at: 1,
-        }
-    }
-
-    /// Replaces the services git client in a test app with a mock while
-    /// preserving the other injected service clients.
-    fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
-        let mock_git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let base_path = app.services.base_path().to_path_buf();
-        let db = app.services.db().clone();
-        let event_sender = app.services.event_sender();
-        let app_server_client = app.services.app_server_client();
-        let fs_client = app.services.fs_client();
-        let review_request_client = app.services.review_request_client();
-
-        app.services = AppServices::new(
-            base_path,
-            db,
-            event_sender,
-            fs_client,
-            mock_git_client,
-            review_request_client,
-            app_server_client,
-        );
-    }
-
     #[tokio::test]
     async fn test_switch_project_reloads_project_scoped_settings() {
         // Arrange
@@ -3654,4 +3615,8 @@ mod tests {
 
         // Assert
         assert_eq!(
-            event_batch.agent_re
+            event_batch.agent_responses.get("session-1").cloned(),
+            Some(latest_response)
+        );
+    }
+}

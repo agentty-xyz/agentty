@@ -1817,6 +1817,781 @@ mod tests {
         );
     }
 
+    /// Inserts one session row with deterministic defaults for tests.
+    async fn insert_session_fixture(
+        database: &Database,
+        session_id: &str,
+        base_branch: &str,
+        status: &str,
+        project_id: i64,
+    ) {
+        database
+            .insert_session(session_id, "gpt-5.3-codex", base_branch, status, project_id)
+            .await
+            .expect("failed to insert session fixture");
+    }
+
+    /// Loads one session row by identifier through `load_sessions()`.
+    async fn load_session_row(database: &Database, session_id: &str) -> SessionRow {
+        database
+            .load_sessions()
+            .await
+            .expect("failed to load all sessions")
+            .into_iter()
+            .find(|row| row.id == session_id)
+            .expect("missing session row")
+    }
+
+    /// Loads one persisted session-operation row regardless of lifecycle
+    /// status.
+    async fn load_session_operation_row(
+        database: &Database,
+        operation_id: &str,
+    ) -> SessionOperationRow {
+        let row = sqlx::query(
+            r"
+SELECT id, session_id, kind, status, queued_at, started_at, finished_at,
+       heartbeat_at, last_error, cancel_requested
+FROM session_operation
+WHERE id = ?
+",
+        )
+        .bind(operation_id)
+        .fetch_one(database.pool())
+        .await
+        .expect("failed to load session operation row");
+
+        SessionOperationRow {
+            cancel_requested: row.get::<i64, _>("cancel_requested") != 0,
+            finished_at: row.get("finished_at"),
+            heartbeat_at: row.get("heartbeat_at"),
+            id: row.get("id"),
+            kind: row.get("kind"),
+            last_error: row.get("last_error"),
+            queued_at: row.get("queued_at"),
+            session_id: row.get("session_id"),
+            started_at: row.get("started_at"),
+            status: row.get("status"),
+        }
+    }
+
+    /// Verifies `load_sessions()` maps persisted joined session fields.
+    #[tokio::test]
+    async fn test_load_sessions_maps_joined_session_fields() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        let review_request = review_request_fixture();
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .update_session_created_at("session-a", 100)
+            .await
+            .expect("failed to update session created_at");
+        database
+            .update_session_updated_at("session-a", 200)
+            .await
+            .expect("failed to update session updated_at");
+        database
+            .update_session_size("session-a", "L")
+            .await
+            .expect("failed to update session size");
+        database
+            .update_session_questions("session-a", "[\"Need logs?\"]")
+            .await
+            .expect("failed to update session questions");
+        database
+            .update_session_prompt("session-a", "Implement the feature")
+            .await
+            .expect("failed to update session prompt");
+        database
+            .update_session_title("session-a", "Feature work")
+            .await
+            .expect("failed to update session title");
+        database
+            .update_session_summary("session-a", "Implemented the requested feature")
+            .await
+            .expect("failed to update session summary");
+        database
+            .update_session_stats(
+                "session-a",
+                &SessionStats {
+                    input_tokens: 11,
+                    output_tokens: 29,
+                },
+            )
+            .await
+            .expect("failed to update session stats");
+        database
+            .update_session_model("session-a", "claude-opus-4.1")
+            .await
+            .expect("failed to update session model");
+        database
+            .update_session_published_upstream_ref("session-a", Some("origin/agentty/session-a"))
+            .await
+            .expect("failed to update published upstream ref");
+        database
+            .update_session_review_request("session-a", Some(&review_request))
+            .await
+            .expect("failed to update review request");
+        database
+            .replace_session_output("session-a", "First line")
+            .await
+            .expect("failed to replace session output");
+        database
+            .append_session_output("session-a", "\nSecond line")
+            .await
+            .expect("failed to append session output");
+
+        // Act
+        let session_row = load_session_row(&database, "session-a").await;
+
+        // Assert
+        assert_eq!(session_row.id, "session-a");
+        assert_eq!(session_row.base_branch, "main");
+        assert_eq!(session_row.created_at, 100);
+        assert_eq!(session_row.updated_at, 200);
+        assert_eq!(session_row.model, "claude-opus-4.1");
+        assert_eq!(session_row.status, "Review");
+        assert_eq!(session_row.project_id, Some(project_id));
+        assert_eq!(session_row.prompt, "Implement the feature");
+        assert_eq!(session_row.output, "First line\nSecond line");
+        assert_eq!(session_row.input_tokens, 11);
+        assert_eq!(session_row.output_tokens, 29);
+        assert_eq!(session_row.size, "L");
+        assert_eq!(
+            session_row.summary.as_deref(),
+            Some("Implemented the requested feature")
+        );
+        assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
+        assert_eq!(session_row.title.as_deref(), Some("Feature work"));
+        assert_eq!(
+            session_row.published_upstream_ref.as_deref(),
+            Some("origin/agentty/session-a")
+        );
+        assert_review_request_row(&session_row);
+    }
+
+    /// Verifies `load_sessions_for_project()` filters rows by project id.
+    #[tokio::test]
+    async fn test_load_sessions_for_project_filters_to_project_rows() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let first_project_id = database
+            .upsert_project("/tmp/project-a", Some("main"))
+            .await
+            .expect("failed to insert first project");
+        let second_project_id = database
+            .upsert_project("/tmp/project-b", Some("develop"))
+            .await
+            .expect("failed to insert second project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", first_project_id).await;
+        insert_session_fixture(&database, "session-b", "main", "Done", first_project_id).await;
+        insert_session_fixture(&database, "session-c", "develop", "Done", second_project_id).await;
+        database
+            .update_session_updated_at("session-a", 300)
+            .await
+            .expect("failed to update session-a updated_at");
+        database
+            .update_session_updated_at("session-b", 200)
+            .await
+            .expect("failed to update session-b updated_at");
+        database
+            .update_session_updated_at("session-c", 100)
+            .await
+            .expect("failed to update session-c updated_at");
+
+        // Act
+        let session_rows = database
+            .load_sessions_for_project(first_project_id)
+            .await
+            .expect("failed to load project sessions");
+
+        // Assert
+        assert_eq!(session_rows.len(), 2);
+        assert_eq!(session_rows[0].id, "session-a");
+        assert_eq!(session_rows[1].id, "session-b");
+        assert!(
+            session_rows
+                .iter()
+                .all(|row| row.project_id == Some(first_project_id))
+        );
+    }
+
+    /// Verifies `load_sessions_metadata()` returns session count and max
+    /// `updated_at`.
+    #[tokio::test]
+    async fn test_load_sessions_metadata_returns_count_and_latest_timestamp() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        insert_session_fixture(&database, "session-b", "main", "Done", project_id).await;
+        database
+            .update_session_updated_at("session-a", 200)
+            .await
+            .expect("failed to update session-a updated_at");
+        database
+            .update_session_updated_at("session-b", 300)
+            .await
+            .expect("failed to update session-b updated_at");
+
+        // Act
+        let session_metadata = database
+            .load_sessions_metadata()
+            .await
+            .expect("failed to load session metadata");
+
+        // Assert
+        assert_eq!(session_metadata, (2, 300));
+    }
+
+    /// Verifies `load_session_timestamps()` returns the persisted timestamps.
+    #[tokio::test]
+    async fn test_load_session_timestamps_returns_created_and_updated_values() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Done", project_id).await;
+        database
+            .update_session_created_at("session-a", 111)
+            .await
+            .expect("failed to update session created_at");
+        database
+            .update_session_updated_at("session-a", 222)
+            .await
+            .expect("failed to update session updated_at");
+
+        // Act
+        let session_timestamps = database
+            .load_session_timestamps("session-a")
+            .await
+            .expect("failed to load session timestamps");
+
+        // Assert
+        assert_eq!(session_timestamps, Some((111, 222)));
+    }
+
+    /// Verifies `get_session_base_branch()` returns the persisted branch name.
+    #[tokio::test]
+    async fn test_get_session_base_branch_returns_persisted_value() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "release", "Done", project_id).await;
+
+        // Act
+        let base_branch = database
+            .get_session_base_branch("session-a")
+            .await
+            .expect("failed to load session base branch");
+
+        // Assert
+        assert_eq!(base_branch.as_deref(), Some("release"));
+    }
+
+    /// Verifies `delete_session()` removes the session row and nulls
+    /// `session_usage.session_id`.
+    #[tokio::test]
+    async fn test_delete_session_removes_row_and_nulls_usage_foreign_key() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Done", project_id).await;
+        database
+            .upsert_session_usage(
+                "session-a",
+                "claude-opus-4.1",
+                &SessionStats {
+                    input_tokens: 11,
+                    output_tokens: 29,
+                },
+            )
+            .await
+            .expect("failed to insert usage row");
+
+        // Act
+        database
+            .delete_session("session-a")
+            .await
+            .expect("failed to delete session");
+        let deleted_session = database
+            .load_session_timestamps("session-a")
+            .await
+            .expect("failed to load deleted session timestamps");
+        let retained_usage_row = sqlx::query(
+            r"
+SELECT session_id
+FROM session_usage
+WHERE model = ?
+",
+        )
+        .bind("claude-opus-4.1")
+        .fetch_one(database.pool())
+        .await
+        .expect("failed to load retained usage row");
+
+        // Assert
+        assert_eq!(deleted_session, None);
+        assert_eq!(
+            retained_usage_row.get::<Option<String>, _>("session_id"),
+            None
+        );
+    }
+
+    /// Verifies `load_unfinished_session_operations()` returns only queued and
+    /// running rows.
+    #[tokio::test]
+    async fn test_load_unfinished_session_operations_returns_only_queued_and_running_rows() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .insert_session_operation("operation-queued", "session-a", "merge")
+            .await
+            .expect("failed to insert queued operation");
+        database
+            .insert_session_operation("operation-running", "session-a", "sync")
+            .await
+            .expect("failed to insert running operation");
+        database
+            .insert_session_operation("operation-done", "session-a", "review")
+            .await
+            .expect("failed to insert done operation");
+        database
+            .mark_session_operation_running("operation-running")
+            .await
+            .expect("failed to mark running operation");
+        database
+            .mark_session_operation_running("operation-done")
+            .await
+            .expect("failed to mark done operation running");
+        database
+            .mark_session_operation_done("operation-done")
+            .await
+            .expect("failed to mark done operation");
+
+        // Act
+        let unfinished_rows = database
+            .load_unfinished_session_operations()
+            .await
+            .expect("failed to load unfinished operations");
+
+        // Assert
+        assert_eq!(unfinished_rows.len(), 2);
+        assert_eq!(unfinished_rows[0].id, "operation-queued");
+        assert_eq!(unfinished_rows[0].status, "queued");
+        assert_eq!(unfinished_rows[1].id, "operation-running");
+        assert_eq!(unfinished_rows[1].status, "running");
+    }
+
+    /// Verifies `request_cancel_for_session_operations()` marks only
+    /// unfinished rows.
+    #[tokio::test]
+    async fn test_request_cancel_for_session_operations_marks_only_unfinished_rows() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .insert_session_operation("operation-queued", "session-a", "merge")
+            .await
+            .expect("failed to insert queued operation");
+        database
+            .insert_session_operation("operation-done", "session-a", "review")
+            .await
+            .expect("failed to insert done operation");
+        database
+            .mark_session_operation_running("operation-done")
+            .await
+            .expect("failed to mark done operation running");
+        database
+            .mark_session_operation_done("operation-done")
+            .await
+            .expect("failed to mark done operation");
+
+        // Act
+        database
+            .request_cancel_for_session_operations("session-a")
+            .await
+            .expect("failed to request cancel");
+        let queued_row = load_session_operation_row(&database, "operation-queued").await;
+        let done_row = load_session_operation_row(&database, "operation-done").await;
+
+        // Assert
+        assert!(queued_row.cancel_requested);
+        assert!(!done_row.cancel_requested);
+    }
+
+    /// Verifies `is_session_operation_unfinished()` returns `false` for a
+    /// completed operation.
+    #[tokio::test]
+    async fn test_is_session_operation_unfinished_returns_false_for_done_operation() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .insert_session_operation("operation-a", "session-a", "merge")
+            .await
+            .expect("failed to insert operation");
+        database
+            .mark_session_operation_running("operation-a")
+            .await
+            .expect("failed to mark operation running");
+        database
+            .mark_session_operation_done("operation-a")
+            .await
+            .expect("failed to mark operation done");
+
+        // Act
+        let is_unfinished = database
+            .is_session_operation_unfinished("operation-a")
+            .await
+            .expect("failed to check unfinished operation state");
+
+        // Assert
+        assert!(!is_unfinished);
+    }
+
+    /// Verifies `is_cancel_requested_for_session_operations()` reflects the
+    /// current cancel-request state for unfinished rows.
+    #[tokio::test]
+    async fn test_is_cancel_requested_for_session_operations_tracks_unfinished_rows() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .insert_session_operation("operation-a", "session-a", "merge")
+            .await
+            .expect("failed to insert operation");
+
+        database
+            .request_cancel_for_session_operations("session-a")
+            .await
+            .expect("failed to request cancel");
+
+        // Act
+        let cancel_requested = database
+            .is_cancel_requested_for_session_operations("session-a")
+            .await
+            .expect("failed to check cancel request state");
+
+        // Assert
+        assert!(cancel_requested);
+    }
+
+    /// Verifies `mark_session_operation_running()` sets the running state and
+    /// timestamps.
+    #[tokio::test]
+    async fn test_mark_session_operation_running_sets_started_at_and_heartbeat() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .insert_session_operation("operation-a", "session-a", "merge")
+            .await
+            .expect("failed to insert operation");
+
+        // Act
+        database
+            .mark_session_operation_running("operation-a")
+            .await
+            .expect("failed to mark operation running");
+        let running_row = load_session_operation_row(&database, "operation-a").await;
+
+        // Assert
+        assert_eq!(running_row.status, "running");
+        assert!(running_row.started_at.is_some());
+        assert!(running_row.heartbeat_at.is_some());
+        assert_eq!(running_row.last_error, None);
+    }
+
+    /// Verifies `mark_session_operation_done()` sets the terminal completion
+    /// fields.
+    #[tokio::test]
+    async fn test_mark_session_operation_done_sets_finished_state() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .insert_session_operation("operation-a", "session-a", "merge")
+            .await
+            .expect("failed to insert operation");
+        database
+            .mark_session_operation_running("operation-a")
+            .await
+            .expect("failed to mark operation running");
+
+        // Act
+        database
+            .mark_session_operation_done("operation-a")
+            .await
+            .expect("failed to mark operation done");
+        let done_row = load_session_operation_row(&database, "operation-a").await;
+
+        // Assert
+        assert_eq!(done_row.status, "done");
+        assert!(done_row.finished_at.is_some());
+        assert!(done_row.heartbeat_at.is_some());
+        assert_eq!(done_row.last_error, None);
+    }
+
+    /// Verifies `parse_session_row()` maps joined session and review-request
+    /// columns into the public row model.
+    #[tokio::test]
+    async fn test_parse_session_row_maps_joined_review_request_columns() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        let review_request = review_request_fixture();
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        database
+            .update_session_title("session-a", "Review session")
+            .await
+            .expect("failed to update session title");
+        database
+            .update_session_summary("session-a", "Summary text")
+            .await
+            .expect("failed to update session summary");
+        database
+            .update_session_questions("session-a", "Question text")
+            .await
+            .expect("failed to update session questions");
+        database
+            .update_session_published_upstream_ref("session-a", Some("origin/session-a"))
+            .await
+            .expect("failed to update session upstream ref");
+        database
+            .update_session_review_request("session-a", Some(&review_request))
+            .await
+            .expect("failed to update session review request");
+
+        let row = sqlx::query(
+            r"
+SELECT session.id, session.model, session.base_branch, session.status, session.title,
+       session.project_id, session.prompt, session.output, session.created_at,
+       session.updated_at, session.input_tokens, session.output_tokens, session.size,
+       session.summary, session.questions, session.published_upstream_ref,
+       session_review_request.display_id AS review_request_display_id,
+       session_review_request.forge_kind AS review_request_forge_kind,
+       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,
+       session_review_request.source_branch AS review_request_source_branch,
+       session_review_request.state AS review_request_state,
+       session_review_request.status_summary AS review_request_status_summary,
+       session_review_request.target_branch AS review_request_target_branch,
+       session_review_request.title AS review_request_title,
+       session_review_request.web_url AS review_request_web_url
+FROM session
+LEFT JOIN session_review_request
+ON session_review_request.session_id = session.id
+WHERE session.id = ?
+",
+        )
+        .bind("session-a")
+        .fetch_one(database.pool())
+        .await
+        .expect("failed to load joined session row");
+
+        // Act
+        let session_row = parse_session_row(&row);
+
+        // Assert
+        assert_eq!(session_row.id, "session-a");
+        assert_eq!(session_row.project_id, Some(project_id));
+        assert_eq!(
+            session_row.published_upstream_ref.as_deref(),
+            Some("origin/session-a")
+        );
+        assert_eq!(session_row.questions.as_deref(), Some("Question text"));
+        assert_eq!(session_row.summary.as_deref(), Some("Summary text"));
+        assert_eq!(session_row.title.as_deref(), Some("Review session"));
+        assert_review_request_row(&session_row);
+    }
+
+    /// Verifies `parse_session_row()` drops partially populated review-request
+    /// join data instead of surfacing an invalid row model.
+    #[tokio::test]
+    async fn test_parse_session_row_ignores_partial_review_request_join_columns() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+
+        let row = sqlx::query(
+            r"
+SELECT session.id, session.model, session.base_branch, session.status, session.title,
+       session.project_id, session.prompt, session.output, session.created_at,
+       session.updated_at, session.input_tokens, session.output_tokens, session.size,
+       session.summary, session.questions, session.published_upstream_ref,
+       '#42' AS review_request_display_id,
+       'GitHub' AS review_request_forge_kind,
+       CAST(NULL AS INTEGER) AS review_request_last_refreshed_at,
+       'feature/forge' AS review_request_source_branch,
+       'Open' AS review_request_state,
+       'checks passing' AS review_request_status_summary,
+       'main' AS review_request_target_branch,
+       'Add forge review support' AS review_request_title,
+       'https://github.com/agentty-xyz/agentty/pull/42' AS review_request_web_url
+FROM session
+WHERE session.id = ?
+",
+        )
+        .bind("session-a")
+        .fetch_one(database.pool())
+        .await
+        .expect("failed to load partially joined session row");
+
+        // Act
+        let session_row = parse_session_row(&row);
+
+        // Assert
+        assert_eq!(session_row.id, "session-a");
+        assert_eq!(session_row.project_id, Some(project_id));
+        assert_eq!(session_row.status, "Review");
+        assert_eq!(session_row.review_request, None);
+    }
+
+    /// Verifies `upsert_session_usage()` accumulates per-model token totals and
+    /// invocation counts.
+    #[tokio::test]
+    async fn test_upsert_session_usage_accumulates_counts_per_model() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+
+        insert_session_fixture(&database, "session-a", "main", "Done", project_id).await;
+        database
+            .upsert_session_usage(
+                "session-a",
+                "claude-opus-4.1",
+                &SessionStats {
+                    input_tokens: 11,
+                    output_tokens: 29,
+                },
+            )
+            .await
+            .expect("failed to insert first usage row");
+        database
+            .upsert_session_usage(
+                "session-a",
+                "claude-opus-4.1",
+                &SessionStats {
+                    input_tokens: 3,
+                    output_tokens: 5,
+                },
+            )
+            .await
+            .expect("failed to update existing usage row");
+        database
+            .upsert_session_usage("session-a", "ignored-model", &SessionStats::default())
+            .await
+            .expect("failed to ignore zero-usage update");
+
+        // Act
+        let usage_rows = database
+            .load_session_usage("session-a")
+            .await
+            .expect("failed to load session usage");
+
+        // Assert
+        assert_eq!(usage_rows.len(), 1);
+        assert_eq!(usage_rows[0].model, "claude-opus-4.1");
+        assert_eq!(usage_rows[0].input_tokens, 14);
+        assert_eq!(usage_rows[0].invocation_count, 2);
+        assert_eq!(usage_rows[0].output_tokens, 34);
+        assert_eq!(usage_rows[0].session_id.as_deref(), Some("session-a"));
+    }
+
     #[tokio::test]
     async fn test_setting_round_trip_supports_default_smart_fast_and_review_models() {
         // Arrange
