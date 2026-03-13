@@ -22,7 +22,7 @@ Agentty organizes its interface into four tabs, accessible with `Tab`:
 | **Sessions** | List, create, and manage agent sessions. When a project is active, this tab appears as `Sessions (<project-name>)`. |
 | **Projects** | Select between projects (git repositories) in a split view: Agentty info (ASCII art, version, short description) on top, project table below. Agentty skips stale entries whose project directories no longer exist. |
 | **Stats** | View usage statistics. |
-| **Settings** | Configure reasoning level, default models, and `Open Commands` for the active project. |
+| **Settings** | Configure reasoning level, default models, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status and session title render in a dedicated
 header row above the output panel.
@@ -45,7 +45,8 @@ Session statuses and what you can do in each state:
 | **Canceled** | Session was canceled by the user and its worktree checkout was removed. | read-only view (`q`, scroll, help) |
 
 Settings values are stored per active project. Switching projects reloads that
-project's `Reasoning Level`, default models, and `Open Commands`.
+project's `Reasoning Level`, default models, `Coauthored by Agentty` toggle,
+and `Open Commands`.
 
 When a session enters **Review**, Agentty starts generating the focused review
 in the background. Pressing `f` opens the cached review immediately when it is
@@ -53,8 +54,9 @@ ready, or shows a loading message while generation is still running.
 
 After each successful turn with file changes, Agentty keeps the session branch
 at one evolving commit. It regenerates that commit message from the cumulative
-session diff, amends `HEAD`, and refreshes the session title and summary from
-the same commit text before merge begins.
+session diff, applies the active project's `Coauthored by Agentty` setting to
+the final commit trailer, amends `HEAD`, and refreshes the session title and
+summary from the same commit text before merge begins.
 
 When a session enters **Merging**, Agentty reuses the session branch `HEAD`
 commit message for the final squash commit on the base branch. Merge still

@@ -60,15 +60,17 @@ enum SettingRow {
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
+    IncludeCoauthoredByAgentty,
     OpenCommand,
 }
 
 impl SettingRow {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::ReasoningLevel,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
+        Self::IncludeCoauthoredByAgentty,
         Self::OpenCommand,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
@@ -88,6 +90,7 @@ impl SettingRow {
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
+            Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::OpenCommand => "Open Commands",
         }
     }
@@ -98,7 +101,8 @@ impl SettingRow {
             Self::ReasoningLevel
             | Self::DefaultSmartModel
             | Self::DefaultFastModel
-            | Self::DefaultReviewModel => SettingControl::Selector,
+            | Self::DefaultReviewModel
+            | Self::IncludeCoauthoredByAgentty => SettingControl::Selector,
             Self::OpenCommand => SettingControl::TextInput,
         }
     }
@@ -110,6 +114,7 @@ impl SettingRow {
             Self::DefaultSmartModel => SettingName::DefaultSmartModel,
             Self::DefaultFastModel => SettingName::DefaultFastModel,
             Self::DefaultReviewModel => SettingName::DefaultReviewModel,
+            Self::IncludeCoauthoredByAgentty => SettingName::IncludeCoauthoredByAgentty,
             Self::OpenCommand => SettingName::OpenCommand,
         }
     }
@@ -132,6 +137,9 @@ pub struct SettingsManager {
     /// Table selection state for the settings page.
     pub table_state: TableState,
     editing_text_row: Option<SettingRow>,
+    /// Whether generated session commit messages append the Agentty coauthor
+    /// trailer for the active project.
+    include_coauthored_by_agentty: bool,
     open_command_input: Option<InputState>,
     /// Active project identifier that owns these persisted settings.
     project_id: i64,
@@ -164,13 +172,20 @@ impl SettingsManager {
             .unwrap_or(None)
             .unwrap_or_default();
 
-        let use_last_used_model_as_default = services
-            .db()
-            .get_project_setting(project_id, SettingName::LastUsedModelAsDefault.as_str())
-            .await
-            .unwrap_or(None)
-            .and_then(|setting| setting.parse::<bool>().ok())
-            .unwrap_or(false);
+        let include_coauthored_by_agentty = load_project_bool_setting(
+            services,
+            Some(project_id),
+            SettingName::IncludeCoauthoredByAgentty,
+            true,
+        )
+        .await;
+        let use_last_used_model_as_default = load_project_bool_setting(
+            services,
+            Some(project_id),
+            SettingName::LastUsedModelAsDefault,
+            false,
+        )
+        .await;
 
         let mut table_state = TableState::default();
         table_state.select(Some(0));
@@ -183,6 +198,7 @@ impl SettingsManager {
             reasoning_level,
             table_state,
             editing_text_row: None,
+            include_coauthored_by_agentty,
             open_command_input: None,
             project_id,
             use_last_used_model_as_default,
@@ -445,6 +461,9 @@ impl SettingsManager {
             }
             SettingRow::DefaultFastModel => self.default_fast_model.as_str().to_string(),
             SettingRow::DefaultReviewModel => self.default_review_model.as_str().to_string(),
+            SettingRow::IncludeCoauthoredByAgentty => {
+                bool_setting_display(self.include_coauthored_by_agentty)
+            }
             SettingRow::OpenCommand => {
                 if self.is_editing_text_input_for(row) {
                     display_open_command_with_cursor(&self.open_command, self.open_command_cursor())
@@ -483,6 +502,10 @@ impl SettingsManager {
             SettingName::DefaultReviewModel => {
                 self.cycle_default_review_model_selector(services).await;
             }
+            SettingName::IncludeCoauthoredByAgentty => {
+                self.toggle_include_coauthored_by_agentty_selector(services)
+                    .await;
+            }
             SettingName::OpenCommand | SettingName::LastUsedModelAsDefault => {}
         }
     }
@@ -508,6 +531,7 @@ impl SettingsManager {
             | SettingName::DefaultFastModel
             | SettingName::DefaultReviewModel
             | SettingName::DefaultSmartModel
+            | SettingName::IncludeCoauthoredByAgentty
             | SettingName::LastUsedModelAsDefault => {}
         }
     }
@@ -561,6 +585,15 @@ impl SettingsManager {
         self.default_review_model = next_model(self.default_review_model);
 
         self.persist_default_review_model_setting(services).await;
+    }
+
+    /// Toggles whether generated session commit messages include the
+    /// `Co-Authored-By` trailer for the active project.
+    async fn toggle_include_coauthored_by_agentty_selector(&mut self, services: &AppServices) {
+        self.include_coauthored_by_agentty = !self.include_coauthored_by_agentty;
+
+        self.persist_include_coauthored_by_agentty_setting(services)
+            .await;
     }
 
     /// Persists smart-model selector values (`DefaultSmartModel` and
@@ -617,6 +650,21 @@ impl SettingsManager {
             )
             .await;
     }
+
+    /// Persists the coauthor-trailer toggle for generated session commit
+    /// messages.
+    async fn persist_include_coauthored_by_agentty_setting(&self, services: &AppServices) {
+        let include_coauthored_by_agentty = self.include_coauthored_by_agentty.to_string();
+
+        let _ = services
+            .db()
+            .upsert_project_setting(
+                self.project_id,
+                SettingName::IncludeCoauthoredByAgentty.as_str(),
+                &include_coauthored_by_agentty,
+            )
+            .await;
+    }
 }
 
 /// Cursor movement direction for text-input settings rows.
@@ -636,6 +684,37 @@ fn parse_open_commands(open_command_setting: &str) -> Vec<String> {
         .filter(|command| !command.is_empty())
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+/// Loads one project-scoped boolean setting, falling back to
+/// `default_value` when the project is missing or the persisted value is
+/// absent or invalid.
+async fn load_project_bool_setting(
+    services: &AppServices,
+    project_id: Option<i64>,
+    setting_name: SettingName,
+    default_value: bool,
+) -> bool {
+    let Some(project_id) = project_id else {
+        return default_value;
+    };
+
+    services
+        .db()
+        .get_project_setting(project_id, setting_name.as_str())
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| setting_value.parse::<bool>().ok())
+        .unwrap_or(default_value)
+}
+
+/// Returns the human-readable value shown for one boolean selector row.
+fn bool_setting_display(setting_value: bool) -> String {
+    if setting_value {
+        "Enabled".to_string()
+    } else {
+        "Disabled".to_string()
+    }
 }
 
 /// Renders `text` with a `|` cursor marker at `cursor_char_index`.
@@ -778,6 +857,7 @@ mod tests {
             reasoning_level: ReasoningLevel::High,
             table_state,
             editing_text_row: None,
+            include_coauthored_by_agentty: true,
             open_command_input: None,
             project_id: 1,
             use_last_used_model_as_default: false,
@@ -826,6 +906,17 @@ mod tests {
 
         // Assert
         assert_eq!(setting_name, "DefaultReviewModel");
+    }
+
+    #[test]
+    fn setting_name_as_str_returns_include_coauthored_by_agentty() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::IncludeCoauthoredByAgentty.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "IncludeCoauthoredByAgentty");
     }
 
     #[test]
@@ -1012,6 +1103,15 @@ mod tests {
             .expect("failed to persist review model");
         services
             .db()
+            .upsert_project_setting(
+                project_id,
+                SettingName::IncludeCoauthoredByAgentty.as_str(),
+                "false",
+            )
+            .await
+            .expect("failed to persist coauthor setting");
+        services
+            .db()
             .upsert_project_setting(project_id, SettingName::OpenCommand.as_str(), "nvim .")
             .await
             .expect("failed to persist open command");
@@ -1039,6 +1139,7 @@ mod tests {
         assert_eq!(manager.default_review_model, AgentModel::ClaudeOpus46);
         assert_eq!(manager.open_command, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
+        assert!(!manager.include_coauthored_by_agentty);
         assert!(manager.use_last_used_model_as_default);
     }
 
@@ -1063,6 +1164,27 @@ mod tests {
         assert!(!manager.use_last_used_model_as_default);
     }
 
+    #[tokio::test]
+    async fn settings_manager_new_defaults_invalid_coauthor_flag_to_true() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        services
+            .db()
+            .upsert_project_setting(
+                project_id,
+                SettingName::IncludeCoauthoredByAgentty.as_str(),
+                "invalid-bool",
+            )
+            .await
+            .expect("failed to persist invalid coauthor flag");
+
+        // Act
+        let manager = SettingsManager::new(&services, project_id).await;
+
+        // Assert
+        assert!(manager.include_coauthored_by_agentty);
+    }
+
     #[test]
     fn next_moves_selection_to_default_smart_model_row() {
         // Arrange
@@ -1084,7 +1206,7 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(4));
+        assert_eq!(manager.table_state.selected(), Some(5));
     }
 
     #[test]
@@ -1100,7 +1222,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_rows_include_reasoning_smart_fast_review_model_and_open_commands() {
+    fn settings_rows_include_reasoning_model_coauthor_and_open_command_options() {
         // Arrange
         let manager = new_settings_manager();
 
@@ -1108,12 +1230,13 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].0, "Reasoning Level");
         assert_eq!(rows[1].0, "Default Smart Model");
         assert_eq!(rows[2].0, "Default Fast Model");
         assert_eq!(rows[3].0, "Default Review Model");
-        assert_eq!(rows[4].0, "Open Commands");
+        assert_eq!(rows[4].0, "Coauthored by Agentty");
+        assert_eq!(rows[5].0, "Open Commands");
     }
 
     #[test]
@@ -1184,7 +1307,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "<empty>");
+        assert_eq!(rows[5].1, "<empty>");
     }
 
     #[test]
@@ -1198,7 +1321,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "http://localhost:5173|");
+        assert_eq!(rows[5].1, "http://localhost:5173|");
     }
 
     #[test]
@@ -1214,7 +1337,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "ab|c");
+        assert_eq!(rows[5].1, "ab|c");
     }
 
     #[test]
@@ -1257,6 +1380,19 @@ mod tests {
     }
 
     #[test]
+    fn settings_rows_show_coauthored_by_agentty_value() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.include_coauthored_by_agentty = false;
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[4].1, "Disabled");
+    }
+
+    #[test]
     fn settings_rows_show_reasoning_level_value() {
         // Arrange
         let mut manager = new_settings_manager();
@@ -1275,7 +1411,7 @@ mod tests {
         let (services, _) = test_services().await;
         let mut manager = new_settings_manager();
         manager.open_command = "nvim .".to_string();
-        select_row(&mut manager, 4);
+        select_row(&mut manager, 5);
 
         // Act
         manager.handle_enter(&services).await;
@@ -1297,7 +1433,7 @@ mod tests {
         // Arrange
         let (services, _) = test_services().await;
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 4);
+        select_row(&mut manager, 5);
         manager.handle_enter(&services).await;
 
         // Act
@@ -1305,7 +1441,7 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(4));
+        assert_eq!(manager.table_state.selected(), Some(5));
     }
 
     #[tokio::test]
@@ -1330,7 +1466,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        select_row(&mut manager, 4);
+        select_row(&mut manager, 5);
         manager.handle_enter(&services).await;
 
         // Act
@@ -1347,6 +1483,28 @@ mod tests {
                 .await
                 .expect("failed to load open command"),
             Some("n".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_enter_toggles_coauthor_setting_and_persists_value() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        select_row(&mut manager, 4);
+
+        // Act
+        manager.handle_enter(&services).await;
+
+        // Assert
+        assert!(!manager.include_coauthored_by_agentty);
+        assert_eq!(
+            services
+                .db()
+                .get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty.as_str())
+                .await
+                .expect("failed to load coauthor setting"),
+            Some("false".to_string())
         );
     }
 

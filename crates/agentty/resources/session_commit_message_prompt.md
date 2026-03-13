@@ -8,7 +8,6 @@ Rules:
 - Do not use Conventional Commit prefixes like `feat:` or `fix:`.
 - If a body is needed, add one empty line after the title and then write the body text.
 - Body text must use present simple tense and use `-` bullets when listing multiple points.
-- Include `Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)` at the end of the final message.
 - If an existing session commit message is provided, refine that same message to fit the new diff instead of restarting from scratch.
 - Use only the diff content and the existing session commit message.
 

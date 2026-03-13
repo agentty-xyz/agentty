@@ -2628,37 +2628,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_commit_changes_amends_existing_session_commit() {
+    async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         // Arrange
         let session_folder = PathBuf::from("/tmp/session-worktree");
         let mut mock_git_client = git::MockGitClient::new();
         let mut sequence = mockall::Sequence::new();
-        mock_git_client
-            .expect_is_worktree_clean()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_| Box::pin(async { Ok(false) }));
-        mock_git_client
-            .expect_has_commits_since()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_, _| Box::pin(async { Ok(false) }));
-        mock_git_client
-            .expect_commit_all_preserving_single_commit()
-            .times(1)
-            .withf(|_, base_branch, commit_message, strategy, no_verify| {
-                base_branch == "main"
-                    && commit_message == "Apply session updates"
-                    && *strategy == git::SingleCommitMessageStrategy::Replace
-                    && !*no_verify
-            })
-            .in_sequence(&mut sequence)
-            .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
-        mock_git_client
-            .expect_head_short_hash()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
         mock_git_client
             .expect_is_worktree_clean()
             .times(1)
@@ -2692,32 +2666,20 @@ mod tests {
             .returning(|_| Box::pin(async { Ok("def5678".to_string()) }));
 
         // Act
-        let first_outcome = SessionTaskService::commit_session_changes(
+        let outcome = SessionTaskService::commit_session_changes(
             &mock_git_client,
             &session_folder,
             "main",
             AgentModel::ClaudeSonnet46,
             false,
-        )
-        .await
-        .expect("failed to create first session commit");
-        let second_outcome = SessionTaskService::commit_session_changes(
-            &mock_git_client,
-            &session_folder,
-            "main",
-            AgentModel::ClaudeSonnet46,
             false,
         )
         .await
-        .expect("failed to amend session commit");
+        .expect("failed to commit existing session message");
 
         // Assert
-        assert_ne!(
-            first_outcome.commit_hash, second_outcome.commit_hash,
-            "amending should rewrite the session commit hash"
-        );
-        assert_eq!(first_outcome.commit_message, "Apply session updates");
-        assert_eq!(second_outcome.commit_message, "Refine session work");
+        assert_eq!(outcome.commit_hash, "def5678");
+        assert_eq!(outcome.commit_message, "Refine session work");
     }
 
     #[tokio::test]

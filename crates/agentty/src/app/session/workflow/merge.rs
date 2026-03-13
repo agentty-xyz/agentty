@@ -1080,12 +1080,16 @@ impl SessionManager {
     async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, String> {
         // Auto-commit any pending changes before rebasing to avoid
         // "cannot rebase: You have unstaged changes".
+        let include_coauthored_by_agentty =
+            SessionTaskService::load_include_coauthored_by_agentty_setting(&input.db, &input.id)
+                .await;
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
             &input.base_branch,
             input.session_model,
             true,
+            include_coauthored_by_agentty,
         )
         .await
         {

@@ -14,6 +14,7 @@ use crate::app::assist::{
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionSize, Status};
+use crate::domain::setting::SettingName;
 use crate::infra::agent;
 use crate::infra::db::Database;
 use crate::infra::git::{self as git, GitClient};
@@ -22,7 +23,8 @@ const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_attempts: 10,
     max_identical_failure_streak: 3,
 };
-const FALLBACK_SESSION_COMMIT_MESSAGE: &str = "Apply session updates";
+const SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER: &str =
+    "Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)";
 
 /// Askama view model for rendering auto-commit recovery prompts.
 #[derive(Template)]
@@ -144,6 +146,24 @@ impl SessionTaskService {
         }
     }
 
+    /// Loads the project-scoped toggle that controls whether generated session
+    /// commit messages include the Agentty coauthor trailer.
+    pub(crate) async fn load_include_coauthored_by_agentty_setting(
+        db: &Database,
+        session_id: &str,
+    ) -> bool {
+        let Some(project_id) = db.load_session_project_id(session_id).await.ok().flatten() else {
+            return true;
+        };
+
+        db.get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty.as_str())
+            .await
+            .ok()
+            .flatten()
+            .and_then(|setting_value| setting_value.parse::<bool>().ok())
+            .unwrap_or(true)
+    }
+
     async fn commit_changes_with_assist(
         context: &AssistContext,
     ) -> Result<Option<SessionCommitOutcome>, String> {
@@ -212,6 +232,7 @@ impl SessionTaskService {
             &base_branch,
             context.session_model,
             no_verify,
+            Self::load_include_coauthored_by_agentty_setting(&context.db, &context.id).await,
         )
         .await
     }
@@ -280,8 +301,10 @@ impl SessionTaskService {
         diff: &str,
         current_commit_message: Option<&str>,
     ) -> Result<String, String> {
+        let stripped_current_commit_message =
+            current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
         let template = SessionCommitMessagePromptTemplate {
-            current_commit_message: current_commit_message.unwrap_or("").trim(),
+            current_commit_message: stripped_current_commit_message.trim(),
             diff,
         };
 
@@ -303,6 +326,7 @@ impl SessionTaskService {
         base_branch: &str,
         session_model: AgentModel,
         no_verify: bool,
+        include_coauthored_by_agentty: bool,
     ) -> Result<SessionCommitOutcome, String> {
         if cfg!(test) {
             let folder = folder.to_path_buf();
@@ -318,8 +342,24 @@ impl SessionTaskService {
             } else {
                 None
             };
-            let commit_message =
-                Self::fallback_session_commit_message(current_commit_message.as_deref());
+            let Some(current_commit_message) = current_commit_message.as_deref().map(str::trim)
+            else {
+                return Err(
+                    "Session commit generation requires an existing commit message during tests"
+                        .to_string(),
+                );
+            };
+            if current_commit_message.is_empty() {
+                return Err(
+                    "Session commit generation requires a non-blank existing commit message \
+                     during tests"
+                        .to_string(),
+                );
+            }
+            let commit_message = append_agentty_coauthor_trailer(
+                strip_agentty_coauthor_trailer(current_commit_message).trim(),
+                include_coauthored_by_agentty,
+            );
             git_client
                 .commit_all_preserving_single_commit(
                     folder.clone(),
@@ -346,6 +386,7 @@ impl SessionTaskService {
             session_model,
             backend.as_ref(),
             no_verify,
+            include_coauthored_by_agentty,
         )
         .await
     }
@@ -364,6 +405,7 @@ impl SessionTaskService {
         session_model: AgentModel,
         backend: &dyn agent::AgentBackend,
         no_verify: bool,
+        include_coauthored_by_agentty: bool,
     ) -> Result<SessionCommitOutcome, String> {
         let folder = folder.to_path_buf();
         if git_client.is_worktree_clean(folder.clone()).await? {
@@ -387,11 +429,9 @@ impl SessionTaskService {
             diff.as_str(),
             current_commit_message.as_deref(),
             backend,
+            include_coauthored_by_agentty,
         )
-        .await
-        .unwrap_or_else(|_| {
-            Self::fallback_session_commit_message(current_commit_message.as_deref())
-        });
+        .await?;
 
         git_client
             .commit_all_preserving_single_commit(
@@ -412,7 +452,8 @@ impl SessionTaskService {
     }
 
     /// Renders the session commit-message prompt, submits it to the injected
-    /// backend, and returns the normalized commit message text.
+    /// backend, validates the returned text, and appends the optional
+    /// coauthor trailer in code.
     ///
     /// # Errors
     /// Returns an error when prompt rendering fails, the one-shot agent call
@@ -423,6 +464,7 @@ impl SessionTaskService {
         diff: &str,
         current_commit_message: Option<&str>,
         backend: &dyn agent::AgentBackend,
+        include_coauthored_by_agentty: bool,
     ) -> Result<String, String> {
         let prompt = Self::session_commit_message_prompt(diff, current_commit_message)?;
         let submission = agent::submit_one_shot_with_backend(
@@ -441,21 +483,12 @@ impl SessionTaskService {
         if trimmed_answer_text.is_empty() {
             return Err("Session commit message model returned blank answer text".to_string());
         }
+        validate_generated_commit_message(trimmed_answer_text)?;
 
-        Ok(trimmed_answer_text.to_string())
-    }
-
-    /// Returns the last good session commit message or a stable fallback when
-    /// generation fails.
-    fn fallback_session_commit_message(current_commit_message: Option<&str>) -> String {
-        let Some(current_commit_message) = current_commit_message.map(str::trim) else {
-            return FALLBACK_SESSION_COMMIT_MESSAGE.to_string();
-        };
-        if current_commit_message.is_empty() {
-            return FALLBACK_SESSION_COMMIT_MESSAGE.to_string();
-        }
-
-        current_commit_message.to_string()
+        Ok(append_agentty_coauthor_trailer(
+            trimmed_answer_text,
+            include_coauthored_by_agentty,
+        ))
     }
 
     /// Executes one isolated assist prompt and appends the normalized answer
@@ -598,6 +631,48 @@ impl SessionTaskService {
     }
 }
 
+/// Removes the Agentty coauthor trailer from one commit message so prompt
+/// continuity and test-mode reuse operate on body/title content only.
+fn strip_agentty_coauthor_trailer(commit_message: &str) -> String {
+    commit_message
+        .lines()
+        .filter(|line| line.trim() != SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Validates generated commit-message output before git commit creation.
+///
+/// # Errors
+/// Returns an error when the generated message already contains the Agentty
+/// coauthor trailer, which is appended by code instead of model output.
+fn validate_generated_commit_message(commit_message: &str) -> Result<(), String> {
+    if commit_message
+        .lines()
+        .any(|line| line.trim() == SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
+    {
+        return Err(
+            "Session commit message model must not emit the Agentty coauthor trailer".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Appends the Agentty coauthor trailer when the project setting enables it.
+fn append_agentty_coauthor_trailer(
+    commit_message: &str,
+    include_coauthored_by_agentty: bool,
+) -> String {
+    let trimmed_commit_message = commit_message.trim().to_string();
+
+    if !include_coauthored_by_agentty || trimmed_commit_message.is_empty() {
+        return trimmed_commit_message;
+    }
+
+    format!("{trimmed_commit_message}\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -702,6 +777,94 @@ mod tests {
         // Assert
         assert!(prompt.contains("Keep session commit accurate"));
         assert!(prompt.contains(diff));
+        assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
+    }
+
+    #[test]
+    /// Verifies prompt rendering strips the Agentty trailer from existing
+    /// commit-message continuity before sending it back to the model.
+    fn test_session_commit_message_prompt_strips_coauthor_trailer_from_continuity() {
+        // Arrange
+        let diff = "diff --git a/a.rs b/a.rs";
+        let current_commit_message = format!(
+            "Keep session commit accurate\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}"
+        );
+
+        // Act
+        let prompt = SessionTaskService::session_commit_message_prompt(
+            diff,
+            Some(current_commit_message.as_str()),
+        )
+        .expect("prompt should render");
+
+        // Assert
+        assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
+        assert!(prompt.contains("Keep session commit accurate"));
+    }
+
+    #[test]
+    /// Verifies append-only handling adds the coauthor trailer once
+    /// when the setting is enabled.
+    fn test_append_agentty_coauthor_trailer_appends_trailer_once() {
+        // Arrange
+        let commit_message = "Refine settings page";
+
+        // Act
+        let appended_commit_message = append_agentty_coauthor_trailer(commit_message, true);
+
+        // Assert
+        assert_eq!(
+            appended_commit_message,
+            format!("Refine settings page\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}")
+        );
+    }
+
+    #[test]
+    /// Verifies append-only handling leaves the generated message unchanged
+    /// when the setting is disabled.
+    fn test_append_agentty_coauthor_trailer_leaves_message_unchanged_when_disabled() {
+        // Arrange
+        let commit_message = "Refine settings page";
+
+        // Act
+        let appended_commit_message = append_agentty_coauthor_trailer(commit_message, false);
+
+        // Assert
+        assert_eq!(appended_commit_message, "Refine settings page");
+    }
+
+    #[test]
+    /// Verifies generated commit-message validation rejects model output that
+    /// already includes the Agentty trailer.
+    fn test_validate_generated_commit_message_rejects_agentty_trailer() {
+        // Arrange
+        let commit_message =
+            format!("Refine settings page\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}");
+
+        // Act
+        let error = validate_generated_commit_message(&commit_message)
+            .expect_err("generated trailer should fail validation");
+
+        // Assert
+        assert_eq!(
+            error,
+            "Session commit message model must not emit the Agentty coauthor trailer"
+        );
+    }
+
+    #[test]
+    /// Verifies trailer stripping removes the Agentty trailer from reused
+    /// commit-message continuity.
+    fn test_strip_agentty_coauthor_trailer_removes_trailer_line() {
+        // Arrange
+        let commit_message =
+            format!("Refine settings page\n\n{SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER}");
+
+        // Act
+        let stripped_commit_message = strip_agentty_coauthor_trailer(&commit_message);
+
+        // Assert
+        assert_eq!(stripped_commit_message, "Refine settings page\n");
     }
 
     #[tokio::test]

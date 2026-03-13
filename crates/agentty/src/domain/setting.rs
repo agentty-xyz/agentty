@@ -13,6 +13,9 @@ pub(crate) enum SettingName {
     DefaultReviewModel,
     /// Persists the project or global smart-model selection.
     DefaultSmartModel,
+    /// Persists whether generated session commits append the Agentty coauthor
+    /// trailer.
+    IncludeCoauthoredByAgentty,
     /// Persists the configured open-command override.
     OpenCommand,
     /// Persists whether the last used model should become the default.
@@ -27,6 +30,7 @@ impl SettingName {
             Self::DefaultFastModel => "DefaultFastModel",
             Self::DefaultReviewModel => "DefaultReviewModel",
             Self::DefaultSmartModel => "DefaultSmartModel",
+            Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::OpenCommand => "OpenCommand",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
         }
@@ -52,6 +56,10 @@ mod tests {
             (SettingName::DefaultFastModel, "DefaultFastModel"),
             (SettingName::DefaultReviewModel, "DefaultReviewModel"),
             (SettingName::DefaultSmartModel, "DefaultSmartModel"),
+            (
+                SettingName::IncludeCoauthoredByAgentty,
+                "IncludeCoauthoredByAgentty",
+            ),
             (SettingName::OpenCommand, "OpenCommand"),
             (
                 SettingName::LastUsedModelAsDefault,
@@ -74,6 +82,7 @@ mod tests {
             SettingName::DefaultFastModel,
             SettingName::DefaultReviewModel,
             SettingName::DefaultSmartModel,
+            SettingName::IncludeCoauthoredByAgentty,
             SettingName::OpenCommand,
             SettingName::LastUsedModelAsDefault,
         ];
