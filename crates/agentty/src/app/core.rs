@@ -365,23 +365,40 @@ impl AppClients {
 
 /// Stores application state and coordinates session/project workflows.
 pub struct App {
+    /// Tracks the currently active UI mode and its transient state.
     pub mode: AppMode,
+    /// Stores persisted and in-memory application settings for the active
+    /// project.
     pub settings: SettingsManager,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
-    pub(crate) projects: ProjectManager,
-    pub(crate) services: AppServices,
-    pub(crate) sessions: SessionManager,
-    event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Caches generated focused review text per session so it survives
     /// mode switches and is ready when the user presses `f`.
     pub(crate) focused_review_cache: HashMap<String, FocusedReviewCacheEntry>,
-    latest_available_version: Option<String>,
-    merge_queue: MergeQueue,
-    update_status: Option<UpdateStatus>,
-    session_progress_messages: HashMap<String, String>,
+    /// Owns project selection state, project metadata, and git status
+    /// snapshots.
+    pub(crate) projects: ProjectManager,
+    /// Shares application-wide services and external clients across workflows.
+    pub(crate) services: AppServices,
+    /// Owns session state, runtime handles, and session workflow coordination.
+    pub(crate) sessions: SessionManager,
+    /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
+    /// Receives app events emitted by background tasks and workflows.
+    event_rx: mpsc::UnboundedReceiver<AppEvent>,
+    /// Stores the latest available stable `agentty` version when one is
+    /// detected.
+    latest_available_version: Option<String>,
+    /// Serializes local merge requests so only one merge workflow runs at a
+    /// time.
+    merge_queue: MergeQueue,
+    /// Tracks per-session progress messages rendered while background work is
+    /// active.
+    session_progress_messages: HashMap<String, String>,
+    /// Interacts with tmux panes for session-specific terminal workflows.
     tmux_client: Arc<dyn TmuxClient>,
+    /// Stores the current auto-update progress state when an update is running.
+    update_status: Option<UpdateStatus>,
 }
 
 /// Cached focused review state for a session.
