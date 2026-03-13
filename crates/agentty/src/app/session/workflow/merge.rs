@@ -2060,7 +2060,12 @@ mod tests {
             .expect_has_commits_since()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(|_, _| Box::pin(async { Ok(false) }));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Box::pin(async { Ok(Some("Existing session commit".to_string())) }));
         mock_git_client
             .expect_commit_all_preserving_single_commit()
             .times(1)

@@ -1947,6 +1947,10 @@ WHERE id = ?
             .append_session_output("session-a", "\nSecond line")
             .await
             .expect("failed to append session output");
+        database
+            .update_session_updated_at("session-a", 200)
+            .await
+            .expect("failed to update session updated_at");
 
         // Act
         let session_row = load_session_row(&database, "session-a").await;

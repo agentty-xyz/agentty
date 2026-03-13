@@ -2572,7 +2572,11 @@ mod tests {
         mock_git_client
             .expect_has_commits_since()
             .times(1)
-            .returning(|_, _| Box::pin(async { Ok(false) }));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(Some("Existing session commit".to_string())) }));
         mock_git_client
             .expect_commit_all_preserving_single_commit()
             .times(1)
@@ -3228,7 +3232,11 @@ mod tests {
         mock_git_client
             .expect_has_commits_since()
             .times(1)
-            .returning(|_, _| Box::pin(async { Ok(false) }));
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        mock_git_client
+            .expect_head_commit_message()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(Some("Existing session commit".to_string())) }));
         mock_git_client
             .expect_commit_all_preserving_single_commit()
             .times(1)

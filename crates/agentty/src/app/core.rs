@@ -4158,10 +4158,7 @@ mod tests {
     }
 
     /// Replaces the app-level git dependencies with one caller-provided mock.
-    fn install_mock_git_client(
-        app: &mut App,
-        mock_git_client: crate::infra::git::MockGitClient,
-    ) {
+    fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
         let mock_git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
         let base_path = app.services.base_path().to_path_buf();
         let db = app.services.db().clone();
