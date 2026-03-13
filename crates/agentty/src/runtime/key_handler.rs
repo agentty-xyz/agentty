@@ -91,136 +91,67 @@ fn handle_view_info_popup_key(app: &mut App, key: KeyEvent) -> EventResult {
 
 /// Handles key input while the publish-branch input overlay is visible.
 fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult {
-    let mode = std::mem::replace(&mut app.mode, AppMode::List);
-    let AppMode::PublishBranchInput {
-        default_branch_name,
-        mut input,
-        locked_upstream_ref,
-        publish_branch_action,
-        restore_view,
-    } = mode
-    else {
-        unreachable!("mode must be publish-branch input in this handler");
-    };
-    let input_locked = locked_upstream_ref.is_some();
+    let publish_branch_input =
+        PublishBranchInputModeState::from_mode(std::mem::replace(&mut app.mode, AppMode::List));
+    let input_locked = publish_branch_input.locked_upstream_ref.is_some();
 
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {
-            app.mode = restore_view.into_view_mode();
+            app.mode = publish_branch_input.restore_view.into_view_mode();
         }
         KeyCode::Enter => {
             let remote_branch_name = if input_locked {
-                Some(input.text().trim().to_string())
+                Some(publish_branch_input.input.text().trim().to_string())
             } else {
-                (!input.text().trim().is_empty()).then(|| input.text().trim().to_string())
+                (!publish_branch_input.input.text().trim().is_empty())
+                    .then(|| publish_branch_input.input.text().trim().to_string())
             };
-            let session_id = restore_view.session_id.clone();
+            let session_id = publish_branch_input.restore_view.session_id.clone();
 
             app.start_publish_branch_action(
-                restore_view,
+                publish_branch_input.restore_view,
                 &session_id,
-                publish_branch_action,
+                publish_branch_input.publish_branch_action,
                 remote_branch_name,
             );
         }
         KeyCode::Left if !input_locked => {
-            input.move_left();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode =
+                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_left);
         }
         KeyCode::Right if !input_locked => {
-            input.move_right();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode =
+                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_right);
         }
         KeyCode::Up if !input_locked => {
-            input.move_up();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode =
+                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_up);
         }
         KeyCode::Down if !input_locked => {
-            input.move_down();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode =
+                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_down);
         }
         KeyCode::Home if !input_locked => {
-            input.move_home();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode =
+                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_home);
         }
         KeyCode::End if !input_locked => {
-            input.move_end();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode =
+                publish_branch_input.apply_input_edit(crate::domain::input::InputState::move_end);
         }
         KeyCode::Backspace if !input_locked => {
-            input.delete_backward();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode = publish_branch_input
+                .apply_input_edit(crate::domain::input::InputState::delete_backward);
         }
         KeyCode::Delete if !input_locked => {
-            input.delete_forward();
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode = publish_branch_input
+                .apply_input_edit(crate::domain::input::InputState::delete_forward);
         }
         KeyCode::Char(character) if !input_locked && is_publish_branch_input_text_key(key) => {
-            input.insert_char(character);
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode = publish_branch_input.apply_input_edit(|input| input.insert_char(character));
         }
         _ => {
-            app.mode = AppMode::PublishBranchInput {
-                default_branch_name,
-                input,
-                locked_upstream_ref,
-                publish_branch_action,
-                restore_view,
-            };
+            app.mode = publish_branch_input.into_mode();
         }
     }
 
@@ -231,6 +162,61 @@ fn handle_publish_branch_input_key(app: &mut App, key: KeyEvent) -> EventResult 
 /// input field.
 fn is_publish_branch_input_text_key(key: KeyEvent) -> bool {
     key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
+}
+
+/// Captures `AppMode::PublishBranchInput` fields so key handlers can rebuild
+/// the overlay consistently after input edits.
+struct PublishBranchInputModeState {
+    default_branch_name: String,
+    input: crate::domain::input::InputState,
+    locked_upstream_ref: Option<String>,
+    publish_branch_action: crate::domain::session::PublishBranchAction,
+    restore_view: ConfirmationViewMode,
+}
+
+impl PublishBranchInputModeState {
+    /// Extracts publish-branch overlay fields from an app mode value.
+    fn from_mode(mode: AppMode) -> Self {
+        let AppMode::PublishBranchInput {
+            default_branch_name,
+            input,
+            locked_upstream_ref,
+            publish_branch_action,
+            restore_view,
+        } = mode
+        else {
+            unreachable!("mode must be publish-branch input in this handler");
+        };
+
+        Self {
+            default_branch_name,
+            input,
+            locked_upstream_ref,
+            publish_branch_action,
+            restore_view,
+        }
+    }
+
+    /// Applies one input edit and rebuilds the publish-branch overlay mode.
+    fn apply_input_edit(
+        mut self,
+        edit: impl FnOnce(&mut crate::domain::input::InputState),
+    ) -> AppMode {
+        edit(&mut self.input);
+
+        self.into_mode()
+    }
+
+    /// Rebuilds `AppMode::PublishBranchInput` from the stored overlay fields.
+    fn into_mode(self) -> AppMode {
+        AppMode::PublishBranchInput {
+            default_branch_name: self.default_branch_name,
+            input: self.input,
+            locked_upstream_ref: self.locked_upstream_ref,
+            publish_branch_action: self.publish_branch_action,
+            restore_view: self.restore_view,
+        }
+    }
 }
 
 /// Handles key input while the app is in open-command selector overlay mode.
@@ -894,6 +880,39 @@ mod tests {
             unreachable!("mode should remain publish-branch input");
         };
         assert_eq!(input.text(), "r");
+    }
+
+    #[tokio::test]
+    async fn test_handle_publish_branch_input_key_left_moves_cursor() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::PublishBranchInput {
+            default_branch_name: "agentty/session".to_string(),
+            input: crate::domain::input::InputState::with_text("review/custom".to_string()),
+            locked_upstream_ref: None,
+            publish_branch_action: crate::domain::session::PublishBranchAction::Push,
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                focused_review_status_message: None,
+                focused_review_text: None,
+                scroll_offset: None,
+                session_id: "session-id".to_string(),
+            },
+        };
+
+        // Act
+        let event_result = handle_publish_branch_input_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        let AppMode::PublishBranchInput { input, .. } = &app.mode else {
+            unreachable!("mode should remain publish-branch input");
+        };
+        assert_eq!(input.text(), "review/custom");
+        assert_eq!(input.cursor, "review/custom".chars().count() - 1);
     }
 
     #[tokio::test]
