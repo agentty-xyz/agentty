@@ -208,6 +208,55 @@ impl InputState {
         self.cursor = self.text.chars().count();
     }
 
+    /// Moves the cursor to the start of the current line.
+    ///
+    /// Scans backward from the cursor to the nearest preceding newline (or
+    /// the beginning of the buffer) and places the cursor there.
+    pub fn move_line_start(&mut self) {
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut cursor = self.cursor;
+
+        while cursor > 0 && characters[cursor - 1] != '\n' {
+            cursor -= 1;
+        }
+
+        self.cursor = cursor;
+    }
+
+    /// Moves the cursor to the end of the current line.
+    ///
+    /// Scans forward from the cursor to the nearest following newline (or the
+    /// end of the buffer) and places the cursor there.
+    pub fn move_line_end(&mut self) {
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut cursor = self.cursor;
+
+        while cursor < characters.len() && characters[cursor] != '\n' {
+            cursor += 1;
+        }
+
+        self.cursor = cursor;
+    }
+
+    /// Deletes all text from the cursor to the end of the current line.
+    ///
+    /// If the cursor is already at the end of a line (sitting on a newline
+    /// character or at the buffer end), this is a no-op.
+    pub fn delete_to_line_end(&mut self) {
+        let characters: Vec<char> = self.text.chars().collect();
+        let mut line_end = self.cursor;
+
+        while line_end < characters.len() && characters[line_end] != '\n' {
+            line_end += 1;
+        }
+
+        if line_end > self.cursor {
+            let start_byte = self.byte_offset();
+            let end_byte = self.byte_offset_at(line_end);
+            self.text.replace_range(start_byte..end_byte, "");
+        }
+    }
+
     /// Extracts the `@query` text at the current cursor position.
     ///
     /// Returns `Some((at_char_index, query))` if the cursor sits inside an
@@ -424,5 +473,99 @@ mod tests {
 
         // Assert
         assert_eq!(query, None);
+    }
+
+    #[test]
+    fn test_move_line_start_moves_to_beginning_of_current_line() {
+        // Arrange
+        let mut state = InputState::with_text("first\nsecond\nthird".to_string());
+        state.cursor = "first\nseco".chars().count();
+
+        // Act
+        state.move_line_start();
+
+        // Assert
+        assert_eq!(state.cursor, "first\n".chars().count());
+    }
+
+    #[test]
+    fn test_move_line_start_stays_at_buffer_start_on_first_line() {
+        // Arrange
+        let mut state = InputState::with_text("hello world".to_string());
+        state.cursor = 5;
+
+        // Act
+        state.move_line_start();
+
+        // Assert
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_move_line_end_moves_to_end_of_current_line() {
+        // Arrange
+        let mut state = InputState::with_text("first\nsecond\nthird".to_string());
+        state.cursor = "first\nse".chars().count();
+
+        // Act
+        state.move_line_end();
+
+        // Assert
+        assert_eq!(state.cursor, "first\nsecond".chars().count());
+    }
+
+    #[test]
+    fn test_move_line_end_moves_to_buffer_end_on_last_line() {
+        // Arrange
+        let mut state = InputState::with_text("first\nsecond".to_string());
+        state.cursor = "first\nse".chars().count();
+
+        // Act
+        state.move_line_end();
+
+        // Assert
+        assert_eq!(state.cursor, "first\nsecond".chars().count());
+    }
+
+    #[test]
+    fn test_delete_to_line_end_removes_text_after_cursor_on_current_line() {
+        // Arrange
+        let mut state = InputState::with_text("first\nsecond\nthird".to_string());
+        state.cursor = "first\nse".chars().count();
+
+        // Act
+        state.delete_to_line_end();
+
+        // Assert
+        assert_eq!(state.text(), "first\nse\nthird");
+        assert_eq!(state.cursor, "first\nse".chars().count());
+    }
+
+    #[test]
+    fn test_delete_to_line_end_is_noop_at_newline() {
+        // Arrange
+        let mut state = InputState::with_text("first\nsecond".to_string());
+        state.cursor = "first".chars().count();
+
+        // Act
+        state.delete_to_line_end();
+
+        // Assert
+        assert_eq!(state.text(), "first\nsecond");
+        assert_eq!(state.cursor, "first".chars().count());
+    }
+
+    #[test]
+    fn test_delete_to_line_end_clears_rest_of_single_line() {
+        // Arrange
+        let mut state = InputState::with_text("hello world".to_string());
+        state.cursor = "hello".chars().count();
+
+        // Act
+        state.delete_to_line_end();
+
+        // Assert
+        assert_eq!(state.text(), "hello");
+        assert_eq!(state.cursor, "hello".chars().count());
     }
 }

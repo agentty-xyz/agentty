@@ -137,6 +137,10 @@ The diff panel title shows aggregate line-change totals as `+added` and
 | `Enter` | Submit prompt |
 | `Alt+Enter` or `Shift+Enter` | Insert newline |
 | `Ctrl+V` or `Alt+V` | Paste one clipboard image as an inline `[Image #n]` placeholder |
+| `Cmd+Left` | Move to start of current line |
+| `Cmd+Right` | Move to end of current line |
+| `Option+Left` | Move to previous word |
+| `Option+Right` | Move to next word |
 | `Option+Backspace` | Delete previous word |
 | `Cmd+Backspace` | Delete current line |
 | `Esc` | Cancel |
@@ -173,7 +177,10 @@ After selecting "Type custom answer", or when no predefined options exist:
 | `Up` / `Down` | Move cursor across wrapped lines |
 | `Backspace` / `Delete` | Delete character |
 | `Home` / `End` | Move cursor to start/end |
-| `Ctrl+u` | Delete current line |
+| `Cmd+Left` | Move to start of current line |
+| `Cmd+Right` | Move to end of current line |
+| `Option+Left` / `Option+Right` | Move to previous / next word |
+| `Cmd+Backspace` | Delete current line |
 | `Tab` | Switch focus to chat output for scrolling |
 
 ## Question Input — Chat Scroll

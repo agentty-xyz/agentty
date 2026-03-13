@@ -35,89 +35,116 @@ pub(crate) async fn handle(
         reset_prompt_slash_state(app);
     }
 
+    if prompt_context.is_at_mention && handle_at_mention_key(app, key) {
+        return Ok(EventResult::Continue);
+    }
+
+    handle_editing_key(app, terminal, key, &prompt_context).await?;
+
+    Ok(EventResult::Continue)
+}
+
+/// Handles keys when the at-mention dropdown is active.
+///
+/// Returns `true` if the key was consumed by at-mention logic.
+fn handle_at_mention_key(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
-        KeyCode::Esc if prompt_context.is_at_mention => {
-            dismiss_at_mention(app);
-        }
-        KeyCode::Enter if prompt_context.is_at_mention && !should_insert_newline(key) => {
-            handle_at_mention_select(app);
-        }
-        KeyCode::Tab if prompt_context.is_at_mention => {
-            handle_at_mention_select(app);
-        }
-        KeyCode::Up if prompt_context.is_at_mention => {
-            handle_at_mention_up(app);
-        }
-        KeyCode::Down if prompt_context.is_at_mention => {
-            handle_at_mention_down(app);
-        }
+        KeyCode::Esc => dismiss_at_mention(app),
+        KeyCode::Enter if !should_insert_newline(key) => handle_at_mention_select(app),
+        KeyCode::Tab => handle_at_mention_select(app),
+        KeyCode::Up => handle_at_mention_up(app),
+        KeyCode::Down => handle_at_mention_down(app),
+        _ => return false,
+    }
+
+    true
+}
+
+/// Handles all editing, navigation, and submission keys in prompt mode.
+async fn handle_editing_key(
+    app: &mut App,
+    terminal: &mut TuiTerminal,
+    key: KeyEvent,
+    prompt_context: &PromptContext,
+) -> io::Result<()> {
+    match key.code {
         KeyCode::Enter if should_insert_newline(key) => {
             reset_prompt_history_navigation(app);
-
             if let AppMode::Prompt { input, .. } = &mut app.mode {
                 input.insert_newline();
             }
         }
-        KeyCode::Enter => {
-            handle_prompt_submit_key(app, &prompt_context).await;
-        }
+        KeyCode::Enter => handle_prompt_submit_key(app, prompt_context).await,
         KeyCode::Esc | KeyCode::Char('c') if is_prompt_cancel_key(key) => {
-            handle_prompt_cancel_key(app, &prompt_context).await;
+            handle_prompt_cancel_key(app, prompt_context).await;
         }
-        KeyCode::Left => {
-            handle_prompt_left(app, key);
-        }
-        KeyCode::Right => {
-            handle_prompt_right(app, key);
-        }
-        KeyCode::Up => {
-            handle_prompt_up_key(app, terminal, &prompt_context)?;
-        }
-        KeyCode::Down => {
-            handle_prompt_down_key(app, terminal, &prompt_context)?;
-        }
+        KeyCode::Left => handle_prompt_left(app, key),
+        KeyCode::Right => handle_prompt_right(app, key),
+        KeyCode::Up => handle_prompt_up_key(app, terminal, prompt_context)?,
+        KeyCode::Down => handle_prompt_down_key(app, terminal, prompt_context)?,
         KeyCode::Char('k') if prompt_context.is_slash_command && is_plain_char_key(key, 'k') => {
-            handle_prompt_up_key(app, terminal, &prompt_context)?;
+            handle_prompt_up_key(app, terminal, prompt_context)?;
         }
         KeyCode::Char('j') if prompt_context.is_slash_command && is_plain_char_key(key, 'j') => {
-            handle_prompt_down_key(app, terminal, &prompt_context)?;
+            handle_prompt_down_key(app, terminal, prompt_context)?;
         }
-        KeyCode::Home => {
-            if let AppMode::Prompt { input, .. } = &mut app.mode {
-                input.move_home();
-            }
-        }
-        KeyCode::End => {
-            if let AppMode::Prompt { input, .. } = &mut app.mode {
-                input.move_end();
-            }
-        }
-        KeyCode::Backspace => {
-            handle_prompt_backspace(app, key);
-        }
-        KeyCode::Delete => {
-            handle_prompt_delete(app);
-        }
+        KeyCode::Home => handle_prompt_input(app, InputState::move_home),
+        KeyCode::End => handle_prompt_input(app, InputState::move_end),
+        KeyCode::Backspace => handle_prompt_backspace(app, key),
+        KeyCode::Delete => handle_prompt_delete(app),
         KeyCode::Char(character) if is_control_newline_key(key, character) => {
             reset_prompt_history_navigation(app);
-
             if let AppMode::Prompt { input, .. } = &mut app.mode {
                 input.insert_newline();
             }
         }
-        KeyCode::Char('u') if is_control_line_delete_key(key) => {
-            handle_prompt_line_delete(app);
-        }
+        KeyCode::Char('u') if is_control_line_delete_key(key) => handle_prompt_line_delete(app),
         KeyCode::Char('v') if is_prompt_image_paste_key(key) => {
-            handle_prompt_image_paste(app, &prompt_context).await;
+            handle_prompt_image_paste(app, prompt_context).await;
         }
-        KeyCode::Char(character) => {
-            handle_prompt_char(app, character, &prompt_context);
+        KeyCode::Char('a') if is_control_key(key) => {
+            handle_prompt_input(app, InputState::move_line_start);
         }
+        KeyCode::Char('e') if is_control_key(key) => {
+            handle_prompt_input(app, InputState::move_line_end);
+        }
+        KeyCode::Char('f') if is_control_key(key) => {
+            handle_prompt_input(app, InputState::move_right);
+        }
+        KeyCode::Char('b') if is_control_key(key) => {
+            handle_prompt_input(app, InputState::move_left);
+        }
+        KeyCode::Char('p') if is_control_key(key) => {
+            handle_prompt_up_key(app, terminal, prompt_context)?;
+        }
+        KeyCode::Char('n') if is_control_key(key) => {
+            handle_prompt_down_key(app, terminal, prompt_context)?;
+        }
+        KeyCode::Char('d') if is_control_key(key) => handle_prompt_delete(app),
+        KeyCode::Char('k') if is_control_key(key) => handle_prompt_kill_to_line_end(app),
+        KeyCode::Char('w') if is_control_key(key) => handle_prompt_word_delete(app),
+        KeyCode::Char('b') if is_alt_key(key) => {
+            if let AppMode::Prompt { input, .. } = &mut app.mode {
+                move_prompt_cursor_word_left(input);
+            }
+        }
+        KeyCode::Char('f') if is_alt_key(key) => {
+            if let AppMode::Prompt { input, .. } = &mut app.mode {
+                move_prompt_cursor_word_right(input);
+            }
+        }
+        KeyCode::Char(character) => handle_prompt_char(app, character, prompt_context),
         _ => {}
     }
 
-    Ok(EventResult::Continue)
+    Ok(())
+}
+
+/// Applies one `InputState` method to the prompt input.
+fn handle_prompt_input(app: &mut App, action: fn(&mut InputState)) {
+    if let AppMode::Prompt { input, .. } = &mut app.mode {
+        action(input);
+    }
 }
 
 /// Inserts pasted content into the prompt input while normalizing mixed
@@ -245,6 +272,24 @@ fn is_line_delete_backspace(key: KeyEvent) -> bool {
 /// also the standard Unix "kill line" binding.
 fn is_control_line_delete_key(key: KeyEvent) -> bool {
     key.modifiers == event::KeyModifiers::CONTROL
+}
+
+/// Returns true when `Ctrl` is pressed without `Alt` or `Shift`.
+///
+/// macOS terminals send `Ctrl+a` (`\x01`) for `Cmd`+`Left` and `Ctrl+e`
+/// (`\x05`) for `Cmd`+`Right` because the legacy terminal protocol cannot
+/// encode the Super/Cmd modifier.
+fn is_control_key(key: KeyEvent) -> bool {
+    key.modifiers == event::KeyModifiers::CONTROL
+}
+
+/// Returns true when the `Alt` modifier is present.
+///
+/// macOS terminals report `Option`+key as `Alt`+key. `Option`+`Left` sends
+/// `ESC b` (parsed as `Alt+b`) and `Option`+`Right` sends `ESC f` (parsed
+/// as `Alt+f`).
+fn is_alt_key(key: KeyEvent) -> bool {
+    key.modifiers.contains(event::KeyModifiers::ALT)
 }
 
 /// Returns true when the key event should paste one clipboard image into the
@@ -837,11 +882,19 @@ fn prompt_input_width(terminal: &TuiTerminal) -> io::Result<u16> {
     Ok(terminal_width.saturating_sub(2))
 }
 
-/// Moves the prompt cursor one character left, or to the previous word start
-/// when the `Shift` modifier is pressed.
+/// Moves the prompt cursor left with modifier-aware behavior.
+///
+/// `Cmd`+`Left` (`SUPER`) moves to the start of the current line,
+/// `Option`+`Left` (`ALT`) and `Shift`+`Left` move to the previous word
+/// start, and a plain `Left` moves one character.
 fn handle_prompt_left(app: &mut App, key: KeyEvent) {
     if let AppMode::Prompt { input, .. } = &mut app.mode {
-        if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+        if key.modifiers.contains(event::KeyModifiers::SUPER) {
+            input.move_line_start();
+        } else if key
+            .modifiers
+            .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT)
+        {
             move_prompt_cursor_word_left(input);
         } else {
             input.move_left();
@@ -849,11 +902,19 @@ fn handle_prompt_left(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Moves the prompt cursor one character right, or to the next word start when
-/// the `Shift` modifier is pressed.
+/// Moves the prompt cursor right with modifier-aware behavior.
+///
+/// `Cmd`+`Right` (`SUPER`) moves to the end of the current line,
+/// `Option`+`Right` (`ALT`) and `Shift`+`Right` move to the next word
+/// start, and a plain `Right` moves one character.
 fn handle_prompt_right(app: &mut App, key: KeyEvent) {
     if let AppMode::Prompt { input, .. } = &mut app.mode {
-        if key.modifiers.contains(event::KeyModifiers::SHIFT) {
+        if key.modifiers.contains(event::KeyModifiers::SUPER) {
+            input.move_line_end();
+        } else if key
+            .modifiers
+            .intersects(event::KeyModifiers::ALT | event::KeyModifiers::SHIFT)
+        {
             move_prompt_cursor_word_right(input);
         } else {
             input.move_right();
@@ -906,6 +967,23 @@ fn move_prompt_cursor_word_right(input: &mut InputState) {
 fn handle_prompt_line_delete(app: &mut App) {
     if let AppMode::Prompt { input, .. } = &app.mode
         && let Some((start, end)) = current_line_delete_range(input)
+    {
+        apply_prompt_delete_range(app, start, end);
+    }
+}
+
+/// Handles `Ctrl+k` kill-to-end-of-line by deleting text from the cursor to
+/// the end of the current line (stopping before the newline).
+fn handle_prompt_kill_to_line_end(app: &mut App) {
+    if let AppMode::Prompt { input, .. } = &mut app.mode {
+        input.delete_to_line_end();
+    }
+}
+
+/// Handles `Ctrl+w` word deletion by deleting the previous word.
+fn handle_prompt_word_delete(app: &mut App) {
+    if let AppMode::Prompt { input, .. } = &app.mode
+        && let Some((start, end)) = word_delete_range(input)
     {
         apply_prompt_delete_range(app, start, end);
     }
@@ -2224,6 +2302,132 @@ mod tests {
         if let AppMode::Prompt { input, .. } = &app.mode {
             assert_eq!(input.cursor, "hello ".chars().count());
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_left_with_alt_moves_cursor_to_previous_word_start() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = "hello brave world".chars().count();
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Left, event::KeyModifiers::ALT);
+        handle_prompt_left(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt { input, .. } = &app.mode {
+            assert_eq!(input.cursor, "hello brave ".chars().count());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_right_with_alt_moves_cursor_to_next_word_start() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = 0;
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Right, event::KeyModifiers::ALT);
+        handle_prompt_right(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt { input, .. } = &app.mode {
+            assert_eq!(input.cursor, "hello ".chars().count());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_left_with_super_moves_cursor_to_line_start() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("first\nsecond\nthird", None).await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = "first\nseco".chars().count();
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Left, event::KeyModifiers::SUPER);
+        handle_prompt_left(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt { input, .. } = &app.mode {
+            assert_eq!(input.cursor, "first\n".chars().count());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_right_with_super_moves_cursor_to_line_end() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("first\nsecond\nthird", None).await;
+        if let AppMode::Prompt { input, .. } = &mut app.mode {
+            input.cursor = "first\nse".chars().count();
+        }
+
+        // Act
+        let key = KeyEvent::new(KeyCode::Right, event::KeyModifiers::SUPER);
+        handle_prompt_right(&mut app, key);
+
+        // Assert
+        if let AppMode::Prompt { input, .. } = &app.mode {
+            assert_eq!(input.cursor, "first\nsecond".chars().count());
+        }
+    }
+
+    #[test]
+    fn test_is_control_key_accepts_control_modifier() {
+        // Arrange, Act
+        let key = KeyEvent::new(KeyCode::Char('a'), event::KeyModifiers::CONTROL);
+
+        // Assert
+        assert!(is_control_key(key));
+    }
+
+    #[test]
+    fn test_is_control_key_rejects_plain_key() {
+        // Arrange, Act
+        let key = KeyEvent::new(KeyCode::Char('a'), event::KeyModifiers::NONE);
+
+        // Assert
+        assert!(!is_control_key(key));
+    }
+
+    #[test]
+    fn test_is_control_key_rejects_alt_modifier() {
+        // Arrange, Act
+        let key = KeyEvent::new(KeyCode::Char('a'), event::KeyModifiers::ALT);
+
+        // Assert
+        assert!(!is_control_key(key));
+    }
+
+    #[test]
+    fn test_is_alt_key_accepts_alt_modifier() {
+        // Arrange, Act
+        let key = KeyEvent::new(KeyCode::Char('b'), event::KeyModifiers::ALT);
+
+        // Assert
+        assert!(is_alt_key(key));
+    }
+
+    #[test]
+    fn test_is_alt_key_rejects_plain_key() {
+        // Arrange, Act
+        let key = KeyEvent::new(KeyCode::Char('b'), event::KeyModifiers::NONE);
+
+        // Assert
+        assert!(!is_alt_key(key));
+    }
+
+    #[test]
+    fn test_is_alt_key_rejects_control_modifier() {
+        // Arrange, Act
+        let key = KeyEvent::new(KeyCode::Char('b'), event::KeyModifiers::CONTROL);
+
+        // Assert
+        assert!(!is_alt_key(key));
     }
 
     #[tokio::test]
