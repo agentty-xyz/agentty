@@ -150,30 +150,15 @@ struct ResumeWithSessionOutputPromptTemplate<'a> {
     session_output: &'a str,
 }
 
-/// Askama view model for rendering the structured response protocol
-/// instructions with inline schema details.
-#[derive(Template)]
-#[template(path = "protocol_instruction_prompt_with_schema.md", escape = "none")]
-struct ProtocolInstructionWithSchemaPromptTemplate<'a> {
-    /// Whether change-summary instructions are required in the answer text.
-    include_change_summary: bool,
-    /// Server-side question cap rendered into the prompt so the limit stays
-    /// in sync with [`protocol::MAX_QUESTIONS`].
-    max_questions: usize,
-    /// User prompt appended after protocol instructions.
-    prompt: &'a str,
-    /// Pretty-printed JSON schema contract injected into the prompt template.
-    protocol_schema_json: &'a str,
-}
-
 /// Askama view model for rendering structured response protocol
-/// instructions without an inline schema block.
+/// instructions.
+///
+/// When `protocol_schema_json` is `Some`, the template embeds the JSON schema
+/// directly in the prompt. When it is `None`, the template tells the provider
+/// that schema enforcement happens externally.
 #[derive(Template)]
-#[template(
-    path = "protocol_instruction_prompt_without_schema.md",
-    escape = "none"
-)]
-struct ProtocolInstructionWithoutSchemaPromptTemplate<'a> {
+#[template(path = "protocol_instruction_prompt.md", escape = "none")]
+struct ProtocolInstructionPromptTemplate<'a> {
     /// Whether change-summary instructions are required in the answer text.
     include_change_summary: bool,
     /// Server-side question cap rendered into the prompt so the limit stays
@@ -181,6 +166,9 @@ struct ProtocolInstructionWithoutSchemaPromptTemplate<'a> {
     max_questions: usize,
     /// User prompt appended after protocol instructions.
     prompt: &'a str,
+    /// Pretty-printed JSON schema contract injected into the prompt template
+    /// when the provider requires inline schema instructions.
+    protocol_schema_json: Option<&'a str>,
 }
 
 /// Askama view model for rendering repo-root file path contract instructions.
@@ -324,36 +312,21 @@ pub(crate) fn prepend_protocol_instructions(
     }
 
     let include_change_summary = matches!(prompt_kind, ProtocolPromptKind::SessionDiscussion);
-    let rendered = match mode {
-        ProtocolInstructionMode::WithSchema => {
-            let protocol_schema_json = protocol::agent_response_output_schema_json();
-            let template = ProtocolInstructionWithSchemaPromptTemplate {
-                include_change_summary,
-                max_questions: protocol::MAX_QUESTIONS,
-                prompt,
-                protocol_schema_json: &protocol_schema_json,
-            };
-
-            template.render().map_err(|error| {
-                AgentBackendError::CommandBuild(format!(
-                    "Failed to render `protocol_instruction_prompt_with_schema.md`: {error}"
-                ))
-            })?
-        }
-        ProtocolInstructionMode::WithoutSchema => {
-            let template = ProtocolInstructionWithoutSchemaPromptTemplate {
-                include_change_summary,
-                max_questions: protocol::MAX_QUESTIONS,
-                prompt,
-            };
-
-            template.render().map_err(|error| {
-                AgentBackendError::CommandBuild(format!(
-                    "Failed to render `protocol_instruction_prompt_without_schema.md`: {error}"
-                ))
-            })?
-        }
+    let protocol_schema_json = match mode {
+        ProtocolInstructionMode::WithSchema => Some(protocol::agent_response_output_schema_json()),
+        ProtocolInstructionMode::WithoutSchema => None,
     };
+    let template = ProtocolInstructionPromptTemplate {
+        include_change_summary,
+        max_questions: protocol::MAX_QUESTIONS,
+        prompt,
+        protocol_schema_json: protocol_schema_json.as_deref(),
+    };
+    let rendered = template.render().map_err(|error| {
+        AgentBackendError::CommandBuild(format!(
+            "Failed to render `protocol_instruction_prompt.md`: {error}"
+        ))
+    })?;
 
     Ok(rendered.trim_end().to_string())
 }
