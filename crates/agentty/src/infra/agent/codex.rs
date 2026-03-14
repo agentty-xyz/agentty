@@ -87,6 +87,8 @@ mod tests {
 
     use super::*;
 
+    /// Verifies start commands include the shared protocol envelope and
+    /// reasoning configuration passed to Codex.
     #[test]
     fn build_start_command_includes_protocol_and_reasoning_settings() {
         // Arrange
@@ -115,7 +117,7 @@ mod tests {
         assert!(debug_command.contains("high"));
         assert!(debug_command.contains("Run checks"));
         assert!(debug_command.contains("Structured response protocol:"));
-        assert!(!debug_command.contains("Follow this JSON Schema exactly:"));
+        assert!(debug_command.contains("Follow this JSON Schema exactly:"));
     }
 
     /// Verifies resume command composes replay-based prompt content when
