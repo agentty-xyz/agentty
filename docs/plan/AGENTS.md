@@ -17,4 +17,6 @@ Keep size budgeting in the skill workflow only; do not render `### Size` section
 
 - [`multi_method_auto_update.md`](multi_method_auto_update.md) - Implementation plan for detecting the installation method and running the appropriate auto-update command for npm, cargo, sh, and npx.
 
+- [`sqlx_query_as_db.md`](sqlx_query_as_db.md) - Implementation plan for migrating row-returning `db.rs` queries to compile-time checked `sqlx::query_as!` mappings.
+
 - [`tui_e2e_testing_framework.md`](tui_e2e_testing_framework.md) - Implementation plan for a custom Playwright-inspired TUI end-to-end testing framework with PTY-based interaction, snapshot assertions, and a scriptable scenario DSL.
