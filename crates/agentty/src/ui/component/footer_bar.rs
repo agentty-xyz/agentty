@@ -41,6 +41,10 @@ impl FooterBar {
 
 impl Component for FooterBar {
     fn render(&self, f: &mut Frame, area: Rect) {
+        if area.width == 0 {
+            return;
+        }
+
         let display_path = if let Some(home) = dirs::home_dir() {
             if let Ok(path) = std::path::Path::new(&self.working_dir).strip_prefix(home) {
                 format!("~/{}", path.display())
@@ -58,11 +62,12 @@ impl Component for FooterBar {
                 .add_modifier(Modifier::DIM),
         );
 
+        let left_width = left_text.width();
+        let total_width = usize::from(area.width);
         let mut spans = vec![left_text];
 
         if let Some(branch) = &self.git_branch {
-            let left_width = format!(" {display_path}").len();
-
+            let trailing_branch_padding = 1;
             let status_text = if let Some((ahead, behind)) = self.git_status {
                 if ahead == 0 && behind == 0 {
                     format!("{} ", Icon::Check)
@@ -73,20 +78,26 @@ impl Component for FooterBar {
                 String::new()
             };
 
-            let branch_text = format!("{status_text}{} {branch}", Icon::GitBranch);
-            let branch_width = branch_text.len();
-            let total_width = area.width as usize;
+            let branch_span = Span::styled(
+                format!("{status_text}{} {branch}", Icon::GitBranch),
+                Style::default().fg(style::palette::SUCCESS),
+            );
+            let branch_width = branch_span.width();
 
-            if left_width + branch_width + 1 < total_width {
-                let padding_width = total_width - left_width - branch_width;
+            if left_width + branch_width + trailing_branch_padding <= total_width {
+                let padding_width =
+                    total_width - left_width - branch_width - trailing_branch_padding;
                 let padding = " ".repeat(padding_width);
 
                 spans.push(Span::raw(padding));
-                spans.push(Span::styled(
-                    branch_text,
-                    Style::default().fg(style::palette::SUCCESS),
-                ));
+                spans.push(branch_span);
+                spans.push(Span::raw(" ".repeat(trailing_branch_padding)));
             }
+        }
+
+        let line_width: usize = spans.iter().map(Span::width).sum();
+        if line_width < total_width {
+            spans.push(Span::raw(" ".repeat(total_width - line_width)));
         }
 
         let footer = Paragraph::new(Line::from(spans)).style(
@@ -212,5 +223,87 @@ mod tests {
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
         assert!(text.contains("/tmp/other-project"));
+    }
+
+    #[test]
+    fn test_footer_bar_render_shows_git_status_when_unicode_width_exactly_fits() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(20, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let footer = FooterBar::new("/tmp/p".to_string())
+            .git_branch(Some("main".to_string()))
+            .git_status(Some((1, 2)));
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let content = buffer.content();
+        let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("↓2 ↑1"));
+        assert!(text.contains("main"));
+    }
+
+    #[test]
+    fn test_footer_bar_render_clears_stale_branch_cells_on_redraw() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(40, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let footer_with_branch = FooterBar::new("/tmp/project".to_string())
+            .git_branch(Some("main".to_string()))
+            .git_status(Some((0, 0)));
+        let footer_without_branch = FooterBar::new("/tmp/other".to_string());
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer_with_branch, f, area);
+            })
+            .expect("failed to draw");
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer_without_branch, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let content = buffer.content();
+        let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("/tmp/other"));
+        assert!(!text.contains("main"));
+        assert!(!text.contains("✓"));
+    }
+
+    #[test]
+    fn test_footer_bar_render_keeps_one_space_after_branch_name() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(25, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let footer = FooterBar::new("/tmp/p".to_string()).git_branch(Some("main".to_string()));
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let last_column = usize::from(buffer.area.width.saturating_sub(1));
+        let last_symbol = buffer[(last_column as u16, 0)].symbol();
+        let second_to_last_symbol = buffer[(last_column as u16 - 1, 0)].symbol();
+        assert_eq!(last_symbol, " ");
+        assert_eq!(second_to_last_symbol, "n");
     }
 }
