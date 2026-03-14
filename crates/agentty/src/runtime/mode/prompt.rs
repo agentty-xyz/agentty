@@ -127,24 +127,31 @@ async fn handle_editing_key(
             if let AppMode::Prompt { input, .. } = &mut app.mode {
                 move_prompt_cursor_word_left(input);
             }
+
+            sync_prompt_at_mention_state(app);
         }
         KeyCode::Char('f') if is_alt_key(key) => {
             if let AppMode::Prompt { input, .. } = &mut app.mode {
                 move_prompt_cursor_word_right(input);
             }
+
+            sync_prompt_at_mention_state(app);
         }
-        KeyCode::Char(character) => handle_prompt_char(app, character, prompt_context),
+        KeyCode::Char(character) => handle_prompt_char(app, character),
         _ => {}
     }
 
     Ok(())
 }
 
-/// Applies one `InputState` method to the prompt input.
+/// Applies one `InputState` method to the prompt input and keeps `@` mention
+/// state aligned with the updated cursor location.
 fn handle_prompt_input(app: &mut App, action: fn(&mut InputState)) {
     if let AppMode::Prompt { input, .. } = &mut app.mode {
         action(input);
     }
+
+    sync_prompt_at_mention_state(app);
 }
 
 /// Inserts pasted content into the prompt input while normalizing mixed
@@ -156,7 +163,6 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     }
 
     if let AppMode::Prompt {
-        at_mention_state,
         history_state,
         input,
         slash_state,
@@ -166,13 +172,9 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
         input.insert_text(&normalized_text);
         history_state.reset_navigation();
         slash_state.reset();
-
-        if at_mention_state.is_some() && input.at_mention_query().is_none() {
-            *at_mention_state = None;
-        } else if let Some(state) = at_mention_state.as_mut() {
-            state.selected_index = 0;
-        }
     }
+
+    sync_prompt_at_mention_state(app);
 }
 
 fn prompt_context(app: &mut App) -> Option<PromptContext> {
@@ -219,6 +221,51 @@ fn is_active_at_mention(
     input: &InputState,
 ) -> bool {
     at_mention_state.is_some() && input.at_mention_query().is_some()
+}
+
+/// Reopens or dismisses the `@` mention dropdown to match the current prompt
+/// cursor position.
+///
+/// This keeps previously inserted `@path` tokens editable after the user types
+/// more text elsewhere and later moves the cursor back into the mention.
+fn sync_prompt_at_mention_state(app: &mut App) {
+    let Some(prompt_context) = prompt_context(app) else {
+        return;
+    };
+
+    let (has_at_mention_query, has_at_mention_state) = match &app.mode {
+        AppMode::Prompt {
+            at_mention_state,
+            input,
+            ..
+        } => (
+            input.at_mention_query().is_some(),
+            at_mention_state.is_some(),
+        ),
+        _ => return,
+    };
+
+    if !has_at_mention_query {
+        dismiss_at_mention(app);
+
+        return;
+    }
+
+    if has_at_mention_state {
+        if let AppMode::Prompt {
+            at_mention_state: Some(state),
+            ..
+        } = &mut app.mode
+        {
+            state.selected_index = 0;
+        }
+
+        return;
+    }
+
+    if !prompt_context.is_slash_command {
+        activate_at_mention(app, &prompt_context);
+    }
 }
 
 fn reset_prompt_slash_state(app: &mut App) {
@@ -341,12 +388,14 @@ fn handle_prompt_up_key(
         let next_cursor = move_input_cursor_up(input.text(), input_width, input.cursor);
         if next_cursor != input.cursor {
             input.cursor = next_cursor;
+            sync_prompt_at_mention_state(app);
 
             return Ok(());
         }
     }
 
     navigate_prompt_history_up(app);
+    sync_prompt_at_mention_state(app);
 
     Ok(())
 }
@@ -367,12 +416,14 @@ fn handle_prompt_down_key(
         let next_cursor = move_input_cursor_down(input.text(), input_width, input.cursor);
         if next_cursor != input.cursor {
             input.cursor = next_cursor;
+            sync_prompt_at_mention_state(app);
 
             return Ok(());
         }
     }
 
     navigate_prompt_history_down(app);
+    sync_prompt_at_mention_state(app);
 
     Ok(())
 }
@@ -517,7 +568,6 @@ async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext
 /// the attachment metadata in prompt state.
 fn insert_pasted_image_placeholder(app: &mut App, local_image_path: std::path::PathBuf) {
     if let AppMode::Prompt {
-        at_mention_state,
         attachment_state,
         history_state,
         input,
@@ -529,13 +579,9 @@ fn insert_pasted_image_placeholder(app: &mut App, local_image_path: std::path::P
         input.insert_text(&placeholder);
         history_state.reset_navigation();
         slash_state.reset();
-
-        if at_mention_state.is_some() && input.at_mention_query().is_none() {
-            *at_mention_state = None;
-        } else if let Some(state) = at_mention_state.as_mut() {
-            state.selected_index = 0;
-        }
     }
+
+    sync_prompt_at_mention_state(app);
 }
 
 /// Drains the prompt composer into the structured turn payload sent to the
@@ -886,7 +932,8 @@ fn prompt_input_width(terminal: &TuiTerminal) -> io::Result<u16> {
 ///
 /// `Cmd`+`Left` (`SUPER`) moves to the start of the current line,
 /// `Option`+`Left` (`ALT`) and `Shift`+`Left` move to the previous word
-/// start, and a plain `Left` moves one character.
+/// start, and a plain `Left` moves one character. When the move lands inside
+/// an existing `@path` token, the file dropdown is reopened.
 fn handle_prompt_left(app: &mut App, key: KeyEvent) {
     if let AppMode::Prompt { input, .. } = &mut app.mode {
         if key.modifiers.contains(event::KeyModifiers::SUPER) {
@@ -900,13 +947,16 @@ fn handle_prompt_left(app: &mut App, key: KeyEvent) {
             input.move_left();
         }
     }
+
+    sync_prompt_at_mention_state(app);
 }
 
 /// Moves the prompt cursor right with modifier-aware behavior.
 ///
 /// `Cmd`+`Right` (`SUPER`) moves to the end of the current line,
 /// `Option`+`Right` (`ALT`) and `Shift`+`Right` move to the next word
-/// start, and a plain `Right` moves one character.
+/// start, and a plain `Right` moves one character. When the move lands inside
+/// an existing `@path` token, the file dropdown is reopened.
 fn handle_prompt_right(app: &mut App, key: KeyEvent) {
     if let AppMode::Prompt { input, .. } = &mut app.mode {
         if key.modifiers.contains(event::KeyModifiers::SUPER) {
@@ -920,6 +970,8 @@ fn handle_prompt_right(app: &mut App, key: KeyEvent) {
             input.move_right();
         }
     }
+
+    sync_prompt_at_mention_state(app);
 }
 
 /// Moves the cursor to the start of the previous word, skipping adjacent
@@ -1075,7 +1127,6 @@ fn prompt_delete_range(app: &App) -> Option<(usize, usize)> {
 fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
     if let AppMode::Prompt {
         attachment_state,
-        at_mention_state,
         history_state,
         input,
         slash_state,
@@ -1096,10 +1147,9 @@ fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
 
         history_state.reset_navigation();
         slash_state.reset();
-        if at_mention_state.is_some() && input.at_mention_query().is_none() {
-            *at_mention_state = None;
-        }
     }
+
+    sync_prompt_at_mention_state(app);
 }
 
 /// Returns the character range deleted by one current-line delete action.
@@ -1207,33 +1257,20 @@ fn image_token_end_index(characters: &[char], start_index: usize) -> Option<usiz
 
 /// Inserts one typed character into prompt input and keeps at-mention state
 /// in sync.
-fn handle_prompt_char(app: &mut App, character: char, prompt_context: &PromptContext) {
-    let mut should_activate = false;
-
+fn handle_prompt_char(app: &mut App, character: char) {
     if let AppMode::Prompt {
         input,
         history_state,
         slash_state,
-        at_mention_state,
         ..
     } = &mut app.mode
     {
         input.insert_char(character);
         history_state.reset_navigation();
         slash_state.reset();
-
-        if character == ' ' || input.at_mention_query().is_none() {
-            *at_mention_state = None;
-        } else if character == '@' && at_mention_state.is_none() {
-            should_activate = true;
-        } else if let Some(state) = at_mention_state.as_mut() {
-            state.selected_index = 0;
-        }
     }
 
-    if should_activate && !prompt_context.is_slash_command {
-        activate_at_mention(app, prompt_context);
-    }
+    sync_prompt_at_mention_state(app);
 }
 
 /// Starts asynchronous loading of at-mention file entries for the prompt
@@ -2856,10 +2893,9 @@ mod tests {
     async fn test_handle_prompt_char_activates_and_clears_at_mention_state() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act
-        handle_prompt_char(&mut app, '@', &prompt_context);
+        handle_prompt_char(&mut app, '@');
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -2871,7 +2907,7 @@ mod tests {
         }
 
         // Act
-        handle_prompt_char(&mut app, ' ', &prompt_context);
+        handle_prompt_char(&mut app, ' ');
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
@@ -2880,6 +2916,33 @@ mod tests {
         } = &app.mode
         {
             assert!(at_mention_state.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_left_reactivates_existing_at_mention_without_cached_state() {
+        // Arrange
+        let input_text = "@src/main.rs more";
+        let (mut app, _base_dir) = new_test_prompt_app(input_text, None).await;
+        let moves_back_into_mention = " more".chars().count();
+
+        // Act
+        for _ in 0..moves_back_into_mention {
+            handle_prompt_left(
+                &mut app,
+                KeyEvent::new(KeyCode::Left, event::KeyModifiers::NONE),
+            );
+        }
+
+        // Assert
+        if let AppMode::Prompt {
+            at_mention_state,
+            input,
+            ..
+        } = &app.mode
+        {
+            assert_eq!(input.cursor, "@src/main.rs".chars().count());
+            assert!(at_mention_state.is_some());
         }
     }
 
