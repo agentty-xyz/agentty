@@ -4,15 +4,6 @@
 
 Agentty is an **ADE (Agentic Development Environment) for structured, controllable AI-assisted software development**. It is itself developed with Agentty, built with Rust and [Ratatui](https://ratatui.rs), and designed around a deeply integrated workflow.
 
-Session view includes a manual branch-publish workflow so reviewed session
-branches can be pushed from the TUI before you open a pull request or merge
-request yourself.
-
-Prompt mode also supports pasted clipboard images for Codex, Gemini, and Claude
-sessions: press `Ctrl+V` or `Alt+V` while composing the first prompt or a
-reply to insert an inline `[Image #n]` placeholder backed by a local temp PNG
-upload.
-
 ## Installation
 
 ### Shell
