@@ -15,6 +15,8 @@ Keep size budgeting in the skill workflow only; do not render `### Size` section
 
 - [`forge_review_request_support.md`](forge_review_request_support.md) - Implementation plan for adding forge-generic review request workflows across GitHub and GitLab.
 
+- [`local_agent_availability.md`](local_agent_availability.md) - Implementation plan for startup-time agent CLI discovery and filtering settings plus `/model` choices to locally available backends.
+
 - [`multi_method_auto_update.md`](multi_method_auto_update.md) - Implementation plan for detecting the installation method and running the appropriate auto-update command for npm, cargo, sh, and npx.
 
 - [`sqlx_query_as_db.md`](sqlx_query_as_db.md) - Implementation plan for migrating row-returning `db.rs` queries to compile-time checked `sqlx::query_as!` mappings.
