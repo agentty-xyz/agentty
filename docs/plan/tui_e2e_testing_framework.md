@@ -30,55 +30,13 @@ A developer can write a test that boots the full TUI app in-memory, sends a sequ
 
 ### Substeps
 
-- [ ] **Create the `ag-tui-test` workspace crate.** Add `crates/ag-tui-test/` as a new workspace member with dependencies on `ratatui` (for `TestBackend` and `Buffer`), `crossterm` (for `Event`/`KeyCode` types), `tokio`, and `insta`. This crate will house the entire framework and be used as a `dev-dependency` by `agentty`. Register it in the root `Cargo.toml` workspace members and `[workspace.dependencies]`. Create `AGENTS.md`, `CLAUDE.md` → symlink, `GEMINI.md` → symlink.
+- [ ] **Create the `ag-tui-test` crate and baseline config surface.** Add `crates/ag-tui-test/` as a workspace member with shared dependencies declared in the root `Cargo.toml`, create the local `AGENTS.md` plus symlinks, and add `crates/ag-tui-test/src/config.rs` with the first `TuiTestConfig` builder fields for terminal size, timeout, tick rate, injected mocks, temp-dir setup, and preloaded project or session state.
 
-- [ ] **Implement `TuiTestContext` — the test orchestrator.** Create `crates/ag-tui-test/src/context.rs` with a `TuiTestContext` struct that owns:
+- [ ] **Implement the in-process app harness.** Create `crates/ag-tui-test/src/context.rs` with `TuiTestContext` owning the `Terminal<TestBackend>`, injected terminal and app event channels, the running app-loop handle, and readable app state; add the supporting `crates/ag-tui-test/src/event_source.rs` implementation of `EventSource` so tests can drive the real runtime through queued synthetic events and clean shutdown.
 
-  - A `Terminal<TestBackend>` (configurable width/height, default 120×40).
-  - An `mpsc::UnboundedSender<crossterm::event::Event>` for injecting terminal events.
-  - A `tokio::sync::mpsc::Sender<AppEvent>` for injecting app events.
-  - A handle to the running app loop task (`JoinHandle`).
-  - A shared `Arc<Mutex<App>>` or equivalent to read app state between frames.
-  - Methods: `new(config) -> Self`, `send_key(KeyCode)`, `send_key_modified(KeyModifiers, KeyCode)`, `send_text(&str)` (types each char), `send_paste(&str)`, `resize(w, h)`, `tick()` (advance one frame), `buffer() -> Buffer` (snapshot current render), `shutdown()`.
+- [ ] **Add locator and auto-wait assertion primitives.** Create `crates/ag-tui-test/src/locator.rs` and `crates/ag-tui-test/src/assertion.rs` so tests can find exact text, substring matches, regex matches, and region-scoped content in a `Buffer`, then wait for visibility or mode changes through repeated `tick()`-driven rendering.
 
-- [ ] **Implement the `ScriptableEventSource`.** Create `crates/ag-tui-test/src/event_source.rs` implementing the `EventSource` trait from `crates/agentty/src/runtime/event.rs`. This implementation reads injected events from an `mpsc::UnboundedReceiver<crossterm::event::Event>` instead of crossterm's real terminal reader. It must support:
-
-  - `poll()` returning `true` when events are queued.
-  - `read()` returning the next injected event.
-  - A `shutdown` flag (`Arc<AtomicBool>`) to cleanly stop the event reader thread.
-
-- [ ] **Implement `Locator` — Playwright-style element finder.** Create `crates/ag-tui-test/src/locator.rs` with a `Locator` struct that searches a ratatui `Buffer` for content. Key APIs:
-
-  - `Locator::by_text(ctx, "Session List")` — find cells matching exact text.
-  - `Locator::by_text_containing(ctx, "Session")` — substring match.
-  - `Locator::by_regex(ctx, r"Session \d+")` — regex match.
-  - `Locator::in_region(ctx, Rect)` — scope search to a screen region.
-  - Each locator returns a `LocatorResult` with: `found: bool`, `positions: Vec<(u16, u16)>`, `matched_text: String`, `cell_styles: Vec<Style>`.
-
-- [ ] **Implement auto-waiting assertions.** Create `crates/ag-tui-test/src/assertion.rs` with assertion functions that poll the rendered buffer across multiple frames until a condition is met or a timeout expires (default 2 seconds, configurable). Key APIs:
-
-  - `expect_text(ctx, "text").to_be_visible().await` — waits for text to appear.
-  - `expect_text(ctx, "text").to_not_be_visible().await` — waits for text to disappear.
-  - `expect_text(ctx, "text").in_region(Rect).to_be_visible().await` — scoped assertion.
-  - `expect_mode(ctx, AppMode::List).await` — waits for app mode transition.
-  - Internally: each assertion calls `ctx.tick()` in a loop, re-renders, checks condition, sleeps 10ms between attempts.
-
-- [ ] **Implement snapshot integration.** Create `crates/ag-tui-test/src/snapshot.rs` with helpers to convert a `Buffer` to a stable string representation for `insta` snapshots:
-
-  - `snapshot_buffer(buffer) -> String` — renders buffer content as a grid of characters with row separators.
-  - `snapshot_styled(buffer) -> String` — includes ANSI-like style markers for color/bold assertions.
-  - `assert_snapshot!(ctx)` macro — captures current frame buffer and calls `insta::assert_snapshot!`.
-
-- [ ] **Add `TuiTestConfig` builder.** Create `crates/ag-tui-test/src/config.rs` with a builder for test configuration:
-
-  - `width` / `height` — terminal dimensions (default 120×40).
-  - `timeout` — default assertion timeout (default 2s).
-  - `tick_rate` — frame interval (default 50ms, matching production).
-  - `mock_agent` — pre-configured `MockAgentChannel` for session scenarios.
-  - `mock_git` — pre-configured `MockGitClient`.
-  - `temp_dir` — whether to create a temp directory as working dir (default true).
-  - `with_project(name, path)` — register a project.
-  - `with_session(session)` — pre-populate sessions.
+- [ ] **Add snapshot helpers for the first frame assertions.** Create `crates/ag-tui-test/src/snapshot.rs` with plain and styled buffer serializers plus an `assert_snapshot!` helper so the initial harness can capture stable `insta` snapshots of rendered terminal frames.
 
 - [ ] **Write one full interactive scenario test.** Add `crates/agentty/tests/tui_session_list_navigation.rs` that:
 

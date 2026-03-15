@@ -35,6 +35,11 @@ This skill is the source of truth for plan structure and execution-planning requ
    - In each step, render `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
    - Use size budgeting during plan creation, not after the fact. Before finalizing the plan, estimate the changed-line scope for each step, split oversized work into additional steps, and keep those size estimates in planning notes or reviewer reasoning rather than rendering a `### Size` block in `docs/plan/` files.
    - Treat each step as one mergeable planned slice. Keep every planned step at `XL` or smaller, and split any step that would be `XXL` before handing off the plan.
+   - Define `atomic` as one mergeable acceptance story: the step can land, be tested, documented, and reverted independently without needing a follow-up step just to become coherent or usable.
+   - Prefer one primary usable outcome per step. If the `### Usable outcome` sentence describes two sibling capabilities, split the step.
+   - Target `2..=5` checklist items under `### Substeps`. If a step needs more than `5` implementation items, split it into additional steps instead of hiding multiple deliverables in one slice.
+   - Split by executable outcome, not by architecture layer. Prefer steps such as `persist X`, `render X`, `edit X`, or `reconcile X` when they each form their own usable slice, rather than bundling multiple outcomes into one cross-layer bucket.
+   - Use step titles that name one outcome. If a title needs `and`, `plus`, or multiple verbs to describe separate deliverables, split the work unless those words only clarify one tightly coupled result.
    - Use this size table when labeling a planned step:
 
      | Size | Changed lines |
@@ -61,10 +66,13 @@ This skill is the source of truth for plan structure and execution-planning requ
 
    - Remove duplicated or contradictory checklist items and trim stale completed detail when it no longer helps active execution.
    - Verify every step can be executed, validated, and merged independently.
+   - Verify every step answers `What becomes newly possible after only this step lands?` in one sentence.
    - Verify every step was split using the size table below before handoff, even though the resulting plan should not render a `### Size` section.
    - Verify no planned step is larger than `XL`; split oversized work before handoff.
+   - Verify no step has more than `5` implementation checklist items under `### Substeps`; split crowded steps before handoff.
    - Verify every step has explicit `### Tests` and `### Docs` sections when they are required by that slice.
    - Verify every `### Substeps` checklist item starts with a human-readable title while keeping the detailed implementation guidance in the same item.
+   - Reject steps that bundle multiple acceptance stories behind one title, one `### Usable outcome`, or one combined validation block.
    - Reject plans that save most tests/docs for the last step instead of keeping them attached to the relevant behavior changes.
    - When this skill changed, verify the active plan files in `docs/plan/` were reviewed and updated to match the new rules unless the user explicitly excluded them.
    - Verify overlapping plans are aligned or clearly marked for user resolution.
