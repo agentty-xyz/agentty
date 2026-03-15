@@ -1198,8 +1198,9 @@ impl SessionManager {
         let _ = app_event_tx.send(AppEvent::RefreshSessions);
     }
 
-    /// Updates the persisted done-session summary by appending the canonical
-    /// commit message to the latest agent `summary.session` text.
+    /// Updates the persisted done-session summary by formatting the latest
+    /// agent `summary.session` text and canonical commit message into markdown
+    /// sections.
     async fn update_done_session_summary_from_commit_message(
         db: &Database,
         session_id: &str,
@@ -1241,8 +1242,10 @@ impl SessionManager {
         })
     }
 
-    /// Builds the persisted session summary from one agent summary section and
-    /// one canonical commit message.
+    /// Builds the persisted done-session summary with markdown sections.
+    ///
+    /// Includes `# Summary` from the final agent response and `# Commit` from the
+    /// canonical session commit message.
     fn session_summary_with_commit_message(
         session_summary: Option<&str>,
         commit_message: &str,
@@ -1250,14 +1253,9 @@ impl SessionManager {
         let trimmed_summary = session_summary.map(str::trim).unwrap_or_default();
         let trimmed_commit_message = commit_message.trim();
 
-        if trimmed_summary.is_empty() {
-            return trimmed_commit_message.to_string();
-        }
-        if trimmed_commit_message.is_empty() {
-            return trimmed_summary.to_string();
-        }
-
-        format!("{trimmed_summary}\n\n{trimmed_commit_message}")
+        format!(
+            "# Summary\n\n{trimmed_summary}\n\n# Commit\n\n{trimmed_commit_message}"
+        )
     }
 
     /// Runs a bounded rebase-assistance loop until conflicts are resolved.
@@ -1878,7 +1876,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_summary_with_commit_message_appends_commit_message() {
+    fn test_session_summary_with_commit_message_builds_markdown_sections() {
         // Arrange
         let session_summary = Some("- Session branch now handles refresh races.");
         let commit_message = "Refine session summary\n\n- Append commit context";
@@ -1890,13 +1888,12 @@ mod tests {
         // Assert
         assert_eq!(
             summary,
-            "- Session branch now handles refresh races.\n\nRefine session summary\n\n- Append \
-             commit context"
+            "# Summary\n\n- Session branch now handles refresh races.\n\n# Commit\n\nRefine session summary\n\n- Append commit context"
         );
     }
 
     #[test]
-    fn test_session_summary_with_commit_message_falls_back_to_commit_message() {
+    fn test_session_summary_with_commit_message_formats_empty_summary_section() {
         // Arrange
         let session_summary = Some("   ");
         let commit_message = "Refine session summary";
@@ -1906,7 +1903,10 @@ mod tests {
             SessionManager::session_summary_with_commit_message(session_summary, commit_message);
 
         // Assert
-        assert_eq!(summary, "Refine session summary");
+        assert_eq!(
+            summary,
+            "# Summary\n\n\n\n# Commit\n\nRefine session summary"
+        );
     }
 
     #[tokio::test]
@@ -2005,8 +2005,7 @@ mod tests {
         assert_eq!(
             sessions[0].summary.as_deref(),
             Some(
-                "- Session branch updates README.\n\nRefine session commit message\n\n- Keep \
-                 title in sync"
+                "# Summary\n\n- Session branch updates README.\n\n# Commit\n\nRefine session commit message\n\n- Keep title in sync"
             )
         );
     }

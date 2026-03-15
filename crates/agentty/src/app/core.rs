@@ -1392,8 +1392,8 @@ impl App {
     /// At the app layer, only `question` messages require explicit mode
     /// routing. `answer` messages are already appended to transcript output by
     /// the session worker before this event is handled. The cached session
-    /// summary mirrors the agent-provided `summary.session` text until the
-    /// commit-message path appends the canonical commit message.
+    /// summary mirrors the agent-provided `summary.session` text until the Done
+    /// path persists markdown sections with `# Summary` and `# Commit`.
     fn apply_agent_response_received(&mut self, session_id: &str, response: &AgentResponse) {
         let Some(session) = self
             .sessions

@@ -524,8 +524,9 @@ impl SessionManager {
 /// `question` text so clarification prompts remain visible while thought-only
 /// responses are not persisted as final transcript output.
 ///
-/// Only the agent `summary.session` field is persisted here; the canonical
-/// commit message is appended later by the auto-commit path.
+/// Only the agent `summary.session` field is persisted here; when the session
+/// later reaches `Done`, the merge path rewrites the persisted value into
+/// markdown with `# Summary` and `# Commit` sections.
 ///
 /// `question` messages are persisted to the session row and trigger
 /// `Status::Question`; all responses are emitted through

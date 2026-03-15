@@ -270,9 +270,9 @@ pub struct Session {
     /// Current lifecycle status.
     pub status: Status,
     /// Optional persisted session summary text sourced from the agent
-    /// `summary.session` field and, once the session is done, appended with
-    /// the canonical session commit message. This text is also reused as
-    /// review-assist context.
+    /// `summary.session` field and, once the session is done, formatted with
+    /// `# Summary` and `# Commit` sections using the canonical session commit
+    /// message. This text is also reused as review-assist context.
     pub summary: Option<String>,
     /// Optional explicit session title.
     pub title: Option<String>,

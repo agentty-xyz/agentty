@@ -239,7 +239,7 @@ fn focused_review_agent_comments(summary: Option<&str>) -> Vec<String> {
 
 /// Returns whether one normalized summary line is a protocol summary heading.
 fn is_protocol_summary_heading(line: &str) -> bool {
-    matches!(line, "Change Summary" | "Current Turn" | "Session Changes")
+    matches!(line, "Change Summary" | "Current Turn" | "Session Changes" | "Summary" | "Commit")
 }
 
 /// Returns scored review highlights from unified diff text.
@@ -800,7 +800,7 @@ diff --git a/src/main.rs b/src/main.rs
         // Arrange
         let summary = Some(
             "## Change Summary\n### Current Turn\n- Added protocol summary fields.\n\n### Session \
-             Changes\n- Session output renders summary markdown separately.",
+             Changes\n- Session output renders summary markdown separately.\n\n# Summary\n- Final session summary line\n\n# Commit\n- Canonical commit note",
         );
 
         // Act
@@ -809,9 +809,13 @@ diff --git a/src/main.rs b/src/main.rs
         // Assert
         assert!(focused_review.contains("- Added protocol summary fields."));
         assert!(focused_review.contains("- Session output renders summary markdown separately."));
+        assert!(focused_review.contains("- Final session summary line"));
+        assert!(focused_review.contains("- Canonical commit note"));
         assert!(!focused_review.contains("- Change Summary"));
         assert!(!focused_review.contains("- Current Turn"));
         assert!(!focused_review.contains("- Session Changes"));
+        assert!(!focused_review.contains("- Summary"));
+        assert!(!focused_review.contains("- Commit"));
     }
 
     #[test]
