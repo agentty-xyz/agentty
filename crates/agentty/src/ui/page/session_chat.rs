@@ -9,7 +9,6 @@ use crate::domain::input::{self, extract_at_mention_query};
 use crate::domain::session::{Session, Status};
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::file_index;
-use crate::runtime::mode::question;
 use crate::ui::component::chat_input::{ChatInput, SlashMenu, SlashMenuOption};
 use crate::ui::component::session_output::SessionOutput;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
@@ -360,8 +359,7 @@ impl<'a> SessionChatPage<'a> {
                 .map(|item| item.options.as_slice())
                 .unwrap_or_default();
             let is_free_text_mode = selected_option_index.is_none();
-            let options_height =
-                question_options_height(options, is_free_text_mode, area.height.saturating_sub(1));
+            let options_height = question_options_height(options, area.height.saturating_sub(1));
             let input_text = if is_free_text_mode { input.text() } else { "" };
 
             let layout_available_height =
@@ -562,12 +560,11 @@ fn render_question_panel(
         .map(|item| item.options.as_slice())
         .unwrap_or_default();
     let is_free_text_mode = selected_option_index.is_none();
-    let show_input = is_free_text_mode;
 
-    let options_height = question_options_height(options, is_free_text_mode, bottom_area.height);
+    let options_height = question_options_height(options, bottom_area.height);
 
     let layout_available_height = bottom_area.height.saturating_sub(options_height);
-    let input_text = if show_input { input.text() } else { "" };
+    let input_text = if is_free_text_mode { input.text() } else { "" };
     let panel_layout = question_panel_layout(
         bottom_area.width,
         layout_available_height,
@@ -576,18 +573,12 @@ fn render_question_panel(
         CHAT_INPUT_MAX_PANEL_HEIGHT,
     );
 
-    let (input_height, spacer_height) = if show_input {
-        (panel_layout.input_height, panel_layout.spacer_height)
-    } else {
-        (0, 0)
-    };
-
     let chunks = Layout::default()
         .constraints([
             Constraint::Length(panel_layout.question_height),
             Constraint::Length(options_height),
-            Constraint::Length(spacer_height),
-            Constraint::Length(input_height),
+            Constraint::Length(panel_layout.spacer_height),
+            Constraint::Length(panel_layout.input_height),
             Constraint::Length(panel_layout.help_height),
         ])
         .split(bottom_area);
@@ -604,14 +595,21 @@ fn render_question_panel(
         render_question_options(f, chunks[1], options, selected_option_index);
     }
 
-    if show_input {
-        let input_placeholder = "Type custom answer (Enter: send, Esc: skip)";
-        let input_title = format!(" [{question_title}] ");
-        let chat_input =
-            ChatInput::new(&input_title, input.text(), input.cursor).placeholder(input_placeholder);
-        if input_height > 0 {
-            chat_input.render(f, chunks[3]);
-        }
+    // Always render the input widget so the panel height stays stable
+    // across mode transitions. When navigating options the input shows a
+    // placeholder; when in free-text mode it is fully editable.
+    let (display_text, display_cursor) = if is_free_text_mode {
+        (input.text(), input.cursor)
+    } else {
+        ("", 0)
+    };
+    let input_placeholder = "Type custom answer (Enter: send, Esc: skip)";
+    let input_title = format!(" [{question_title}] ");
+    let chat_input = ChatInput::new(&input_title, display_text, display_cursor)
+        .placeholder(input_placeholder)
+        .active(is_free_text_mode);
+    if panel_layout.input_height > 0 {
+        chat_input.render(f, chunks[3]);
     }
 
     let is_chat_focused = focus == QuestionFocus::Chat;
@@ -619,23 +617,8 @@ fn render_question_panel(
 
     if is_chat_focused {
         help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
-    } else if is_free_text_mode {
-        help_actions.push(help_action::HelpAction::new(
-            "send",
-            "Enter",
-            "Send response",
-        ));
     } else {
-        help_actions.push(help_action::HelpAction::new(
-            "navigate",
-            "j/k/Up/Down",
-            "Select option",
-        ));
-        help_actions.push(help_action::HelpAction::new(
-            "choose",
-            "Enter",
-            "Choose option",
-        ));
+        help_actions.push(help_action::HelpAction::new("send", "Enter", "Submit"));
     }
 
     let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
@@ -657,39 +640,32 @@ fn render_question_panel(
 
 /// Returns the total height for the question options section.
 ///
-/// Includes the header line, predefined options, and the virtual "Type custom
-/// answer" entry when navigating. Returns zero when there are no predefined
-/// options and the user is in free-text mode.
-fn question_options_height(options: &[String], is_free_text_mode: bool, max_height: u16) -> u16 {
-    let has_visible_options = !options.is_empty() || !is_free_text_mode;
-    if !has_visible_options {
+/// Includes the header line and predefined options. Returns zero when there
+/// are no predefined options. The height is independent of the current
+/// input mode so the layout stays stable during mode transitions.
+fn question_options_height(options: &[String], max_height: u16) -> u16 {
+    if options.is_empty() {
         return 0;
     }
-
-    let virtual_entry_count = u16::from(!is_free_text_mode);
 
     u16::try_from(options.len())
         .unwrap_or(u16::MAX)
         .saturating_add(1) // +1 header
-        .saturating_add(virtual_entry_count)
         .min(max_height)
 }
 
 /// Renders the answer option list for the active question.
 ///
-/// Each predefined option is shown as a numbered line. A virtual "Type
-/// custom answer" entry is always appended while navigating (i.e.
-/// `selected_option_index` is `Some`). In free-text mode the virtual entry
-/// is omitted because the text input appears directly below instead.
+/// Each predefined option is shown as a numbered line with the currently
+/// selected option highlighted. The input widget below the options serves
+/// as the "type custom answer" area, so no virtual entry is appended here.
 fn render_question_options(
     f: &mut Frame,
     area: Rect,
     options: &[String],
     selected_option_index: Option<usize>,
 ) {
-    let is_navigating = selected_option_index.is_some();
-    let capacity = options.len() + 1 + usize::from(is_navigating);
-    let mut lines: Vec<Line<'_>> = Vec::with_capacity(capacity);
+    let mut lines: Vec<Line<'_>> = Vec::with_capacity(options.len() + 1);
     lines.push(Line::from(Span::styled(
         "Options:",
         Style::default().fg(Color::Yellow),
@@ -709,34 +685,6 @@ fn render_question_options(
         };
 
         lines.push(Line::from(Span::styled(label, style)));
-    }
-
-    // Virtual "Type custom answer" entry — only shown while navigating.
-    if is_navigating {
-        let type_custom_index = options.len();
-        let is_type_custom_selected = selected_option_index == Some(type_custom_index);
-        let type_custom_prefix = if is_type_custom_selected {
-            "▸ "
-        } else {
-            "  "
-        };
-        let type_custom_label = format!(
-            "{type_custom_prefix}{}. {}",
-            type_custom_index + 1,
-            question::TYPE_CUSTOM_ANSWER,
-        );
-        let type_custom_style = if is_type_custom_selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        lines.push(Line::from(Span::styled(
-            type_custom_label,
-            type_custom_style,
-        )));
     }
 
     f.render_widget(Paragraph::new(lines), area);
@@ -1361,7 +1309,7 @@ mod tests {
         };
         let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
         let area = Rect::new(0, 0, 120, 30);
-        let options_height = question_options_height(&[], true, area.height.saturating_sub(1));
+        let options_height = question_options_height(&[], area.height.saturating_sub(1));
         let layout_available = area.height.saturating_sub(1).saturating_sub(options_height);
         let panel_layout = question_panel_layout(
             area.width,
@@ -1610,7 +1558,7 @@ mod tests {
             "typed answer",
             CHAT_INPUT_MAX_PANEL_HEIGHT,
         );
-        let options_height = question_options_height(&[], true, bottom_height);
+        let options_height = question_options_height(&[], bottom_height);
         let spacer_row = bottom_top + panel_layout.question_height + options_height;
         let spacer_text = buffer_row_text(terminal.backend().buffer(), spacer_row, width);
         assert!(spacer_text.trim().is_empty());

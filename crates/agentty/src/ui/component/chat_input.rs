@@ -26,6 +26,7 @@ pub struct SlashMenu<'a> {
 /// Prompt input component with optional slash-command dropdown.
 pub struct ChatInput<'a> {
     pub placeholder: &'a str,
+    active: bool,
     cursor: usize,
     input: &'a str,
     slash_menu: Option<SlashMenu<'a>>,
@@ -37,6 +38,7 @@ impl<'a> ChatInput<'a> {
     pub fn new(title: &'a str, input: &'a str, cursor: usize) -> Self {
         Self {
             placeholder: "",
+            active: true,
             cursor,
             input,
             slash_menu: None,
@@ -51,6 +53,16 @@ impl<'a> ChatInput<'a> {
         self
     }
 
+    /// Marks the input as inactive (dimmed border, no cursor).
+    ///
+    /// When `false`, the border uses a muted color and the terminal cursor
+    /// is not rendered. Defaults to `true`.
+    #[must_use]
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
     /// Sets the slash command menu.
     #[must_use]
     pub fn slash_menu(mut self, slash_menu: SlashMenu<'a>) -> Self {
@@ -58,15 +70,22 @@ impl<'a> ChatInput<'a> {
         self
     }
 
-    /// Returns the shared block styling for the focused prompt input frame.
+    /// Returns the shared block styling for the prompt input frame.
+    ///
+    /// Uses accent styling when active and muted styling when inactive.
     fn input_block(&self) -> Block<'a> {
         let title = format!(" {} ", self.title);
+        let (border_style, title_style) = if self.active {
+            (Self::focused_border_style(), Self::focused_title_style())
+        } else {
+            (Self::inactive_border_style(), Self::inactive_title_style())
+        };
 
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Self::focused_border_style())
-            .title(Span::styled(title, Self::focused_title_style()))
+            .border_style(border_style)
+            .title(Span::styled(title, title_style))
     }
 
     /// Returns the border style used to keep the active prompt field visually
@@ -82,6 +101,16 @@ impl<'a> ChatInput<'a> {
         Style::default()
             .fg(style::palette::ACCENT)
             .add_modifier(Modifier::BOLD)
+    }
+
+    /// Returns the border style for an inactive (dimmed) prompt input frame.
+    fn inactive_border_style() -> Style {
+        Style::default().fg(style::palette::BORDER)
+    }
+
+    /// Returns the title style for an inactive (dimmed) prompt input frame.
+    fn inactive_title_style() -> Style {
+        Style::default().fg(style::palette::BORDER)
     }
 
     /// Returns the shared block styling for slash-command and file suggestion
@@ -139,14 +168,16 @@ impl<'a> ChatInput<'a> {
         let block = self.input_block();
 
         if self.input.is_empty() {
+            let prefix_style = if self.active {
+                Style::default()
+                    .fg(style::palette::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(style::palette::BORDER)
+            };
             let prefix = " › ";
             let display_lines = vec![Line::from(vec![
-                Span::styled(
-                    prefix,
-                    Style::default()
-                        .fg(style::palette::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(prefix, prefix_style),
                 Span::raw("  "),
                 Span::styled(
                     self.placeholder,
@@ -157,7 +188,9 @@ impl<'a> ChatInput<'a> {
             let widget = Paragraph::new(display_lines).block(block);
             f.render_widget(Clear, area);
             f.render_widget(widget, area);
-            f.set_cursor_position(placeholder_cursor_position(area));
+            if self.active {
+                f.set_cursor_position(placeholder_cursor_position(area));
+            }
 
             return;
         }
@@ -177,7 +210,9 @@ impl<'a> ChatInput<'a> {
 
         f.render_widget(Clear, area);
         f.render_widget(widget, area);
-        f.set_cursor_position(input_cursor_position(area, cursor_x, cursor_row));
+        if self.active {
+            f.set_cursor_position(input_cursor_position(area, cursor_x, cursor_row));
+        }
     }
 
     /// Computes the total line count used by input viewport scrolling.
@@ -289,6 +324,52 @@ mod tests {
         assert!(top_row.starts_with("╭"));
         assert!(top_row.contains(" Prompt "));
         assert!(top_row.contains("╮"));
+    }
+
+    #[test]
+    fn test_render_inactive_uses_dimmed_border_style() {
+        // Arrange
+        let width = 32;
+        let backend = ratatui::backend::TestBackend::new(width, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let chat_input = ChatInput::new("Prompt", "", 0)
+            .placeholder("Type your message")
+            .active(false);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                chat_input.render(frame, area);
+            })
+            .expect("failed to draw inactive prompt input");
+
+        // Assert — border is rendered with the muted BORDER color, not ACCENT.
+        let buffer = terminal.backend().buffer();
+        let top_left_cell = &buffer.content()[0];
+        assert_eq!(top_left_cell.fg, style::palette::BORDER);
+    }
+
+    #[test]
+    fn test_render_inactive_with_text_uses_dimmed_border() {
+        // Arrange — inactive input with text still uses the muted border.
+        let width = 32;
+        let backend = ratatui::backend::TestBackend::new(width, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let chat_input = ChatInput::new("Prompt", "hello", 5).active(false);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                chat_input.render(frame, area);
+            })
+            .expect("failed to draw inactive prompt input with text");
+
+        // Assert — border still uses muted BORDER color.
+        let buffer = terminal.backend().buffer();
+        let top_left_cell = &buffer.content()[0];
+        assert_eq!(top_left_cell.fg, style::palette::BORDER);
     }
 
     #[test]

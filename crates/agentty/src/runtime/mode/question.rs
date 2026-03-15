@@ -12,10 +12,6 @@ use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 /// Default response stored when users skip one model question.
 const NO_ANSWER: &str = "no answer";
 
-/// Label for the virtual "type custom answer" option appended after predefined
-/// options.
-pub(crate) const TYPE_CUSTOM_ANSWER: &str = "Type custom answer";
-
 /// Applies one key event in question-answer mode.
 ///
 /// `Tab` toggles focus between the question panel and the chat output for
@@ -181,7 +177,8 @@ fn scroll_offset_up(scroll_offset: Option<u16>, metrics: QuestionViewMetrics, st
 ///
 /// Paste only takes effect when the user is in free-text mode
 /// (`selected_option_index` is `None`). While navigating predefined options,
-/// paste is ignored — the user must first select "Type custom answer".
+/// paste is ignored — the user must first navigate past the last option to
+/// enter free-text mode.
 pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
     let normalized_text = normalize_pasted_text(pasted_text);
     if normalized_text.is_empty() {
@@ -203,14 +200,17 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
 }
 
 /// Returns the default selected option index for a question at the given
-/// position. Always returns `Some(0)` for valid questions so the UI starts
-/// in option-selection mode. The virtual "Type custom answer" entry is
-/// always available as the last selectable choice.
+/// position. Returns `Some(0)` when the question has predefined options so
+/// the UI starts in option-selection mode, or `None` when there are no
+/// predefined options so the input line opens immediately.
 pub(crate) fn default_option_index(
     questions: &[QuestionItem],
     question_index: usize,
 ) -> Option<usize> {
-    questions.get(question_index).map(|_| 0)
+    questions
+        .get(question_index)
+        .filter(|item| !item.options.is_empty())
+        .map(|_| 0)
 }
 
 /// Semantic action emitted by one question-mode key event.
@@ -222,9 +222,10 @@ enum QuestionAction {
 /// Resolves and applies one key event against question input state.
 ///
 /// When navigating predefined options (`selected_option_index` is `Some`),
-/// `Up`/`Down`/`j`/`k` cycle through the options plus a virtual "Type custom
-/// answer" entry. Selecting that entry and pressing `Enter` transitions to
-/// free-text mode where the text input is visible and all keys type normally.
+/// `Up`/`Down`/`j`/`k` cycle through the options. Moving past the last (or
+/// first) option automatically enters free-text mode where the text input is
+/// visible. In free-text mode, `Up` returns to the last predefined option
+/// and `Down` wraps to the first.
 fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionAction> {
     let AppMode::Question {
         current_index,
@@ -244,20 +245,30 @@ fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionActio
 
     let action = match key.code {
         KeyCode::Esc => QuestionAction::Submit(NO_ANSWER.to_string()),
-        KeyCode::Enter => resolve_enter_action(
-            input,
-            questions,
-            *current_index,
-            selected_option_index,
-            option_count,
-        ),
+        KeyCode::Enter => {
+            resolve_enter_action(input, questions, *current_index, selected_option_index)
+        }
         KeyCode::Up | KeyCode::Char('k') if is_navigating_options => {
-            navigate_option_up(selected_option_index, option_count);
+            navigate_option_up(selected_option_index);
 
             QuestionAction::Continue
         }
         KeyCode::Down | KeyCode::Char('j') if is_navigating_options => {
             navigate_option_down(selected_option_index, option_count);
+
+            QuestionAction::Continue
+        }
+        KeyCode::Up
+            if !is_navigating_options && option_count > 0 && is_cursor_on_first_line(input) =>
+        {
+            *selected_option_index = Some(option_count - 1);
+
+            QuestionAction::Continue
+        }
+        KeyCode::Down
+            if !is_navigating_options && option_count > 0 && is_cursor_on_last_line(input) =>
+        {
+            *selected_option_index = Some(0);
 
             QuestionAction::Continue
         }
@@ -270,56 +281,44 @@ fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionActio
 
 /// Resolves an `Enter` key press in question mode.
 ///
-/// When navigating options, submits the highlighted option or enters free-text
-/// mode for the virtual "Type custom answer" entry. In free-text mode, submits
-/// the typed text.
+/// When navigating options, submits the highlighted predefined option. In
+/// free-text mode, submits the typed text.
 fn resolve_enter_action(
     input: &mut InputState,
     questions: &[QuestionItem],
     current_index: usize,
     selected_option_index: &mut Option<usize>,
-    option_count: usize,
 ) -> QuestionAction {
-    match *selected_option_index {
-        Some(option_index) if option_index >= option_count => {
-            *selected_option_index = None;
+    if let Some(option_index) = *selected_option_index {
+        let selected_text = questions
+            .get(current_index)
+            .and_then(|item| item.options.get(option_index))
+            .cloned()
+            .unwrap_or_default();
 
-            QuestionAction::Continue
-        }
-        Some(option_index) => {
-            let selected_text = questions
-                .get(current_index)
-                .and_then(|item| item.options.get(option_index))
-                .cloned()
-                .unwrap_or_default();
+        QuestionAction::Submit(normalize_response_text(&selected_text))
+    } else {
+        let response_text = input.take_text();
 
-            QuestionAction::Submit(normalize_response_text(&selected_text))
-        }
-        None => {
-            let response_text = input.take_text();
-
-            QuestionAction::Submit(normalize_response_text(&response_text))
-        }
+        QuestionAction::Submit(normalize_response_text(&response_text))
     }
 }
 
-/// Moves the selected option index up (wrapping to the virtual "Type custom
-/// answer" entry).
-fn navigate_option_up(selected_option_index: &mut Option<usize>, option_count: usize) {
-    let total_count = option_count + 1;
+/// Moves the selected option index up, entering free-text mode when wrapping
+/// past the first predefined option.
+fn navigate_option_up(selected_option_index: &mut Option<usize>) {
     *selected_option_index = match *selected_option_index {
-        Some(0) => Some(total_count - 1),
+        Some(0) => None,
         Some(index) => Some(index.saturating_sub(1)),
         None => unreachable!(),
     };
 }
 
-/// Moves the selected option index down (wrapping from the virtual "Type
-/// custom answer" entry back to the first option).
+/// Moves the selected option index down, entering free-text mode when
+/// advancing past the last predefined option.
 fn navigate_option_down(selected_option_index: &mut Option<usize>, option_count: usize) {
-    let total_count = option_count + 1;
     *selected_option_index = match *selected_option_index {
-        Some(index) if index + 1 >= total_count => Some(0),
+        Some(index) if index + 1 >= option_count => None,
         Some(index) => Some(index + 1),
         None => unreachable!(),
     };
@@ -389,6 +388,22 @@ fn is_insertable_char_key(key: KeyEvent) -> bool {
         key.modifiers,
         event::KeyModifiers::NONE | event::KeyModifiers::SHIFT
     )
+}
+
+/// Returns whether the input cursor is on the first line of text.
+///
+/// True when no newline characters appear before the cursor position,
+/// including when the input is empty.
+fn is_cursor_on_first_line(input: &InputState) -> bool {
+    input.text().chars().take(input.cursor).all(|ch| ch != '\n')
+}
+
+/// Returns whether the input cursor is on the last line of text.
+///
+/// True when no newline characters appear after the cursor position,
+/// including when the input is empty.
+fn is_cursor_on_last_line(input: &InputState) -> bool {
+    input.text().chars().skip(input.cursor).all(|ch| ch != '\n')
 }
 
 /// Moves the cursor to the start of the previous word, skipping adjacent
@@ -793,8 +808,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_up_from_first_wraps_to_type_custom_answer() {
-        // Arrange — 3 real options → virtual "Type custom answer" at index 3.
+    async fn test_handle_up_from_first_enters_free_text_mode() {
+        // Arrange — 3 real options, navigating up from first wraps to
+        // free-text input.
         let mut app = new_test_app().await;
         app.mode = question_mode_with_options();
 
@@ -810,15 +826,16 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                selected_option_index: Some(3),
+                selected_option_index: None,
                 ..
             }
         ));
     }
 
     #[tokio::test]
-    async fn test_handle_down_from_last_real_selects_type_custom_answer() {
-        // Arrange — 3 real options → virtual at index 3.
+    async fn test_handle_down_from_last_real_enters_free_text_mode() {
+        // Arrange — 3 real options, navigating down from last enters
+        // free-text input.
         let mut app = new_test_app().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
@@ -841,15 +858,15 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::Question {
-                selected_option_index: Some(3),
+                selected_option_index: None,
                 ..
             }
         ));
     }
 
     #[tokio::test]
-    async fn test_handle_down_from_type_custom_answer_wraps_to_first() {
-        // Arrange — virtual option is at index 3.
+    async fn test_handle_up_from_free_text_returns_to_last_real_option() {
+        // Arrange — free-text mode with 3 real options available.
         let mut app = new_test_app().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
@@ -857,7 +874,38 @@ mod tests {
             ..
         } = &mut app.mode
         {
-            *selected_option_index = Some(3);
+            *selected_option_index = None;
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                selected_option_index: Some(2),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_down_from_free_text_wraps_to_first_option() {
+        // Arrange — free-text mode with 3 real options available.
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question {
+            selected_option_index,
+            ..
+        } = &mut app.mode
+        {
+            *selected_option_index = None;
         }
 
         // Act
@@ -955,32 +1003,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_enter_on_type_custom_answer_enters_free_text_mode() {
-        // Arrange — virtual "Type custom answer" is at index 3 (3 real options).
+    async fn test_handle_up_from_free_text_stays_in_free_text_when_no_options() {
+        // Arrange — question has no predefined options, so Up stays in
+        // free-text mode (no options to navigate to).
+        let mut app = new_test_app().await;
+        app.mode = free_text_question_mode("some text", 4);
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — remains in free-text mode, Up moves cursor.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                selected_option_index: None,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_up_from_free_text_stays_when_cursor_not_on_first_line() {
+        // Arrange — multiline input with cursor on second line. Up should
+        // move the cursor within the text, not exit to option navigation.
         let mut app = new_test_app().await;
         app.mode = question_mode_with_options();
         if let AppMode::Question {
             selected_option_index,
+            input,
             ..
         } = &mut app.mode
         {
-            *selected_option_index = Some(3);
+            *selected_option_index = None;
+            *input = InputState::with_text("first\nsecond".to_string());
+            input.cursor = "first\nseco".chars().count();
         }
 
         // Act
         let _ = handle(
             &mut app,
             TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         )
         .await;
 
-        // Assert — transitions to free-text mode.
+        // Assert — stays in free-text mode, cursor moved up within text.
         assert!(matches!(
             app.mode,
             AppMode::Question {
                 selected_option_index: None,
-                current_index: 0,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_down_from_free_text_stays_when_cursor_not_on_last_line() {
+        // Arrange — multiline input with cursor on first line. Down should
+        // move the cursor within the text, not exit to option navigation.
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question {
+            selected_option_index,
+            input,
+            ..
+        } = &mut app.mode
+        {
+            *selected_option_index = None;
+            *input = InputState::with_text("first\nsecond".to_string());
+            input.cursor = 2;
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — stays in free-text mode, cursor moved down within text.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                selected_option_index: None,
                 ..
             }
         ));
@@ -1129,16 +1240,16 @@ mod tests {
     }
 
     #[test]
-    fn test_default_option_index_returns_first_for_question_without_predefined_options() {
-        // Arrange — even without predefined options, the virtual "Type custom
-        // answer" entry is always available so the UI starts in selection mode.
+    fn test_default_option_index_returns_none_for_question_without_predefined_options() {
+        // Arrange — without predefined options the UI starts directly in
+        // free-text input mode.
         let questions = vec![QuestionItem {
             options: Vec::new(),
             text: "Type something?".to_string(),
         }];
 
         // Act & Assert
-        assert_eq!(default_option_index(&questions, 0), Some(0));
+        assert_eq!(default_option_index(&questions, 0), None);
     }
 
     #[test]
