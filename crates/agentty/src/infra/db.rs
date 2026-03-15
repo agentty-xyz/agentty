@@ -119,6 +119,27 @@ pub struct SessionUsageRow {
     pub session_id: Option<String>,
 }
 
+/// Row returned when loading an optional `i64` scalar value.
+struct OptionalI64ValueRow {
+    value: Option<i64>,
+}
+
+/// Row returned when loading an optional string scalar value.
+struct OptionalStringValueRow {
+    value: Option<String>,
+}
+
+/// Row returned when loading a required string scalar value.
+struct RequiredStringValueRow {
+    value: String,
+}
+
+/// Row returned when loading session count and latest-update metadata.
+struct SessionMetadataRow {
+    max_updated_at: i64,
+    session_count: i64,
+}
+
 /// Maps one joined `session` query row into the public session row model.
 fn parse_session_row(row: &SqliteRow) -> SessionRow {
     SessionRow {
@@ -256,35 +277,27 @@ WHERE path = ?
     /// # Errors
     /// Returns an error if the project lookup query fails.
     pub async fn get_project(&self, id: i64) -> Result<Option<ProjectRow>, String> {
-        let row = sqlx::query(
-            r"
+        let row = sqlx::query_as!(
+            ProjectRow,
+            r#"
 SELECT created_at,
        display_name,
        git_branch,
        id,
-       is_favorite,
+       is_favorite AS "is_favorite: _",
        last_opened_at,
        path,
        updated_at
 FROM project
 WHERE id = ?
-",
+"#,
+            id
         )
-        .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| format!("Failed to get project: {err}"))?;
 
-        Ok(row.map(|row| ProjectRow {
-            created_at: row.get("created_at"),
-            display_name: row.get("display_name"),
-            git_branch: row.get("git_branch"),
-            id: row.get("id"),
-            is_favorite: row.get::<i64, _>("is_favorite") != 0,
-            last_opened_at: row.get("last_opened_at"),
-            path: row.get("path"),
-            updated_at: row.get("updated_at"),
-        }))
+        Ok(row)
     }
 
     /// Loads all configured projects with aggregated session stats.
@@ -575,20 +588,19 @@ ORDER BY id
     /// # Errors
     /// Returns an error if metadata cannot be queried from the database.
     pub async fn load_sessions_metadata(&self) -> Result<(i64, i64), String> {
-        let row = sqlx::query(
-            r"
-SELECT COUNT(*) AS session_count, COALESCE(MAX(updated_at), 0) AS max_updated_at
+        let row = sqlx::query_as!(
+            SessionMetadataRow,
+            r#"
+SELECT COUNT(*) AS "session_count!: _",
+       COALESCE(MAX(updated_at), 0) AS "max_updated_at!: _"
 FROM session
-",
+"#
         )
         .fetch_one(&self.pool)
         .await
         .map_err(|err| format!("Failed to load session metadata: {err}"))?;
 
-        let session_count = row.get("session_count");
-        let max_updated_at = row.get("max_updated_at");
-
-        Ok((session_count, max_updated_at))
+        Ok((row.session_count, row.max_updated_at))
     }
 
     /// Deletes a session row by identifier.
@@ -1066,19 +1078,20 @@ WHERE project_id IS NULL
     /// # Errors
     /// Returns an error if the base branch lookup query fails.
     pub async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, String> {
-        let row = sqlx::query(
-            r"
-SELECT base_branch
+        let row = sqlx::query_as!(
+            RequiredStringValueRow,
+            r#"
+SELECT base_branch AS "value!: _"
 FROM session
 WHERE id = ?
-",
+"#,
+            id
         )
-        .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| format!("Failed to get base branch: {err}"))?;
 
-        Ok(row.map(|row| row.get("base_branch")))
+        Ok(row.map(|row| row.value))
     }
 
     /// Returns the provider conversation identifier for a session, when
@@ -1090,19 +1103,20 @@ WHERE id = ?
         &self,
         id: &str,
     ) -> Result<Option<String>, String> {
-        let row = sqlx::query(
-            r"
-SELECT provider_conversation_id
+        let row = sqlx::query_as!(
+            OptionalStringValueRow,
+            r#"
+SELECT provider_conversation_id AS "value: _"
 FROM session
 WHERE id = ?
-",
+"#,
+            id
         )
-        .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| format!("Failed to get provider conversation id: {err}"))?;
 
-        Ok(row.and_then(|row| row.get("provider_conversation_id")))
+        Ok(row.and_then(|row| row.value))
     }
 
     /// Inserts a queued operation row for a session.
@@ -1452,19 +1466,20 @@ SET value = excluded.value
     /// # Errors
     /// Returns an error if the setting lookup query fails.
     pub async fn get_setting(&self, name: &str) -> Result<Option<String>, String> {
-        let row = sqlx::query(
-            r"
-SELECT value
+        let row = sqlx::query_as!(
+            RequiredStringValueRow,
+            r#"
+SELECT value AS "value!: _"
 FROM setting
 WHERE name = ?
-",
+"#,
+            name
         )
-        .bind(name)
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| format!("Failed to get setting: {err}"))?;
 
-        Ok(row.map(|row| row.get("value")))
+        Ok(row.map(|row| row.value))
     }
 
     /// Looks up one project-scoped setting value by project and name.
@@ -1476,21 +1491,22 @@ WHERE name = ?
         project_id: i64,
         name: &str,
     ) -> Result<Option<String>, String> {
-        let row = sqlx::query(
-            r"
-SELECT value
+        let row = sqlx::query_as!(
+            RequiredStringValueRow,
+            r#"
+SELECT value AS "value!: _"
 FROM project_setting
 WHERE project_id = ?
   AND name = ?
-",
+"#,
+            project_id,
+            name
         )
-        .bind(project_id)
-        .bind(name)
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| format!("Failed to get project setting: {err}"))?;
 
-        Ok(row.map(|row| row.get("value")))
+        Ok(row.map(|row| row.value))
     }
 
     /// Persists one project-scoped reasoning-effort setting.
@@ -1568,19 +1584,20 @@ WHERE project_id = ?
     /// # Errors
     /// Returns an error if the session lookup query fails.
     pub async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, String> {
-        let row = sqlx::query(
-            r"
-SELECT project_id
+        let row = sqlx::query_as!(
+            OptionalI64ValueRow,
+            r#"
+SELECT project_id AS "value: _"
 FROM session
 WHERE id = ?
-",
+"#,
+            session_id
         )
-        .bind(session_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|err| format!("Failed to load session project id: {err}"))?;
 
-        Ok(row.and_then(|row| row.get("project_id")))
+        Ok(row.and_then(|row| row.value))
     }
 
     /// Persists the active project identifier in application settings.
@@ -1597,7 +1614,18 @@ WHERE id = ?
     /// # Errors
     /// Returns an error if settings lookup fails.
     pub async fn load_active_project_id(&self) -> Result<Option<i64>, String> {
-        let setting_value = self.get_setting("ActiveProjectId").await?;
+        let setting_value = sqlx::query_as!(
+            RequiredStringValueRow,
+            r#"
+SELECT value AS "value!: _"
+FROM setting
+WHERE name = 'ActiveProjectId'
+"#
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| format!("Failed to load active project id: {err}"))?
+        .map(|row| row.value);
 
         Ok(setting_value.and_then(|value| value.parse::<i64>().ok()))
     }

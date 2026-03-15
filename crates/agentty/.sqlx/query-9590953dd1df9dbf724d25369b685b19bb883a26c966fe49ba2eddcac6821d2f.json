@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT created_at,\n       display_name,\n       git_branch,\n       id,\n       is_favorite AS \"is_favorite: _\",\n       last_opened_at,\n       path,\n       updated_at\nFROM project\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "created_at",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "display_name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "git_branch",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "id",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_favorite: _",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_opened_at",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "path",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 7,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "9590953dd1df9dbf724d25369b685b19bb883a26c966fe49ba2eddcac6821d2f"
+}

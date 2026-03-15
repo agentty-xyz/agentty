@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT value AS \"value!: _\"\nFROM project_setting\nWHERE project_id = ?\n  AND name = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!: _",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f25ca886ee77e8af0199a088066ebc41a63fe36bed9d6d77986e9e159c8a8a6a"
+}

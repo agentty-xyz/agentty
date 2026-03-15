@@ -16,18 +16,18 @@ The repository builds with SQLx macros enabled, `.sqlx` metadata is generated fo
 
 ### Substeps
 
-- [ ] **Enable macro-backed SQLx compilation.** Update the workspace `sqlx` dependency in `Cargo.toml` so `agentty` can use `query_as!`, confirm the `crates/agentty/migrations/` schema is sufficient for macro preparation, and establish the concrete `DATABASE_URL` or preparation command that will be used for local validation and CI-compatible offline builds.
-- [ ] **Commit the initial offline query metadata.** Generate and commit the `.sqlx/` artifacts for the current `agentty` schema so compile-time checked queries in `crates/agentty/src/infra/db.rs` build without a live database connection.
-- [ ] **Convert single-table reader methods first.** Replace manual row extraction in the smallest reader methods in `crates/agentty/src/infra/db.rs`, starting with lookups such as `get_project()`, `load_sessions_metadata()`, `get_session_base_branch()`, `get_session_provider_conversation_id()`, `get_setting()`, `get_project_setting()`, `load_session_project_id()`, and `load_active_project_id()`, using explicit row structs or macro-friendly intermediate types instead of `SqliteRow` field reads.
-- [ ] **Keep write-only paths unchanged in this slice.** Leave `INSERT`, `UPDATE`, and `DELETE` calls that only use `.execute()` on `sqlx::query(...)` untouched so the first slice only establishes the read-path migration pattern.
+- [x] **Enable macro-backed SQLx compilation.** Updated workspace `sqlx` features in `Cargo.toml` to include `macros` and added a local contributor command in `CONTRIBUTING.md` for query-metadata preparation.
+- [x] **Commit the initial offline query metadata.** Generated and checked in `crates/agentty/.sqlx/` for the current `agentty` schema so the step-1 `query_as!` conversions build cleanly with `SQLX_OFFLINE=true`.
+- [x] **Convert single-table reader methods first.** Replaced manual row extraction in smallest reader methods in `crates/agentty/src/infra/db.rs` (`get_project()`, `load_sessions_metadata()`, `get_session_base_branch()`, `get_session_provider_conversation_id()`, `get_setting()`, `get_project_setting()`, `load_session_project_id()`, `load_active_project_id()`) using `query_as!`.
+- [x] **Keep write-only paths unchanged in this slice.** Leave `INSERT`, `UPDATE`, and `DELETE` calls that only use `.execute()` on `sqlx::query(...)` untouched so the first slice only establishes the read-path migration pattern.
 
 ### Tests
 
-- [ ] Run focused `db.rs` tests that cover the converted reader methods, then run `cargo check -q --all-targets --all-features` to confirm the macro feature and `.sqlx` metadata compile cleanly.
+- [x] Run focused `db.rs` tests that cover the converted reader methods, then run `cargo check -q --all-targets --all-features` to confirm the macro feature and `.sqlx` metadata compile cleanly. Validated with `cargo test -q infra::db::tests -- --test-threads=1` and `SQLX_OFFLINE=true cargo check -q --all-targets --all-features`.
 
 ### Docs
 
-- [ ] Update `CONTRIBUTING.md` with the required SQLx query-preparation command and any `DATABASE_URL` expectations if the new `.sqlx` workflow is not already documented.
+- [x] Update `CONTRIBUTING.md` with the required SQLx query-preparation command and any `DATABASE_URL` expectations if the new `.sqlx` workflow is not already documented.
 
 ## 2) Convert aggregate and joined readers to typed macro mappings
 
@@ -91,9 +91,9 @@ The production code migration is not complete while the `db.rs` test module stil
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| SQLx workspace setup | `Cargo.toml` enables `sqlx` with `runtime-tokio` and `sqlite`, but not the macro feature needed for `query_as!`. | Not started |
-| Offline query metadata | No `.sqlx/` directory is present in this worktree even though repository guidance prefers compile-time checked SQLx macros. | Not started |
-| `db.rs` row-returning readers | `crates/agentty/src/infra/db.rs` still contains many `sqlx::query(...)` readers with manual `row.get(...)` mapping for projects, sessions, settings, operations, and usage rows. | Not started |
+| SQLx workspace setup | `Cargo.toml` enables `sqlx` with `runtime-tokio`, `sqlite`, and `macros`, and `CONTRIBUTING.md` documents the preparation workflow. | Complete |
+| Offline query metadata | `crates/agentty/.sqlx/` is present for the current step-1 `query_as!` set, and the workflow is validated with `SQLX_OFFLINE=true`. | Complete |
+| `db.rs` row-returning readers | `crates/agentty/src/infra/db.rs` now has `query_as!` for the first target reader slice (`get_project()`, `load_sessions_metadata()`, `get_session_base_branch()`, `get_session_provider_conversation_id()`, `get_setting()`, `get_project_setting()`, `load_session_project_id()`, `load_active_project_id()`) with joins and aggregate/operation readers still using manual extraction. | In progress |
 | Joined session mapping | `parse_session_row()` and `parse_session_review_request_row()` depend on `SqliteRow` plus aliased join columns to build `SessionRow` and `SessionReviewRequestRow`. | Not started |
 | Test coverage shape | The `db.rs` test module already covers the read behavior well, but several helpers and parser-focused tests still inspect raw query rows directly. | Partial |
 

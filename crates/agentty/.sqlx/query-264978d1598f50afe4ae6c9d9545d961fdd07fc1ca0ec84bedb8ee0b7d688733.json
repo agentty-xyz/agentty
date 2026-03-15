@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT project_id AS \"value: _\"\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "value: _",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "264978d1598f50afe4ae6c9d9545d961fdd07fc1ca0ec84bedb8ee0b7d688733"
+}

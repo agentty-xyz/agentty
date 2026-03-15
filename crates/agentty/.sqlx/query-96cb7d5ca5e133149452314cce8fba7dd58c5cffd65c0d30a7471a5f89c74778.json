@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT provider_conversation_id AS \"value: _\"\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "value: _",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "96cb7d5ca5e133149452314cce8fba7dd58c5cffd65c0d30a7471a5f89c74778"
+}

@@ -5,6 +5,7 @@ The main binary is named `agentty`.
 
 ## Directory Index
 
+- [`.sqlx/`](.sqlx/) - Checked-in SQLx offline query metadata for compile-time macro validation.
 - [`migrations/`](migrations/) - SQLite schema migrations for SQLx.
 - [`resources/`](resources/) - Static resources embedded at compile time.
 - [`src/`](src/) - Source code directory.

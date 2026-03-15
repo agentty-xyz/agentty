@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT base_branch AS \"value!: _\"\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "value!: _",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "71ecf91ed46884837a62d0401a3171aee3767399c5c92daa642c132c1cc8acd7"
+}
