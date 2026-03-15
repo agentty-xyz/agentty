@@ -7,7 +7,7 @@ The main binary is named `agentty`.
 
 - [`.sqlx/`](.sqlx/) - Checked-in SQLx offline query metadata for compile-time macro validation.
 - [`migrations/`](migrations/) - SQLite schema migrations for SQLx.
-- [`resources/`](resources/) - Static resources embedded at compile time.
+- [`resources/`](resources/) - Directory-local AGENTS instructions for shared workflow assets.
 - [`src/`](src/) - Source code directory.
 - [`tests/`](tests/) - Integration tests for live provider behavior and protocol compliance.
 - [`AGENTS.md`](AGENTS.md) - Crate documentation.

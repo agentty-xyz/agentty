@@ -19,7 +19,6 @@ Keep size budgeting in the skill workflow only; do not render `### Size` section
 
 - [`multi_method_auto_update.md`](multi_method_auto_update.md) - Implementation plan for detecting the installation method and running the appropriate auto-update command for npm, cargo, sh, and npx.
 
-
 - [`session_in_progress_timer.md`](session_in_progress_timer.md) - Implementation plan for persisting and rendering cumulative session `InProgress` time in chat and list views.
 
 - [`tui_e2e_testing_framework.md`](tui_e2e_testing_framework.md) - Implementation plan for a Rust-native Playwright-inspired TUI end-to-end testing framework with in-process `TestBackend` harness, `insta` snapshot assertions, and PTY-based smoke validation.

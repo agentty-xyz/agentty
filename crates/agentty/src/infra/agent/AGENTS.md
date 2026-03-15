@@ -19,6 +19,7 @@ When backend protocol or provider parsing behavior changes, update:
 - [`protocol.rs`](protocol.rs) - Structured response contract (`AgentResponse`, `AgentResponseMessage`, `AgentResponseMessageKind`), schema generation, parsing, and stream normalization helpers.
 - [`response_parser.rs`](response_parser.rs) - Provider-specific parsing for final and streaming output.
 - [`submission.rs`](submission.rs) - Shared one-shot prompt execution with strict protocol parsing and direct schema-error surfacing.
+- [`template/`](template/) - Shared Askama template files used by agent-backed prompts.
 - [`AGENTS.md`](AGENTS.md) - Local module guidance and directory index.
 - [`CLAUDE.md`](CLAUDE.md) - Symlink to AGENTS.md.
 - [`GEMINI.md`](GEMINI.md) - Symlink to AGENTS.md.
