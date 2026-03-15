@@ -293,6 +293,35 @@ git worktree prune
 - Use the minimal set of skills needed for the current turn.
 - Do not carry a skill across turns unless it is explicitly requested again or clearly re-triggered by intent.
 
+## Meta-Agent Inventory
+
+The project uses two layers of prompt-driven meta-agents that shape agent behavior:
+
+### Interactive Skills (`skills/`)
+
+User- or AI-triggered workflow guides invoked via slash commands. Pure markdown with numbered steps.
+
+| Skill | Description |
+|-------|-------------|
+| [`git-commit`](skills/git-commit/SKILL.md) | Gather context, write commit messages following repo conventions. |
+| [`review`](skills/review/SKILL.md) | Structured code review with severity-categorized report output. |
+| [`implementation-plan`](skills/implementation-plan/SKILL.md) | Create iterative execution plans in `docs/plan/` with size budgeting. |
+| [`release`](skills/release/SKILL.md) | Version bump, changelog, tagging, and push workflow. |
+
+### Runtime Prompt Templates (`crates/agentty/src/infra/agent/template/`)
+
+Askama templates compiled into the binary that are sent to agent backends automatically during session workflows.
+
+| Template | Rust Struct | Trigger | Job |
+|----------|-------------|---------|-----|
+| `session_title_generation_prompt.md` | `SessionTitleGenerationPromptTemplate` | New session | Generate a concise session title from the user's first prompt. |
+| `session_commit_message_prompt.md` | `SessionCommitMessagePromptTemplate` | Auto-commit | Generate or refine commit messages from the cumulative session diff. |
+| `review_assist_prompt.md` | `FocusedReviewAssistPromptTemplate` | Diff view (`d` key) | Read-only code review producing `## Review` → `### Project Impact` → `### Suggestions`. |
+| `auto_commit_assist_prompt.md` | `AutoCommitAssistPromptTemplate` | Commit failure | Fix code so a follow-up commit can succeed (no git commands allowed). |
+| `rebase_assist_prompt.md` | `RebaseAssistPromptTemplate` | Rebase conflict | Resolve conflict markers using read-only git analysis. |
+| `protocol_instruction_prompt.md` | `ProtocolInstructionPromptTemplate` | Every agent turn | Wrap prompts with structured JSON response protocol and file-path rules. |
+| `resume_with_session_output_prompt.md` | `ResumeWithSessionOutputPromptTemplate` | Model switch | Replay prior session transcript for context continuity. |
+
 ## Directory Index
 
 - [`.claude/`](.claude/) - Claude AI specific settings.
