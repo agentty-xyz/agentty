@@ -33,6 +33,10 @@ impl SessionManager {
     /// `Canceled`) override stale in-memory status.
     ///
     /// New handles are inserted for sessions that don't have entries yet.
+    /// Sessions whose worktree folder disappeared during merge cleanup remain
+    /// visible while a live handle still reports the terminalizing merge
+    /// transition, which avoids dropping the active view before `Done` is
+    /// persisted.
     ///
     /// Returns both loaded sessions and local-day activity counts aggregated
     /// from persisted session-creation activity history.
@@ -100,11 +104,16 @@ impl SessionManager {
             let folder = session_folder(base, &row.id);
             let persisted_status = row.status.parse::<Status>().unwrap_or(Status::Done);
             let persisted_size = row.size.parse::<SessionSize>().unwrap_or_default();
-            let persisted_status_is_terminal =
-                matches!(persisted_status, Status::Done | Status::Canceled);
             let has_session_folder = fs_client.is_dir(folder.clone());
+            let live_handle_status = handles
+                .get(&row.id)
+                .and_then(|existing| existing.status.lock().ok().map(|status| *status));
 
-            if !has_session_folder && !persisted_status_is_terminal {
+            if should_skip_missing_folder_session(
+                has_session_folder,
+                persisted_status,
+                live_handle_status,
+            ) {
                 continue;
             }
             let session_model = row
@@ -196,6 +205,27 @@ impl SessionManager {
 
         SessionSize::from_diff(&diff)
     }
+}
+
+/// Returns whether one persisted session row should be skipped because its
+/// worktree folder is missing and no merge-cleanup transition is still active.
+fn should_skip_missing_folder_session(
+    has_session_folder: bool,
+    persisted_status: Status,
+    live_handle_status: Option<Status>,
+) -> bool {
+    if has_session_folder {
+        return false;
+    }
+
+    if matches!(persisted_status, Status::Done | Status::Canceled) {
+        return false;
+    }
+
+    !matches!(
+        live_handle_status,
+        Some(Status::Merging | Status::Done | Status::Canceled)
+    )
 }
 
 /// Merges one loaded status with the existing live-handle status.
@@ -555,6 +585,46 @@ mod tests {
 
         // Assert
         assert_eq!(merged_status, Status::InProgress);
+    }
+
+    #[test]
+    /// Verifies missing-folder rows stay visible while merge cleanup has
+    /// removed the worktree before `Done` persistence finishes.
+    fn should_skip_missing_folder_session_keeps_live_merging_session() {
+        // Arrange
+        let has_session_folder = false;
+        let persisted_status = Status::Merging;
+        let live_handle_status = Some(Status::Merging);
+
+        // Act
+        let should_skip = should_skip_missing_folder_session(
+            has_session_folder,
+            persisted_status,
+            live_handle_status,
+        );
+
+        // Assert
+        assert!(!should_skip);
+    }
+
+    #[test]
+    /// Verifies missing-folder non-terminal rows are still filtered when no
+    /// merge-cleanup transition is active.
+    fn should_skip_missing_folder_session_skips_orphaned_active_session() {
+        // Arrange
+        let has_session_folder = false;
+        let persisted_status = Status::Review;
+        let live_handle_status = None;
+
+        // Act
+        let should_skip = should_skip_missing_folder_session(
+            has_session_folder,
+            persisted_status,
+            live_handle_status,
+        );
+
+        // Assert
+        assert!(should_skip);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use ag_forge as forge;
 use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
@@ -25,7 +26,6 @@ use ratatui::Frame;
 use ratatui::widgets::TableState;
 use session::{SessionTaskService, SyncMainOutcome, SyncSessionStartError};
 use tokio::sync::mpsc;
-use {ag_forge as forge, serde_json};
 
 use crate::app::session;
 use crate::domain::agent::{AgentKind, AgentModel};
@@ -1391,8 +1391,9 @@ impl App {
     ///
     /// At the app layer, only `question` messages require explicit mode
     /// routing. `answer` messages are already appended to transcript output by
-    /// the session worker before this event is handled, while the structured
-    /// summary payload is stored here for immediate UI refresh.
+    /// the session worker before this event is handled. The cached session
+    /// summary mirrors the agent-provided `summary.session` text until the
+    /// commit-message path appends the canonical commit message.
     fn apply_agent_response_received(&mut self, session_id: &str, response: &AgentResponse) {
         let Some(session) = self
             .sessions
@@ -1406,7 +1407,9 @@ impl App {
         session.summary = response
             .summary
             .as_ref()
-            .and_then(|summary| serde_json::to_string(summary).ok());
+            .map(|summary| summary.session.trim())
+            .filter(|summary| !summary.is_empty())
+            .map(ToString::to_string);
 
         let questions = response.question_items();
         if questions.is_empty() {
@@ -2756,7 +2759,9 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::AgentModel;
-    use crate::domain::session::{SESSION_DATA_DIR, Session, SessionSize, SessionStats, Status};
+    use crate::domain::session::{
+        SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
+    };
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::{AgentResponseMessage, AgentResponseSummary};
     use crate::infra::db::Database;
@@ -3895,9 +3900,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies structured response summaries refresh the in-memory session
-    /// summary markdown even when no question flow is triggered.
-    async fn apply_app_events_agent_response_updates_session_summary() {
+    /// Verifies agent response summaries cache only `summary.session` in
+    /// memory.
+    async fn apply_app_events_agent_response_updates_session_summary_from_session_section() {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
@@ -3920,17 +3925,118 @@ mod tests {
         })
         .await;
 
-        let expected_summary = serde_json::to_string(&AgentResponseSummary {
-            turn: "- Added structured protocol summary fields.".to_string(),
-            session: "- Session output now renders summary markdown separately.".to_string(),
-        })
-        .expect("summary payload should serialize");
-
         // Assert
         assert_eq!(
             app.sessions.sessions[0].summary.as_deref(),
-            Some(expected_summary.as_str())
+            Some("- Session output now renders summary markdown separately.")
         );
+    }
+
+    #[tokio::test]
+    /// Verifies a viewed session keeps summary mode when its live status
+    /// transition reaches `Done`.
+    async fn apply_app_events_session_updated_keeps_done_view_in_summary_mode() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-done-view")));
+        app.sessions.handles.insert(
+            "session-1".to_string(),
+            SessionHandles::new("Merge finished".to_string(), Status::Done),
+        );
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: Some("Preparing focused review".to_string()),
+            focused_review_text: Some("Review text".to_string()),
+            session_id: "session-1".to_string(),
+            scroll_offset: Some(9),
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: "session-1".to_string(),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                scroll_offset: Some(9),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    /// Verifies refresh keeps the active session view when merge cleanup has
+    /// removed the worktree just before `Done` persists.
+    async fn apply_app_events_refresh_keeps_viewed_merging_session_without_worktree() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project(&base_path.to_string_lossy(), None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-1",
+                AgentModel::Gemini3FlashPreview.as_str(),
+                "main",
+                &Status::Merging.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert merging session");
+
+        let mut app = App::new(
+            true,
+            base_path.clone(),
+            base_path.clone(),
+            None,
+            database,
+            mock_app_server(),
+        )
+        .await
+        .expect("failed to build app");
+        let session_folder = base_path.join("session-1");
+        let mut viewed_session = test_session(session_folder);
+        viewed_session.status = Status::Merging;
+        app.sessions.sessions.push(viewed_session);
+        app.sessions.handles.insert(
+            "session-1".to_string(),
+            SessionHandles::new("Merging".to_string(), Status::Merging),
+        );
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            focused_review_status_message: None,
+            focused_review_text: None,
+            session_id: "session-1".to_string(),
+            scroll_offset: None,
+        };
+
+        // Act
+        app.apply_app_events(AppEvent::RefreshSessions).await;
+
+        // Assert
+        assert!(
+            app.sessions
+                .sessions
+                .iter()
+                .any(|session| session.id == "session-1" && session.status == Status::Merging)
+        );
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id, ..
+            } if session_id == "session-1"
+        ));
     }
 
     #[test]

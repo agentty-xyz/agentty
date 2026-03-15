@@ -511,10 +511,10 @@ impl SessionManager {
     }
 }
 
-/// Applies the turn result: appends the final response, persists the raw
-/// summary payload, updates stats, and runs auto-commit. Returns `Ok(Status)`
-/// on success or `Err(description)` on turn failure after appending the error
-/// to session output.
+/// Applies the turn result: appends the final response, persists the agent
+/// `summary.session` text, updates stats, and runs auto-commit. Returns
+/// `Ok(Status)` on success or `Err(description)` on turn failure after
+/// appending the error to session output.
 ///
 /// The final parsed response appends non-empty protocol `answer` text only
 /// when no assistant stream chunks were already appended for this turn. This
@@ -524,9 +524,8 @@ impl SessionManager {
 /// `question` text so clarification prompts remain visible while thought-only
 /// responses are not persisted as final transcript output.
 ///
-/// Structured response summaries are stored separately from transcript output
-/// so the UI can render them without parsing answer markdown from `answer`
-/// messages.
+/// Only the agent `summary.session` field is persisted here; the canonical
+/// commit message is appended later by the auto-commit path.
 ///
 /// `question` messages are persisted to the session row and trigger
 /// `Status::Question`; all responses are emitted through
@@ -560,14 +559,15 @@ async fn apply_turn_result(
                 .await;
             }
 
-            let summary_markdown = assistant_message
+            let summary_text = assistant_message
                 .summary
                 .as_ref()
-                .and_then(|summary| serde_json::to_string(summary).ok())
+                .map(|summary| summary.session.trim())
+                .filter(|summary| !summary.is_empty())
                 .unwrap_or_default();
             let _ = context
                 .db
-                .update_session_summary(&context.session_id, &summary_markdown)
+                .update_session_summary(&context.session_id, summary_text)
                 .await;
 
             let question_items = assistant_message.question_items();

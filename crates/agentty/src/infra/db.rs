@@ -992,7 +992,11 @@ WHERE id = ?
         Ok(())
     }
 
-    /// Updates the persisted summary payload for a session row.
+    /// Updates the persisted session summary text for a session row.
+    ///
+    /// This field stores the agent `summary.session` section and, once the
+    /// session reaches `Done`, the canonical session commit message appended
+    /// after it.
     ///
     /// # Errors
     /// Returns an error if the summary update fails.

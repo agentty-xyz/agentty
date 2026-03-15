@@ -683,12 +683,9 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
-    use serde_json;
-
     use super::*;
     use crate::db::Database;
     use crate::infra::agent::AgentCommandMode;
-    use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::git::MockGitClient;
 
@@ -953,8 +950,8 @@ mod tests {
 
     #[tokio::test]
     /// Verifies successful auto-commit updates the title while preserving the
-    /// structured session summary payload used by the UI.
-    async fn test_handle_auto_commit_preserves_structured_session_summary() {
+    /// persisted agent session summary text.
+    async fn test_handle_auto_commit_preserves_agent_session_summary() {
         // Arrange
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -987,15 +984,11 @@ mod tests {
             .await
             .expect("failed to open in-memory db");
         insert_review_session(&database, AgentModel::Gpt53Codex.as_str()).await;
-        let summary_payload = serde_json::to_string(&AgentResponseSummary {
-            turn: "- Updated README body.".to_string(),
-            session: "- Session branch updates README formatting.".to_string(),
-        })
-        .expect("summary payload should serialize");
+        let summary_payload = "- Session branch updates README formatting.".to_string();
         database
             .update_session_summary("session-id", &summary_payload)
             .await
-            .expect("failed to persist summary payload");
+            .expect("failed to persist summary text");
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
@@ -1020,7 +1013,7 @@ mod tests {
         assert_eq!(sessions[0].title.as_deref(), Some("Refine README updates"));
         assert_eq!(
             sessions[0].summary.as_deref(),
-            Some(summary_payload.as_str())
+            Some("- Session branch updates README formatting.")
         );
         let output_text = output
             .lock()

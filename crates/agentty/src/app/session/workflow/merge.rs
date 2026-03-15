@@ -654,6 +654,7 @@ impl SessionManager {
                 &app_event_tx,
             )
             .await;
+            Self::update_done_session_summary_from_commit_message(&db, &id, &commit_message).await;
         }
 
         if !SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Done).await
@@ -1183,8 +1184,7 @@ impl SessionManager {
             SessionTaskService::update_status(status, db, app_event_tx, id, Status::Review).await;
     }
 
-    /// Updates the persisted session title from the canonical session commit
-    /// message without replacing the structured session summary payload.
+    /// Updates the persisted session title from the canonical commit message.
     pub(crate) async fn update_session_title_from_commit_message(
         db: &Database,
         session_id: &str,
@@ -1196,6 +1196,23 @@ impl SessionManager {
         let _ = db.update_session_title(session_id, &title).await;
 
         let _ = app_event_tx.send(AppEvent::RefreshSessions);
+    }
+
+    /// Updates the persisted done-session summary by appending the canonical
+    /// commit message to the latest agent `summary.session` text.
+    async fn update_done_session_summary_from_commit_message(
+        db: &Database,
+        session_id: &str,
+        commit_message: &str,
+    ) {
+        let summary = Self::session_summary_with_commit_message(
+            Self::persisted_session_summary(db, session_id)
+                .await
+                .as_deref(),
+            commit_message,
+        );
+
+        let _ = db.update_session_summary(session_id, &summary).await;
     }
 
     /// Extracts the first non-empty line from one session commit message for
@@ -1212,6 +1229,35 @@ impl SessionManager {
             .find(|line| !line.is_empty())
             .unwrap_or("Apply session updates")
             .to_string()
+    }
+
+    /// Loads the currently persisted session summary text for one session.
+    async fn persisted_session_summary(db: &Database, session_id: &str) -> Option<String> {
+        db.load_sessions().await.ok().and_then(|sessions| {
+            sessions
+                .into_iter()
+                .find(|session| session.id == session_id)
+                .and_then(|session| session.summary)
+        })
+    }
+
+    /// Builds the persisted session summary from one agent summary section and
+    /// one canonical commit message.
+    fn session_summary_with_commit_message(
+        session_summary: Option<&str>,
+        commit_message: &str,
+    ) -> String {
+        let trimmed_summary = session_summary.map(str::trim).unwrap_or_default();
+        let trimmed_commit_message = commit_message.trim();
+
+        if trimmed_summary.is_empty() {
+            return trimmed_commit_message.to_string();
+        }
+        if trimmed_commit_message.is_empty() {
+            return trimmed_summary.to_string();
+        }
+
+        format!("{trimmed_summary}\n\n{trimmed_commit_message}")
     }
 
     /// Runs a bounded rebase-assistance loop until conflicts are resolved.
@@ -1831,6 +1877,38 @@ mod tests {
         assert_eq!(title, "Apply session updates");
     }
 
+    #[test]
+    fn test_session_summary_with_commit_message_appends_commit_message() {
+        // Arrange
+        let session_summary = Some("- Session branch now handles refresh races.");
+        let commit_message = "Refine session summary\n\n- Append commit context";
+
+        // Act
+        let summary =
+            SessionManager::session_summary_with_commit_message(session_summary, commit_message);
+
+        // Assert
+        assert_eq!(
+            summary,
+            "- Session branch now handles refresh races.\n\nRefine session summary\n\n- Append \
+             commit context"
+        );
+    }
+
+    #[test]
+    fn test_session_summary_with_commit_message_falls_back_to_commit_message() {
+        // Arrange
+        let session_summary = Some("   ");
+        let commit_message = "Refine session summary";
+
+        // Act
+        let summary =
+            SessionManager::session_summary_with_commit_message(session_summary, commit_message);
+
+        // Assert
+        assert_eq!(summary, "Refine session summary");
+    }
+
     #[tokio::test]
     async fn test_update_session_title_from_commit_message_preserves_existing_summary() {
         // Arrange
@@ -1851,8 +1929,7 @@ mod tests {
             )
             .await
             .expect("failed to insert session");
-        let existing_summary =
-            "{\"turn\":\"- Updated README.\",\"session\":\"- Session branch updates README.\"}";
+        let existing_summary = "- Session branch updates README.";
         database
             .update_session_summary("session-id", existing_summary)
             .await
@@ -1882,6 +1959,55 @@ mod tests {
         assert_eq!(
             app_event_rx.try_recv().ok(),
             Some(AppEvent::RefreshSessions)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_done_session_summary_from_commit_message_appends_commit_message() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                AgentModel::ClaudeSonnet46.as_str(),
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let existing_summary = "- Session branch updates README.";
+        database
+            .update_session_summary("session-id", existing_summary)
+            .await
+            .expect("failed to persist existing summary");
+        let commit_message = "Refine session commit message\n\n- Keep title in sync";
+
+        // Act
+        SessionManager::update_done_session_summary_from_commit_message(
+            &database,
+            "session-id",
+            commit_message,
+        )
+        .await;
+        let sessions = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
+
+        // Assert
+        assert_eq!(
+            sessions[0].summary.as_deref(),
+            Some(
+                "- Session branch updates README.\n\nRefine session commit message\n\n- Keep \
+                 title in sync"
+            )
         );
     }
 
