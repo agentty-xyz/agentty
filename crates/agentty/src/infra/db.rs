@@ -1776,6 +1776,25 @@ WHERE id = ?
         Ok(row.and_then(|row| row.value))
     }
 
+    /// Loads the persisted summary text associated with one session.
+    ///
+    /// # Errors
+    /// Returns an error if the session summary lookup query fails.
+    pub async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, String> {
+        sqlx::query_scalar::<_, Option<String>>(
+            r#"
+SELECT summary
+FROM session
+WHERE id = ?
+"#,
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.flatten())
+        .map_err(|err| format!("Failed to load session summary: {err}"))
+    }
+
     /// Persists the active project identifier in application settings.
     ///
     /// # Errors
@@ -3268,6 +3287,35 @@ WHERE model = ?
 
         // Assert
         assert_eq!(loaded_project_id, Some(project_id));
+    }
+
+    #[tokio::test]
+    async fn test_load_session_summary_returns_persisted_summary() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-a", "gpt-5.3-codex", "main", "Done", project_id)
+            .await
+            .expect("failed to insert session");
+        database
+            .update_session_summary("session-a", "persisted summary")
+            .await
+            .expect("failed to update session summary");
+
+        // Act
+        let loaded_summary = database
+            .load_session_summary("session-a")
+            .await
+            .expect("failed to load session summary");
+
+        // Assert
+        assert_eq!(loaded_summary.as_deref(), Some("persisted summary"));
     }
 
     #[tokio::test]

@@ -200,6 +200,9 @@ impl<'a> SessionOutput<'a> {
 
     /// Returns the source text shown in the output panel for the current
     /// status and done-session display mode.
+    ///
+    /// Summary markdown is shown only for `Done` sessions after it has been
+    /// persisted. Active and canceled sessions render transcript output only.
     fn output_text(
         session: &Session,
         status: Status,
@@ -224,11 +227,9 @@ impl<'a> SessionOutput<'a> {
                 return Self::render_summary_text(Self::session_summary_text(session));
             }
             Status::Canceled => {
-                return Self::render_summary_text(Self::session_summary_text(session));
+                return session.output.clone();
             }
-            Status::Review | Status::Question => {
-                return Self::session_output_with_summary(session);
-            }
+            Status::Review | Status::Question => {}
             Status::New
             | Status::Done
             | Status::InProgress
@@ -238,21 +239,6 @@ impl<'a> SessionOutput<'a> {
         }
 
         session.output.clone()
-    }
-
-    /// Returns transcript output with the rendered summary appended below it.
-    fn session_output_with_summary(session: &Session) -> String {
-        let summary_text = Self::session_summary_text(session);
-        let output_text = session.output.trim_end();
-        if output_text.is_empty() {
-            return Self::render_summary_text(summary_text);
-        }
-
-        format!(
-            "{}\n\n{}",
-            output_text,
-            Self::render_summary_text(summary_text)
-        )
     }
 
     /// Returns the persisted raw summary payload or plain-text fallback.
@@ -636,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_lines_review_session_appends_summary_after_output() {
+    fn test_output_lines_review_session_uses_transcript_only() {
         // Arrange
         let mut session = session_fixture();
         session.output = "implemented the feature".to_string();
@@ -661,12 +647,12 @@ mod tests {
 
         // Assert
         assert!(text.contains("implemented the feature"));
-        assert!(text.contains("Added the structured protocol summary."));
-        assert!(text.contains("Session output now renders persisted summary markdown."));
+        assert!(!text.contains("Added the structured protocol summary."));
+        assert!(!text.contains("Session output now renders persisted summary markdown."));
     }
 
     #[test]
-    fn test_output_lines_review_session_uses_no_changes_summary_fallback() {
+    fn test_output_lines_review_session_without_summary_keeps_transcript_only() {
         // Arrange
         let mut session = session_fixture();
         session.output = "implemented the feature".to_string();
@@ -690,9 +676,9 @@ mod tests {
 
         // Assert
         assert!(text.contains("implemented the feature"));
-        assert!(text.contains("No changes"));
-        assert!(text.contains("Current Turn"));
-        assert!(text.contains("Session Changes"));
+        assert!(!text.contains("No changes"));
+        assert!(!text.contains("Current Turn"));
+        assert!(!text.contains("Session Changes"));
     }
 
     #[test]
@@ -868,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_lines_uses_summary_for_canceled_session() {
+    fn test_output_lines_uses_transcript_for_canceled_session() {
         // Arrange
         let mut session = session_fixture();
         session.output = "streamed output".to_string();
@@ -892,8 +878,8 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(text.contains("Added the structured protocol summary."));
-        assert!(!text.contains("streamed output"));
+        assert!(!text.contains("Added the structured protocol summary."));
+        assert!(text.contains("streamed output"));
     }
 
     #[test]

@@ -437,6 +437,61 @@ mod tests {
         assert_eq!(handle_status, live_status);
     }
 
+    /// Ensures reload reads the persisted summary for active sessions.
+    #[tokio::test]
+    async fn test_load_sessions_reads_persisted_summary_for_active_session() {
+        // Arrange
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+
+        let session_id = "test-session";
+        db.insert_session(
+            session_id,
+            "gemini-3-flash-preview",
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        db.update_session_summary(session_id, "persisted summary")
+            .await
+            .expect("failed to update session summary");
+
+        let base_path = Path::new("/virtual/session-base");
+        let session_dir = session_folder(base_path, session_id);
+        let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
+
+        let mut handles = HashMap::new();
+        handles.insert(
+            session_id.to_string(),
+            SessionHandles::new("Live Output".to_string(), Status::Review),
+        );
+
+        // Act
+        let (sessions, _) = SessionManager::load_sessions_with_fs_client(
+            base_path,
+            &db,
+            project_id,
+            Path::new("/tmp/test"),
+            &mut handles,
+            &mock_fs_client,
+        )
+        .await;
+
+        // Assert
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        assert_eq!(session.summary.as_deref(), Some("persisted summary"));
+    }
+
     /// Ensures terminal persisted statuses replace stale active handle status
     /// during reload.
     #[tokio::test]

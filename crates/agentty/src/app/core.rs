@@ -1391,26 +1391,19 @@ impl App {
     ///
     /// At the app layer, only `question` messages require explicit mode
     /// routing. `answer` messages are already appended to transcript output by
-    /// the session worker before this event is handled. The cached session
-    /// summary mirrors the agent-provided `summary.session` text until the Done
-    /// path persists markdown sections with `# Summary` and `# Commit`.
+    /// the session worker before this event is handled. Session summaries are
+    /// rendered from persisted database state after refresh.
     fn apply_agent_response_received(&mut self, session_id: &str, response: &AgentResponse) {
-        let Some(session) = self
+        let Some(session_index) = self
             .sessions
             .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
+            .iter()
+            .position(|session| session.id == session_id)
         else {
             return;
         };
 
-        session.summary = response
-            .summary
-            .as_ref()
-            .map(|summary| summary.session.trim())
-            .filter(|summary| !summary.is_empty())
-            .map(ToString::to_string);
-
+        let session = &mut self.sessions.sessions[session_index];
         let questions = response.question_items();
         if questions.is_empty() {
             return;
@@ -3900,9 +3893,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies agent response summaries cache only `summary.session` in
-    /// memory.
-    async fn apply_app_events_agent_response_updates_session_summary_from_session_section() {
+    /// Verifies agent response handling leaves session summaries to
+    /// refresh-driven database reloads.
+    async fn apply_app_events_agent_response_does_not_mutate_session_summary() {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
@@ -3926,10 +3919,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            app.sessions.sessions[0].summary.as_deref(),
-            Some("- Session output now renders summary markdown separately.")
-        );
+        assert!(app.sessions.sessions[0].summary.is_none());
     }
 
     #[tokio::test]

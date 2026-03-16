@@ -512,8 +512,8 @@ impl SessionManager {
 }
 
 /// Applies the turn result: appends the final response, persists the agent
-/// `summary.session` text, updates stats, and runs auto-commit. Returns
-/// `Ok(Status)` on success or `Err(description)` on turn failure after
+/// `summary.session` text, updates stats, and runs auto-commit.
+/// Returns `Ok(Status)` on success or `Err(description)` on turn failure after
 /// appending the error to session output.
 ///
 /// The final parsed response appends non-empty protocol `answer` text only
@@ -524,9 +524,10 @@ impl SessionManager {
 /// `question` text so clarification prompts remain visible while thought-only
 /// responses are not persisted as final transcript output.
 ///
-/// Only the agent `summary.session` field is persisted here; when the session
-/// later reaches `Done`, the merge path rewrites the persisted value into
-/// markdown with `# Summary` and `# Commit` sections.
+/// The agent `summary.session` field is persisted here so refresh-driven UI
+/// rendering can read the database-backed value. When the session later
+/// reaches `Done`, the merge path rewrites the persisted value into markdown
+/// with `# Summary` and `# Commit` sections.
 ///
 /// `question` messages are persisted to the session row and trigger
 /// `Status::Question`; all responses are emitted through
@@ -570,6 +571,7 @@ async fn apply_turn_result(
                 .db
                 .update_session_summary(&context.session_id, summary_text)
                 .await;
+            let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
 
             let question_items = assistant_message.question_items();
             let target_status = if question_items.is_empty() {
@@ -862,7 +864,7 @@ mod tests {
 
     use super::*;
     use crate::infra::agent::AgentResponse;
-    use crate::infra::agent::protocol::AgentResponseMessage;
+    use crate::infra::agent::protocol::{AgentResponseMessage, AgentResponseSummary};
     use crate::infra::channel::MockAgentChannel;
     use crate::infra::db::Database;
     use crate::infra::fs;
@@ -1221,6 +1223,77 @@ mod tests {
         assert_eq!(
             output.lock().expect("output lock poisoned").as_str(),
             "Partial answer"
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies turn summaries are persisted to the database when the agent
+    /// returns them.
+    async fn test_apply_turn_result_persists_summary_to_database() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "sess1",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::new(Mutex::new(String::new())),
+            session_id: "sess1".to_string(),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = Ok(TurnResult {
+            assistant_message: AgentResponse {
+                messages: vec![AgentResponseMessage::answer("Implemented the change.")],
+                summary: Some(AgentResponseSummary {
+                    turn: "- Updated the worker flow.".to_string(),
+                    session: "- Active review now keeps summary in memory.".to_string(),
+                }),
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        });
+
+        // Act
+        let status = apply_turn_result(
+            &context,
+            AgentModel::Gemini3FlashPreview,
+            turn_result,
+            false,
+        )
+        .await
+        .expect("turn result should succeed");
+        let sessions = db.load_sessions().await.expect("failed to load sessions");
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(
+            sessions[0].summary.as_deref(),
+            Some("- Active review now keeps summary in memory.")
         );
     }
 

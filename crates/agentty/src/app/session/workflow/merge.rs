@@ -1199,8 +1199,8 @@ impl SessionManager {
     }
 
     /// Updates the persisted done-session summary by formatting the latest
-    /// agent `summary.session` text and canonical commit message into markdown
-    /// sections.
+    /// persisted agent `summary.session` text and canonical commit message
+    /// into markdown sections.
     async fn update_done_session_summary_from_commit_message(
         db: &Database,
         session_id: &str,
@@ -1214,6 +1214,11 @@ impl SessionManager {
         );
 
         let _ = db.update_session_summary(session_id, &summary).await;
+    }
+
+    /// Loads the currently persisted session summary text for one session.
+    async fn persisted_session_summary(db: &Database, session_id: &str) -> Option<String> {
+        db.load_session_summary(session_id).await.ok().flatten()
     }
 
     /// Extracts the first non-empty line from one session commit message for
@@ -1230,16 +1235,6 @@ impl SessionManager {
             .find(|line| !line.is_empty())
             .unwrap_or("Apply session updates")
             .to_string()
-    }
-
-    /// Loads the currently persisted session summary text for one session.
-    async fn persisted_session_summary(db: &Database, session_id: &str) -> Option<String> {
-        db.load_sessions().await.ok().and_then(|sessions| {
-            sessions
-                .into_iter()
-                .find(|session| session.id == session_id)
-                .and_then(|session| session.summary)
-        })
     }
 
     /// Builds the persisted done-session summary with markdown sections.
@@ -1982,11 +1977,11 @@ mod tests {
             .await
             .expect("failed to insert session");
         let existing_summary = "- Session branch updates README.";
+        let commit_message = "Refine session commit message\n\n- Keep title in sync";
         database
             .update_session_summary("session-id", existing_summary)
             .await
             .expect("failed to persist existing summary");
-        let commit_message = "Refine session commit message\n\n- Keep title in sync";
 
         // Act
         SessionManager::update_done_session_summary_from_commit_message(
