@@ -60,7 +60,7 @@ The Sessions tab shows a compact timer value for each row, including live tickin
 
 ## Cross-Plan Notes
 
-- `docs/plan/continue_in_progress_sessions_after_exit.md` also touches persisted `InProgress` semantics. This timer plan owns cumulative session timing fields and UI display, while the detached-session plan should reuse those fields if reopened sessions later remain `InProgress` across app restarts.
+- `docs/plan/session_execution_backends.md` also touches persisted `InProgress` semantics. This timer plan owns cumulative session timing fields and UI display, while the session-execution plan should reuse those fields if reopened sessions later remain `InProgress` across app restarts.
 - No other active plan currently owns `session_list.rs` or `session_chat.rs` timer display behavior.
 
 ## Status Maintenance Rule

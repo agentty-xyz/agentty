@@ -86,7 +86,7 @@ Starting a draft session is atomic and restart-safe: the collected prompt queue 
 
 ## Cross-Plan Notes
 
-- `docs/plan/continue_in_progress_sessions_after_exit.md` also changes first-turn enqueue and `session_operation` ownership. This draft-session plan owns pre-start draft persistence and prompt consumption, while the detached-session plan owns what happens after the first operation is enqueued.
+- `docs/plan/session_execution_backends.md` also changes first-turn enqueue and `session_operation` ownership. This draft-session plan owns pre-start draft persistence and prompt consumption, while the session-execution plan owns what happens after the first operation is enqueued.
 - `docs/plan/end_to_end_test_structure.md` may eventually provide a higher-level scenario harness for this feature, but draft-session behavior and acceptance criteria stay in this plan.
 - If another active plan conflicts with this plan and the correct resolution is not explicit, stop and ask the user which plan should control the work.
 

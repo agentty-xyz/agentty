@@ -7,7 +7,7 @@ Keep size budgeting in the skill workflow only; do not render `### Size` section
 
 ## Directory Index
 
-- [`continue_in_progress_sessions_after_exit.md`](continue_in_progress_sessions_after_exit.md) - Implementation plan for keeping active session turns running after the TUI exits and reconnecting on restart.
+- [`session_execution_backends.md`](session_execution_backends.md) - Implementation plan for backend-owned session execution that survives TUI exit and restart, with `LocalProcess` first and OCI backends reserved for follow-up work.
 
 - [`draft_session_prompt_collection.md`](draft_session_prompt_collection.md) - Implementation plan for draft sessions that collect multiple prompts before the first real agent turn starts.
 

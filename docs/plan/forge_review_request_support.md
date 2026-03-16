@@ -35,7 +35,7 @@ Linked sessions automatically reconcile to `Done` or `Canceled` after the remote
 ## Cross-Plan Notes
 
 - `docs/plan/coverage_follow_up.md` only adds coverage work and does not change review-request behavior.
-- `docs/plan/continue_in_progress_sessions_after_exit.md` also touches `crates/agentty/src/app/core.rs`; detached-session rules own turn lifetime, while this plan owns review-request reconciliation.
+- `docs/plan/session_execution_backends.md` also touches `crates/agentty/src/app/core.rs`; backend-owned session execution owns turn lifetime, while this plan owns review-request reconciliation.
 - If another active plan conflicts with this plan and the correct resolution is not explicit, stop and ask the user which plan should control the work.
 
 ## Status Maintenance Rule
