@@ -188,8 +188,7 @@ impl TaskService {
             )
             .await;
 
-            let app_event =
-                Self::review_app_event(diff_hash, review_result, session_id);
+            let app_event = Self::review_app_event(diff_hash, review_result, session_id);
             let _ = app_event_tx.send(app_event);
         });
     }
@@ -255,10 +254,8 @@ impl TaskService {
             Box<dyn Future<Output = Result<agent::AgentResponse, String>> + Send + 'submit>,
         >,
     {
-        let review_prompt =
-            Self::review_assist_prompt(review_diff, session_summary)?;
-        let agent_response =
-            submitter(session_folder, review_model, &review_prompt).await?;
+        let review_prompt = Self::review_assist_prompt(review_diff, session_summary)?;
+        let agent_response = submitter(session_folder, review_model, &review_prompt).await?;
 
         Self::review_output_text(&agent_response)
     }
@@ -435,8 +432,7 @@ mod tests {
         let session_id = "session-7".to_string();
 
         // Act
-        let app_event =
-            TaskService::review_app_event(diff_hash, review_result, session_id);
+        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id);
 
         // Assert
         assert_eq!(
@@ -459,8 +455,7 @@ mod tests {
         let session_id = "session-9".to_string();
 
         // Act
-        let app_event =
-            TaskService::review_app_event(diff_hash, review_result, session_id);
+        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id);
 
         // Assert
         assert_eq!(
@@ -512,9 +507,8 @@ mod tests {
         let session_summary = Some("Refactor parser error mapping.");
 
         // Act
-        let prompt =
-            TaskService::review_assist_prompt(review_diff, session_summary)
-                .expect("review prompt should render");
+        let prompt = TaskService::review_assist_prompt(review_diff, session_summary)
+            .expect("review prompt should render");
 
         // Assert
         assert!(prompt.contains("You are in read-only review mode."));

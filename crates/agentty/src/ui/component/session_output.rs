@@ -1112,10 +1112,7 @@ mod tests {
             output.done_session_output_mode,
             DoneSessionOutputMode::Output
         );
-        assert_eq!(
-            output.review_status_message,
-            Some(review_status_message)
-        );
+        assert_eq!(output.review_status_message, Some(review_status_message));
         assert_eq!(output.review_text, Some(review_text));
         assert_eq!(output.scroll_offset, Some(10));
     }

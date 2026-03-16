@@ -318,8 +318,7 @@ async fn handle_confirmation_decision(
 /// Resolves target mode for `Cancel` in confirmation overlays.
 fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
     if let AppMode::Confirmation {
-        confirmation_intent:
-            ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview,
+        confirmation_intent: ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview,
         restore_view: Some(restore_view),
         ..
     } = mode
@@ -360,12 +359,7 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
         }
         ConfirmationIntent::RegenerateReview => {
-            handle_regenerate_review_confirmation(
-                app,
-                confirmation_session_id,
-                restore_view,
-            )
-            .await
+            handle_regenerate_review_confirmation(app, confirmation_session_id, restore_view).await
         }
     }
 }
@@ -464,10 +458,8 @@ async fn handle_regenerate_review_confirmation(
 
     let diff_hash = diff_content_hash(&diff);
     let review_model = app.settings.default_review_model;
-    app.review_cache.insert(
-        session_id.clone(),
-        ReviewCacheEntry::Loading { diff_hash },
-    );
+    app.review_cache
+        .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
     app.start_review_assist(
         &session_id,
         &session_folder,
@@ -484,8 +476,9 @@ async fn handle_regenerate_review_confirmation(
         session_id,
     });
     view_mode.done_session_output_mode = DoneSessionOutputMode::Review;
-    view_mode.review_status_message =
-        Some(crate::runtime::mode::session_view::review_loading_message(review_model));
+    view_mode.review_status_message = Some(
+        crate::runtime::mode::session_view::review_loading_message(review_model),
+    );
     view_mode.review_text = None;
     app.mode = view_mode.into_view_mode();
 

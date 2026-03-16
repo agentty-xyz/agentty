@@ -1499,10 +1499,7 @@ impl App {
     }
 
     /// Applies review assist updates for all sessions in the batch.
-    fn apply_review_updates(
-        &mut self,
-        review_updates: HashMap<String, ReviewUpdate>,
-    ) {
+    fn apply_review_updates(&mut self, review_updates: HashMap<String, ReviewUpdate>) {
         for (session_id, review_update) in review_updates {
             self.apply_review_update(&session_id, review_update);
         }
@@ -1510,11 +1507,7 @@ impl App {
 
     /// Applies review assist output to the active view/help mode when
     /// session identifiers still match and updates the persistent cache.
-    fn apply_review_update(
-        &mut self,
-        session_id: &str,
-        review_update: ReviewUpdate,
-    ) {
+    fn apply_review_update(&mut self, session_id: &str, review_update: ReviewUpdate) {
         let ReviewUpdate { diff_hash, result } = review_update;
         let Some(cache_entry) = self.review_cache.get(session_id) else {
             return;
@@ -1714,13 +1707,13 @@ impl App {
 
             let new_hash = diff_content_hash(&diff);
 
-            let existing_hash =
-                self.review_cache
-                    .get(session_id)
-                    .and_then(|entry| match entry {
-                        ReviewCacheEntry::Ready { .. } => Some(entry.diff_hash()),
-                        _ => None,
-                    });
+            let existing_hash = self
+                .review_cache
+                .get(session_id)
+                .and_then(|entry| match entry {
+                    ReviewCacheEntry::Ready { .. } => Some(entry.diff_hash()),
+                    _ => None,
+                });
 
             if existing_hash == Some(new_hash) {
                 continue;
@@ -4455,8 +4448,7 @@ mod tests {
         let previous_states = HashMap::from([(session_id.to_string(), Status::Review)]);
 
         // Act
-        app.auto_start_reviews(&session_ids, &previous_states)
-            .await;
+        app.auto_start_reviews(&session_ids, &previous_states).await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id));
@@ -4491,8 +4483,7 @@ mod tests {
         install_mock_git_client(&mut app, mock_git_client);
 
         // Act
-        app.auto_start_reviews(&session_ids, &previous_states)
-            .await;
+        app.auto_start_reviews(&session_ids, &previous_states).await;
 
         // Assert
         assert!(matches!(
@@ -4523,8 +4514,7 @@ mod tests {
         install_mock_git_client(&mut app, mock_git_client);
 
         // Act
-        app.auto_start_reviews(&session_ids, &previous_states)
-            .await;
+        app.auto_start_reviews(&session_ids, &previous_states).await;
 
         // Assert
         assert!(matches!(

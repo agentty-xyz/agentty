@@ -129,15 +129,10 @@ impl<'a> SessionChatPage<'a> {
     /// Returns review assist text for the active view mode.
     fn review_text(&self) -> Option<&str> {
         match self.mode {
-            AppMode::View {
-                review_text,
-                ..
-            } => review_text.as_deref(),
+            AppMode::View { review_text, .. } => review_text.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
             | AppMode::PublishBranchInput { restore_view, .. }
-            | AppMode::ViewInfoPopup { restore_view, .. } => {
-                restore_view.review_text.as_deref()
-            }
+            | AppMode::ViewInfoPopup { restore_view, .. } => restore_view.review_text.as_deref(),
             AppMode::List
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }

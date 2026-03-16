@@ -497,28 +497,23 @@ fn remote_branch_name_from_upstream_ref(upstream_ref: &str) -> String {
 }
 
 fn view_context(app: &mut App) -> Option<ViewContext> {
-    let (
-        done_session_output_mode,
-        review_status_message,
-        review_text,
-        session_id,
-        scroll_offset,
-    ) = match &app.mode {
-        AppMode::View {
-            done_session_output_mode,
-            review_status_message,
-            review_text,
-            session_id,
-            scroll_offset,
-        } => (
-            *done_session_output_mode,
-            review_status_message.clone(),
-            review_text.clone(),
-            session_id.clone(),
-            *scroll_offset,
-        ),
-        _ => return None,
-    };
+    let (done_session_output_mode, review_status_message, review_text, session_id, scroll_offset) =
+        match &app.mode {
+            AppMode::View {
+                done_session_output_mode,
+                review_status_message,
+                review_text,
+                session_id,
+                scroll_offset,
+            } => (
+                *done_session_output_mode,
+                review_status_message.clone(),
+                review_text.clone(),
+                session_id.clone(),
+                *scroll_offset,
+            ),
+            _ => return None,
+        };
 
     let Some(session_index) = app.session_index_for_id(&session_id) else {
         app.mode = AppMode::List;
@@ -1412,10 +1407,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            next_done_session_output_mode,
-            DoneSessionOutputMode::Review
-        );
+        assert_eq!(next_done_session_output_mode, DoneSessionOutputMode::Review);
         assert_eq!(next_review_status_message, None);
         assert_eq!(next_review_text.as_deref(), Some("Cached review"));
     }
@@ -1451,10 +1443,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            next_done_session_output_mode,
-            DoneSessionOutputMode::Review
-        );
+        assert_eq!(next_done_session_output_mode, DoneSessionOutputMode::Review);
         assert_eq!(
             next_review_status_message,
             Some(review_loading_message(AgentModel::ClaudeOpus46))
@@ -1493,19 +1482,10 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            next_done_session_output_mode,
-            DoneSessionOutputMode::Review
-        );
+        assert_eq!(next_done_session_output_mode, DoneSessionOutputMode::Review);
         assert_eq!(next_review_status_message, None);
-        assert_eq!(
-            next_review_text.as_deref(),
-            Some(REVIEW_NO_DIFF_MESSAGE)
-        );
-        assert!(
-            !app.review_cache
-                .contains_key(&view_context.session_id)
-        );
+        assert_eq!(next_review_text.as_deref(), Some(REVIEW_NO_DIFF_MESSAGE));
+        assert!(!app.review_cache.contains_key(&view_context.session_id));
     }
 
     #[tokio::test]
@@ -1536,10 +1516,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            next_done_session_output_mode,
-            DoneSessionOutputMode::Review
-        );
+        assert_eq!(next_done_session_output_mode, DoneSessionOutputMode::Review);
         assert_eq!(next_review_status_message, None);
         assert_eq!(next_review_text, Some(String::new()));
     }
@@ -2009,10 +1986,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            next_done_session_output_mode,
-            DoneSessionOutputMode::Review
-        );
+        assert_eq!(next_done_session_output_mode, DoneSessionOutputMode::Review);
         assert_eq!(next_review_status_message, None);
         assert_eq!(next_review_text.as_deref(), Some(cached_text));
     }
@@ -2049,10 +2023,7 @@ mod tests {
         .await;
 
         // Assert
-        assert_eq!(
-            next_done_session_output_mode,
-            DoneSessionOutputMode::Review
-        );
+        assert_eq!(next_done_session_output_mode, DoneSessionOutputMode::Review);
         assert_eq!(
             next_review_status_message,
             Some(review_loading_message(AgentModel::ClaudeOpus46))
@@ -2148,10 +2119,7 @@ mod tests {
             app.review_cache.get(&session_id),
             Some(ReviewCacheEntry::Loading { diff_hash: 42 })
         ));
-        assert_eq!(
-            pending_update.review_status_message,
-            Some(loading_message)
-        );
+        assert_eq!(pending_update.review_status_message, Some(loading_message));
     }
 
     #[tokio::test]

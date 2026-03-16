@@ -106,18 +106,18 @@ impl QuestionItem {
                    turns."
 )]
 pub struct AgentResponseSummary {
-    /// Concise summary of only the work completed in the current turn.
-    #[schemars(
-        title = "turn",
-        description = "Concise summary of only the work completed in the current turn."
-    )]
-    pub turn: String,
     /// Cumulative summary of active changes on the current session branch.
     #[schemars(
         title = "session",
         description = "Cumulative summary of active changes on the current session branch."
     )]
     pub session: String,
+    /// Concise summary of only the work completed in the current turn.
+    #[schemars(
+        title = "turn",
+        description = "Concise summary of only the work completed in the current turn."
+    )]
+    pub turn: String,
 }
 
 /// Wire-format protocol payload used for schema-driven provider output.
@@ -229,59 +229,6 @@ impl AgentResponse {
     }
 }
 
-/// Appends one non-empty display message.
-fn push_display_message(display_messages: &mut Vec<String>, text: &str) {
-    if text.trim().is_empty() {
-        return;
-    }
-
-    display_messages.push(text.to_string());
-}
-
-/// Appends non-empty clarification question text in order.
-fn push_question_display_messages(display_messages: &mut Vec<String>, questions: &[QuestionItem]) {
-    for question in questions {
-        push_display_message(display_messages, &question.text);
-    }
-}
-
-/// Returns the self-descriptive JSON Schema for the response payload.
-///
-/// This preserves the raw `schemars` output, including metadata such as
-/// `title` and `description`, so prompt templates can show models the richest
-/// possible schema contract.
-fn agent_response_json_schema() -> Value {
-    let schema = schemars::schema_for!(AgentResponse);
-    let mut schema_value = serde_json::to_value(schema).unwrap_or(Value::Null);
-
-    inject_dynamic_schema_guidance(&mut schema_value);
-
-    schema_value
-}
-
-/// Injects dynamic prompt guidance that depends on runtime constants into the
-/// schema metadata shown to providers.
-fn inject_dynamic_schema_guidance(schema: &mut Value) {
-    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
-        return;
-    };
-    let Some(questions_property) = properties
-        .get_mut("questions")
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-
-    questions_property.insert(
-        "description".to_string(),
-        Value::String(format!(
-            "Ordered clarification questions emitted for this turn. Emit at most {MAX_QUESTIONS} \
-             items, and use an empty array when no user input is required. Defaults to an empty \
-             array when omitted."
-        )),
-    );
-}
-
 /// Returns the JSON Schema used for structured assistant output.
 ///
 /// The returned value is passed directly to providers that support enforced
@@ -316,14 +263,6 @@ pub(crate) fn agent_response_output_schema_json() -> String {
     let schema = agent_response_output_schema();
 
     stringify_schema_json(&schema)
-}
-
-/// Pretty-prints one schema document for prompt or transport wiring.
-fn stringify_schema_json(schema: &Value) -> String {
-    match serde_json::to_string_pretty(schema) {
-        Ok(schema_json) => schema_json,
-        Err(_) => "null".to_string(),
-    }
 }
 
 /// Parses a raw assistant message into an [`AgentResponse`].
@@ -384,6 +323,51 @@ pub(crate) fn normalize_stream_assistant_chunk(raw: &str) -> Option<String> {
     }
 
     Some(raw.to_string())
+}
+
+/// Returns the self-descriptive JSON Schema for the response payload.
+///
+/// This preserves the raw `schemars` output, including metadata such as
+/// `title` and `description`, so prompt templates can show models the richest
+/// possible schema contract.
+fn agent_response_json_schema() -> Value {
+    let schema = schemars::schema_for!(AgentResponse);
+    let mut schema_value = serde_json::to_value(schema).unwrap_or(Value::Null);
+
+    inject_dynamic_schema_guidance(&mut schema_value);
+
+    schema_value
+}
+
+/// Injects dynamic prompt guidance that depends on runtime constants into the
+/// schema metadata shown to providers.
+fn inject_dynamic_schema_guidance(schema: &mut Value) {
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(questions_property) = properties
+        .get_mut("questions")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+
+    questions_property.insert(
+        "description".to_string(),
+        Value::String(format!(
+            "Ordered clarification questions emitted for this turn. Emit at most {MAX_QUESTIONS} \
+             items, and use an empty array when no user input is required. Defaults to an empty \
+             array when omitted."
+        )),
+    );
+}
+
+/// Pretty-prints one schema document for prompt or transport wiring.
+fn stringify_schema_json(schema: &Value) -> String {
+    match serde_json::to_string_pretty(schema) {
+        Ok(schema_json) => schema_json,
+        Err(_) => "null".to_string(),
+    }
 }
 
 /// Attempts to parse one schema-driven structured JSON response.
@@ -486,6 +470,22 @@ fn is_json_punctuation_only(value: &str) -> bool {
     value
         .chars()
         .all(|character| matches!(character, '{' | '}' | '[' | ']' | ':' | ',' | '"'))
+}
+
+/// Appends non-empty clarification question text in order.
+fn push_question_display_messages(display_messages: &mut Vec<String>, questions: &[QuestionItem]) {
+    for question in questions {
+        push_display_message(display_messages, &question.text);
+    }
+}
+
+/// Appends one non-empty display message.
+fn push_display_message(display_messages: &mut Vec<String>, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+
+    display_messages.push(text.to_string());
 }
 
 /// Parses the first valid protocol payload embedded in free-form text.
@@ -912,8 +912,8 @@ mod tests {
         assert_eq!(
             response.summary,
             Some(AgentResponseSummary {
-                turn: "- Updated the protocol payload.".to_string(),
                 session: "- Session branch now uses structured summaries.".to_string(),
+                turn: "- Updated the protocol payload.".to_string(),
             })
         );
     }
@@ -1105,8 +1105,8 @@ mod tests {
             answer: "Step 1".to_string(),
             questions: vec![QuestionItem::new("Need one decision")],
             summary: Some(AgentResponseSummary {
-                turn: "- Added the protocol summary field.".to_string(),
                 session: "- Session changes remain pending.".to_string(),
+                turn: "- Added the protocol summary field.".to_string(),
             }),
         };
 
