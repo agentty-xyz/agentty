@@ -2587,7 +2587,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok("abc1234".to_string()) }));
         mock_git_client
             .expect_diff()
-            .times(1)
+            .times(2)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         install_mock_git_client(&mut app, mock_git_client);
 
