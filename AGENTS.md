@@ -315,6 +315,7 @@ Agent-driven analysis skills that review a codebase and return findings as prior
 | Skill | Description |
 |-------|-------------|
 | [`security-audit`](skills/security-audit/SKILL.md) | Audit subprocess execution, path handling, SQL queries, panic conditions, and dependency risks. |
+| [`tech-debt`](skills/tech-debt/SKILL.md) | Sweep for TODOs, stale patterns, missing docs, and dead code. |
 
 ### Runtime Prompt Templates (`crates/agentty/src/infra/agent/template/`)
 
