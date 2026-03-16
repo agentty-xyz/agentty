@@ -477,7 +477,7 @@ impl SessionTaskService {
                 folder,
                 model: session_model,
                 prompt: &prompt,
-                protocol_profile: agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
@@ -535,7 +535,7 @@ impl SessionTaskService {
                 folder: &folder,
                 model: session_model,
                 prompt: &prompt,
-                protocol_profile: agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
@@ -685,8 +685,8 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
-    use crate::infra::agent::AgentCommandMode;
     use crate::infra::agent::tests::MockAgentBackend;
+    use crate::infra::channel::AgentRequestKind;
     use crate::infra::git::MockGitClient;
 
     /// Builds one deterministic shell command used by mocked backends.
@@ -1038,11 +1038,10 @@ mod tests {
         let mut backend = MockAgentBackend::new();
         backend.expect_build_command().times(1).returning(|request| {
             assert!(matches!(
-                request.mode,
-                AgentCommandMode::OneShot {
-                    prompt: "Resolve conflict",
-                }
+                request.request_kind,
+                AgentRequestKind::UtilityPrompt
             ));
+            assert_eq!(request.prompt, "Resolve conflict");
 
             Ok(mock_shell_command(
                 r#"{"result":"{\"answer\":\"Resolved the rebase conflict.\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":11,"output_tokens":7}}"#,
@@ -1103,11 +1102,10 @@ mod tests {
             .times(1)
             .returning(|request| {
                 assert!(matches!(
-                    request.mode,
-                    AgentCommandMode::OneShot {
-                        prompt: "Resolve conflict",
-                    }
+                    request.request_kind,
+                    AgentRequestKind::UtilityPrompt
                 ));
+                assert_eq!(request.prompt, "Resolve conflict");
 
                 Ok(mock_shell_command(
                     r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1}}"#,

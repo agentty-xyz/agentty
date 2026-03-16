@@ -16,10 +16,10 @@ use crate::infra::agent::protocol::{
     normalize_stream_assistant_chunk, normalize_turn_response, parse_agent_response,
     parse_agent_response_strict,
 };
-use crate::infra::agent::{self as agent, AgentBackend, AgentCommandMode, BuildCommandRequest};
+use crate::infra::agent::{self as agent, AgentBackend, BuildCommandRequest};
 use crate::infra::channel::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnMode,
-    TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
+    TurnResult,
 };
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
@@ -60,17 +60,9 @@ fn build_command_request(request: &TurnRequest) -> BuildCommandRequest<'_> {
     BuildCommandRequest {
         attachments: &request.prompt.attachments,
         folder: &request.folder,
-        mode: match &request.mode {
-            TurnMode::Start => AgentCommandMode::Start {
-                prompt: &request.prompt.text,
-            },
-            TurnMode::Resume { session_output } => AgentCommandMode::Resume {
-                prompt: &request.prompt.text,
-                session_output: session_output.as_deref(),
-            },
-        },
+        prompt: &request.prompt.text,
+        request_kind: &request.request_kind,
         model: &request.model,
-        protocol_profile: request.protocol_profile,
         reasoning_level: request.reasoning_level,
     }
 }
@@ -198,7 +190,7 @@ impl AgentChannel for CliAgentChannel {
             let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
             let assistant_message = normalize_turn_response(
                 parse_strict_structured_response(kind, &parsed.content)?,
-                req.protocol_profile,
+                req.request_kind.protocol_profile(),
             );
 
             Ok(TurnResult {
@@ -434,16 +426,15 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::infra::agent::tests::MockAgentBackend;
-    use crate::infra::channel::{TurnMode, TurnPrompt, TurnPromptAttachment};
+    use crate::infra::channel::{AgentRequestKind, TurnPrompt, TurnPromptAttachment};
 
     fn make_turn_request(folder: PathBuf) -> TurnRequest {
         TurnRequest {
             folder,
             live_session_output: None,
             model: "claude-sonnet-4-6".to_string(),
-            mode: TurnMode::Start,
+            request_kind: AgentRequestKind::SessionStart,
             prompt: "Write a test".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
         }
@@ -729,7 +720,10 @@ mod tests {
             .expect_build_command()
             .times(1)
             .returning(|request| {
-                assert!(matches!(request.mode, AgentCommandMode::Start { .. }));
+                assert!(matches!(
+                    request.request_kind,
+                    AgentRequestKind::SessionStart
+                ));
 
                 let mut command = std::process::Command::new("sh");
                 command.arg("-c").arg("printf 'plain non-json response'");

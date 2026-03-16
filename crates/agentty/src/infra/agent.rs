@@ -13,8 +13,8 @@ mod response_parser;
 mod submission;
 
 pub use backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, AgentTransport, BuildCommandRequest,
-    create_backend, parse_response, transport_mode,
+    AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest, create_backend,
+    parse_response, transport_mode,
 };
 pub(crate) use backend::{
     build_command_stdin_payload, build_resume_prompt, parse_stream_output_line,

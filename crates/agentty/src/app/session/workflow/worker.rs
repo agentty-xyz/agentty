@@ -16,7 +16,7 @@ use crate::domain::session::{SessionStats, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::agent;
 use crate::infra::channel::{
-    AgentChannel, AgentError, TurnEvent, TurnMode, TurnPrompt, TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
     create_agent_channel,
 };
 use crate::infra::db::Database;
@@ -32,12 +32,12 @@ const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution"
 /// `StartPrompt`, `StartPromptAppServer`) with a single provider-agnostic
 /// variant. The underlying channel adapter handles transport-specific details.
 pub(super) enum SessionCommand {
-    /// Executes one agent turn with the given mode and prompt.
+    /// Executes one agent turn with the given request kind and prompt.
     Run {
         /// Persisted operation identifier.
         operation_id: String,
         /// Whether this is a first-message start or a follow-up resume.
-        mode: TurnMode,
+        request_kind: AgentRequestKind,
         /// Structured user prompt payload.
         prompt: TurnPrompt,
         /// Session model used for stats and post-turn operations.
@@ -57,13 +57,17 @@ impl SessionCommand {
     fn kind(&self) -> &'static str {
         match self {
             Self::Run {
-                mode: TurnMode::Start,
+                request_kind: AgentRequestKind::SessionStart,
                 ..
             } => "start_prompt",
             Self::Run {
-                mode: TurnMode::Resume { .. },
+                request_kind: AgentRequestKind::SessionResume { .. },
                 ..
             } => "reply",
+            Self::Run {
+                request_kind: AgentRequestKind::UtilityPrompt,
+                ..
+            } => "utility_prompt",
         }
     }
 }
@@ -266,32 +270,32 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Result<(), String> {
         let SessionCommand::Run {
-            mode,
+            request_kind,
             prompt,
             session_model,
             ..
         } = command;
 
-        Self::run_channel_turn(context, mode, prompt, session_model).await
+        Self::run_channel_turn(context, request_kind, prompt, session_model).await
     }
 
     /// Executes one agent turn through the session channel and applies all
     /// post-turn effects (stats, auto-commit, size refresh, status update).
     ///
-    /// When `mode` is [`TurnMode::Resume`], the session is first transitioned
-    /// to `InProgress` (start turns set `InProgress` in the lifecycle before
-    /// enqueueing). Start turns schedule detached title generation immediately
-    /// before the main turn request runs. Progress events update the UI
-    /// indicator; `PidUpdate` events update the shared PID slot used for
-    /// cancellation. If the turn fails, the error is appended to session output
-    /// before transitioning to `Review`.
+    /// When `request_kind` is [`AgentRequestKind::SessionResume`], the session
+    /// is first transitioned to `InProgress` (start turns set `InProgress` in
+    /// the lifecycle before enqueueing). Start turns schedule detached title
+    /// generation immediately before the main turn request runs. Progress
+    /// events update the UI indicator; `PidUpdate` events update the shared PID
+    /// slot used for cancellation. If the turn fails, the error is appended to
+    /// session output before transitioning to `Review`.
     async fn run_channel_turn(
         context: &SessionWorkerContext,
-        mode: TurnMode,
+        request_kind: AgentRequestKind,
         prompt: TurnPrompt,
         session_model: AgentModel,
     ) -> Result<(), String> {
-        if matches!(mode, TurnMode::Resume { .. }) {
+        if matches!(request_kind, AgentRequestKind::SessionResume { .. }) {
             let _ = context
                 .db
                 .update_session_questions(&context.session_id, "")
@@ -320,9 +324,8 @@ impl SessionWorkerService {
             folder: context.folder.clone(),
             live_session_output: Some(Arc::clone(&context.output)),
             model: session_model.as_str().to_string(),
-            mode: mode.clone(),
+            request_kind: request_kind.clone(),
             prompt: prompt.clone(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
             provider_conversation_id,
             reasoning_level,
         };
@@ -347,7 +350,7 @@ impl SessionWorkerService {
         spawn_start_turn_title_generation(
             context,
             session_project_id,
-            &mode,
+            &request_kind,
             &prompt.text,
             session_model,
         )
@@ -658,11 +661,11 @@ async fn apply_turn_result(
 async fn spawn_start_turn_title_generation(
     context: &SessionWorkerContext,
     session_project_id: Option<i64>,
-    mode: &TurnMode,
+    request_kind: &AgentRequestKind,
     prompt: &str,
     session_model: AgentModel,
 ) {
-    if !matches!(mode, TurnMode::Start) {
+    if !matches!(request_kind, AgentRequestKind::SessionStart) {
         return;
     }
 
@@ -911,19 +914,19 @@ mod tests {
     use crate::infra::git::MockGitClient;
 
     #[test]
-    /// Ensures `Start` mode maps to `start_prompt` and `Resume` maps to
-    /// `reply` in persisted operation labels.
+    /// Ensures session start requests map to `start_prompt` and session
+    /// resume requests map to `reply` in persisted operation labels.
     fn test_session_command_kind_values() {
         // Arrange
         let start_command = SessionCommand::Run {
             operation_id: "op-start".to_string(),
-            mode: TurnMode::Start,
+            request_kind: AgentRequestKind::SessionStart,
             prompt: "prompt".into(),
             session_model: AgentModel::ClaudeSonnet46,
         };
         let resume_command = SessionCommand::Run {
             operation_id: "op-resume".to_string(),
-            mode: TurnMode::Resume {
+            request_kind: AgentRequestKind::SessionResume {
                 session_output: None,
             },
             prompt: "prompt".into(),

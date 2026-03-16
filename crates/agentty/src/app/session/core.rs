@@ -233,10 +233,10 @@ mod tests {
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
     use crate::domain::setting::SettingName;
+    use crate::infra::agent::AgentResponse;
     use crate::infra::agent::tests::MockAgentBackend;
-    use crate::infra::agent::{AgentCommandMode, AgentResponse};
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
-    use crate::infra::channel::{MockAgentChannel, TurnEvent, TurnMode, TurnResult};
+    use crate::infra::channel::{AgentRequestKind, MockAgentChannel, TurnEvent, TurnResult};
     use crate::infra::db::Database;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
@@ -2218,9 +2218,10 @@ mod tests {
 
     #[tokio::test]
     /// Verifies end-to-end session execution for start and resume turns using
-    /// a single `MockAgentChannel`. The first turn must use `TurnMode::Start`
-    /// and produce output without `--resume`; the second must use
-    /// `TurnMode::Resume` and produce output with `--resume latest`.
+    /// a single `MockAgentChannel`. The first turn must use
+    /// `AgentRequestKind::SessionStart` and produce output without
+    /// `--resume`; the second must use `AgentRequestKind::SessionResume` and
+    /// produce output with `--resume latest`.
     async fn test_spawn_integration() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -2247,14 +2248,14 @@ mod tests {
                 };
                 let delta_text = if turn_index == 0 {
                     assert!(
-                        matches!(req.mode, TurnMode::Start),
-                        "expected TurnMode::Start on first turn"
+                        matches!(req.request_kind, AgentRequestKind::SessionStart),
+                        "expected AgentRequestKind::SessionStart on first turn"
                     );
                     format!("--prompt {}\n", req.prompt)
                 } else {
                     assert!(
-                        matches!(req.mode, TurnMode::Resume { .. }),
-                        "expected TurnMode::Resume on second turn"
+                        matches!(req.request_kind, AgentRequestKind::SessionResume { .. }),
+                        "expected AgentRequestKind::SessionResume on second turn"
                     );
                     format!("--prompt {} --resume latest\n", req.prompt)
                 };
@@ -2325,8 +2326,9 @@ mod tests {
 
     #[tokio::test]
     /// Verifies that the first reply after a model switch replays the full
-    /// session transcript (`TurnMode::Resume { session_output: Some(...) }`)
-    /// and subsequent replies omit it (`session_output: None`).
+    /// session transcript
+    /// (`AgentRequestKind::SessionResume { session_output: Some(...) }`) and
+    /// subsequent replies omit it (`session_output: None`).
     ///
     /// A completion channel (`done_tx`/`done_rx`) is used to signal from
     /// inside the mock's async block so that `wait_for_status` always sees the
@@ -2368,7 +2370,8 @@ mod tests {
         // Persist the prompt so that `RefreshSessions` reloads from DB with the
         // correct value. `update_status(Review)` emits `RefreshSessions`, which
         // reloads sessions from DB; without persisting here, `session.prompt`
-        // would be reset to `""` causing the second reply to use `TurnMode::Start`.
+        // would be reset to `""` causing the second reply to use
+        // `AgentRequestKind::SessionStart`.
         app.services
             .db()
             .update_session_prompt(&session_id, "Initial prompt")
@@ -2395,7 +2398,7 @@ mod tests {
         let captured = Arc::clone(&captured_session_outputs);
         let done_capture = done_tx.clone();
         mock_channel.expect_run_turn().returning(move |_, req, _| {
-            if let TurnMode::Resume { session_output } = req.mode {
+            if let AgentRequestKind::SessionResume { session_output } = req.request_kind {
                 captured.lock().expect("lock poisoned").push(session_output);
             }
             let done = done_capture.clone();
@@ -2502,10 +2505,10 @@ mod tests {
         // Act
         let mut resume_backend = MockAgentBackend::new();
         resume_backend.expect_build_command().returning(|request| {
-            assert!(matches!(request.mode, AgentCommandMode::Resume { .. }));
+            assert!(request.request_kind.is_resume());
 
             let session_output = request
-                .mode
+                .request_kind
                 .session_output()
                 .expect("expected replayed session output after restart");
             assert!(session_output.contains("Initial prompt"));

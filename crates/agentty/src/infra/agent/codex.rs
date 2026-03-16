@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
+    AgentBackend, AgentBackendError, BuildCommandRequest, build_resume_prompt,
     prepend_protocol_instructions,
 };
 use crate::domain::agent::ReasoningLevel;
@@ -30,33 +30,29 @@ impl AgentBackend for CodexBackend {
         let BuildCommandRequest {
             attachments: _attachments,
             folder,
-            mode,
+            prompt,
+            request_kind,
             model,
-            protocol_profile,
             reasoning_level,
         } = request;
-        let has_history_replay = mode
+        let has_history_replay = request_kind
             .session_output()
             .is_some_and(|session_output| !session_output.trim().is_empty());
-        let prompt = match mode {
-            AgentCommandMode::Start { prompt } | AgentCommandMode::OneShot { prompt } => {
-                prompt.to_string()
-            }
-            AgentCommandMode::Resume {
-                prompt,
-                session_output,
-            } => build_resume_prompt(prompt, session_output)?,
+        let prompt = if request_kind.is_resume() {
+            build_resume_prompt(prompt, request_kind.session_output())?
+        } else {
+            prompt.to_string()
         };
-        let prompt = prepend_protocol_instructions(&prompt, protocol_profile)?;
+        let prompt = prepend_protocol_instructions(&prompt, request_kind.protocol_profile())?;
 
         let mut command = Command::new("codex");
         command.arg("exec");
 
-        if matches!(mode, AgentCommandMode::Resume { .. }) {
+        if request_kind.is_resume() {
             command.arg("resume");
         }
 
-        if matches!(mode, AgentCommandMode::Resume { .. }) && !has_history_replay {
+        if request_kind.is_resume() && !has_history_replay {
             command.arg("--last");
         }
 
@@ -86,6 +82,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::infra::channel::AgentRequestKind;
+
+    fn session_start_request_kind() -> AgentRequestKind {
+        AgentRequestKind::SessionStart
+    }
+
+    fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
+        AgentRequestKind::SessionResume {
+            session_output: session_output.map(ToString::to_string),
+        }
+    }
 
     /// Verifies start commands include the shared protocol envelope and
     /// reasoning configuration passed to Codex.
@@ -101,11 +108,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Run checks",
-                },
+                prompt: "Run checks",
+                request_kind: &session_start_request_kind(),
                 model: "gpt-5.3-codex",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::High,
             },
         )
@@ -137,12 +142,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Resume {
-                    prompt: "Continue edits",
-                    session_output: Some("previous assistant output"),
-                },
+                prompt: "Continue edits",
+                request_kind: &session_resume_request_kind(Some("previous assistant output")),
                 model: "gpt-5.3-codex",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::High,
             },
         )
@@ -171,12 +173,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Resume {
-                    prompt: "Continue edits",
-                    session_output: None,
-                },
+                prompt: "Continue edits",
+                request_kind: &session_resume_request_kind(None),
                 model: "gpt-5.3-codex",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::High,
             },
         )
@@ -207,11 +206,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Run checks",
-                },
+                prompt: "Run checks",
+                request_kind: &session_start_request_kind(),
                 model: "gpt-5.3-codex",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::Low,
             },
         )
@@ -238,11 +235,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::OneShot {
-                    prompt: "Generate title",
-                },
+                prompt: "Generate title",
+                request_kind: &AgentRequestKind::UtilityPrompt,
                 model: "gpt-5.3-codex",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
                 reasoning_level: ReasoningLevel::Low,
             },
         )

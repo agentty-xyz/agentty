@@ -1764,11 +1764,10 @@ mod tests {
             live_session_output: None,
             model: AgentModel::Gpt53Codex.as_str().to_string(),
             prompt: "Implement the task".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: provider_conversation_id.map(ToString::to_string),
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-123".to_string(),
-            session_output: None,
         }
     }
 
@@ -3562,7 +3561,7 @@ sleep 5
         // Act
         let turn_prompt = app_server::turn_prompt_for_runtime(
             prompt,
-            agent::ProtocolRequestProfile::SessionTurn,
+            &crate::infra::channel::AgentRequestKind::SessionStart,
             session_output,
             false,
         )
@@ -3582,7 +3581,9 @@ sleep 5
         // Act
         let turn_prompt = app_server::turn_prompt_for_runtime(
             prompt,
-            agent::ProtocolRequestProfile::SessionTurn,
+            &crate::infra::channel::AgentRequestKind::SessionResume {
+                session_output: session_output.map(ToString::to_string),
+            },
             session_output,
             true,
         )

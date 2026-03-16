@@ -15,7 +15,7 @@ use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, Status};
 use crate::domain::setting::SettingName;
-use crate::infra::channel::{TurnMode, TurnPrompt};
+use crate::infra::channel::{AgentRequestKind, TurnPrompt};
 use crate::infra::fs::FsClient;
 use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
@@ -289,7 +289,7 @@ impl SessionManager {
         let operation_id = Uuid::new_v4().to_string();
         let command = SessionCommand::Run {
             operation_id,
-            mode: TurnMode::Start,
+            request_kind: AgentRequestKind::SessionStart,
             prompt: prompt.clone(),
             session_model,
         };
@@ -770,8 +770,8 @@ impl SessionManager {
     /// Validates and queues a follow-up prompt for an existing session.
     ///
     /// Gathers reply context, appends the prompt line to session output, builds
-    /// a [`SessionCommand::Run`] with the appropriate [`TurnMode`], and
-    /// enqueues it on the session worker.
+    /// a [`SessionCommand::Run`] with the appropriate [`AgentRequestKind`],
+    /// and enqueues it on the session worker.
     async fn reply_impl(
         &mut self,
         services: &AppServices,
@@ -976,9 +976,10 @@ impl SessionManager {
 
     /// Builds a queued command for starting or resuming a session interaction.
     ///
-    /// Creates a [`SessionCommand::Run`] with [`TurnMode::Start`] for first
-    /// messages and [`TurnMode::Resume`] with optional transcript replay for
-    /// subsequent replies.
+    /// Creates a [`SessionCommand::Run`] with
+    /// [`AgentRequestKind::SessionStart`] for first messages and
+    /// [`AgentRequestKind::SessionResume`] with optional transcript replay
+    /// for subsequent replies.
     fn build_session_command(input: BuildSessionCommandInput) -> SessionCommand {
         let BuildSessionCommandInput {
             is_first_message,
@@ -987,15 +988,15 @@ impl SessionManager {
             session_output,
         } = input;
         let operation_id = Uuid::new_v4().to_string();
-        let mode = if is_first_message {
-            TurnMode::Start
+        let request_kind = if is_first_message {
+            AgentRequestKind::SessionStart
         } else {
-            TurnMode::Resume { session_output }
+            AgentRequestKind::SessionResume { session_output }
         };
 
         SessionCommand::Run {
             operation_id,
-            mode,
+            request_kind,
             prompt,
             session_model,
         }
@@ -1111,7 +1112,7 @@ impl SessionManager {
             folder,
             model,
             prompt,
-            protocol_profile: agent::ProtocolRequestProfile::UtilityPrompt,
+            request_kind: AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
         })
         .await

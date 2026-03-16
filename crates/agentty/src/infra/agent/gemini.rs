@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
+    AgentBackend, AgentBackendError, BuildCommandRequest, build_resume_prompt,
     prepend_protocol_instructions,
 };
 
@@ -22,12 +22,12 @@ impl AgentBackend for GeminiBackend {
         let BuildCommandRequest {
             attachments: _attachments,
             folder,
-            mode,
+            prompt: _prompt,
+            request_kind,
             model,
-            protocol_profile: _protocol_profile,
             reasoning_level: _reasoning_level,
         } = request;
-        let has_history_replay = mode
+        let has_history_replay = request_kind
             .session_output()
             .is_some_and(|session_output| !session_output.trim().is_empty());
         let mut command = Command::new("gemini");
@@ -42,7 +42,7 @@ impl AgentBackend for GeminiBackend {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        if matches!(mode, AgentCommandMode::Resume { .. }) && !has_history_replay {
+        if request_kind.is_resume() && !has_history_replay {
             command.arg("--resume").arg("latest");
         }
 
@@ -57,16 +57,12 @@ impl AgentBackend for GeminiBackend {
 pub(super) fn build_prompt_stdin_payload(
     request: BuildCommandRequest<'_>,
 ) -> Result<Vec<u8>, AgentBackendError> {
-    let prompt = match request.mode {
-        AgentCommandMode::Start { prompt } | AgentCommandMode::OneShot { prompt } => {
-            prompt.to_string()
-        }
-        AgentCommandMode::Resume {
-            prompt,
-            session_output,
-        } => build_resume_prompt(prompt, session_output)?,
+    let prompt = if request.request_kind.is_resume() {
+        build_resume_prompt(request.prompt, request.request_kind.session_output())?
+    } else {
+        request.prompt.to_string()
     };
-    let prompt = prepend_protocol_instructions(&prompt, request.protocol_profile)?;
+    let prompt = prepend_protocol_instructions(&prompt, request.request_kind.protocol_profile())?;
 
     Ok(prompt.into_bytes())
 }
@@ -77,6 +73,15 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+    use crate::infra::channel::AgentRequestKind;
+
+    fn session_start_request_kind() -> AgentRequestKind {
+        AgentRequestKind::SessionStart
+    }
+
+    fn utility_request_kind() -> AgentRequestKind {
+        AgentRequestKind::UtilityPrompt
+    }
 
     #[test]
     fn test_gemini_setup_creates_no_files() {
@@ -107,11 +112,9 @@ mod tests {
             build_prompt_stdin_payload(BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Plan prompt",
-                },
+                prompt: "Plan prompt",
+                request_kind: &session_start_request_kind(),
                 model: "gemini-3-flash-preview",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
             })
             .expect("prompt payload should build"),
@@ -138,11 +141,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::OneShot {
-                    prompt: "Generate title",
-                },
+                prompt: "Generate title",
+                request_kind: &utility_request_kind(),
                 model: "gemini-3-flash-preview",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -156,11 +157,9 @@ mod tests {
             build_prompt_stdin_payload(BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::OneShot {
-                    prompt: "Generate title",
-                },
+                prompt: "Generate title",
+                request_kind: &utility_request_kind(),
                 model: "gemini-3-flash-preview",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             })
             .expect("prompt payload should build"),

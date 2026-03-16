@@ -100,11 +100,11 @@ Reducer behaviors that matter for data flow:
 From prompt submit to persisted result:
 
 1. Prompt mode submits:
-1. `start_session()` for first prompt (`TurnMode::Start`) or `reply()` for follow-up (`TurnMode::Resume`).
+1. `start_session()` for first prompt (`AgentRequestKind::SessionStart`) or `reply()` for follow-up (`AgentRequestKind::SessionResume`).
 1. Session command is persisted in `session_operation` before enqueue.
 1. `SessionWorkerService` lazily creates or reuses a per-session worker queue.
 1. Worker marks operation `running`, checks cancel flags, then runs channel turn.
-1. Worker creates `TurnRequest` (reasoning level, model, prompt, protocol profile, replay output, provider conversation id).
+1. Worker creates `TurnRequest` (reasoning level, model, prompt, `request_kind`, replay output, provider conversation id).
 1. Worker spawns `consume_turn_events()` and sets initial progress (`Thinking`).
 1. `AgentChannel::run_turn()` streams `TurnEvent` values and returns `TurnResult`.
 1. Worker applies final result:
@@ -159,10 +159,10 @@ Key types (`infra/channel.rs`):
 
 | Type | Purpose |
 |------|---------|
-| `TurnRequest` | Input payload: `reasoning_level`, folder, `live_session_output`, model, mode (start/resume), prompt, `protocol_profile`, `provider_conversation_id`. |
+| `TurnRequest` | Input payload: `reasoning_level`, folder, `live_session_output`, model, `request_kind`, prompt, and `provider_conversation_id`. |
 | `TurnEvent` | Incremental stream events: `AssistantDelta`, `ThoughtDelta`, `Progress`, `Completed`, `Failed`, `PidUpdate`. |
 | `TurnResult` | Normalized output: `assistant_message`, token counts, `provider_conversation_id`. |
-| `TurnMode` | `Start` (fresh turn) or `Resume` (with optional session output replay). |
+| `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional session output replay), or `UtilityPrompt`. |
 
 <a id="architecture-provider-conversation-id-flow"></a>
 Provider conversation id flow:
@@ -178,7 +178,7 @@ Provider output is normalized to one structured response protocol:
 
 1. Prompt builders prepend the shared protocol preamble template and the self-descriptive `schemars` document, so every provider sees the same `answer`/`questions`/optional-`summary` schema and transport-enforced `outputSchema` paths can normalize that same contract separately.
    `crates/agentty/resources/protocol_instruction_prompt.md` owns the normal request wrapper, while `crates/agentty/src/infra/agent/protocol.rs` remains the authoritative source for dynamic schema titles, descriptions, response shape metadata, and parsing.
-1. The caller selects one `ProtocolRequestProfile` before transport handoff. Session turns use `SessionTurn`, while isolated utility prompts use `UtilityPrompt`.
+1. The caller selects one canonical `AgentRequestKind` before transport handoff, and the transport derives the matching `ProtocolRequestProfile` from it. Session turns use `SessionStart` or `SessionResume`, while isolated utility prompts use `UtilityPrompt`.
 1. Session discussion turns typically populate `summary.turn` and `summary.session`, while one-shot prompts may leave `summary` unused.
 1. Channels stream deltas/progress as `TurnEvent`.
 1. Final output is parsed to protocol `answer`, `questions`, and the optional structured summary.

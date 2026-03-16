@@ -289,7 +289,7 @@ impl RealSyncAssistClient {
             folder: &folder,
             model: session_model,
             prompt: &prompt,
-            protocol_profile: agent::ProtocolRequestProfile::UtilityPrompt,
+            request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
         })
         .await?;

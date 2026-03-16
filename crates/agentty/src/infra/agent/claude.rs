@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::backend::{
-    AgentBackend, AgentBackendError, AgentCommandMode, BuildCommandRequest, build_resume_prompt,
+    AgentBackend, AgentBackendError, BuildCommandRequest, build_resume_prompt,
     prepend_protocol_instructions,
 };
 use crate::infra::agent::protocol::agent_response_output_schema_json;
@@ -34,14 +34,14 @@ impl AgentBackend for ClaudeBackend {
         let BuildCommandRequest {
             attachments: _attachments,
             folder,
-            mode,
+            request_kind,
             model,
-            protocol_profile: _protocol_profile,
+            prompt: _prompt,
             reasoning_level,
         } = request;
         let mut command = Command::new("claude");
 
-        if matches!(mode, AgentCommandMode::Resume { .. }) {
+        if request_kind.is_resume() {
             command.arg("-c");
         }
 
@@ -74,19 +74,15 @@ impl AgentBackend for ClaudeBackend {
 pub(super) fn build_prompt_stdin_payload(
     request: BuildCommandRequest<'_>,
 ) -> Result<Vec<u8>, AgentBackendError> {
-    let prompt = match request.mode {
-        AgentCommandMode::Start { prompt } | AgentCommandMode::OneShot { prompt } => {
-            render_prompt_with_local_images(prompt, request.attachments)?
-        }
-        AgentCommandMode::Resume {
-            prompt,
-            session_output,
-        } => build_resume_prompt(
-            &render_prompt_with_local_images(prompt, request.attachments)?,
-            session_output,
-        )?,
+    let prompt = if request.request_kind.is_resume() {
+        build_resume_prompt(
+            &render_prompt_with_local_images(request.prompt, request.attachments)?,
+            request.request_kind.session_output(),
+        )?
+    } else {
+        render_prompt_with_local_images(request.prompt, request.attachments)?
     };
-    let prompt = prepend_protocol_instructions(&prompt, request.protocol_profile)?;
+    let prompt = prepend_protocol_instructions(&prompt, request.request_kind.protocol_profile())?;
 
     Ok(prompt.into_bytes())
 }
@@ -191,6 +187,15 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+    use crate::infra::channel::AgentRequestKind;
+
+    fn session_start_request_kind() -> AgentRequestKind {
+        AgentRequestKind::SessionStart
+    }
+
+    fn utility_request_kind() -> AgentRequestKind {
+        AgentRequestKind::UtilityPrompt
+    }
 
     #[test]
     /// Verifies Claude sessions allow Agentty's required write-capable tools.
@@ -205,11 +210,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Plan prompt",
-                },
+                prompt: "Plan prompt",
+                request_kind: &session_start_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -254,9 +257,9 @@ mod tests {
                 BuildCommandRequest {
                     attachments: &[],
                     folder: temp_directory.path(),
-                    mode: AgentCommandMode::Start { prompt: "Do work" },
+                    prompt: "Do work",
+                    request_kind: &session_start_request_kind(),
                     model: "claude-sonnet-4-6",
-                    protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                     reasoning_level,
                 },
             )
@@ -303,11 +306,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &attachments,
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Inspect [Image #1] and [Image #2]",
-                },
+                prompt: "Inspect [Image #1] and [Image #2]",
+                request_kind: &session_start_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -338,11 +339,9 @@ mod tests {
             build_prompt_stdin_payload(BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Plan prompt",
-                },
+                prompt: "Plan prompt",
+                request_kind: &session_start_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
             })
             .expect("prompt payload should build"),
@@ -369,11 +368,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::OneShot {
-                    prompt: "Generate title",
-                },
+                prompt: "Generate title",
+                request_kind: &utility_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -383,11 +380,9 @@ mod tests {
             build_prompt_stdin_payload(BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::OneShot {
-                    prompt: "Generate title",
-                },
+                prompt: "Generate title",
+                request_kind: &utility_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             })
             .expect("prompt payload should build"),
@@ -417,11 +412,9 @@ mod tests {
             BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Return protocol response",
-                },
+                prompt: "Return protocol response",
+                request_kind: &session_start_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -431,11 +424,9 @@ mod tests {
             build_prompt_stdin_payload(BuildCommandRequest {
                 attachments: &[],
                 folder: temp_directory.path(),
-                mode: AgentCommandMode::Start {
-                    prompt: "Return protocol response",
-                },
+                prompt: "Return protocol response",
+                request_kind: &session_start_request_kind(),
                 model: "claude-sonnet-4-6",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
                 reasoning_level: ReasoningLevel::default(),
             })
             .expect("prompt payload should build"),

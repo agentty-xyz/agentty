@@ -8,7 +8,7 @@ use askama::Template;
 use super::protocol;
 use super::response_parser::ParsedResponse;
 use crate::domain::agent::{AgentKind, ReasoningLevel};
-use crate::infra::channel::TurnPromptAttachment;
+use crate::infra::channel::{AgentRequestKind, TurnPromptAttachment};
 
 /// Marker used to detect whether protocol instructions are already included
 /// in a prompt.
@@ -37,59 +37,16 @@ pub struct BuildCommandRequest<'a> {
     pub attachments: &'a [TurnPromptAttachment],
     /// Working directory where the command will run.
     pub folder: &'a Path,
-    /// Prompt mode and optional replay payload.
-    pub mode: AgentCommandMode<'a>,
+    /// User prompt to send.
+    pub prompt: &'a str,
+    /// Canonical request kind that drives execution and protocol semantics.
+    pub request_kind: &'a AgentRequestKind,
     /// Provider-specific model identifier.
     pub model: &'a str,
-    /// Protocol-owned request family preserved for this command and any
-    /// follow-up repair flow.
-    pub protocol_profile: protocol::ProtocolRequestProfile,
     /// Reasoning effort preference for this turn.
     ///
     /// Ignored by backends/models that do not support reasoning effort.
     pub reasoning_level: ReasoningLevel,
-}
-
-/// Prompt mode for command construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentCommandMode<'a> {
-    /// Starts a fresh turn.
-    Start {
-        /// User prompt to send.
-        prompt: &'a str,
-    },
-    /// Starts one isolated utility command that still returns structured
-    /// protocol output.
-    OneShot {
-        /// User prompt to send.
-        prompt: &'a str,
-    },
-    /// Resumes a prior turn, optionally replaying transcript output.
-    Resume {
-        /// User prompt to send.
-        prompt: &'a str,
-        /// Prior session output used for history replay when present.
-        session_output: Option<&'a str>,
-    },
-}
-
-impl<'a> AgentCommandMode<'a> {
-    /// Returns the user prompt for this command mode.
-    pub fn prompt(self) -> &'a str {
-        match self {
-            Self::Start { prompt } | Self::OneShot { prompt } | Self::Resume { prompt, .. } => {
-                prompt
-            }
-        }
-    }
-
-    /// Returns transcript output used for resume replay, when present.
-    pub fn session_output(self) -> Option<&'a str> {
-        match self {
-            Self::Start { .. } | Self::OneShot { .. } => None,
-            Self::Resume { session_output, .. } => session_output,
-        }
-    }
 }
 
 /// Error type for backend setup and command construction failures.
@@ -411,21 +368,6 @@ mod tests {
         assert!(rendered_prompt.contains("---"));
         assert!(rendered_prompt.contains("\"summary\""));
         assert!(rendered_prompt.ends_with(prompt));
-    }
-
-    #[test]
-    /// Ensures start mode keeps its original prompt text.
-    fn test_agent_command_mode_start_returns_original_prompt() {
-        // Arrange
-        let mode = AgentCommandMode::Start {
-            prompt: "Generate answer",
-        };
-
-        // Act
-        let prompt = mode.prompt();
-
-        // Assert
-        assert_eq!(prompt, "Generate answer");
     }
 
     #[test]

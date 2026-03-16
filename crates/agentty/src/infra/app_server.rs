@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::agent::ReasoningLevel;
 use crate::infra::agent;
-use crate::infra::channel::TurnPrompt;
+use crate::infra::channel::{AgentRequestKind, TurnPrompt};
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -58,9 +58,9 @@ pub struct AppServerTurnRequest {
     pub model: String,
     /// Structured user prompt for this turn.
     pub prompt: TurnPrompt,
-    /// Protocol-owned request family used to render the shared response
-    /// wrapper for this turn.
-    pub protocol_profile: agent::ProtocolRequestProfile,
+    /// Canonical request kind that drives transport behavior and protocol
+    /// semantics for this turn.
+    pub request_kind: AgentRequestKind,
     /// Provider-native thread/session id used to resume context in a newly
     /// started runtime.
     pub provider_conversation_id: Option<String>,
@@ -70,8 +70,6 @@ pub struct AppServerTurnRequest {
     pub reasoning_level: ReasoningLevel,
     /// Stable agentty session id.
     pub session_id: String,
-    /// Snapshot of prior session output used for replay prompts.
-    pub session_output: Option<String>,
 }
 
 /// Normalized result for one app-server turn.
@@ -373,7 +371,7 @@ where
 
     match turn_prompt_for_runtime(
         &request.prompt,
-        request.protocol_profile,
+        &request.request_kind,
         session_output.as_deref(),
         replays_context,
     ) {
@@ -403,7 +401,10 @@ fn read_latest_session_output(request: &AppServerTurnRequest) -> Option<String> 
         }
     }
 
-    request.session_output.clone()
+    request
+        .request_kind
+        .session_output()
+        .map(ToString::to_string)
 }
 
 /// Returns the turn prompt, replaying session output after context reset.
@@ -416,20 +417,21 @@ fn read_latest_session_output(request: &AppServerTurnRequest) -> Option<String> 
 /// Returns an error when Askama prompt rendering fails after a context reset.
 pub fn turn_prompt_for_runtime(
     prompt: impl Into<TurnPrompt>,
-    profile: agent::ProtocolRequestProfile,
-    session_output: Option<&str>,
+    request_kind: &AgentRequestKind,
+    replay_session_output: Option<&str>,
     context_reset: bool,
 ) -> Result<TurnPrompt, String> {
     let prompt = prompt.into();
     let turn_prompt = if context_reset {
-        agent::build_resume_prompt(&prompt.text, session_output)
+        agent::build_resume_prompt(&prompt.text, replay_session_output)
             .map_err(|error| error.to_string())?
     } else {
         prompt.text.clone()
     };
 
-    let turn_prompt = agent::prepend_protocol_instructions(&turn_prompt, profile)
-        .map_err(|error| error.to_string())?;
+    let turn_prompt =
+        agent::prepend_protocol_instructions(&turn_prompt, request_kind.protocol_profile())
+            .map_err(|error| error.to_string())?;
 
     Ok(TurnPrompt {
         attachments: prompt.attachments,
@@ -448,6 +450,16 @@ mod tests {
 
     struct TestRuntime {
         model: String,
+    }
+
+    fn session_start_request_kind() -> AgentRequestKind {
+        AgentRequestKind::SessionStart
+    }
+
+    fn session_resume_request_kind(session_output: Option<&str>) -> AgentRequestKind {
+        AgentRequestKind::SessionResume {
+            session_output: session_output.map(ToString::to_string),
+        }
     }
 
     #[test]
@@ -483,7 +495,7 @@ mod tests {
         // Act
         let turn_prompt = turn_prompt_for_runtime(
             prompt,
-            agent::ProtocolRequestProfile::SessionTurn,
+            &session_start_request_kind(),
             Some("prior context"),
             false,
         )
@@ -503,7 +515,7 @@ mod tests {
         // Act
         let turn_prompt = turn_prompt_for_runtime(
             prompt,
-            agent::ProtocolRequestProfile::SessionTurn,
+            &session_resume_request_kind(Some("assistant: proposed plan")),
             Some("assistant: proposed plan"),
             true,
         )
@@ -522,13 +534,9 @@ mod tests {
         let prompt = "Generate title";
 
         // Act
-        let turn_prompt = turn_prompt_for_runtime(
-            prompt,
-            agent::ProtocolRequestProfile::UtilityPrompt,
-            None,
-            false,
-        )
-        .expect("turn prompt should render");
+        let turn_prompt =
+            turn_prompt_for_runtime(prompt, &AgentRequestKind::UtilityPrompt, None, false)
+                .expect("turn prompt should render");
 
         // Assert
         assert!(turn_prompt.contains("summary"));
@@ -544,11 +552,10 @@ mod tests {
             live_session_output: Some(live_output),
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: Some("stale snapshot".to_string()),
         };
 
         // Act
@@ -567,11 +574,10 @@ mod tests {
             live_session_output: Some(live_output),
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: Some("stale snapshot".to_string()),
         };
 
         // Act
@@ -589,11 +595,10 @@ mod tests {
             live_session_output: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: Some("stale snapshot".to_string()),
         };
 
         // Act
@@ -611,11 +616,10 @@ mod tests {
             live_session_output: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_start_request_kind(),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: None,
         };
 
         // Act
@@ -635,11 +639,10 @@ mod tests {
             live_session_output: Some(live_output),
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: Some("stale snapshot".to_string()),
         };
         let captured_retry_prompt = Arc::new(Mutex::new(String::new()));
 
@@ -710,11 +713,10 @@ mod tests {
             live_session_output: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_resume_request_kind(Some("previous output")),
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: Some("previous output".to_string()),
         };
         let start_count = Arc::new(AtomicUsize::new(0));
         let run_count = Arc::new(AtomicUsize::new(0));
@@ -793,11 +795,10 @@ mod tests {
             live_session_output: None,
             model: "model-a".to_string(),
             prompt: "Do work".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: session_resume_request_kind(Some("previous output")),
             provider_conversation_id: Some("thread-123".to_string()),
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: Some("previous output".to_string()),
         };
         let captured_prompt = Arc::new(Mutex::new(String::new()));
 

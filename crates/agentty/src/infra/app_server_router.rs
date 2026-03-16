@@ -114,11 +114,10 @@ mod tests {
             live_session_output: None,
             model: AgentModel::Gpt53Codex.as_str().to_string(),
             prompt: "prompt".into(),
-            protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: None,
         };
 
         // Act
@@ -159,11 +158,10 @@ mod tests {
             live_session_output: None,
             model: AgentModel::Gemini3FlashPreview.as_str().to_string(),
             prompt: "prompt".into(),
-            protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: None,
         };
 
         // Act
@@ -193,11 +191,10 @@ mod tests {
             live_session_output: None,
             model: "unknown-model".to_string(),
             prompt: "prompt".into(),
-            protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
+            request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
-            session_output: None,
         };
 
         // Act

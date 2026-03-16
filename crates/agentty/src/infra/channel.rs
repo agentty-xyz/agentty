@@ -11,8 +11,8 @@ pub mod factory;
 #[cfg(test)]
 pub use contract::MockAgentChannel;
 pub use contract::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnMode,
-    TurnPrompt, TurnPromptAttachment, TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, AgentRequestKind, SessionRef, StartSessionRequest,
+    TurnEvent, TurnPrompt, TurnPromptAttachment, TurnRequest, TurnResult,
 };
 pub(crate) use contract::{TurnPromptContentPart, split_turn_prompt_content};
 pub use factory::create_agent_channel;

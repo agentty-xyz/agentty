@@ -214,7 +214,7 @@ impl TaskService {
                         folder: review_folder,
                         model: review_model,
                         prompt: review_prompt,
-                        protocol_profile: agent::ProtocolRequestProfile::UtilityPrompt,
+                        request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
                         reasoning_level: ReasoningLevel::default(),
                     })
                     .await

@@ -11,15 +11,16 @@ use std::sync::Mutex;
 use tokio::io::AsyncWriteExt as _;
 use tokio::task::JoinHandle;
 
-use super::backend::{AgentBackend, AgentCommandMode, BuildCommandRequest};
+use super::backend::{AgentBackend, BuildCommandRequest};
 use super::protocol::{AgentResponse, parse_agent_response_strict};
 use super::{ParsedResponse, create_backend, parse_response};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionStats;
+use crate::infra::channel::AgentRequestKind;
 
 /// Input payload for one isolated prompt that must still return structured
 /// protocol output.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct OneShotRequest<'a> {
     /// Optional PID slot used by cancel/stop flows to terminate the spawned
     /// subprocess while a one-shot prompt is running.
@@ -30,9 +31,8 @@ pub(crate) struct OneShotRequest<'a> {
     pub(crate) model: AgentModel,
     /// Prompt text submitted to the agent.
     pub(crate) prompt: &'a str,
-    /// Protocol-owned request family used to render shared response
-    /// instructions for this utility prompt.
-    pub(crate) protocol_profile: super::protocol::ProtocolRequestProfile,
+    /// Canonical request kind for this isolated prompt.
+    pub(crate) request_kind: AgentRequestKind,
     /// Reasoning effort preference for the one-shot prompt.
     pub(crate) reasoning_level: ReasoningLevel,
 }
@@ -118,9 +118,9 @@ async fn execute_one_shot_command(
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder: request.folder,
-        mode: AgentCommandMode::OneShot { prompt },
+        prompt,
+        request_kind: &request.request_kind,
         model: request.model.as_str(),
-        protocol_profile: request.protocol_profile,
         reasoning_level: request.reasoning_level,
     };
     let command = backend
@@ -373,15 +373,10 @@ mod tests {
         let mut backend = MockAgentBackend::new();
         backend.expect_build_command().returning(|request| {
             assert!(matches!(
-                request.mode,
-                AgentCommandMode::OneShot {
-                    prompt: "Generate title",
-                }
+                request.request_kind,
+                AgentRequestKind::UtilityPrompt
             ));
-            assert_eq!(
-                request.protocol_profile,
-                crate::infra::agent::ProtocolRequestProfile::UtilityPrompt
-            );
+            assert_eq!(request.prompt, "Generate title");
 
             Ok(mock_shell_command(
                 r#"{"answer":"Generated title","questions":[],"summary":null}"#,
@@ -398,7 +393,7 @@ mod tests {
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
                 prompt: "Generate title",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -424,11 +419,10 @@ mod tests {
             .times(1)
             .returning(|request| {
                 assert!(matches!(
-                    request.mode,
-                    AgentCommandMode::OneShot {
-                        prompt: "Generate title",
-                    }
+                    request.request_kind,
+                    AgentRequestKind::UtilityPrompt
                 ));
+                assert_eq!(request.prompt, "Generate title");
 
                 Ok(mock_shell_command("plain text", "", 0))
             });
@@ -441,7 +435,7 @@ mod tests {
                 folder: temp_directory.path(),
                 model: AgentModel::Gpt54,
                 prompt: "Generate title",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -465,11 +459,10 @@ mod tests {
             .times(1)
             .returning(|request| {
                 assert!(matches!(
-                    request.mode,
-                    AgentCommandMode::OneShot {
-                        prompt: "Generate title",
-                    }
+                    request.request_kind,
+                    AgentRequestKind::UtilityPrompt
                 ));
+                assert_eq!(request.prompt, "Generate title");
 
                 Ok(mock_shell_command(
                     r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1}}"#,
@@ -486,7 +479,7 @@ mod tests {
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
                 prompt: "Generate title",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -528,7 +521,7 @@ mod tests {
                     folder: temp_directory.path(),
                     model: AgentModel::ClaudeSonnet46,
                     prompt: &large_prompt,
-                    protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                    request_kind: AgentRequestKind::UtilityPrompt,
                     reasoning_level: ReasoningLevel::default(),
                 },
             ),
@@ -563,7 +556,7 @@ mod tests {
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
                 prompt: "Generate title",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -603,7 +596,7 @@ mod tests {
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
                 prompt: &large_prompt,
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )
@@ -642,7 +635,7 @@ mod tests {
                 folder: temp_directory.path(),
                 model: AgentModel::ClaudeSonnet46,
                 prompt: "Generate title",
-                protocol_profile: crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+                request_kind: AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
             },
         )

@@ -84,13 +84,17 @@ the full self-descriptive JSON Schema generated from
 source of truth for the dynamic response shape, field descriptions, parsing,
 and transport-oriented schema generation.
 
-Each request path now selects a protocol-owned `ProtocolRequestProfile`
-before the backend sees the prompt:
+Each request path now selects one canonical `AgentRequestKind` before the
+backend sees the prompt, and the backend derives the protocol-owned
+`ProtocolRequestProfile` from that request kind:
 
-- Session turns use the `SessionTurn` profile.
-- One-shot utility prompts use the `UtilityPrompt` profile.
-- Strict and permissive request paths still select explicit profiles at the
-  transport boundary.
+- Session turns use `AgentRequestKind::SessionStart` or
+  `AgentRequestKind::SessionResume`, which both derive the `SessionTurn`
+  profile.
+- One-shot utility prompts use `AgentRequestKind::UtilityPrompt`, which
+  derives the `UtilityPrompt` profile.
+- Strict and permissive request paths still share the same protocol contract
+  after that derivation step.
 
 The shared schema defines a top-level `answer` markdown string, a `questions`
 array, and the optional top-level `summary` object. Session turns typically

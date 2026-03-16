@@ -17,8 +17,8 @@ use crate::infra::app_server::{
     AppServerClient, AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse,
 };
 use crate::infra::channel::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnMode,
-    TurnRequest, TurnResult,
+    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
+    TurnResult,
 };
 
 /// [`AgentChannel`] adapter backed by a persistent app-server session.
@@ -81,23 +81,17 @@ impl AgentChannel for AppServerAgentChannel {
         let should_stream_assistant_messages = !requires_strict_structured_output(kind);
 
         Box::pin(async move {
-            let session_output = match req.mode {
-                TurnMode::Start => None,
-                TurnMode::Resume { session_output } => session_output,
-            };
-
             let request = AppServerTurnRequest {
                 folder: req.folder,
                 live_session_output: req.live_session_output,
                 model: req.model,
                 prompt: req.prompt,
-                protocol_profile: req.protocol_profile,
+                request_kind: req.request_kind,
                 provider_conversation_id: req.provider_conversation_id,
                 reasoning_level: req.reasoning_level,
                 session_id,
-                session_output,
             };
-            let protocol_profile = request.protocol_profile;
+            let protocol_profile = request.request_kind.protocol_profile();
             let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<AppServerStreamEvent>();
 
             let bridge_handle = {
@@ -268,16 +262,15 @@ mod tests {
     use super::*;
     use crate::domain::agent::ReasoningLevel;
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
-    use crate::infra::channel::{TurnMode, TurnPromptAttachment};
+    use crate::infra::channel::{AgentRequestKind, TurnPromptAttachment};
 
     fn make_turn_request() -> TurnRequest {
         TurnRequest {
             folder: PathBuf::from("/tmp"),
             live_session_output: None,
             model: "gemini-3-flash-preview".to_string(),
-            mode: TurnMode::Start,
+            request_kind: AgentRequestKind::SessionStart,
             prompt: "Do something".into(),
-            protocol_profile: agent::ProtocolRequestProfile::SessionTurn,
             provider_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
         }
@@ -660,10 +653,7 @@ mod tests {
             .times(1)
             .returning(|request, _stream_tx| {
                 assert_eq!(request.prompt, "Do something");
-                assert_eq!(
-                    request.protocol_profile,
-                    agent::ProtocolRequestProfile::SessionTurn
-                );
+                assert_eq!(request.request_kind, AgentRequestKind::SessionStart);
 
                 Box::pin(async { Ok(make_ok_response("plain non-json response")) })
             });

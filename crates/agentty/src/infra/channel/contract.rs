@@ -219,15 +219,46 @@ impl PartialEq<TurnPrompt> for &str {
 }
 
 /// Turn initiation mode for [`TurnRequest`].
-#[derive(Debug, Clone)]
-pub enum TurnMode {
-    /// Starts a fresh agent turn with no prior context.
-    Start,
-    /// Resumes a prior turn, optionally replaying transcript output.
-    Resume {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentRequestKind {
+    /// Starts a fresh interactive session turn with no prior context.
+    SessionStart,
+    /// Resumes an interactive session turn, optionally replaying transcript
+    /// output into the next prompt.
+    SessionResume {
         /// Prior session output used for history replay when present.
         session_output: Option<String>,
     },
+    /// Runs one isolated utility prompt outside the long-lived session flow.
+    UtilityPrompt,
+}
+
+impl AgentRequestKind {
+    /// Returns the protocol request profile derived from this request kind.
+    #[must_use]
+    pub fn protocol_profile(&self) -> crate::infra::agent::ProtocolRequestProfile {
+        match self {
+            Self::SessionStart | Self::SessionResume { .. } => {
+                crate::infra::agent::ProtocolRequestProfile::SessionTurn
+            }
+            Self::UtilityPrompt => crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+        }
+    }
+
+    /// Returns whether this request resumes a prior interactive session turn.
+    #[must_use]
+    pub fn is_resume(&self) -> bool {
+        matches!(self, Self::SessionResume { .. })
+    }
+
+    /// Returns transcript output used for history replay, when present.
+    #[must_use]
+    pub fn session_output(&self) -> Option<&str> {
+        match self {
+            Self::SessionStart | Self::UtilityPrompt => None,
+            Self::SessionResume { session_output } => session_output.as_deref(),
+        }
+    }
 }
 
 /// Input payload for one provider-agnostic agent turn.
@@ -244,13 +275,11 @@ pub struct TurnRequest {
     pub live_session_output: Option<Arc<Mutex<String>>>,
     /// Provider-specific model identifier.
     pub model: String,
-    /// Turn initiation mode (start or resume).
-    pub mode: TurnMode,
+    /// Canonical request kind that drives transport behavior and protocol
+    /// semantics for this turn.
+    pub request_kind: AgentRequestKind,
     /// Structured user prompt for the turn.
     pub prompt: TurnPrompt,
-    /// Protocol-owned request family used to render shared response
-    /// instructions for this turn.
-    pub protocol_profile: crate::infra::agent::ProtocolRequestProfile,
     /// Provider-native conversation identifier loaded from persistence.
     ///
     /// When present, app-server channels forward this to the provider runtime
@@ -379,6 +408,50 @@ pub trait AgentChannel: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Ensures session request kinds derive the session-turn protocol
+    /// profile.
+    fn test_agent_request_kind_session_variants_use_session_protocol_profile() {
+        // Arrange
+        let start = AgentRequestKind::SessionStart;
+        let resume = AgentRequestKind::SessionResume {
+            session_output: Some("prior output".to_string()),
+        };
+
+        // Act
+        let start_profile = start.protocol_profile();
+        let resume_profile = resume.protocol_profile();
+
+        // Assert
+        assert_eq!(
+            start_profile,
+            crate::infra::agent::ProtocolRequestProfile::SessionTurn
+        );
+        assert_eq!(
+            resume_profile,
+            crate::infra::agent::ProtocolRequestProfile::SessionTurn
+        );
+    }
+
+    #[test]
+    /// Ensures utility prompts derive the utility protocol profile and never
+    /// expose replay output.
+    fn test_agent_request_kind_utility_prompt_uses_utility_protocol_profile() {
+        // Arrange
+        let request_kind = AgentRequestKind::UtilityPrompt;
+
+        // Act
+        let protocol_profile = request_kind.protocol_profile();
+        let session_output = request_kind.session_output();
+
+        // Assert
+        assert_eq!(
+            protocol_profile,
+            crate::infra::agent::ProtocolRequestProfile::UtilityPrompt
+        );
+        assert_eq!(session_output, None);
+    }
 
     #[test]
     /// Ensures transcript text keeps inline image placeholders unchanged.
