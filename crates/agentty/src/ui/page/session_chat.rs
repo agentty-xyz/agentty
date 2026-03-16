@@ -67,16 +67,16 @@ impl<'a> SessionChatPage<'a> {
         session: &Session,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
-        focused_review_status_message: Option<&str>,
-        focused_review_text: Option<&str>,
+        review_status_message: Option<&str>,
+        review_text: Option<&str>,
         active_progress: Option<&str>,
     ) -> u16 {
         SessionOutput::rendered_line_count(
             session,
             output_width,
             done_session_output_mode,
-            focused_review_status_message,
-            focused_review_text,
+            review_status_message,
+            review_text,
             active_progress,
         )
     }
@@ -105,16 +105,16 @@ impl<'a> SessionChatPage<'a> {
     }
 
     /// Returns review status text for the active view mode.
-    fn focused_review_status_message(&self) -> Option<&str> {
+    fn review_status_message(&self) -> Option<&str> {
         match self.mode {
             AppMode::View {
-                focused_review_status_message,
+                review_status_message,
                 ..
-            } => focused_review_status_message.as_deref(),
+            } => review_status_message.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
             | AppMode::PublishBranchInput { restore_view, .. }
             | AppMode::ViewInfoPopup { restore_view, .. } => {
-                restore_view.focused_review_status_message.as_deref()
+                restore_view.review_status_message.as_deref()
             }
             AppMode::List
             | AppMode::Confirmation { .. }
@@ -127,16 +127,16 @@ impl<'a> SessionChatPage<'a> {
     }
 
     /// Returns review assist text for the active view mode.
-    fn focused_review_text(&self) -> Option<&str> {
+    fn review_text(&self) -> Option<&str> {
         match self.mode {
             AppMode::View {
-                focused_review_text,
+                review_text,
                 ..
-            } => focused_review_text.as_deref(),
+            } => review_text.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
             | AppMode::PublishBranchInput { restore_view, .. }
             | AppMode::ViewInfoPopup { restore_view, .. } => {
-                restore_view.focused_review_text.as_deref()
+                restore_view.review_text.as_deref()
             }
             AppMode::List
             | AppMode::Confirmation { .. }
@@ -281,8 +281,8 @@ impl<'a> SessionChatPage<'a> {
 
         let mut output =
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
-        output = output.focused_review_status_message(self.focused_review_status_message());
-        output = output.focused_review_text(self.focused_review_text());
+        output = output.review_status_message(self.review_status_message());
+        output = output.review_text(self.review_text());
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
         }
@@ -509,7 +509,7 @@ impl<'a> SessionChatPage<'a> {
     fn done_toggle_action_label(done_session_output_mode: DoneSessionOutputMode) -> &'static str {
         match done_session_output_mode {
             DoneSessionOutputMode::Summary => "output",
-            DoneSessionOutputMode::Output | DoneSessionOutputMode::FocusedReview => "summary",
+            DoneSessionOutputMode::Output | DoneSessionOutputMode::Review => "summary",
         }
     }
 
@@ -1127,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_review_shows_focused_review_and_hides_diff_hint() {
+    fn test_view_help_text_review_shows_review_and_hides_diff_hint() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Review;
@@ -1183,13 +1183,13 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_done_focused_review_mode_shows_summary_toggle_hint() {
+    fn test_view_help_text_done_review_mode_shows_summary_toggle_hint() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Done;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::FocusedReview);
+        let help_text = view_help_text(&session, DoneSessionOutputMode::Review);
 
         // Assert
         assert!(help_text.contains("t: summary"));

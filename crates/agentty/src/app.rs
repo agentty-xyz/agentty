@@ -17,7 +17,7 @@ mod task;
 pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 #[cfg(test)]
 pub(crate) use core::{AppClients, MockSyncMainRunner};
-pub(crate) use core::{AppEvent, FocusedReviewCacheEntry, SessionStatsUsage, diff_content_hash};
+pub(crate) use core::{AppEvent, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
 
 pub use project::ProjectManager;
 pub use service::AppServices;

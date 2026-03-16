@@ -38,4 +38,4 @@ Existing session summary context (may be empty):
 {{ session_summary }}
 
 Unified diff:
-{{ focused_review_diff }}
+{{ review_diff }}

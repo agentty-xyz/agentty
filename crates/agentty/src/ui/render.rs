@@ -194,8 +194,8 @@ mod tests {
         let session = session_fixture(session_id, "/tmp/session-view-folder");
         let mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             session_id: session_id.to_string(),
             scroll_offset: None,
         };

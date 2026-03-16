@@ -475,8 +475,8 @@ async fn submit_response(app: &mut App, response: String) {
     let question_reply = build_question_reply_prompt(&questions, &responses);
     app.mode = AppMode::View {
         done_session_output_mode: DoneSessionOutputMode::Summary,
-        focused_review_status_message: None,
-        focused_review_text: None,
+        review_status_message: None,
+        review_text: None,
         session_id: session_id.clone(),
         scroll_offset: None,
     };

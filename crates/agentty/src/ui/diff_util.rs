@@ -159,7 +159,7 @@ const MAX_REVIEW_FALLBACK_COUNT: usize = 5;
 const MAX_REVIEW_SNIPPET_WIDTH: usize = 96;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FocusedReviewHighlight {
+struct ReviewHighlight {
     comment: &'static str,
     file_path: String,
     line_number: Option<u32>,
@@ -171,9 +171,9 @@ struct FocusedReviewHighlight {
 
 /// Builds review markdown using concise agent comments and critical
 /// diff highlights.
-pub fn build_focused_review_text(diff: &str, summary: Option<&str>) -> String {
-    let agent_comments = focused_review_agent_comments(summary);
-    let highlights = focused_review_highlights(diff);
+pub fn build_review_text(diff: &str, summary: Option<&str>) -> String {
+    let agent_comments = review_agent_comments(summary);
+    let highlights = review_highlights(diff);
 
     let mut lines = vec![
         "## Review".to_string(),
@@ -193,7 +193,7 @@ pub fn build_focused_review_text(diff: &str, summary: Option<&str>) -> String {
     if highlights.is_empty() {
         lines.push("- No changes found in the current diff.".to_string());
     } else {
-        lines.extend(highlights.iter().map(focused_review_highlight_markdown));
+        lines.extend(highlights.iter().map(review_highlight_markdown));
     }
 
     lines.push(String::new());
@@ -208,7 +208,7 @@ pub fn build_focused_review_text(diff: &str, summary: Option<&str>) -> String {
 /// headings is retained so user-facing notes such as canonical commit text
 /// still appear in the focused review. The returned list is capped at
 /// `MAX_AGENT_COMMENT_COUNT` entries to keep the focused review compact.
-fn focused_review_agent_comments(summary: Option<&str>) -> Vec<String> {
+fn review_agent_comments(summary: Option<&str>) -> Vec<String> {
     let summary_text = summary.unwrap_or_default().trim();
     let structured_summary_lines = serde_json::from_str::<AgentResponseSummary>(summary_text)
         .ok()
@@ -267,7 +267,7 @@ fn is_protocol_summary_heading(line: &str) -> bool {
 }
 
 /// Returns scored review highlights from unified diff text.
-fn focused_review_highlights(diff: &str) -> Vec<FocusedReviewHighlight> {
+fn review_highlights(diff: &str) -> Vec<ReviewHighlight> {
     let mut highlights = Vec::new();
     let mut fallback_highlights = Vec::new();
     let mut current_file = "unknown".to_string();
@@ -301,11 +301,11 @@ fn focused_review_highlights(diff: &str) -> Vec<FocusedReviewHighlight> {
             new_line = new_line.saturating_add(1);
 
             if let Some(highlight) =
-                focused_review_highlight(&current_file, line_number, '+', content, order)
+                review_highlight(&current_file, line_number, '+', content, order)
             {
                 highlights.push(highlight);
             } else if let Some(fallback_highlight) =
-                focused_review_fallback_highlight(&current_file, line_number, '+', content, order)
+                review_fallback_highlight(&current_file, line_number, '+', content, order)
             {
                 fallback_highlights.push(fallback_highlight);
             }
@@ -320,11 +320,11 @@ fn focused_review_highlights(diff: &str) -> Vec<FocusedReviewHighlight> {
             old_line = old_line.saturating_add(1);
 
             if let Some(highlight) =
-                focused_review_highlight(&current_file, line_number, '-', content, order)
+                review_highlight(&current_file, line_number, '-', content, order)
             {
                 highlights.push(highlight);
             } else if let Some(fallback_highlight) =
-                focused_review_fallback_highlight(&current_file, line_number, '-', content, order)
+                review_fallback_highlight(&current_file, line_number, '-', content, order)
             {
                 fallback_highlights.push(fallback_highlight);
             }
@@ -359,7 +359,7 @@ fn focused_review_highlights(diff: &str) -> Vec<FocusedReviewHighlight> {
 }
 
 /// Builds one markdown list item for a review highlight.
-fn focused_review_highlight_markdown(highlight: &FocusedReviewHighlight) -> String {
+fn review_highlight_markdown(highlight: &ReviewHighlight) -> String {
     let location = highlight
         .line_number
         .map_or_else(|| "?".to_string(), |line_number| line_number.to_string());
@@ -372,13 +372,13 @@ fn focused_review_highlight_markdown(highlight: &FocusedReviewHighlight) -> Stri
 
 /// Creates a scored highlight when a change matches high-signal criticality
 /// heuristics.
-fn focused_review_highlight(
+fn review_highlight(
     file_path: &str,
     line_number: Option<u32>,
     sign: char,
     content: &str,
     order: usize,
-) -> Option<FocusedReviewHighlight> {
+) -> Option<ReviewHighlight> {
     const DEFAULT_COMMENT: &str = "Behavior changed.";
     const RUNTIME_COMMENT: &str = "Runtime safety or error handling changed.";
     const SECURITY_COMMENT: &str = "Authorization or security-sensitive logic changed.";
@@ -465,32 +465,32 @@ fn focused_review_highlight(
         return None;
     }
 
-    Some(FocusedReviewHighlight {
+    Some(ReviewHighlight {
         comment,
         file_path: file_path.to_string(),
         line_number,
         order,
         score,
         sign,
-        snippet: focused_review_snippet(content),
+        snippet: review_snippet(content),
     })
 }
 
 /// Creates an unscored fallback highlight when no criticality heuristic
 /// matches.
-fn focused_review_fallback_highlight(
+fn review_fallback_highlight(
     file_path: &str,
     line_number: Option<u32>,
     sign: char,
     content: &str,
     order: usize,
-) -> Option<FocusedReviewHighlight> {
-    let snippet = focused_review_snippet(content);
+) -> Option<ReviewHighlight> {
+    let snippet = review_snippet(content);
     if snippet.is_empty() {
         return None;
     }
 
-    Some(FocusedReviewHighlight {
+    Some(ReviewHighlight {
         comment: "General code change; inspect full diff for context.",
         file_path: file_path.to_string(),
         line_number,
@@ -510,7 +510,7 @@ fn parse_diff_file_path(line: &str) -> Option<String> {
 }
 
 /// Returns a clean one-line snippet for review output.
-fn focused_review_snippet(content: &str) -> String {
+fn review_snippet(content: &str) -> String {
     let collapsed = content
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -778,7 +778,7 @@ index abc..def 100644
     }
 
     #[test]
-    fn test_build_focused_review_text_includes_summary_and_critical_highlights() {
+    fn test_build_review_text_includes_summary_and_critical_highlights() {
         // Arrange
         let diff = "\
 diff --git a/src/auth.rs b/src/auth.rs
@@ -791,18 +791,18 @@ diff --git a/src/auth.rs b/src/auth.rs
         let summary = Some("Tighten merge access\n- Add role guard");
 
         // Act
-        let focused_review = build_focused_review_text(diff, summary);
+        let review = build_review_text(diff, summary);
 
         // Assert
-        assert!(focused_review.contains("## Review"));
-        assert!(focused_review.contains("- Tighten merge access"));
-        assert!(focused_review.contains("Authorization or security-sensitive logic changed."));
-        assert!(focused_review.contains("Runtime safety or error handling changed."));
-        assert!(focused_review.contains("src/auth.rs"));
+        assert!(review.contains("## Review"));
+        assert!(review.contains("- Tighten merge access"));
+        assert!(review.contains("Authorization or security-sensitive logic changed."));
+        assert!(review.contains("Runtime safety or error handling changed."));
+        assert!(review.contains("src/auth.rs"));
     }
 
     #[test]
-    fn test_build_focused_review_text_uses_fallback_when_summary_and_critical_hits_missing() {
+    fn test_build_review_text_uses_fallback_when_summary_and_critical_hits_missing() {
         // Arrange
         let diff = "\
 diff --git a/src/main.rs b/src/main.rs
@@ -811,16 +811,16 @@ diff --git a/src/main.rs b/src/main.rs
 +let new_value = 2;";
 
         // Act
-        let focused_review = build_focused_review_text(diff, None);
+        let review = build_review_text(diff, None);
 
         // Assert
-        assert!(focused_review.contains(DEFAULT_REVIEW_COMMENT));
-        assert!(focused_review.contains("General code change; inspect full diff for context."));
-        assert!(focused_review.contains("src/main.rs"));
+        assert!(review.contains(DEFAULT_REVIEW_COMMENT));
+        assert!(review.contains("General code change; inspect full diff for context."));
+        assert!(review.contains("src/main.rs"));
     }
 
     #[test]
-    fn test_build_focused_review_text_skips_protocol_summary_headings() {
+    fn test_build_review_text_skips_protocol_summary_headings() {
         // Arrange
         let summary = Some(
             "## Change Summary\n### Current Turn\n- Added protocol summary fields.\n\n### Session \
@@ -829,22 +829,22 @@ diff --git a/src/main.rs b/src/main.rs
         );
 
         // Act
-        let focused_review = build_focused_review_text("", summary);
+        let review = build_review_text("", summary);
 
         // Assert
-        assert!(focused_review.contains("- Added protocol summary fields."));
-        assert!(focused_review.contains("- Session output renders summary markdown separately."));
-        assert!(focused_review.contains("- Final session summary line"));
-        assert!(focused_review.contains("- Canonical commit note"));
-        assert!(!focused_review.contains("- Change Summary"));
-        assert!(!focused_review.contains("- Current Turn"));
-        assert!(!focused_review.contains("- Session Changes"));
-        assert!(!focused_review.contains("- Summary"));
-        assert!(!focused_review.contains("- Commit"));
+        assert!(review.contains("- Added protocol summary fields."));
+        assert!(review.contains("- Session output renders summary markdown separately."));
+        assert!(review.contains("- Final session summary line"));
+        assert!(review.contains("- Canonical commit note"));
+        assert!(!review.contains("- Change Summary"));
+        assert!(!review.contains("- Current Turn"));
+        assert!(!review.contains("- Session Changes"));
+        assert!(!review.contains("- Summary"));
+        assert!(!review.contains("- Commit"));
     }
 
     #[test]
-    fn test_build_focused_review_text_truncates_comments_at_max_count() {
+    fn test_build_review_text_truncates_comments_at_max_count() {
         // Arrange — 5 content lines exceed `MAX_AGENT_COMMENT_COUNT` (4),
         // verify only the first 4 survive and the rest are dropped.
         let summary = Some(
@@ -852,19 +852,19 @@ diff --git a/src/main.rs b/src/main.rs
         );
 
         // Act
-        let focused_review = build_focused_review_text("", summary);
+        let review = build_review_text("", summary);
 
         // Assert — first four kept in order
-        assert!(focused_review.contains("- First comment"));
-        assert!(focused_review.contains("- Second comment"));
-        assert!(focused_review.contains("- Third comment"));
-        assert!(focused_review.contains("- Fourth comment"));
+        assert!(review.contains("- First comment"));
+        assert!(review.contains("- Second comment"));
+        assert!(review.contains("- Third comment"));
+        assert!(review.contains("- Fourth comment"));
         // fifth truncated
-        assert!(!focused_review.contains("Fifth comment"));
+        assert!(!review.contains("Fifth comment"));
     }
 
     #[test]
-    fn test_build_focused_review_text_parses_structured_summary_json() {
+    fn test_build_review_text_parses_structured_summary_json() {
         // Arrange
         let summary = Some(
             "{\"turn\":\"- Added protocol summary fields.\",\"session\":\"- Session output \
@@ -872,23 +872,23 @@ diff --git a/src/main.rs b/src/main.rs
         );
 
         // Act
-        let focused_review = build_focused_review_text("", summary);
+        let review = build_review_text("", summary);
 
         // Assert
-        assert!(focused_review.contains("- Added protocol summary fields."));
-        assert!(focused_review.contains("- Session output renders summary markdown separately."));
+        assert!(review.contains("- Added protocol summary fields."));
+        assert!(review.contains("- Session output renders summary markdown separately."));
     }
 
     #[test]
-    fn test_build_focused_review_text_handles_empty_diff() {
+    fn test_build_review_text_handles_empty_diff() {
         // Arrange
         let summary = Some("Keep behavior stable");
 
         // Act
-        let focused_review = build_focused_review_text("", summary);
+        let review = build_review_text("", summary);
 
         // Assert
-        assert!(focused_review.contains("- Keep behavior stable"));
-        assert!(focused_review.contains("No changes found in the current diff."));
+        assert!(review.contains("- Keep behavior stable"));
+        assert!(review.contains("No changes found in the current diff."));
     }
 }

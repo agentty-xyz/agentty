@@ -316,7 +316,7 @@ Askama templates compiled into the binary that are sent to agent backends automa
 |----------|-------------|---------|-----|
 | `session_title_generation_prompt.md` | `SessionTitleGenerationPromptTemplate` | New session | Generate a concise session title from the user's first prompt. |
 | `session_commit_message_prompt.md` | `SessionCommitMessagePromptTemplate` | Auto-commit | Generate or refine commit messages from the cumulative session diff. |
-| `review_assist_prompt.md` | `FocusedReviewAssistPromptTemplate` | Diff view (`d` key) | Read-only code review producing `## Review` → `### Project Impact` → `### Suggestions`. |
+| `review_assist_prompt.md` | `ReviewAssistPromptTemplate` | Diff view (`d` key) | Read-only code review producing `## Review` → `### Project Impact` → `### Suggestions`. |
 | `auto_commit_assist_prompt.md` | `AutoCommitAssistPromptTemplate` | Commit failure | Fix code so a follow-up commit can succeed (no git commands allowed). |
 | `rebase_assist_prompt.md` | `RebaseAssistPromptTemplate` | Rebase conflict | Resolve conflict markers using read-only git analysis. |
 | `protocol_instruction_prompt.md` | `ProtocolInstructionPromptTemplate` | Every agent turn | Wrap prompts with structured JSON response protocol and file-path rules. |

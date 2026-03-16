@@ -141,7 +141,7 @@ fn render_list_or_overlay_mode(
         } => {
             if matches!(
                 confirmation_intent,
-                ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateFocusedReview
+                ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview
             ) && let Some(view_mode) = restore_view
             {
                 render_session_confirmation_overlay(
@@ -566,8 +566,8 @@ mod tests {
         let sessions = vec![session_fixture(session_id)];
         let mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             session_id: session_id.to_string(),
             scroll_offset: None,
         };
@@ -601,8 +601,8 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "missing-session".to_string(),
             scroll_offset: None,
         };
@@ -684,8 +684,8 @@ mod tests {
         };
         let view_mode = ConfirmationViewMode {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             scroll_offset: None,
             session_id: session_id.to_string(),
         };

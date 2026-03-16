@@ -1946,8 +1946,8 @@ mod tests {
         let selected_session_id = app.sessions.sessions[1].id.clone();
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             session_id: selected_session_id.clone(),
             scroll_offset: None,
         };

@@ -22,12 +22,12 @@ use crate::version;
 pub(super) struct TaskService;
 
 /// Inputs needed to generate review assist text in the background.
-pub(super) struct FocusedReviewAssistTaskInput {
+pub(super) struct ReviewAssistTaskInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Hash of the diff that triggered this review, threaded back in the
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
-    pub(super) focused_review_diff: String,
+    pub(super) review_diff: String,
     pub(super) review_model: AgentModel,
     pub(super) session_folder: PathBuf,
     pub(super) session_id: String,
@@ -37,8 +37,8 @@ pub(super) struct FocusedReviewAssistTaskInput {
 /// Askama view model for rendering review assist prompts.
 #[derive(Template)]
 #[template(path = "review_assist_prompt.md", escape = "none")]
-struct FocusedReviewAssistPromptTemplate<'a> {
-    focused_review_diff: &'a str,
+struct ReviewAssistPromptTemplate<'a> {
+    review_diff: &'a str,
     session_summary: &'a str,
 }
 
@@ -168,11 +168,11 @@ impl TaskService {
 
     /// Spawns one background review assist generation task and emits
     /// an event with either final review text or a failure description.
-    pub(super) fn spawn_focused_review_assist_task(input: FocusedReviewAssistTaskInput) {
-        let FocusedReviewAssistTaskInput {
+    pub(super) fn spawn_review_assist_task(input: ReviewAssistTaskInput) {
+        let ReviewAssistTaskInput {
             app_event_tx,
             diff_hash,
-            focused_review_diff,
+            review_diff,
             review_model,
             session_folder,
             session_id,
@@ -180,16 +180,16 @@ impl TaskService {
         } = input;
 
         tokio::spawn(async move {
-            let focused_review_result = Self::focused_review_assist_text(
+            let review_result = Self::review_assist_text(
                 &session_folder,
                 review_model,
-                &focused_review_diff,
+                &review_diff,
                 session_summary.as_deref(),
             )
             .await;
 
             let app_event =
-                Self::focused_review_app_event(diff_hash, focused_review_result, session_id);
+                Self::review_app_event(diff_hash, review_result, session_id);
             let _ = app_event_tx.send(app_event);
         });
     }
@@ -197,24 +197,24 @@ impl TaskService {
     /// Generates review assist text by running one model command with
     /// read-only review constraints and parsing the final assistant response
     /// content.
-    async fn focused_review_assist_text(
+    async fn review_assist_text(
         session_folder: &Path,
         review_model: AgentModel,
-        focused_review_diff: &str,
+        review_diff: &str,
         session_summary: Option<&str>,
     ) -> Result<String, String> {
-        Self::focused_review_assist_text_with_submitter(
+        Self::review_assist_text_with_submitter(
             session_folder,
             review_model,
-            focused_review_diff,
+            review_diff,
             session_summary,
-            |review_folder, review_model, focused_review_prompt| {
+            |review_folder, review_model, review_prompt| {
                 Box::pin(async move {
                     agent::submit_one_shot(agent::OneShotRequest {
                         child_pid: None,
                         folder: review_folder,
                         model: review_model,
-                        prompt: focused_review_prompt,
+                        prompt: review_prompt,
                         protocol_profile: agent::ProtocolRequestProfile::UtilityPrompt,
                         reasoning_level: ReasoningLevel::default(),
                     })
@@ -239,10 +239,10 @@ impl TaskService {
 
     /// Generates review assist text using an injected one-shot submitter so
     /// failure paths can be tested without subprocess execution.
-    async fn focused_review_assist_text_with_submitter<Submitter>(
+    async fn review_assist_text_with_submitter<Submitter>(
         session_folder: &Path,
         review_model: AgentModel,
-        focused_review_diff: &str,
+        review_diff: &str,
         session_summary: Option<&str>,
         submitter: Submitter,
     ) -> Result<String, String>
@@ -255,27 +255,27 @@ impl TaskService {
             Box<dyn Future<Output = Result<agent::AgentResponse, String>> + Send + 'submit>,
         >,
     {
-        let focused_review_prompt =
-            Self::focused_review_assist_prompt(focused_review_diff, session_summary)?;
+        let review_prompt =
+            Self::review_assist_prompt(review_diff, session_summary)?;
         let agent_response =
-            submitter(session_folder, review_model, &focused_review_prompt).await?;
+            submitter(session_folder, review_model, &review_prompt).await?;
 
-        Self::focused_review_output_text(&agent_response)
+        Self::review_output_text(&agent_response)
     }
 
     /// Builds the final reducer event for one review-assist task outcome.
-    fn focused_review_app_event(
+    fn review_app_event(
         diff_hash: u64,
-        focused_review_result: Result<String, String>,
+        review_result: Result<String, String>,
         session_id: String,
     ) -> AppEvent {
-        match focused_review_result {
-            Ok(review_text) => AppEvent::FocusedReviewPrepared {
+        match review_result {
+            Ok(review_text) => AppEvent::ReviewPrepared {
                 diff_hash,
                 review_text,
                 session_id,
             },
-            Err(error) => AppEvent::FocusedReviewPreparationFailed {
+            Err(error) => AppEvent::ReviewPreparationFailed {
                 diff_hash,
                 error,
                 session_id,
@@ -284,26 +284,26 @@ impl TaskService {
     }
 
     /// Extracts one non-empty review string from the agent response payload.
-    fn focused_review_output_text(agent_response: &agent::AgentResponse) -> Result<String, String> {
-        let focused_review_text = agent_response.to_display_text();
-        let focused_review_text = focused_review_text.trim();
-        if focused_review_text.is_empty() {
+    fn review_output_text(agent_response: &agent::AgentResponse) -> Result<String, String> {
+        let review_text = agent_response.to_display_text();
+        let review_text = review_text.trim();
+        if review_text.is_empty() {
             return Err("Review assist returned empty output".to_string());
         }
 
-        Ok(focused_review_text.to_string())
+        Ok(review_text.to_string())
     }
 
     /// Renders the review assist prompt from the markdown template.
     ///
     /// # Errors
     /// Returns an error when Askama template rendering fails.
-    fn focused_review_assist_prompt(
-        focused_review_diff: &str,
+    fn review_assist_prompt(
+        review_diff: &str,
         session_summary: Option<&str>,
     ) -> Result<String, String> {
-        let template = FocusedReviewAssistPromptTemplate {
-            focused_review_diff: focused_review_diff.trim(),
+        let template = ReviewAssistPromptTemplate {
+            review_diff: review_diff.trim(),
             session_summary: session_summary.map_or("", str::trim),
         };
 
@@ -405,17 +405,17 @@ mod tests {
     #[tokio::test]
     /// Ensures review assist surfaces one-shot submission failures without
     /// invoking a real subprocess.
-    async fn focused_review_assist_text_with_submitter_returns_submit_error() {
+    async fn review_assist_text_with_submitter_returns_submit_error() {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-submit-error");
         let review_model = AgentModel::ClaudeSonnet46;
-        let focused_review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+        let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
 
         // Act
-        let result = TaskService::focused_review_assist_text_with_submitter(
+        let result = TaskService::review_assist_text_with_submitter(
             session_folder,
             review_model,
-            focused_review_diff,
+            review_diff,
             None,
             |_, _, _| Box::pin(async { Err("submit failed".to_string()) }),
         )
@@ -428,20 +428,20 @@ mod tests {
 
     #[test]
     /// Verifies review-assist event mapping preserves successful review text.
-    fn focused_review_app_event_maps_successful_review_output() {
+    fn review_app_event_maps_successful_review_output() {
         // Arrange
         let diff_hash = 7;
-        let focused_review_result = Ok("Flagged one missing error branch.".to_string());
+        let review_result = Ok("Flagged one missing error branch.".to_string());
         let session_id = "session-7".to_string();
 
         // Act
         let app_event =
-            TaskService::focused_review_app_event(diff_hash, focused_review_result, session_id);
+            TaskService::review_app_event(diff_hash, review_result, session_id);
 
         // Assert
         assert_eq!(
             app_event,
-            AppEvent::FocusedReviewPrepared {
+            AppEvent::ReviewPrepared {
                 diff_hash: 7,
                 review_text: "Flagged one missing error branch.".to_string(),
                 session_id: "session-7".to_string(),
@@ -452,20 +452,20 @@ mod tests {
     #[test]
     /// Verifies review-assist event mapping preserves failure details for the
     /// reducer and view-mode status text.
-    fn focused_review_app_event_maps_failure_output() {
+    fn review_app_event_maps_failure_output() {
         // Arrange
         let diff_hash = 9;
-        let focused_review_result = Err("empty response".to_string());
+        let review_result = Err("empty response".to_string());
         let session_id = "session-9".to_string();
 
         // Act
         let app_event =
-            TaskService::focused_review_app_event(diff_hash, focused_review_result, session_id);
+            TaskService::review_app_event(diff_hash, review_result, session_id);
 
         // Assert
         assert_eq!(
             app_event,
-            AppEvent::FocusedReviewPreparationFailed {
+            AppEvent::ReviewPreparationFailed {
                 diff_hash: 9,
                 error: "empty response".to_string(),
                 session_id: "session-9".to_string(),
@@ -476,12 +476,12 @@ mod tests {
     #[test]
     /// Verifies review output text is trimmed before it is stored in app
     /// state.
-    fn focused_review_output_text_trims_agent_response_text() {
+    fn review_output_text_trims_agent_response_text() {
         // Arrange
         let agent_response = AgentResponse::plain("  Review looks good.  \n");
 
         // Act
-        let review_text = TaskService::focused_review_output_text(&agent_response)
+        let review_text = TaskService::review_output_text(&agent_response)
             .expect("non-empty output should be accepted");
 
         // Assert
@@ -491,12 +491,12 @@ mod tests {
     #[test]
     /// Verifies whitespace-only review output is rejected so users see a clear
     /// error instead of a blank review pane.
-    fn focused_review_output_text_rejects_blank_agent_response_text() {
+    fn review_output_text_rejects_blank_agent_response_text() {
         // Arrange
         let agent_response = AgentResponse::plain(" \n\t ");
 
         // Act
-        let result = TaskService::focused_review_output_text(&agent_response);
+        let result = TaskService::review_output_text(&agent_response);
 
         // Assert
         let error = result.expect_err("blank output should be rejected");
@@ -506,14 +506,14 @@ mod tests {
     #[test]
     /// Ensures review prompt rendering includes read-only constraints
     /// while keeping internet and non-editing verification options available.
-    fn test_focused_review_assist_prompt_enforces_read_only_constraints() {
+    fn test_review_assist_prompt_enforces_read_only_constraints() {
         // Arrange
-        let focused_review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
+        let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
         let session_summary = Some("Refactor parser error mapping.");
 
         // Act
         let prompt =
-            TaskService::focused_review_assist_prompt(focused_review_diff, session_summary)
+            TaskService::review_assist_prompt(review_diff, session_summary)
                 .expect("review prompt should render");
 
         // Assert

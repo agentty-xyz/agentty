@@ -14,7 +14,7 @@ pub enum DoneSessionOutputMode {
     /// Renders the full captured session output stream.
     Output,
     /// Renders a concise review view with critical diff highlights.
-    FocusedReview,
+    Review,
 }
 
 impl DoneSessionOutputMode {
@@ -23,7 +23,7 @@ impl DoneSessionOutputMode {
     pub const fn toggled(self) -> Self {
         match self {
             Self::Summary => Self::Output,
-            Self::Output | Self::FocusedReview => Self::Summary,
+            Self::Output | Self::Review => Self::Summary,
         }
     }
 }
@@ -38,7 +38,7 @@ pub enum ConfirmationIntent {
     /// Confirms queueing merge for the active view session.
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
-    RegenerateFocusedReview,
+    RegenerateReview,
 }
 
 /// Stored view-mode values used to restore session view after merge
@@ -46,8 +46,8 @@ pub enum ConfirmationIntent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfirmationViewMode {
     pub done_session_output_mode: DoneSessionOutputMode,
-    pub focused_review_status_message: Option<String>,
-    pub focused_review_text: Option<String>,
+    pub review_status_message: Option<String>,
+    pub review_text: Option<String>,
     pub scroll_offset: Option<u16>,
     pub session_id: String,
 }
@@ -58,8 +58,8 @@ impl ConfirmationViewMode {
     pub fn into_view_mode(self) -> AppMode {
         AppMode::View {
             done_session_output_mode: self.done_session_output_mode,
-            focused_review_status_message: self.focused_review_status_message,
-            focused_review_text: self.focused_review_text,
+            review_status_message: self.review_status_message,
+            review_text: self.review_text,
             session_id: self.session_id,
             scroll_offset: self.scroll_offset,
         }
@@ -169,9 +169,9 @@ pub enum AppMode {
         done_session_output_mode: DoneSessionOutputMode,
         /// Optional status line shown while review text is loading or
         /// unavailable.
-        focused_review_status_message: Option<String>,
+        review_status_message: Option<String>,
         /// Agent-assisted review text for the active session.
-        focused_review_text: Option<String>,
+        review_text: Option<String>,
         session_id: String,
         scroll_offset: Option<u16>,
     },
@@ -216,8 +216,8 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         done_session_output_mode: DoneSessionOutputMode,
-        focused_review_status_message: Option<String>,
-        focused_review_text: Option<String>,
+        review_status_message: Option<String>,
+        review_text: Option<String>,
         publish_branch_action: Option<PublishBranchAction>,
         session_id: String,
         session_state: ViewSessionState,
@@ -254,16 +254,16 @@ impl HelpContext {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
                 done_session_output_mode,
-                focused_review_status_message,
-                focused_review_text,
+                review_status_message,
+                review_text,
                 publish_branch_action: _,
                 session_id,
                 scroll_offset,
                 ..
             } => AppMode::View {
                 done_session_output_mode,
-                focused_review_status_message,
-                focused_review_text,
+                review_status_message,
+                review_text,
                 session_id,
                 scroll_offset,
             },
@@ -297,26 +297,26 @@ mod tests {
         // Arrange
         let summary_mode = DoneSessionOutputMode::Summary;
         let output_mode = DoneSessionOutputMode::Output;
-        let focused_review_mode = DoneSessionOutputMode::FocusedReview;
+        let review_mode = DoneSessionOutputMode::Review;
 
         // Act
         let toggled_from_summary = summary_mode.toggled();
         let toggled_from_output = output_mode.toggled();
-        let toggled_from_focused_review = focused_review_mode.toggled();
+        let toggled_from_review = review_mode.toggled();
 
         // Assert
         assert_eq!(toggled_from_summary, DoneSessionOutputMode::Output);
         assert_eq!(toggled_from_output, DoneSessionOutputMode::Summary);
-        assert_eq!(toggled_from_focused_review, DoneSessionOutputMode::Summary);
+        assert_eq!(toggled_from_review, DoneSessionOutputMode::Summary);
     }
 
     #[test]
     fn test_confirmation_view_mode_into_view_mode_restores_snapshot_values() {
         // Arrange
         let confirmation_view_mode = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-            focused_review_status_message: Some("Preparing focused review".to_string()),
-            focused_review_text: Some("Critical finding".to_string()),
+            done_session_output_mode: DoneSessionOutputMode::Review,
+            review_status_message: Some("Preparing focused review".to_string()),
+            review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(7),
             session_id: "session-id".to_string(),
         };
@@ -328,14 +328,14 @@ mod tests {
         assert!(matches!(
             mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some(ref focused_review_status_message),
-                focused_review_text: Some(ref focused_review_text),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some(ref review_status_message),
+                review_text: Some(ref review_text),
                 ref session_id,
                 scroll_offset: Some(7),
             } if session_id == "session-id"
-                && focused_review_status_message == "Preparing focused review"
-                && focused_review_text == "Critical finding"
+                && review_status_message == "Preparing focused review"
+                && review_text == "Critical finding"
         ));
     }
 
@@ -344,8 +344,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             publish_branch_action: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
@@ -372,8 +372,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: Some("Preparing review...".to_string()),
-            focused_review_text: Some("Ready".to_string()),
+            review_status_message: Some("Preparing review...".to_string()),
+            review_text: Some("Ready".to_string()),
             publish_branch_action: Some(PublishBranchAction::Push),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
@@ -388,13 +388,13 @@ mod tests {
             mode,
             AppMode::View {
                 ref session_id,
-                focused_review_status_message: Some(ref focused_review_status_message),
-                focused_review_text: Some(ref focused_review_text),
+                review_status_message: Some(ref review_status_message),
+                review_text: Some(ref review_text),
                 scroll_offset: Some(4),
                 ..
             } if session_id == "session-id"
-                && focused_review_status_message == "Preparing review..."
-                && focused_review_text == "Ready"
+                && review_status_message == "Preparing review..."
+                && review_text == "Ready"
         ));
     }
 
@@ -403,8 +403,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             publish_branch_action: Some(PublishBranchAction::Push),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::Interactive,

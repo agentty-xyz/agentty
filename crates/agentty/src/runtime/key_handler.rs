@@ -5,7 +5,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 
-use crate::app::{App, FocusedReviewCacheEntry, diff_content_hash};
+use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, backend_err, mode};
 use crate::ui::state::app_mode::{
@@ -319,7 +319,7 @@ async fn handle_confirmation_decision(
 fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
     if let AppMode::Confirmation {
         confirmation_intent:
-            ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateFocusedReview,
+            ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview,
         restore_view: Some(restore_view),
         ..
     } = mode
@@ -359,8 +359,8 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
         }
-        ConfirmationIntent::RegenerateFocusedReview => {
-            handle_regenerate_focused_review_confirmation(
+        ConfirmationIntent::RegenerateReview => {
+            handle_regenerate_review_confirmation(
                 app,
                 confirmation_session_id,
                 restore_view,
@@ -408,7 +408,7 @@ async fn handle_merge_confirmation(
 
 /// Clears the focused review cache and restarts generation for the confirmed
 /// session, then restores focused review mode with loading state.
-async fn handle_regenerate_focused_review_confirmation(
+async fn handle_regenerate_review_confirmation(
     app: &mut App,
     confirmation_session_id: Option<String>,
     restore_view: Option<ConfirmationViewMode>,
@@ -419,7 +419,7 @@ async fn handle_regenerate_focused_review_confirmation(
         return Ok(EventResult::Continue);
     };
 
-    app.focused_review_cache.remove(&session_id);
+    app.review_cache.remove(&session_id);
 
     let session = app
         .sessions
@@ -445,14 +445,14 @@ async fn handle_regenerate_focused_review_confirmation(
 
     if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
         let mut view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            done_session_output_mode: DoneSessionOutputMode::Review,
+            review_status_message: None,
+            review_text: None,
             scroll_offset: None,
             session_id: session_id.clone(),
         });
-        view_mode.focused_review_status_message = None;
-        view_mode.focused_review_text = if diff.trim().is_empty() {
+        view_mode.review_status_message = None;
+        view_mode.review_text = if diff.trim().is_empty() {
             Some("No diff changes found for review.".to_string())
         } else {
             Some(diff)
@@ -464,11 +464,11 @@ async fn handle_regenerate_focused_review_confirmation(
 
     let diff_hash = diff_content_hash(&diff);
     let review_model = app.settings.default_review_model;
-    app.focused_review_cache.insert(
+    app.review_cache.insert(
         session_id.clone(),
-        FocusedReviewCacheEntry::Loading { diff_hash },
+        ReviewCacheEntry::Loading { diff_hash },
     );
-    app.start_focused_review_assist(
+    app.start_review_assist(
         &session_id,
         &session_folder,
         diff_hash,
@@ -477,16 +477,16 @@ async fn handle_regenerate_focused_review_confirmation(
     );
 
     let mut view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-        done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-        focused_review_status_message: None,
-        focused_review_text: None,
+        done_session_output_mode: DoneSessionOutputMode::Review,
+        review_status_message: None,
+        review_text: None,
         scroll_offset: None,
         session_id,
     });
-    view_mode.done_session_output_mode = DoneSessionOutputMode::FocusedReview;
-    view_mode.focused_review_status_message =
-        Some(crate::runtime::mode::session_view::focused_review_loading_message(review_model));
-    view_mode.focused_review_text = None;
+    view_mode.done_session_output_mode = DoneSessionOutputMode::Review;
+    view_mode.review_status_message =
+        Some(crate::runtime::mode::session_view::review_loading_message(review_model));
+    view_mode.review_text = None;
     app.mode = view_mode.into_view_mode();
 
     Ok(EventResult::Continue)
@@ -609,8 +609,8 @@ mod tests {
             message: "Review request refreshed.".to_string(),
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: Some(2),
                 session_id: "session-id".to_string(),
             },
@@ -736,9 +736,9 @@ mod tests {
             confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some("Preparing focused review".to_string()),
-                focused_review_text: Some("Review output".to_string()),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some("Preparing focused review".to_string()),
+                review_text: Some("Review output".to_string()),
                 scroll_offset: Some(6),
                 session_id: session_id.clone(),
             }),
@@ -755,14 +755,14 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some(ref focused_review_status_message),
-                focused_review_text: Some(ref focused_review_text),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some(ref review_status_message),
+                review_text: Some(ref review_text),
                 session_id: ref session_id_in_mode,
                 scroll_offset: Some(6),
             } if session_id_in_mode == &session_id
-                && focused_review_status_message == "Preparing focused review"
-                && focused_review_text == "Review output"
+                && review_status_message == "Preparing focused review"
+                && review_text == "Review output"
         ));
     }
 
@@ -780,8 +780,8 @@ mod tests {
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: Some(2),
                 session_id: session_id.clone(),
             }),
@@ -799,8 +799,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 session_id: ref session_id_in_mode,
                 scroll_offset: Some(2),
             } if session_id_in_mode == &session_id
@@ -820,9 +820,9 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some("Preparing focused review".to_string()),
-                focused_review_text: Some("Critical finding".to_string()),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some("Preparing focused review".to_string()),
+                review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(7),
                 session_id: "session-id".to_string(),
             },
@@ -839,9 +839,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some(ref status_message),
-                focused_review_text: Some(ref review_text),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some(ref status_message),
+                review_text: Some(ref review_text),
                 ref session_id,
                 scroll_offset: Some(7),
             } if session_id == "session-id"
@@ -861,8 +861,8 @@ mod tests {
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".to_string(),
             },
@@ -900,8 +900,8 @@ mod tests {
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".to_string(),
             },
@@ -933,8 +933,8 @@ mod tests {
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".to_string(),
             },
@@ -991,9 +991,9 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some("Preparing focused review".to_string()),
-                focused_review_text: Some("Critical finding".to_string()),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some("Preparing focused review".to_string()),
+                review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(3),
                 session_id: "session-id".to_string(),
             },
@@ -1012,9 +1012,9 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some(ref status_message),
-                focused_review_text: Some(ref review_text),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some(ref status_message),
+                review_text: Some(ref review_text),
                 ref session_id,
                 scroll_offset: Some(3),
             } if session_id == "session-id"
@@ -1031,8 +1031,8 @@ mod tests {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".to_string(),
             },
@@ -1065,8 +1065,8 @@ mod tests {
             commands: Vec::new(),
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: None,
                 session_id: "session-id".to_string(),
             },
@@ -1099,8 +1099,8 @@ mod tests {
             commands: vec!["cargo test".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: Some(4),
                 session_id: "session-id".to_string(),
             },
@@ -1120,8 +1120,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 ref session_id,
                 scroll_offset: Some(4),
             } if session_id == "session-id"
@@ -1151,8 +1151,8 @@ mod tests {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 scroll_offset: Some(2),
                 session_id: expected_session_id.clone(),
             },
@@ -1172,8 +1172,8 @@ mod tests {
             app.mode,
             AppMode::View {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
-                focused_review_status_message: None,
-                focused_review_text: None,
+                review_status_message: None,
+                review_text: None,
                 ref session_id,
                 scroll_offset: Some(2),
             } if session_id == &expected_session_id
@@ -1187,9 +1187,9 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some("Preparing focused review".to_string()),
-                focused_review_text: Some("Critical finding".to_string()),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some("Preparing focused review".to_string()),
+                review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(1),
                 session_id: "session-id".to_string(),
             },
@@ -1212,9 +1212,9 @@ mod tests {
                 ref commands,
                 restore_view:
                     ConfirmationViewMode {
-                        done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                        focused_review_status_message: Some(ref status_message),
-                        focused_review_text: Some(ref review_text),
+                        done_session_output_mode: DoneSessionOutputMode::Review,
+                        review_status_message: Some(ref status_message),
+                        review_text: Some(ref review_text),
                         scroll_offset: Some(1),
                         ref session_id,
                     },
@@ -1234,13 +1234,13 @@ mod tests {
             .await
             .expect("failed to create session");
         app.mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::RegenerateFocusedReview,
+            confirmation_intent: ConfirmationIntent::RegenerateReview,
             confirmation_message: "Regenerate focused review?".to_string(),
             confirmation_title: "Confirm Regenerate".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: None,
-                focused_review_text: Some("Previous review".to_string()),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: None,
+                review_text: Some("Previous review".to_string()),
                 scroll_offset: Some(4),
                 session_id: session_id.clone(),
             }),
@@ -1257,8 +1257,8 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_text: Some(ref review_text),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_text: Some(ref review_text),
                 scroll_offset: Some(4),
                 ..
             } if review_text == "Previous review"
@@ -1266,7 +1266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_confirmation_decision_confirm_regenerates_focused_review() {
+    async fn test_handle_confirmation_decision_confirm_regenerates_review() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_with_git().await;
         let session_id = app
@@ -1276,21 +1276,21 @@ mod tests {
         let session_folder = app.sessions.sessions[0].folder.clone();
         std::fs::write(session_folder.join("README.md"), "regenerate test\n")
             .expect("failed to write");
-        app.focused_review_cache.insert(
+        app.review_cache.insert(
             session_id.clone(),
-            FocusedReviewCacheEntry::Ready {
+            ReviewCacheEntry::Ready {
                 text: "Old review".to_string(),
                 diff_hash: 99,
             },
         );
         app.mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::RegenerateFocusedReview,
+            confirmation_intent: ConfirmationIntent::RegenerateReview,
             confirmation_message: "Regenerate focused review?".to_string(),
             confirmation_title: "Confirm Regenerate".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: None,
-                focused_review_text: Some("Old review".to_string()),
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: None,
+                review_text: Some("Old review".to_string()),
                 scroll_offset: None,
                 session_id: session_id.clone(),
             }),
@@ -1307,15 +1307,15 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::FocusedReview,
-                focused_review_status_message: Some(_),
-                focused_review_text: None,
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some(_),
+                review_text: None,
                 ..
             }
         ));
         assert!(matches!(
-            app.focused_review_cache.get(&session_id),
-            Some(FocusedReviewCacheEntry::Loading { .. })
+            app.review_cache.get(&session_id),
+            Some(ReviewCacheEntry::Loading { .. })
         ));
     }
 }

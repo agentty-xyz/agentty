@@ -255,8 +255,8 @@ enum ResolvedHelpBackground<'a> {
     List,
     View {
         done_session_output_mode: DoneSessionOutputMode,
-        focused_review_status_message: &'a Option<String>,
-        focused_review_text: &'a Option<String>,
+        review_status_message: &'a Option<String>,
+        review_text: &'a Option<String>,
         scroll_offset: Option<u16>,
         session_id: &'a str,
         session_index: usize,
@@ -278,8 +278,8 @@ fn resolve_help_background<'a>(
         HelpContext::List { .. } => Some(ResolvedHelpBackground::List),
         HelpContext::View {
             done_session_output_mode,
-            focused_review_status_message,
-            focused_review_text,
+            review_status_message,
+            review_text,
             session_id,
             scroll_offset,
             ..
@@ -288,8 +288,8 @@ fn resolve_help_background<'a>(
             .position(|session| session.id == *session_id)
             .map(|session_index| ResolvedHelpBackground::View {
                 done_session_output_mode: *done_session_output_mode,
-                focused_review_status_message,
-                focused_review_text,
+                review_status_message,
+                review_text,
                 scroll_offset: *scroll_offset,
                 session_id,
                 session_index,
@@ -327,16 +327,16 @@ fn render_help_background(
         }
         Some(ResolvedHelpBackground::View {
             done_session_output_mode,
-            focused_review_status_message,
-            focused_review_text,
+            review_status_message,
+            review_text,
             session_id,
             session_index,
             scroll_offset,
         }) => {
             let bg_mode = AppMode::View {
                 done_session_output_mode,
-                focused_review_status_message: focused_review_status_message.clone(),
-                focused_review_text: focused_review_text.clone(),
+                review_status_message: review_status_message.clone(),
+                review_text: review_text.clone(),
                 session_id: session_id.to_string(),
                 scroll_offset,
             };
@@ -547,8 +547,8 @@ mod tests {
         // Arrange
         let help_context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            focused_review_status_message: None,
-            focused_review_text: None,
+            review_status_message: None,
+            review_text: None,
             publish_branch_action: None,
             session_id: "missing-session".to_string(),
             session_state: crate::ui::state::help_action::ViewSessionState::Done,

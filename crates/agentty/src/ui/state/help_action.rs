@@ -194,7 +194,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ViewSessionState::Interactive | ViewSessionState::Review
     );
     let can_show_diff = state.session_state == ViewSessionState::Review;
-    let can_show_focused_review = state.session_state == ViewSessionState::Review;
+    let can_show_review = state.session_state == ViewSessionState::Review;
     let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -211,7 +211,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
     }
 
-    if can_show_focused_review {
+    if can_show_review {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
@@ -258,7 +258,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Interactive | ViewSessionState::Review
     );
-    let can_show_focused_review = state.session_state == ViewSessionState::Review;
+    let can_show_review = state.session_state == ViewSessionState::Review;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
@@ -276,7 +276,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
     }
 
-    if can_show_focused_review {
+    if can_show_review {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
