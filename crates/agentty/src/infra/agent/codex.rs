@@ -3,15 +3,15 @@ use std::process::Command;
 use std::sync::Arc;
 
 use super::backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
+use crate::infra::agent::app_server::RealCodexAppServerClient;
 use crate::infra::app_server::AppServerClient;
-use crate::infra::codex_app_server::RealCodexAppServerClient;
 
-/// Keeps Codex setup wired through [`AgentBackend`] while forbidding direct
-/// CLI execution.
+/// Keeps Codex setup wired through [`AgentBackend`] while always routing turns
+/// through the Codex app-server runtime.
 ///
-/// Codex session turns and one-shot utility prompts must always run through
-/// `codex app-server`, so `build_command()` fails closed if a caller tries to
-/// construct a direct subprocess invocation.
+/// Codex session turns and one-shot utility prompts run on top of
+/// `codex app-server`, so `build_command()` constructs the long-lived runtime
+/// process command instead of a one-shot CLI prompt invocation.
 pub(super) struct CodexBackend;
 
 impl AgentBackend for CodexBackend {
@@ -35,13 +35,37 @@ impl AgentBackend for CodexBackend {
 
     fn build_command<'request>(
         &'request self,
-        _request: BuildCommandRequest<'request>,
+        request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
-        Err(AgentBackendError::CommandBuild(
-            "Codex direct CLI execution is disabled; use the Codex app-server transport"
-                .to_string(),
-        ))
+        build_app_server_command(request)
     }
+}
+
+/// Builds the persistent `codex app-server` runtime command for one session.
+///
+/// The prompt payload is sent later over JSON-RPC, so prompt text, request
+/// kind, attachments, and reasoning level do not change the spawned process.
+pub(crate) fn build_app_server_command(
+    request: BuildCommandRequest<'_>,
+) -> Result<Command, AgentBackendError> {
+    let BuildCommandRequest {
+        attachments: _attachments,
+        folder,
+        prompt: _prompt,
+        request_kind: _request_kind,
+        model,
+        reasoning_level: _reasoning_level,
+    } = request;
+    let mut command = Command::new("codex");
+    command
+        .arg("--model")
+        .arg(model)
+        .arg("app-server")
+        .arg("--listen")
+        .arg("stdio://")
+        .current_dir(folder);
+
+    Ok(command)
 }
 
 #[cfg(test)]
@@ -61,16 +85,15 @@ mod tests {
         }
     }
 
-    /// Verifies direct Codex command construction is rejected because Codex
-    /// must run through app-server transport.
+    /// Verifies Codex start requests build the persistent app-server command.
     #[test]
-    fn build_command_returns_error_for_start_requests() {
+    fn build_command_builds_app_server_runtime_for_start_requests() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let error = AgentBackend::build_command(
+        let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -81,22 +104,24 @@ mod tests {
                 reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
-        .expect_err("command build should fail");
+        .expect("command build should succeed");
+        let debug_command = format!("{command:?}");
 
         // Assert
-        assert!(error.to_string().contains("app-server transport"));
+        assert!(debug_command.contains("codex"));
+        assert!(debug_command.contains("app-server"));
+        assert!(debug_command.contains("stdio://"));
     }
 
-    /// Verifies direct Codex command construction is rejected for resume
-    /// requests that include transcript replay.
+    /// Verifies resume requests reuse the same Codex runtime launch command.
     #[test]
-    fn build_command_returns_error_for_resume_requests_with_session_output() {
+    fn build_command_builds_app_server_runtime_for_resume_requests() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let error = AgentBackend::build_command(
+        let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -107,74 +132,34 @@ mod tests {
                 reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
-        .expect_err("resume command build should fail");
+        .expect("resume command build should succeed");
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
 
         // Assert
-        assert!(error.to_string().contains("app-server transport"));
+        assert_eq!(
+            arguments,
+            vec![
+                "--model",
+                "gpt-5.3-codex",
+                "app-server",
+                "--listen",
+                "stdio://"
+            ]
+        );
     }
 
-    /// Verifies direct Codex command construction is rejected for resume
-    /// requests without stored transcript replay.
+    /// Verifies utility prompts use the same app-server runtime launch path.
     #[test]
-    fn build_command_returns_error_for_resume_requests_without_session_output() {
+    fn build_command_builds_app_server_runtime_for_utility_prompts() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let error = AgentBackend::build_command(
-            &backend,
-            BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Continue edits",
-                request_kind: &session_resume_request_kind(None),
-                model: "gpt-5.3-codex",
-                reasoning_level: crate::domain::agent::ReasoningLevel::High,
-            },
-        )
-        .expect_err("resume command build should fail");
-
-        // Assert
-        assert!(error.to_string().contains("app-server transport"));
-    }
-
-    #[test]
-    /// Verifies direct Codex command construction is rejected for plain start
-    /// requests regardless of reasoning level.
-    fn build_command_returns_error_with_low_reasoning_level() {
-        // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
-        let backend = CodexBackend;
-
-        // Act
-        let error = AgentBackend::build_command(
-            &backend,
-            BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Run checks",
-                request_kind: &session_start_request_kind(),
-                model: "gpt-5.3-codex",
-                reasoning_level: crate::domain::agent::ReasoningLevel::Low,
-            },
-        )
-        .expect_err("command build should fail");
-
-        // Assert
-        assert!(error.to_string().contains("app-server transport"));
-    }
-
-    #[test]
-    /// Verifies direct Codex command construction is rejected for one-shot
-    /// utility prompts.
-    fn build_command_returns_error_for_utility_prompts() {
-        // Arrange
-        let temp_directory = tempdir().expect("failed to create temp dir");
-        let backend = CodexBackend;
-
-        // Act
-        let error = AgentBackend::build_command(
+        let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -185,9 +170,9 @@ mod tests {
                 reasoning_level: crate::domain::agent::ReasoningLevel::Low,
             },
         )
-        .expect_err("command build should fail");
+        .expect("utility command build should succeed");
 
         // Assert
-        assert!(error.to_string().contains("app-server transport"));
+        assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
     }
 }

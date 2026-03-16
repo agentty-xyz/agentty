@@ -17,6 +17,8 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::sync::mpsc;
 
+use crate::domain::agent::AgentKind;
+use crate::infra::agent;
 use crate::infra::app_server::{
     self, AppServerClient, AppServerFuture, AppServerSessionRegistry, AppServerStreamEvent,
     AppServerTurnRequest, AppServerTurnResponse,
@@ -97,7 +99,7 @@ impl GeminiRuntimeTransport for GeminiStdioTransport {
 }
 
 /// Production [`AppServerClient`] backed by `gemini --experimental-acp`.
-pub struct RealGeminiAcpClient {
+pub(crate) struct RealGeminiAcpClient {
     sessions: AppServerSessionRegistry<GeminiSessionRuntime>,
 }
 
@@ -110,7 +112,7 @@ struct PromptCompletion {
 
 impl RealGeminiAcpClient {
     /// Creates an empty ACP runtime registry for Gemini sessions.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             sessions: AppServerSessionRegistry::new("Gemini ACP"),
         }
@@ -158,12 +160,21 @@ impl RealGeminiAcpClient {
     /// If bootstrap fails after spawn, the child is shut down before returning
     /// the error to avoid leaking an orphaned runtime process.
     async fn start_runtime(request: &AppServerTurnRequest) -> Result<GeminiSessionRuntime, String> {
-        let mut command = tokio::process::Command::new("gemini");
+        let request_kind = crate::infra::channel::AgentRequestKind::SessionStart;
+        let command = agent::create_backend(AgentKind::Gemini)
+            .build_command(agent::BuildCommandRequest {
+                attachments: &[],
+                folder: request.folder.as_path(),
+                prompt: "",
+                request_kind: &request_kind,
+                model: &request.model,
+                reasoning_level: request.reasoning_level,
+            })
+            .map_err(|error| {
+                format!("Failed to build `gemini --experimental-acp` command: {error}")
+            })?;
+        let mut command = tokio::process::Command::from(command);
         command
-            .arg("--experimental-acp")
-            .arg("--model")
-            .arg(&request.model)
-            .current_dir(&request.folder)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

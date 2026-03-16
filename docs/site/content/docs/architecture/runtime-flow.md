@@ -198,7 +198,7 @@ Streaming behavior differs by transport/provider:
   so app-server providers (Codex and Gemini) resolve their own runtime client
   and Claude stays on direct CLI subprocess execution.
 - Codex thought phases (`thinking`/`plan`/`reasoning`/`thought`) stream as `ThoughtDelta`.
-- Provider capabilities in `crates/agentty/src/infra/agent/backend.rs` centralize whether transports stream assistant chunks live, require strict final protocol validation, or classify app-server phase labels as thought output, while concrete backends now own the actual app-server client selection.
+- Provider capabilities in `crates/agentty/src/infra/agent/backend.rs` centralize whether transports stream assistant chunks live, require strict final protocol validation, or classify app-server phase labels as thought output, while concrete backends now own both app-server client selection and runtime command construction.
 - Strict providers suppress streamed assistant chunks when needed so malformed first-pass protocol JSON is not persisted.
 - Worker persistence behavior: streamed `ThoughtDelta` and `Progress` updates drive transient progress badges and are not appended to session transcript output.
 

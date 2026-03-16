@@ -4,6 +4,7 @@
 //! and response parsing to focused files under `infra/agent/` using the
 //! standard `agent.rs` + `agent/` module layout.
 
+pub(crate) mod app_server;
 mod backend;
 mod claude;
 mod codex;

@@ -12,10 +12,12 @@ When backend protocol or provider parsing behavior changes, update:
 
 ## Directory Index
 
+- [`app_server/`](app_server/) - Provider-specific app-server client implementations kept private to agent backends.
+- [`app_server.rs`](app_server.rs) - Router-only module for provider-specific app-server clients under `agent/`.
 - [`backend.rs`](backend.rs) - Shared backend trait, backend factory, and resume prompt construction.
 - [`claude.rs`](claude.rs) - Claude CLI backend command construction.
-- [`codex.rs`](codex.rs) - Codex CLI backend command construction.
-- [`gemini.rs`](gemini.rs) - Gemini CLI backend command construction.
+- [`codex.rs`](codex.rs) - Codex backend transport command construction and app-server client selection.
+- [`gemini.rs`](gemini.rs) - Gemini backend transport command construction and app-server client selection.
 - [`prompt.rs`](prompt.rs) - Shared prompt preparation helpers for transcript replay and protocol instruction injection.
 - [`protocol/`](protocol/) - Structured response protocol subsystem split into model, schema, and parse modules.
 - [`protocol.rs`](protocol.rs) - Protocol module router and public re-exports for structured response handling.

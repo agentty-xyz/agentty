@@ -153,8 +153,9 @@ Agentty validates final agent output against the structured response protocol.
   final parsing, and app-server thought-phase handling are centralized in the
   shared provider descriptor in `crates/agentty/src/infra/agent/backend.rs`.
 - Concrete backends in `crates/agentty/src/infra/agent/` now also own app-server
-  client selection, so Codex and Gemini runtime wiring stays with their
-  provider-specific implementations instead of a separate production router.
+  client selection and runtime command construction, so Codex and Gemini
+  transport wiring stays with their provider-specific implementations instead
+  of top-level `infra/` modules.
 - Claude turns use native schema validation via `claude --json-schema` and
   `--output-format json` (no Claude `stream-json` mode).
 - Prompt-side protocol instructions rely on the raw self-descriptive

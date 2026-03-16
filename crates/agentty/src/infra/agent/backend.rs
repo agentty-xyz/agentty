@@ -53,7 +53,7 @@ pub(crate) enum AppServerThoughtPolicy {
     PhaseLabel,
 }
 
-/// Request payload used to build provider commands.
+/// Request payload used to build provider transport commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildCommandRequest<'a> {
     /// Ordered local image attachments referenced from the prompt body.
@@ -115,7 +115,11 @@ pub trait AgentBackend: Send + Sync {
         default_client: Option<Arc<dyn AppServerClient>>,
     ) -> Option<Arc<dyn AppServerClient>>;
 
-    /// Builds one command for a start, resume, or one-shot interaction.
+    /// Builds one provider transport command.
+    ///
+    /// CLI-backed providers return the per-turn subprocess command. App-server
+    /// providers return the long-lived runtime command that owns later RPC
+    /// turn execution.
     ///
     /// # Errors
     /// Returns an error when prompt rendering or provider argument

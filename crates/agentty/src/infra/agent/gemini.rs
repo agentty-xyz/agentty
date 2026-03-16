@@ -1,13 +1,13 @@
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 
 use super::backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
 use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
+use crate::infra::agent::app_server::RealGeminiAcpClient;
 use crate::infra::app_server::AppServerClient;
-use crate::infra::gemini_acp::RealGeminiAcpClient;
 
-/// Backend implementation for the Gemini CLI.
+/// Backend implementation for the Gemini ACP runtime.
 pub(super) struct GeminiBackend;
 
 impl AgentBackend for GeminiBackend {
@@ -35,35 +35,33 @@ impl AgentBackend for GeminiBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
-        let BuildCommandRequest {
-            attachments: _attachments,
-            folder,
-            prompt: _prompt,
-            request_kind,
-            model,
-            reasoning_level: _reasoning_level,
-        } = request;
-        let has_history_replay = request_kind
-            .session_output()
-            .is_some_and(|session_output| !session_output.trim().is_empty());
-        let mut command = Command::new("gemini");
-        command
-            .arg("--model")
-            .arg(model)
-            .arg("--approval-mode")
-            .arg("auto_edit")
-            .arg("--output-format")
-            .arg("stream-json")
-            .current_dir(folder)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if request_kind.is_resume() && !has_history_replay {
-            command.arg("--resume").arg("latest");
-        }
-
-        Ok(command)
+        build_app_server_command(request)
     }
+}
+
+/// Builds the persistent Gemini ACP runtime command for one session.
+///
+/// Prompt submission and resume behavior happen over ACP after the process is
+/// running, so startup only depends on the working directory and model.
+pub(crate) fn build_app_server_command(
+    request: BuildCommandRequest<'_>,
+) -> Result<Command, AgentBackendError> {
+    let BuildCommandRequest {
+        attachments: _attachments,
+        folder,
+        prompt: _prompt,
+        request_kind: _request_kind,
+        model,
+        reasoning_level: _reasoning_level,
+    } = request;
+    let mut command = Command::new("gemini");
+    command
+        .arg("--experimental-acp")
+        .arg("--model")
+        .arg(model)
+        .current_dir(folder);
+
+    Ok(command)
 }
 
 /// Renders the full Gemini prompt text that Agentty streams through stdin.
@@ -144,9 +142,8 @@ mod tests {
     }
 
     #[test]
-    /// Verifies one-shot Gemini prompts keep the shared schema-only protocol
-    /// wrapper.
-    fn test_gemini_one_shot_command_uses_schema_only_protocol_instructions() {
+    /// Verifies Gemini startup uses the ACP runtime command shape.
+    fn test_gemini_build_command_uses_acp_runtime_command() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = GeminiBackend;
@@ -164,28 +161,16 @@ mod tests {
             },
         )
         .expect("command should build");
-        let debug_command = format!("{command:?}");
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        let prompt = String::from_utf8(
-            build_prompt_stdin_payload(BuildCommandRequest {
-                attachments: &[],
-                folder: temp_directory.path(),
-                prompt: "Generate title",
-                request_kind: &utility_request_kind(),
-                model: "gemini-3-flash-preview",
-                reasoning_level: ReasoningLevel::default(),
-            })
-            .expect("prompt payload should build"),
-        )
-        .expect("prompt payload should be utf-8");
 
         // Assert
-        assert!(prompt.contains("Structured response protocol:"));
-        assert!(prompt.contains("summary"));
-        assert!(debug_command.contains("--output-format"));
-        assert!(!args.iter().any(String::is_empty));
+        assert_eq!(
+            args,
+            vec!["--experimental-acp", "--model", "gemini-3-flash-preview"]
+        );
+        assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
     }
 }

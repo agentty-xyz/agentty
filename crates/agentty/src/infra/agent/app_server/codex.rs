@@ -61,13 +61,13 @@ const CODEX_TURN_TIMEOUT: Duration = Duration::from_hours(4);
 
 /// Production [`AppServerClient`] backed by `codex app-server` process
 /// instances.
-pub struct RealCodexAppServerClient {
+pub(crate) struct RealCodexAppServerClient {
     sessions: AppServerSessionRegistry<CodexSessionRuntime>,
 }
 
 impl RealCodexAppServerClient {
     /// Creates an empty app-server runtime registry.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             sessions: AppServerSessionRegistry::new("Codex"),
         }
@@ -113,27 +113,29 @@ impl RealCodexAppServerClient {
 
     /// Starts `codex app-server`, initializes it, and creates a thread.
     async fn start_runtime(request: &AppServerTurnRequest) -> Result<CodexSessionRuntime, String> {
-        Self::start_runtime_with_command(Path::new("codex"), request).await
+        let request_kind = crate::infra::channel::AgentRequestKind::SessionStart;
+        let command = agent::create_backend(AgentKind::Codex)
+            .build_command(agent::BuildCommandRequest {
+                attachments: &[],
+                folder: request.folder.as_path(),
+                prompt: "",
+                request_kind: &request_kind,
+                model: &request.model,
+                reasoning_level: request.reasoning_level,
+            })
+            .map_err(|error| format!("Failed to build `codex app-server` command: {error}"))?;
+
+        Self::start_runtime_with_built_command(command, request).await
     }
 
-    /// Starts one app-server executable, initializes it, and creates or
-    /// resumes a thread for the requested session.
-    ///
-    /// Tests use this helper with a scripted binary path so lifecycle
-    /// branches stay deterministic without depending on a real `codex`
-    /// installation.
-    async fn start_runtime_with_command(
-        executable: &Path,
+    /// Starts one pre-built Codex app-server command and bootstraps the
+    /// session runtime around its stdio streams.
+    async fn start_runtime_with_built_command(
+        command: std::process::Command,
         request: &AppServerTurnRequest,
     ) -> Result<CodexSessionRuntime, String> {
-        let mut command = tokio::process::Command::new(executable);
-        command.arg("--model").arg(&request.model);
-
+        let mut command = tokio::process::Command::from(command);
         command
-            .arg("app-server")
-            .arg("--listen")
-            .arg("stdio://")
-            .current_dir(&request.folder)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -1953,8 +1955,16 @@ cat >/dev/null
         let request = build_turn_request(temp_dir.path().to_path_buf(), Some("thread-existing"));
 
         // Act
+        let mut command = std::process::Command::new(&executable);
+        command
+            .arg("--model")
+            .arg(&request.model)
+            .arg("app-server")
+            .arg("--listen")
+            .arg("stdio://")
+            .current_dir(&request.folder);
         let mut session =
-            RealCodexAppServerClient::start_runtime_with_command(&executable, &request)
+            RealCodexAppServerClient::start_runtime_with_built_command(command, &request)
                 .await
                 .expect("runtime should start");
 
@@ -1986,8 +1996,16 @@ cat >/dev/null
         let request = build_turn_request(temp_dir.path().to_path_buf(), Some("thread-existing"));
 
         // Act
+        let mut command = std::process::Command::new(&executable);
+        command
+            .arg("--model")
+            .arg(&request.model)
+            .arg("app-server")
+            .arg("--listen")
+            .arg("stdio://")
+            .current_dir(&request.folder);
         let mut session =
-            RealCodexAppServerClient::start_runtime_with_command(&executable, &request)
+            RealCodexAppServerClient::start_runtime_with_built_command(command, &request)
                 .await
                 .expect("runtime should start");
 

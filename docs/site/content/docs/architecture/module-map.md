@@ -76,8 +76,9 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/infra/agent/` | Per-provider backend command builders and response parsing: |
 | - `backend.rs` | `AgentBackend` trait, provider capability descriptors, backend-owned transport selection, and shared final-response policy. |
 | - `claude.rs` | Claude backend implementation. |
-| - `codex.rs` | Codex backend implementation that owns Codex app-server client selection and rejects direct CLI execution so Codex always stays on app-server transport. |
-| - `gemini.rs` | Gemini backend implementation that owns Gemini ACP client selection for app-server turns and one-shot prompts. |
+| - `app_server.rs` + `infra/agent/app_server/` | Router plus provider-specific app-server clients kept private to the agent backend module. |
+| - `codex.rs` | Codex backend implementation that owns Codex app-server client selection and runtime command construction. |
+| - `gemini.rs` | Gemini backend implementation that owns Gemini ACP client selection and runtime command construction. |
 | - `prompt.rs` | Shared prompt preparation (`prepare_prompt_text`) for transcript replay and protocol preamble injection. |
 | - `protocol.rs` + `infra/agent/protocol/` | Router plus focused protocol submodules: `model.rs` for the wire contract, `schema.rs` for prompt/transport schema generation, and `parse.rs` for final/stream parsing helpers. |
 | - `response_parser.rs` | Provider-specific final/stream output parsing and usage extraction for Claude, Gemini, and Codex. |
@@ -85,8 +86,6 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/infra/app_server.rs` | `AppServerClient` trait and shared request/response stream types. |
 | `crates/agentty/src/infra/app_server_router.rs` | `RoutingAppServerClient` - reusable app-server router kept for tests and integration entry points that want one shared client across providers. |
 | `crates/agentty/src/infra/app_server_transport.rs` | Shared stdio JSON-RPC transport utilities for app-server processes. |
-| `crates/agentty/src/infra/codex_app_server.rs` | Codex app-server transport/session integration. |
-| `crates/agentty/src/infra/gemini_acp.rs` | Gemini ACP transport/session integration. |
 | `crates/agentty/src/infra/file_index.rs` | Gitignore-aware file indexing and fuzzy filtering for `@` mentions in prompts. |
 | `crates/agentty/src/infra/tmux.rs` | `TmuxClient` trait and tmux subprocess adapter used by `App` worktree-open orchestration. |
 | `crates/agentty/src/infra/version.rs` | Version checking infrastructure. |

@@ -5,12 +5,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::domain::agent::{AgentKind, AgentModel};
+use crate::infra::agent::app_server::{RealCodexAppServerClient, RealGeminiAcpClient};
 use crate::infra::app_server::{
     AppServerClient, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse,
 };
-use crate::infra::codex_app_server::RealCodexAppServerClient;
-use crate::infra::gemini_acp::RealGeminiAcpClient;
 
 /// Production router that dispatches app-server turns by model provider.
 pub struct RoutingAppServerClient {
