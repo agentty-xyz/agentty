@@ -97,6 +97,20 @@ impl ReasoningLevel {
             Self::XHigh => "xhigh",
         }
     }
+
+    /// Returns the Claude `--effort` value for this level.
+    ///
+    /// Maps `XHigh` to `"max"`, which is only supported on `claude-opus-4-6`.
+    /// The Claude CLI enforces this restriction and will surface an error for
+    /// other models.
+    pub fn claude(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "max",
+        }
+    }
 }
 
 impl FromStr for ReasoningLevel {
@@ -343,5 +357,16 @@ mod tests {
 
         // Assert
         assert_eq!(kind, AgentKind::Claude);
+    }
+
+    #[test]
+    /// Ensures `ReasoningLevel::claude()` maps all levels to the correct
+    /// Claude `--effort` values, including `XHigh` → `"max"`.
+    fn test_reasoning_level_claude_maps_all_levels() {
+        // Arrange / Act / Assert
+        assert_eq!(ReasoningLevel::Low.claude(), "low");
+        assert_eq!(ReasoningLevel::Medium.claude(), "medium");
+        assert_eq!(ReasoningLevel::High.claude(), "high");
+        assert_eq!(ReasoningLevel::XHigh.claude(), "max");
     }
 }

@@ -37,7 +37,7 @@ impl AgentBackend for ClaudeBackend {
             mode,
             model,
             protocol_profile: _protocol_profile,
-            reasoning_level: _reasoning_level,
+            reasoning_level,
         } = request;
         let mut command = Command::new("claude");
 
@@ -52,6 +52,7 @@ impl AgentBackend for ClaudeBackend {
         command.arg("--input-format").arg("text");
         command.arg("--strict-mcp-config");
         command.arg("--verbose");
+        command.arg("--effort").arg(reasoning_level.claude());
         command.arg("--output-format").arg("json");
         command
             .arg("--json-schema")
@@ -225,10 +226,57 @@ mod tests {
         assert!(debug_command.contains("MultiEdit"));
         assert!(debug_command.contains("Write"));
         assert!(debug_command.contains("--strict-mcp-config"));
+        assert!(debug_command.contains("--effort"));
         assert!(debug_command.contains("--output-format"));
         assert!(debug_command.contains("json"));
         assert!(!debug_command.contains("--permission-mode"));
         assert!(!args.iter().any(String::is_empty));
+    }
+
+    #[test]
+    /// Verifies the `--effort` flag is passed to Claude with the correct value
+    /// for each `ReasoningLevel`.
+    fn test_claude_command_passes_effort_flag_for_each_reasoning_level() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = ClaudeBackend;
+        let cases = [
+            (ReasoningLevel::Low, "low"),
+            (ReasoningLevel::Medium, "medium"),
+            (ReasoningLevel::High, "high"),
+            (ReasoningLevel::XHigh, "max"),
+        ];
+
+        for (reasoning_level, expected_effort) in cases {
+            // Act
+            let command = AgentBackend::build_command(
+                &backend,
+                BuildCommandRequest {
+                    attachments: &[],
+                    folder: temp_directory.path(),
+                    mode: AgentCommandMode::Start { prompt: "Do work" },
+                    model: "claude-sonnet-4-6",
+                    protocol_profile: crate::infra::agent::ProtocolRequestProfile::SessionTurn,
+                    reasoning_level,
+                },
+            )
+            .expect("command should build");
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            // Assert
+            let effort_pos = args
+                .iter()
+                .position(|arg| arg == "--effort")
+                .expect("--effort flag should be present");
+            assert_eq!(
+                args[effort_pos + 1],
+                expected_effort,
+                "expected effort={expected_effort} for {reasoning_level:?}"
+            );
+        }
     }
 
     #[test]
