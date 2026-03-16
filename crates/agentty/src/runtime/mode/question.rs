@@ -1,13 +1,15 @@
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
-use crate::app::App;
+use crate::app::{App, AppEvent};
 use crate::domain::input::InputState;
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPrompt;
+use crate::infra::file_index;
 use crate::runtime::EventResult;
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
+use crate::ui::state::prompt::PromptAtMentionState;
 
 /// Default response stored when users skip one model question.
 const NO_ANSWER: &str = "no answer";
@@ -27,12 +29,17 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
         return EventResult::Continue;
     }
 
+    if is_active_at_mention(app) && handle_at_mention_key(app, key) {
+        return EventResult::Continue;
+    }
+
     let Some(action) = resolve_question_action(app, key) else {
         return EventResult::Continue;
     };
 
-    if let QuestionAction::Submit(response) = action {
-        submit_response(app, response).await;
+    match action {
+        QuestionAction::Submit(response) => submit_response(app, response).await,
+        QuestionAction::Continue => sync_question_at_mention_state(app),
     }
 
     EventResult::Continue
@@ -197,6 +204,8 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
 
         input.insert_text(&normalized_text);
     }
+
+    sync_question_at_mention_state(app);
 }
 
 /// Returns the default selected option index for a question at the given
@@ -227,54 +236,58 @@ enum QuestionAction {
 /// visible. In free-text mode, `Up` returns to the last predefined option
 /// and `Down` wraps to the first.
 fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionAction> {
-    let AppMode::Question {
-        current_index,
-        input,
-        questions,
-        selected_option_index,
-        ..
-    } = &mut app.mode
-    else {
-        return None;
+    let action = {
+        let AppMode::Question {
+            current_index,
+            input,
+            questions,
+            selected_option_index,
+            ..
+        } = &mut app.mode
+        else {
+            return None;
+        };
+
+        let option_count = questions
+            .get(*current_index)
+            .map_or(0, |item| item.options.len());
+        let is_navigating_options = selected_option_index.is_some();
+
+        match key.code {
+            KeyCode::Esc => QuestionAction::Submit(NO_ANSWER.to_string()),
+            KeyCode::Enter => {
+                resolve_enter_action(input, questions, *current_index, selected_option_index)
+            }
+            KeyCode::Up | KeyCode::Char('k') if is_navigating_options => {
+                navigate_option_up(selected_option_index);
+
+                QuestionAction::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') if is_navigating_options => {
+                navigate_option_down(selected_option_index, option_count);
+
+                QuestionAction::Continue
+            }
+            KeyCode::Up
+                if !is_navigating_options && option_count > 0 && is_cursor_on_first_line(input) =>
+            {
+                *selected_option_index = Some(option_count - 1);
+
+                QuestionAction::Continue
+            }
+            KeyCode::Down
+                if !is_navigating_options && option_count > 0 && is_cursor_on_last_line(input) =>
+            {
+                *selected_option_index = Some(0);
+
+                QuestionAction::Continue
+            }
+            _ if !is_navigating_options => resolve_free_text_key(input, key),
+            _ => QuestionAction::Continue,
+        }
     };
 
-    let option_count = questions
-        .get(*current_index)
-        .map_or(0, |item| item.options.len());
-    let is_navigating_options = selected_option_index.is_some();
-
-    let action = match key.code {
-        KeyCode::Esc => QuestionAction::Submit(NO_ANSWER.to_string()),
-        KeyCode::Enter => {
-            resolve_enter_action(input, questions, *current_index, selected_option_index)
-        }
-        KeyCode::Up | KeyCode::Char('k') if is_navigating_options => {
-            navigate_option_up(selected_option_index);
-
-            QuestionAction::Continue
-        }
-        KeyCode::Down | KeyCode::Char('j') if is_navigating_options => {
-            navigate_option_down(selected_option_index, option_count);
-
-            QuestionAction::Continue
-        }
-        KeyCode::Up
-            if !is_navigating_options && option_count > 0 && is_cursor_on_first_line(input) =>
-        {
-            *selected_option_index = Some(option_count - 1);
-
-            QuestionAction::Continue
-        }
-        KeyCode::Down
-            if !is_navigating_options && option_count > 0 && is_cursor_on_last_line(input) =>
-        {
-            *selected_option_index = Some(0);
-
-            QuestionAction::Continue
-        }
-        _ if !is_navigating_options => resolve_free_text_key(input, key),
-        _ => QuestionAction::Continue,
-    };
+    sync_question_at_mention_state(app);
 
     Some(action)
 }
@@ -466,6 +479,210 @@ fn normalize_pasted_text(pasted_text: &str) -> String {
     normalized_text
 }
 
+/// Returns whether the question-mode at-mention dropdown is currently visible.
+fn is_active_at_mention(app: &App) -> bool {
+    matches!(
+        &app.mode,
+        AppMode::Question {
+            at_mention_state: Some(_),
+            input,
+            selected_option_index: None,
+            ..
+        } if input.at_mention_query().is_some()
+    )
+}
+
+/// Intercepts navigation/selection keys when the at-mention dropdown is open.
+///
+/// Returns `true` when the key was consumed by the at-mention handler.
+fn handle_at_mention_key(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc => dismiss_question_at_mention(app),
+        KeyCode::Enter | KeyCode::Tab => {
+            handle_question_at_mention_select(app);
+
+            return true;
+        }
+        KeyCode::Up => handle_question_at_mention_up(app),
+        KeyCode::Down => handle_question_at_mention_down(app),
+        _ => return false,
+    }
+
+    true
+}
+
+/// Keeps the at-mention dropdown aligned with the current input cursor
+/// position.
+///
+/// Opens the dropdown when the cursor sits inside an `@` token and the
+/// dropdown is not yet visible. Resets the selection index when already open.
+/// Dismisses the dropdown when the cursor moves away from any `@` token.
+fn sync_question_at_mention_state(app: &mut App) {
+    let (has_at_mention_query, has_at_mention_state, session_id) = match &app.mode {
+        AppMode::Question {
+            at_mention_state,
+            input,
+            selected_option_index: None,
+            session_id,
+            ..
+        } => (
+            input.at_mention_query().is_some(),
+            at_mention_state.is_some(),
+            session_id.clone(),
+        ),
+        _ => return,
+    };
+
+    if !has_at_mention_query {
+        dismiss_question_at_mention(app);
+
+        return;
+    }
+
+    if has_at_mention_state {
+        if let AppMode::Question {
+            at_mention_state: Some(state),
+            ..
+        } = &mut app.mode
+        {
+            state.selected_index = 0;
+        }
+
+        return;
+    }
+
+    activate_question_at_mention(app, &session_id);
+}
+
+/// Starts asynchronous loading of file entries for the question-mode
+/// at-mention dropdown.
+fn activate_question_at_mention(app: &mut App, session_id: &str) {
+    let session_folder = app
+        .sessions
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .map_or_else(
+            || app.working_dir().to_path_buf(),
+            |session| session.folder.clone(),
+        );
+    let owned_session_id = session_id.to_string();
+    let event_tx = app.services.event_sender();
+
+    tokio::spawn(async move {
+        let entries = tokio::task::spawn_blocking(move || file_index::list_files(&session_folder))
+            .await
+            .unwrap_or_default();
+
+        let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
+            entries,
+            session_id: owned_session_id,
+        });
+    });
+
+    if let AppMode::Question {
+        at_mention_state, ..
+    } = &mut app.mode
+    {
+        *at_mention_state = Some(PromptAtMentionState::new(Vec::new()));
+    }
+}
+
+/// Clears the question-mode at-mention dropdown state.
+fn dismiss_question_at_mention(app: &mut App) {
+    if let AppMode::Question {
+        at_mention_state, ..
+    } = &mut app.mode
+    {
+        *at_mention_state = None;
+    }
+}
+
+/// Moves the at-mention selection up in question mode.
+fn handle_question_at_mention_up(app: &mut App) {
+    if let AppMode::Question {
+        at_mention_state: Some(state),
+        ..
+    } = &mut app.mode
+    {
+        state.selected_index = state.selected_index.saturating_sub(1);
+    }
+}
+
+/// Moves the at-mention selection down in question mode.
+fn handle_question_at_mention_down(app: &mut App) {
+    let filtered_count = match &app.mode {
+        AppMode::Question {
+            at_mention_state: Some(state),
+            input,
+            ..
+        } => {
+            let query = input
+                .at_mention_query()
+                .map_or(String::new(), |(_, query)| query);
+
+            file_index::filter_entries(&state.all_entries, &query).len()
+        }
+        _ => return,
+    };
+
+    if let AppMode::Question {
+        at_mention_state: Some(state),
+        ..
+    } = &mut app.mode
+    {
+        let max_index = filtered_count.saturating_sub(1);
+        state.selected_index = (state.selected_index + 1).min(max_index);
+    }
+}
+
+/// Selects the currently highlighted file and inserts it into the question
+/// input.
+fn handle_question_at_mention_select(app: &mut App) {
+    let mut should_dismiss = false;
+    let replacement = match &app.mode {
+        AppMode::Question {
+            at_mention_state: Some(state),
+            input,
+            ..
+        } => {
+            if let Some((at_start, query)) = input.at_mention_query() {
+                let filtered = file_index::filter_entries(&state.all_entries, &query);
+                let clamped_index = state.selected_index.min(filtered.len().saturating_sub(1));
+
+                filtered.get(clamped_index).map(|entry| {
+                    let path = if entry.is_dir {
+                        format!("@{}/ ", entry.path)
+                    } else {
+                        format!("@{} ", entry.path)
+                    };
+
+                    (at_start, input.cursor, path)
+                })
+            } else {
+                should_dismiss = true;
+
+                None
+            }
+        }
+        _ => return,
+    };
+
+    if should_dismiss {
+        dismiss_question_at_mention(app);
+
+        return;
+    }
+
+    if let Some((at_start, cursor, text)) = replacement
+        && let AppMode::Question { input, .. } = &mut app.mode
+    {
+        input.replace_range(at_start, cursor, &text);
+    }
+
+    sync_question_at_mention_state(app);
+}
+
 /// Stores one question response and runs follow-up reply when complete.
 async fn submit_response(app: &mut App, response: String) {
     let Some((session_id, questions, responses)) = store_question_response(app, response) else {
@@ -491,6 +708,7 @@ fn store_question_response(
     response: String,
 ) -> Option<(String, Vec<QuestionItem>, Vec<String>)> {
     let AppMode::Question {
+        at_mention_state,
         current_index,
         input,
         questions,
@@ -506,6 +724,7 @@ fn store_question_response(
     responses.push(response);
     *current_index += 1;
     *input = InputState::default();
+    *at_mention_state = None;
     *selected_option_index = default_option_index(questions, *current_index);
 
     if *current_index < questions.len() {
@@ -591,6 +810,7 @@ mod tests {
         // free-text mode, then pressed Enter with empty input.
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "missing-session".to_string(),
             questions: vec![
                 QuestionItem {
@@ -635,6 +855,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "missing-session".to_string(),
             questions: vec![
                 QuestionItem {
@@ -679,6 +900,7 @@ mod tests {
         // Arrange — free-text mode on last question.
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "missing-session".to_string(),
             questions: vec![QuestionItem {
                 options: vec!["Today".to_string(), "Tomorrow".to_string()],
@@ -716,6 +938,7 @@ mod tests {
         // Arrange — free-text mode (user selected "Type custom answer").
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec!["Default".to_string()],
@@ -765,6 +988,7 @@ mod tests {
     /// behavior where the first option is pre-selected.
     fn question_mode_with_options() -> AppMode {
         AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec![
@@ -931,6 +1155,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "missing-session".to_string(),
             questions: vec![
                 QuestionItem {
@@ -1189,6 +1414,7 @@ mod tests {
         // Arrange — free-text mode on first question, next has options.
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "missing-session".to_string(),
             questions: vec![
                 QuestionItem {
@@ -1472,6 +1698,7 @@ mod tests {
         input.cursor = cursor;
 
         AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),

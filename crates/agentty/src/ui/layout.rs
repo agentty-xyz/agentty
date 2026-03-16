@@ -82,7 +82,13 @@ pub fn question_panel_layout(
     input: &str,
     max_input_panel_height: u16,
 ) -> QuestionPanelLayout {
-    let requested_question_height = wrapped_text_height(question, width);
+    let question_text_height = wrapped_text_height(question, width);
+    // +1 for the "Question N/M" title line when there is question text.
+    let requested_question_height = if question_text_height > 0 {
+        question_text_height.saturating_add(1)
+    } else {
+        0
+    };
     let requested_input_height = calculate_input_height(width, input)
         .min(max_input_panel_height.max(CHAT_INPUT_MIN_PANEL_HEIGHT));
     let requested_spacer_height = if requested_question_height > 0 {
@@ -99,11 +105,12 @@ pub fn question_panel_layout(
     let remaining_height = total_height.saturating_sub(help_height);
     let input_height = remaining_height.min(requested_input_height);
     let question_and_spacer_height = remaining_height.saturating_sub(input_height);
-    let spacer_height = if question_and_spacer_height > QUESTION_PANEL_SPACER_HEIGHT {
-        requested_spacer_height
-    } else {
-        0
-    };
+    let spacer_height =
+        if question_and_spacer_height >= requested_question_height + requested_spacer_height {
+            requested_spacer_height
+        } else {
+            0
+        };
     let question_height = question_and_spacer_height.saturating_sub(spacer_height);
 
     QuestionPanelLayout {
@@ -560,15 +567,16 @@ mod tests {
         let input = "Use two phases.";
 
         // Act
-        let panel_layout = question_panel_layout(28, 8, question, input, 10);
+        let panel_layout = question_panel_layout(28, 9, question, input, 10);
 
-        // Assert
+        // Assert — question_height includes +1 for the "Question N/M" title
+        // line.
         assert_eq!(
             panel_layout,
             QuestionPanelLayout {
                 help_height: 1,
                 input_height: 3,
-                question_height: 2,
+                question_height: 3,
                 spacer_height: 1,
             }
         );
@@ -581,15 +589,16 @@ mod tests {
         let input = "Use two phases.";
 
         // Act
-        let panel_layout = question_panel_layout(28, 5, question, input, 10);
+        let panel_layout = question_panel_layout(28, 6, question, input, 10);
 
-        // Assert
+        // Assert — question_height includes +1 for the "Question N/M" title
+        // line but the spacer is dropped when space is tight.
         assert_eq!(
             panel_layout,
             QuestionPanelLayout {
                 help_height: 1,
                 input_height: 3,
-                question_height: 1,
+                question_height: 2,
                 spacer_height: 0,
             }
         );

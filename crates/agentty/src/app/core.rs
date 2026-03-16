@@ -1461,6 +1461,7 @@ impl App {
 
         if is_viewing_session {
             self.mode = AppMode::Question {
+                at_mention_state: None,
                 selected_option_index: question::default_option_index(&questions, 0),
                 session_id: session_id.to_string(),
                 questions,
@@ -1473,29 +1474,41 @@ impl App {
         }
     }
 
-    /// Applies loaded at-mention entries to the currently focused prompt
-    /// session, if the mention query is still active.
+    /// Applies loaded at-mention entries to the currently focused prompt or
+    /// question session, if the mention query is still active.
     fn apply_prompt_at_mention_entries(&mut self, session_id: &str, entries: Vec<FileEntry>) {
-        if let AppMode::Prompt {
-            at_mention_state,
-            input,
-            session_id: prompt_session_id,
-            ..
-        } = &mut self.mode
-        {
-            if prompt_session_id != session_id || input.at_mention_query().is_none() {
-                return;
+        let (at_mention_state, has_query) = match &mut self.mode {
+            AppMode::Prompt {
+                at_mention_state,
+                input,
+                session_id: mode_session_id,
+                ..
+            } if mode_session_id == session_id => {
+                (at_mention_state, input.at_mention_query().is_some())
             }
-
-            if let Some(state) = at_mention_state.as_mut() {
-                state.all_entries = entries;
-                state.selected_index = 0;
-
-                return;
+            AppMode::Question {
+                at_mention_state,
+                input,
+                session_id: mode_session_id,
+                ..
+            } if mode_session_id == session_id => {
+                (at_mention_state, input.at_mention_query().is_some())
             }
+            _ => return,
+        };
 
-            *at_mention_state = Some(PromptAtMentionState::new(entries));
+        if !has_query {
+            return;
         }
+
+        if let Some(state) = at_mention_state.as_mut() {
+            state.all_entries = entries;
+            state.selected_index = 0;
+
+            return;
+        }
+
+        *at_mention_state = Some(PromptAtMentionState::new(entries));
     }
 
     /// Applies review assist updates for all sessions in the batch.

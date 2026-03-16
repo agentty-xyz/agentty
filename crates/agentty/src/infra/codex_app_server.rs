@@ -2542,8 +2542,7 @@ sleep 5
         // Arrange
         let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
         let turn_result = Ok(());
-        let protocol_payload =
-            r#"{"answer":"Structured answer","questions":[],"summary":null}"#;
+        let protocol_payload = r#"{"answer":"Structured answer","questions":[],"summary":null}"#;
         let assistant_messages = vec![
             "Draft".to_string(),
             protocol_payload.to_string(),

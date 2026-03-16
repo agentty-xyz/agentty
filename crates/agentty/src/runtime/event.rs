@@ -452,6 +452,7 @@ mod tests {
         // is `None`).
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
+            at_mention_state: None,
             current_index: 0,
             focus: QuestionFocus::Answer,
             input: InputState::default(),

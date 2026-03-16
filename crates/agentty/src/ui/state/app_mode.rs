@@ -184,6 +184,8 @@ pub enum AppMode {
 
     /// Interactive clarification flow that asks agent questions one-by-one.
     Question {
+        /// File/directory mention dropdown state for the free-text input.
+        at_mention_state: Option<PromptAtMentionState>,
         /// Session receiving the follow-up clarification reply.
         session_id: String,
         /// Ordered clarification prompts emitted by the model.

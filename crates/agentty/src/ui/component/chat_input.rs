@@ -129,7 +129,10 @@ impl<'a> ChatInput<'a> {
     }
 
     /// Renders the slash-command dropdown using the shared chat input chrome.
-    fn render_slash_dropdown(f: &mut Frame, area: Rect, slash_menu: &SlashMenu<'_>) {
+    ///
+    /// This method is also used by the question-mode panel to render the
+    /// at-mention file dropdown as an overlay above the input area.
+    pub(crate) fn render_slash_dropdown(f: &mut Frame, area: Rect, slash_menu: &SlashMenu<'_>) {
         let rows = slash_menu
             .options
             .iter()

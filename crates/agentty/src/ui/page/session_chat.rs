@@ -15,9 +15,10 @@ use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::{
-    calculate_input_height, question_panel_layout, truncate_with_ellipsis, wrap_lines,
+    calculate_input_height, question_panel_layout, slash_menu_dropdown_height,
+    truncate_with_ellipsis, wrap_lines,
 };
-use crate::ui::{Component, Page};
+use crate::ui::{Component, Page, style};
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
@@ -216,50 +217,12 @@ impl<'a> SessionChatPage<'a> {
         cursor: usize,
         at_mention_state: &PromptAtMentionState,
     ) -> Option<SlashMenu<'static>> {
-        let (_, query) = extract_at_mention_query(input_text, cursor)?;
-        let filtered = file_index::filter_entries(&at_mention_state.all_entries, &query);
-
-        if filtered.is_empty() {
-            return None;
-        }
-
-        let max_visible = 10;
-        let window_start = at_mention_state
-            .selected_index
-            .saturating_sub(max_visible / 2);
-        let window_end = filtered.len().min(window_start + max_visible);
-        let window_start = window_end.saturating_sub(max_visible);
-
-        let options: Vec<SlashMenuOption> = filtered[window_start..window_end]
-            .iter()
-            .map(|entry| {
-                let label = if entry.is_dir {
-                    format!("{}/", entry.path)
-                } else {
-                    entry.path.clone()
-                };
-
-                SlashMenuOption {
-                    description: if entry.is_dir {
-                        "folder".to_string()
-                    } else {
-                        String::new()
-                    },
-                    label,
-                }
-            })
-            .collect();
-
-        let display_index = at_mention_state
-            .selected_index
-            .min(filtered.len().saturating_sub(1))
-            .saturating_sub(window_start);
-
-        Some(SlashMenu {
-            options,
-            selected_index: display_index,
-            title: "Files (\u{2191}\u{2193} move, Enter select, Esc dismiss)",
-        })
+        build_at_mention_menu_with_capacity(
+            input_text,
+            cursor,
+            at_mention_state,
+            AT_MENTION_DEFAULT_MAX_VISIBLE,
+        )
     }
 
     /// Renders the session header, output panel, and context-aware bottom
@@ -434,6 +397,7 @@ impl<'a> SessionChatPage<'a> {
         }
 
         if let AppMode::Question {
+            at_mention_state,
             focus,
             questions,
             current_index,
@@ -445,11 +409,14 @@ impl<'a> SessionChatPage<'a> {
             render_question_panel(
                 f,
                 bottom_area,
-                questions,
-                *current_index,
-                *focus,
-                input,
-                *selected_option_index,
+                &QuestionPanelState {
+                    at_mention_state: at_mention_state.as_ref(),
+                    current_index: *current_index,
+                    focus: *focus,
+                    input,
+                    questions,
+                    selected_option_index: *selected_option_index,
+                },
             );
 
             return;
@@ -538,17 +505,28 @@ impl<'a> SessionChatPage<'a> {
     }
 }
 
-/// Renders the question-mode bottom panel with question text, options, input,
-/// and help footer.
-fn render_question_panel(
-    f: &mut Frame,
-    bottom_area: Rect,
-    questions: &[QuestionItem],
+/// Bundled question-mode state passed to the panel renderer.
+#[derive(Clone, Copy)]
+struct QuestionPanelState<'a> {
+    at_mention_state: Option<&'a PromptAtMentionState>,
     current_index: usize,
     focus: QuestionFocus,
-    input: &input::InputState,
+    input: &'a input::InputState,
+    questions: &'a [QuestionItem],
     selected_option_index: Option<usize>,
-) {
+}
+
+/// Renders the question-mode bottom panel with question text, options, input,
+/// and help footer.
+fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanelState<'_>) {
+    let QuestionPanelState {
+        at_mention_state,
+        current_index,
+        focus,
+        input,
+        questions,
+        selected_option_index,
+    } = *state;
     let question_item = questions.get(current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
     let options = question_item
@@ -580,9 +558,19 @@ fn render_question_panel(
 
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
     if panel_layout.question_height > 0 {
-        let question_para =
-            Paragraph::new(wrap_lines(question, usize::from(bottom_area.width.max(1))))
-                .style(Style::default().fg(Color::Yellow));
+        let title_line = Line::from(Span::styled(
+            &question_title,
+            Style::default()
+                .fg(style::palette::QUESTION)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let mut lines = vec![title_line];
+        lines.extend(
+            wrap_lines(question, usize::from(bottom_area.width.max(1)))
+                .into_iter()
+                .map(|line| line.style(Style::default().fg(Color::Yellow))),
+        );
+        let question_para = Paragraph::new(lines);
         f.render_widget(question_para, chunks[0]);
     }
 
@@ -599,12 +587,37 @@ fn render_question_panel(
         ("", 0)
     };
     let input_placeholder = "Type custom answer (Enter: send, Esc: skip)";
-    let input_title = format!(" [{question_title}] ");
-    let chat_input = ChatInput::new(&input_title, display_text, display_cursor)
+    let available_above = usize::from(chunks[3].y.saturating_sub(bottom_area.y));
+    let at_mention_max_visible = available_above
+        .saturating_sub(2)
+        .clamp(1, AT_MENTION_DEFAULT_MAX_VISIBLE);
+    let at_mention_menu = if is_free_text_mode {
+        at_mention_state.and_then(|state| {
+            build_at_mention_menu_with_capacity(
+                display_text,
+                display_cursor,
+                state,
+                at_mention_max_visible,
+            )
+        })
+    } else {
+        None
+    };
+    let chat_input = ChatInput::new("Answer", display_text, display_cursor)
         .placeholder(input_placeholder)
         .active(is_free_text_mode);
     if panel_layout.input_height > 0 {
         chat_input.render(f, chunks[3]);
+    }
+
+    render_question_at_mention_overlay(f, bottom_area, chunks[3], at_mention_menu);
+    render_question_help_footer(f, chunks[4], panel_layout.help_height, focus);
+}
+
+/// Renders the question-mode help footer with context-aware action hints.
+fn render_question_help_footer(f: &mut Frame, area: Rect, help_height: u16, focus: QuestionFocus) {
+    if help_height == 0 {
+        return;
     }
 
     let is_chat_focused = focus == QuestionFocus::Chat;
@@ -626,11 +639,100 @@ fn render_question_panel(
             "Skip (no answer)",
         ));
     }
-    if panel_layout.help_height > 0 {
-        let help_para = Paragraph::new(help_action::footer_line(&help_actions))
-            .alignment(ratatui::layout::Alignment::Right);
-        f.render_widget(help_para, chunks[4]);
+
+    let help_para = Paragraph::new(help_action::footer_line(&help_actions))
+        .alignment(ratatui::layout::Alignment::Right);
+    f.render_widget(help_para, area);
+}
+
+/// Renders the at-mention file dropdown as an overlay above the input area.
+///
+/// The dropdown covers the options section so the file list is fully visible
+/// without pushing the input line out of view.
+fn render_question_at_mention_overlay(
+    f: &mut Frame,
+    bottom_area: Rect,
+    input_area: Rect,
+    at_mention_menu: Option<SlashMenu<'_>>,
+) {
+    let Some(menu) = at_mention_menu else {
+        return;
+    };
+
+    let dropdown_height = slash_menu_dropdown_height(menu.options.len());
+    let available_above = input_area.y.saturating_sub(bottom_area.y);
+    let clamped_height = dropdown_height.min(available_above);
+
+    if clamped_height > 0 {
+        let dropdown_area = Rect::new(
+            input_area.x,
+            input_area.y.saturating_sub(clamped_height),
+            input_area.width,
+            clamped_height,
+        );
+        ChatInput::render_slash_dropdown(f, dropdown_area, &menu);
     }
+}
+
+/// Default maximum number of at-mention dropdown entries visible at once.
+const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
+
+/// Builds an at-mention dropdown menu for the free-text input.
+///
+/// `max_visible` caps how many items the windowed slice may contain. Callers
+/// should derive this from the available rendering height so the logical
+/// window never exceeds what the overlay can display.
+///
+/// Returns `None` when the input has no active `@` query or when no file
+/// entries match the query.
+fn build_at_mention_menu_with_capacity(
+    input_text: &str,
+    cursor: usize,
+    at_mention_state: &PromptAtMentionState,
+    max_visible: usize,
+) -> Option<SlashMenu<'static>> {
+    let (_, query) = extract_at_mention_query(input_text, cursor)?;
+    let filtered = file_index::filter_entries(&at_mention_state.all_entries, &query);
+
+    if filtered.is_empty() {
+        return None;
+    }
+    let window_start = at_mention_state
+        .selected_index
+        .saturating_sub(max_visible / 2);
+    let window_end = filtered.len().min(window_start + max_visible);
+    let window_start = window_end.saturating_sub(max_visible);
+
+    let options: Vec<SlashMenuOption> = filtered[window_start..window_end]
+        .iter()
+        .map(|entry| {
+            let label = if entry.is_dir {
+                format!("{}/", entry.path)
+            } else {
+                entry.path.clone()
+            };
+
+            SlashMenuOption {
+                description: if entry.is_dir {
+                    "folder".to_string()
+                } else {
+                    String::new()
+                },
+                label,
+            }
+        })
+        .collect();
+
+    let display_index = at_mention_state
+        .selected_index
+        .min(filtered.len().saturating_sub(1))
+        .saturating_sub(window_start);
+
+    Some(SlashMenu {
+        options,
+        selected_index: display_index,
+        title: "Files (\u{2191}\u{2193} move, Enter select, Esc dismiss)",
+    })
 }
 
 /// Returns the total height for the question options section.
@@ -921,6 +1023,51 @@ mod tests {
 
         // Assert
         assert_eq!(menu.options.len(), 10);
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_respects_capacity() {
+        // Arrange — 20 entries but only 5 visible slots.
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                is_dir: false,
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let state = PromptAtMentionState::new(entries);
+
+        // Act
+        let menu = build_at_mention_menu_with_capacity("@", 1, &state, 5).expect("expected menu");
+
+        // Assert — window must not exceed the capacity.
+        assert_eq!(menu.options.len(), 5);
+    }
+
+    #[test]
+    fn test_build_at_mention_menu_capacity_scroll_keeps_selection_visible() {
+        // Arrange — 20 entries, capacity 5, selected near the end.
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                is_dir: false,
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let mut state = PromptAtMentionState::new(entries);
+        state.selected_index = 18;
+
+        // Act
+        let menu = build_at_mention_menu_with_capacity("@", 1, &state, 5).expect("expected menu");
+
+        // Assert — the selected item must be within the visible window.
+        assert_eq!(menu.options.len(), 5);
+        assert!(
+            menu.selected_index < menu.options.len(),
+            "selected_index {} must be < options.len() {}",
+            menu.selected_index,
+            menu.options.len()
+        );
+        assert_eq!(menu.options[0].label, "file_15.rs");
+        assert_eq!(menu.options[4].label, "file_19.rs");
     }
 
     #[test]
@@ -1290,6 +1437,7 @@ mod tests {
         let question = "Need an explicit migration plan?".to_string();
         let answer = "Use two phases: schema and runtime.";
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1332,6 +1480,7 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1359,6 +1508,7 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
@@ -1481,6 +1631,7 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1516,6 +1667,7 @@ mod tests {
         let session = session_fixture();
         let question = "Need a detailed migration plan with rollback guidance?".to_string();
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1564,6 +1716,7 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
@@ -1602,6 +1755,7 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let mode = AppMode::Question {
+            at_mention_state: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec![

@@ -114,6 +114,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                     let questions = session.questions.clone();
                     let selected_option_index = question::default_option_index(&questions, 0);
                     app.mode = AppMode::Question {
+                        at_mention_state: None,
                         session_id,
                         questions,
                         responses: Vec::new(),

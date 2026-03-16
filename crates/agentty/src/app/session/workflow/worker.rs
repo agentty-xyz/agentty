@@ -786,10 +786,15 @@ fn build_summary_transcript_output(assistant_message: &agent::AgentResponse) -> 
     let session = summary.session.trim();
 
     let turn_text = if turn.is_empty() { "No changes" } else { turn };
-    let session_text = if session.is_empty() { "No changes" } else { session };
+    let session_text = if session.is_empty() {
+        "No changes"
+    } else {
+        session
+    };
 
     Some(format!(
-        "## Change Summary\n### Current Turn\n{turn_text}\n\n### Session Changes\n{session_text}\n\n"
+        "## Change Summary\n### Current Turn\n{turn_text}\n\n### Session \
+         Changes\n{session_text}\n\n"
     ))
 }
 
@@ -1392,7 +1397,8 @@ mod tests {
         assert_eq!(
             output,
             Some(
-                "## Change Summary\n### Current Turn\n- Added feature X.\n\n### Session Changes\n- Feature X now live on branch.\n\n"
+                "## Change Summary\n### Current Turn\n- Added feature X.\n\n### Session \
+                 Changes\n- Feature X now live on branch.\n\n"
                     .to_string()
             )
         );
@@ -1416,7 +1422,8 @@ mod tests {
     }
 
     #[test]
-    /// Falls back to "No changes" for both fields when the summary struct is present but empty.
+    /// Falls back to "No changes" for both fields when the summary struct is
+    /// present but empty.
     fn test_build_summary_transcript_output_falls_back_for_both_empty_fields() {
         // Arrange
         let assistant_message = AgentResponse {
