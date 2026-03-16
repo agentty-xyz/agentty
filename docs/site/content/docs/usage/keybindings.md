@@ -55,7 +55,7 @@ accented row text, even while cursor selection moves to other rows.
 <a id="usage-settings-options"></a>
 The Settings tab includes:
 
-- `Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex turns in the active project.
+- `Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex and Claude turns in the active project.
 - `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active project.
 - `Coauthored by Agentty` to enable or disable the `Co-Authored-By` trailer on generated session commit messages for the active project.
 - `Open Commands` for launching session worktrees in the active project (one command per line).

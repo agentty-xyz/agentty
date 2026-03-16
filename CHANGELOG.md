@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.3] - 2026-03-16
+
+### Added
+
+- Add tech-debt and security-audit analysis skills.
+- Add at-mention file completion to question mode.
+- Pass `--effort` flag to Claude CLI based on reasoning level.
+- Generate protocol profiles with self-descriptive schemas.
+
+### Changed
+
+- Refactor agent prompt preparation and split protocol subsystem.
+- Move app-server clients under agent backends.
+- Append change summaries and preserve summary payloads.
+- Format done session summary as markdown sections.
+- Parameterize runtime over generic `Backend` for in-process TUI testing.
+- Restrict `a` (new session) shortcut to the Sessions tab.
+- Finish typed SQLx query mapping cleanup.
+- Refine implementation plans for meta-agent skills and execution backends.
+
+### Fixed
+
+- Keep prompt mention state in sync with cursor.
+- Fix footer bar branch rendering.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.6.2] - 2026-03-12
 
 ### Added
