@@ -1,18 +1,14 @@
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
-use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
-use crate::domain::agent::ReasoningLevel;
 
-/// Uses non-interactive Codex commands so Agentty can capture piped output.
+/// Keeps Codex setup wired through [`AgentBackend`] while forbidding direct
+/// CLI execution.
 ///
-/// Interactive `codex` requires a TTY and fails in this app with
-/// `Error: stdout is not a terminal`, so this backend runs
-/// `codex exec --full-auto`. Resume uses `codex exec resume --last --full-auto`
-/// only when replay history is not injected into the prompt. Project
-/// instruction discovery is left to Codex's native `AGENTS.md` loading in the
-/// current worktree.
+/// Codex session turns and one-shot utility prompts must always run through
+/// `codex app-server`, so `build_command()` fails closed if a caller tries to
+/// construct a direct subprocess invocation.
 pub(super) struct CodexBackend;
 
 impl AgentBackend for CodexBackend {
@@ -23,56 +19,13 @@ impl AgentBackend for CodexBackend {
 
     fn build_command<'request>(
         &'request self,
-        request: BuildCommandRequest<'request>,
+        _request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
-        let BuildCommandRequest {
-            attachments: _attachments,
-            folder,
-            prompt,
-            request_kind,
-            model,
-            reasoning_level,
-        } = request;
-        let has_history_replay = request_kind
-            .session_output()
-            .is_some_and(|session_output| !session_output.trim().is_empty());
-        let prompt = prepare_prompt_text(PromptPreparationRequest {
-            prompt,
-            protocol_profile: request_kind.protocol_profile(),
-            replay_session_output: request_kind.session_output(),
-            should_replay_session_output: request_kind.is_resume(),
-        })?;
-
-        let mut command = Command::new("codex");
-        command.arg("exec");
-
-        if request_kind.is_resume() {
-            command.arg("resume");
-        }
-
-        if request_kind.is_resume() && !has_history_replay {
-            command.arg("--last");
-        }
-
-        command
-            .arg("-c")
-            .arg(model_reasoning_effort_config(reasoning_level))
-            .arg("--model")
-            .arg(model)
-            .arg("--full-auto")
-            .arg("--json")
-            .arg(prompt)
-            .current_dir(folder)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        Ok(command)
+        Err(AgentBackendError::CommandBuild(
+            "Codex direct CLI execution is disabled; use the Codex app-server transport"
+                .to_string(),
+        ))
     }
-}
-
-/// Renders the Codex CLI `model_reasoning_effort` override value.
-fn model_reasoning_effort_config(reasoning_level: ReasoningLevel) -> String {
-    format!(r#"model_reasoning_effort="{}""#, reasoning_level.codex())
 }
 
 #[cfg(test)]
@@ -92,16 +45,16 @@ mod tests {
         }
     }
 
-    /// Verifies start commands include the shared protocol envelope and
-    /// reasoning configuration passed to Codex.
+    /// Verifies direct Codex command construction is rejected because Codex
+    /// must run through app-server transport.
     #[test]
-    fn build_start_command_includes_protocol_and_reasoning_settings() {
+    fn build_command_returns_error_for_start_requests() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let command = AgentBackend::build_command(
+        let error = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -109,33 +62,25 @@ mod tests {
                 prompt: "Run checks",
                 request_kind: &session_start_request_kind(),
                 model: "gpt-5.3-codex",
-                reasoning_level: ReasoningLevel::High,
+                reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
-        .expect("command should build");
-        let debug_command = format!("{command:?}");
+        .expect_err("command build should fail");
 
         // Assert
-        assert!(debug_command.contains("-c"));
-        assert!(debug_command.contains("model_reasoning_effort"));
-        assert!(debug_command.contains("high"));
-        assert!(debug_command.contains("Run checks"));
-        assert!(debug_command.contains("Structured response protocol:"));
-        assert!(debug_command.contains("Follow this JSON Schema exactly."));
-        assert!(debug_command.contains("Authoritative JSON Schema:"));
-        assert!(debug_command.contains("summary"));
+        assert!(error.to_string().contains("app-server transport"));
     }
 
-    /// Verifies resume command composes replay-based prompt content when
-    /// session output is available.
+    /// Verifies direct Codex command construction is rejected for resume
+    /// requests that include transcript replay.
     #[test]
-    fn build_resume_command_includes_session_output_replay() {
+    fn build_command_returns_error_for_resume_requests_with_session_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let command = AgentBackend::build_command(
+        let error = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -143,30 +88,25 @@ mod tests {
                 prompt: "Continue edits",
                 request_kind: &session_resume_request_kind(Some("previous assistant output")),
                 model: "gpt-5.3-codex",
-                reasoning_level: ReasoningLevel::High,
+                reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
-        .expect("resume command should build");
-        let debug_command = format!("{command:?}");
+        .expect_err("resume command build should fail");
 
         // Assert
-        assert!(debug_command.contains("-c"));
-        assert!(debug_command.contains("model_reasoning_effort"));
-        assert!(debug_command.contains("high"));
-        assert!(debug_command.contains("Continue this session using the full transcript below."));
-        assert!(debug_command.contains("previous assistant output"));
+        assert!(error.to_string().contains("app-server transport"));
     }
 
-    /// Verifies resume command keeps a plain user prompt when no session output
-    /// is available for replay.
+    /// Verifies direct Codex command construction is rejected for resume
+    /// requests without stored transcript replay.
     #[test]
-    fn build_resume_command_uses_plain_prompt_without_session_output() {
+    fn build_command_returns_error_for_resume_requests_without_session_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let command = AgentBackend::build_command(
+        let error = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -174,32 +114,25 @@ mod tests {
                 prompt: "Continue edits",
                 request_kind: &session_resume_request_kind(None),
                 model: "gpt-5.3-codex",
-                reasoning_level: ReasoningLevel::High,
+                reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
-        .expect("resume command should build");
-        let debug_command = format!("{command:?}");
+        .expect_err("resume command build should fail");
 
         // Assert
-        assert!(debug_command.contains("exec"));
-        assert!(debug_command.contains("resume"));
-        assert!(debug_command.contains("--last"));
-        assert!(debug_command.contains("-c"));
-        assert!(debug_command.contains("model_reasoning_effort"));
-        assert!(debug_command.contains("high"));
-        assert!(debug_command.contains("Continue edits"));
-        assert!(!debug_command.contains("Continue this session using the full transcript below."));
+        assert!(error.to_string().contains("app-server transport"));
     }
 
     #[test]
-    /// Verifies Codex prompts include repo-root-relative path guidance.
-    fn build_command_includes_repo_root_path_instructions() {
+    /// Verifies direct Codex command construction is rejected for plain start
+    /// requests regardless of reasoning level.
+    fn build_command_returns_error_with_low_reasoning_level() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let command = AgentBackend::build_command(
+        let error = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -207,28 +140,25 @@ mod tests {
                 prompt: "Run checks",
                 request_kind: &session_start_request_kind(),
                 model: "gpt-5.3-codex",
-                reasoning_level: ReasoningLevel::Low,
+                reasoning_level: crate::domain::agent::ReasoningLevel::Low,
             },
         )
-        .expect("command should build");
-        let debug_command = format!("{command:?}");
+        .expect_err("command build should fail");
 
         // Assert
-        assert!(debug_command.contains("repository-root-relative POSIX paths"));
-        assert!(debug_command.contains("Paths must be relative to the repository root."));
-        assert!(debug_command.contains(r#"model_reasoning_effort=\"low\""#));
+        assert!(error.to_string().contains("app-server transport"));
     }
 
     #[test]
-    /// Verifies one-shot Codex prompts keep the shared schema-only protocol
-    /// wrapper.
-    fn build_one_shot_command_uses_schema_only_protocol_instructions() {
+    /// Verifies direct Codex command construction is rejected for one-shot
+    /// utility prompts.
+    fn build_command_returns_error_for_utility_prompts() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let backend = CodexBackend;
 
         // Act
-        let command = AgentBackend::build_command(
+        let error = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
                 attachments: &[],
@@ -236,14 +166,12 @@ mod tests {
                 prompt: "Generate title",
                 request_kind: &AgentRequestKind::UtilityPrompt,
                 model: "gpt-5.3-codex",
-                reasoning_level: ReasoningLevel::Low,
+                reasoning_level: crate::domain::agent::ReasoningLevel::Low,
             },
         )
-        .expect("command should build");
-        let debug_command = format!("{command:?}");
+        .expect_err("command build should fail");
 
         // Assert
-        assert!(debug_command.contains("Structured response protocol:"));
-        assert!(debug_command.contains("summary"));
+        assert!(error.to_string().contains("app-server transport"));
     }
 }

@@ -28,7 +28,10 @@ pub use response_parser::ParsedResponse;
 pub(crate) use response_parser::{
     compact_codex_progress_message, is_codex_completion_status_message,
 };
-pub(crate) use submission::{OneShotRequest, submit_one_shot, submit_one_shot_with_backend};
+pub(crate) use submission::{
+    OneShotRequest, OneShotSubmission, submit_one_shot, submit_one_shot_with_backend,
+    submit_one_shot_with_stats,
+};
 
 #[cfg(test)]
 pub(crate) mod tests {

@@ -192,6 +192,9 @@ Streaming behavior differs by transport/provider:
   providers that would otherwise exceed argv limits on large diffs or one-shot
   utility prompts.
 - App-server channel (`AppServerAgentChannel`): bridges `AppServerStreamEvent` to `TurnEvent`.
+- One-shot prompt submission reuses app-server transport for app-server
+  providers (Codex and Gemini) and only uses direct CLI subprocess execution
+  for Claude utility prompts.
 - Codex thought phases (`thinking`/`plan`/`reasoning`/`thought`) stream as `ThoughtDelta`.
 - Provider capabilities in `crates/agentty/src/infra/agent/backend.rs` now centralize whether transports stream assistant chunks live, require strict final protocol validation, or classify app-server phase labels as thought output.
 - Strict providers suppress streamed assistant chunks when needed so malformed first-pass protocol JSON is not persisted.

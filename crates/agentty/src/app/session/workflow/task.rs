@@ -470,7 +470,8 @@ impl SessionTaskService {
         include_coauthored_by_agentty: bool,
     ) -> Result<String, String> {
         let prompt = Self::session_commit_message_prompt(diff, current_commit_message)?;
-        let submission = agent::submit_one_shot_with_backend(
+        let submission = Self::submit_utility_prompt_with_backend(
+            session_model,
             backend,
             agent::OneShotRequest {
                 child_pid: None,
@@ -528,7 +529,8 @@ impl SessionTaskService {
             prompt,
             session_model,
         } = input;
-        let assist_submission = agent::submit_one_shot_with_backend(
+        let assist_submission = Self::submit_utility_prompt_with_backend(
+            session_model,
             backend,
             agent::OneShotRequest {
                 child_pid: Some(child_pid.as_ref()),
@@ -557,6 +559,25 @@ impl SessionTaskService {
         Self::clear_session_progress(&app_event_tx, &id);
 
         Ok(())
+    }
+
+    /// Executes one isolated utility prompt, routing app-server-backed models
+    /// through the shared app-server client while preserving backend injection
+    /// for direct CLI providers in tests and production.
+    ///
+    /// # Errors
+    /// Returns an error when the one-shot prompt fails or the response does
+    /// not satisfy the structured protocol schema.
+    async fn submit_utility_prompt_with_backend(
+        session_model: AgentModel,
+        backend: &dyn agent::AgentBackend,
+        request: agent::OneShotRequest<'_>,
+    ) -> Result<agent::OneShotSubmission, String> {
+        if agent::transport_mode(session_model.kind()).uses_app_server() {
+            return agent::submit_one_shot_with_stats(request).await;
+        }
+
+        agent::submit_one_shot_with_backend(backend, request).await
     }
 
     /// Applies a status transition to memory and database when valid.

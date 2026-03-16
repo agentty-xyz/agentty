@@ -32,6 +32,11 @@ backend:
 - Claude Code turns receive the prompt over stdin with `[Image #n]`
   placeholders rewritten to local image paths that Claude can inspect.
 
+Codex now always runs through `codex app-server`, including isolated utility
+prompts such as title generation, review assist, commit-message generation,
+auto-commit recovery, and rebase-conflict assistance. Agentty no longer uses a
+direct `codex exec` path.
+
 ## Project Instruction Files
 
 <a id="backends-project-instruction-files"></a>
@@ -161,8 +166,9 @@ Agentty validates final agent output against the structured response protocol.
 - Claude turns allow file-modifying tools (`Edit`, `MultiEdit`, `Write`) plus
   `Bash`, `EnterPlanMode`, and `ExitPlanMode` for unattended worktree edits.
 - Codex app-server turns enforce structured output through transport
-  `outputSchema`; prompt instructions also embed the same full self-descriptive
-  schema for consistency across providers.
+  `outputSchema`; the same transport is also used for one-shot Codex utility
+  prompts, and prompt instructions embed the same full self-descriptive schema
+  for consistency across providers.
 - Claude always uses structured protocol output, including isolated one-shot
   utility prompts, through native schema enforcement plus prompt instructions.
 - Codex app-server turns include `outputSchema` at transport level and then use

@@ -15,9 +15,11 @@ use tokio::task::JoinHandle;
 
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::protocol::{AgentResponse, ProtocolRequestProfile, parse_agent_response_strict};
-use super::{ParsedResponse, create_backend, parse_response};
+use super::{ParsedResponse, create_backend, parse_response, transport_mode};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionStats;
+use crate::infra::app_server::{AppServerClient, AppServerTurnRequest};
+use crate::infra::app_server_router::RoutingAppServerClient;
 use crate::infra::channel::AgentRequestKind;
 
 /// Input payload for one isolated prompt that prefers structured protocol
@@ -68,9 +70,67 @@ pub(crate) async fn submit_one_shot(request: OneShotRequest<'_>) -> Result<Agent
 pub(crate) async fn submit_one_shot_with_stats(
     request: OneShotRequest<'_>,
 ) -> Result<OneShotSubmission, String> {
+    if transport_mode(request.model.kind()).uses_app_server() {
+        let app_server_client = RoutingAppServerClient::new();
+
+        return submit_one_shot_with_app_server_client(&app_server_client, request).await;
+    }
+
     let backend = create_backend(request.model.kind());
 
     submit_one_shot_with_backend(backend.as_ref(), request).await
+}
+
+/// Executes one isolated prompt through the shared app-server transport.
+///
+/// The temporary app-server session is shut down after the utility prompt
+/// finishes so one-shot helpers do not keep a provider runtime alive after the
+/// result has been parsed.
+///
+/// # Errors
+/// Returns an error when app-server turn execution fails or the final output
+/// does not match the required protocol JSON.
+pub(crate) async fn submit_one_shot_with_app_server_client(
+    app_server_client: &dyn AppServerClient,
+    request: OneShotRequest<'_>,
+) -> Result<OneShotSubmission, String> {
+    clear_child_pid_slot(request.child_pid);
+
+    let session_id = format!("one-shot-{}", uuid::Uuid::new_v4());
+    let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
+    let turn_request = AppServerTurnRequest {
+        folder: request.folder.to_path_buf(),
+        live_session_output: None,
+        model: request.model.as_str().to_string(),
+        prompt: crate::infra::channel::TurnPrompt::from_text(request.prompt.to_string()),
+        request_kind: request.request_kind,
+        provider_conversation_id: None,
+        reasoning_level: request.reasoning_level,
+        session_id: session_id.clone(),
+    };
+
+    let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
+    app_server_client.shutdown_session(session_id).await;
+    clear_child_pid_slot(request.child_pid);
+
+    let turn_result = turn_result
+        .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"))?;
+    let response =
+        parse_agent_response_strict(&turn_result.assistant_message).map_err(|error| {
+            format!(
+                "One-shot agent output did not match the required JSON schema: \
+                 {error}\nresponse:\n{}",
+                turn_result.assistant_message
+            )
+        })?;
+
+    Ok(OneShotSubmission {
+        response,
+        stats: SessionStats {
+            input_tokens: turn_result.input_tokens,
+            output_tokens: turn_result.output_tokens,
+        },
+    })
 }
 
 /// Executes one isolated prompt using the provided backend.
@@ -310,6 +370,17 @@ fn one_shot_output_detail(stdout: &str, stderr: &str) -> String {
     }
 }
 
+/// Clears the shared one-shot child PID slot when one exists.
+fn clear_child_pid_slot(child_pid: Option<&Mutex<Option<u32>>>) {
+    let Some(child_pid) = child_pid else {
+        return;
+    };
+
+    if let Ok(mut guard) = child_pid.lock() {
+        *guard = None;
+    }
+}
+
 /// Tracks the active one-shot subprocess identifier for cancel/stop flows.
 struct ChildPidGuard<'a> {
     child_pid: Option<&'a Mutex<Option<u32>>>,
@@ -358,6 +429,7 @@ mod tests {
 
     use super::*;
     use crate::infra::agent::tests::MockAgentBackend;
+    use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
 
     /// Builds one shell command that emits controlled stdout/stderr and exits.
     fn mock_shell_command(stdout: &str, stderr: &str, exit_code: i32) -> Command {
@@ -704,5 +776,115 @@ mod tests {
         assert!(error.contains("One-shot Claude command failed because authentication expired"));
         assert!(error.contains("`claude auth login`"));
         assert!(error.contains("`claude auth status`"));
+    }
+
+    #[tokio::test]
+    /// Verifies app-server-backed one-shot execution returns the parsed
+    /// structured answer and usage totals.
+    async fn test_submit_one_shot_with_app_server_client_returns_protocol_response() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let mut app_server_client = MockAppServerClient::new();
+        app_server_client
+            .expect_run_turn()
+            .times(1)
+            .returning(|request, _| {
+                assert_eq!(request.model, AgentModel::Gpt54.as_str());
+                assert!(matches!(
+                    request.request_kind,
+                    AgentRequestKind::UtilityPrompt
+                ));
+                assert_eq!(request.prompt.text, "Generate title");
+
+                Box::pin(async {
+                    Ok(AppServerTurnResponse {
+                        assistant_message:
+                            r#"{"answer":"Generated title","questions":[],"summary":null}"#
+                                .to_string(),
+                        context_reset: false,
+                        input_tokens: 11,
+                        output_tokens: 7,
+                        pid: Some(42),
+                        provider_conversation_id: Some("thread-1".to_string()),
+                    })
+                })
+            });
+        app_server_client
+            .expect_shutdown_session()
+            .times(1)
+            .returning(|_| Box::pin(async {}));
+
+        // Act
+        let response = submit_one_shot_with_app_server_client(
+            &app_server_client,
+            OneShotRequest {
+                child_pid: None,
+                folder: temp_directory.path(),
+                model: AgentModel::Gpt54,
+                prompt: "Generate title",
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .await
+        .expect("one-shot prompt should succeed");
+
+        // Assert
+        assert_eq!(
+            response.response.answers(),
+            vec!["Generated title".to_string()]
+        );
+        assert_eq!(response.stats.input_tokens, 11);
+        assert_eq!(response.stats.output_tokens, 7);
+    }
+
+    #[tokio::test]
+    /// Verifies app-server-backed one-shot execution surfaces invalid
+    /// structured output as a schema error.
+    async fn test_submit_one_shot_with_app_server_client_returns_error_for_invalid_protocol_output()
+    {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let mut app_server_client = MockAppServerClient::new();
+        app_server_client
+            .expect_run_turn()
+            .times(1)
+            .returning(|request, _| {
+                assert_eq!(request.model, AgentModel::Gpt54.as_str());
+
+                Box::pin(async {
+                    Ok(AppServerTurnResponse {
+                        assistant_message: "plain text".to_string(),
+                        context_reset: false,
+                        input_tokens: 2,
+                        output_tokens: 1,
+                        pid: None,
+                        provider_conversation_id: None,
+                    })
+                })
+            });
+        app_server_client
+            .expect_shutdown_session()
+            .times(1)
+            .returning(|_| Box::pin(async {}));
+
+        // Act
+        let error = submit_one_shot_with_app_server_client(
+            &app_server_client,
+            OneShotRequest {
+                child_pid: None,
+                folder: temp_directory.path(),
+                model: AgentModel::Gpt54,
+                prompt: "Generate title",
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .await
+        .expect_err("invalid protocol output should fail");
+
+        // Assert
+        assert!(error.contains("did not match the required JSON schema"));
+        assert!(error.contains("response:\nplain text"));
     }
 }
