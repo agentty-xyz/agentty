@@ -1,11 +1,8 @@
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 
-use super::backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
+use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
-use crate::infra::agent::app_server::RealGeminiAcpClient;
-use crate::infra::app_server::AppServerClient;
 
 /// Backend implementation for the Gemini ACP runtime.
 pub(super) struct GeminiBackend;
@@ -14,21 +11,6 @@ impl AgentBackend for GeminiBackend {
     fn setup(&self, _folder: &Path) -> Result<(), AgentBackendError> {
         // Gemini CLI needs no config files
         Ok(())
-    }
-
-    fn transport(&self) -> AgentTransport {
-        AgentTransport::AppServer
-    }
-
-    fn app_server_client(
-        &self,
-        default_client: Option<Arc<dyn AppServerClient>>,
-    ) -> Option<Arc<dyn AppServerClient>> {
-        Some(
-            default_client.unwrap_or_else(|| {
-                Arc::new(RealGeminiAcpClient::new()) as Arc<dyn AppServerClient>
-            }),
-        )
     }
 
     fn build_command<'request>(

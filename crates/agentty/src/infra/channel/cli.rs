@@ -3,15 +3,14 @@
 //! Spawns a provider CLI process per turn, streams stdout line-by-line as
 //! [`TurnEvent`]s, and parses the final process output when the process exits.
 
-use std::io;
 use std::os::unix::process::ExitStatusExt as _;
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+use tokio::io::AsyncBufReadExt as _;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use crate::domain::agent::AgentKind;
+use crate::infra::agent::cli::{error, stdin};
 use crate::infra::agent::{self as agent, AgentBackend, BuildCommandRequest};
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
@@ -151,13 +150,23 @@ impl AgentChannel for CliAgentChannel {
                     }
                 })
             };
-            let stdin_write_task = spawn_optional_stdin_write(child.stdin.take(), stdin_payload);
+            let stdin_write_task = stdin::spawn_optional_stdin_write(
+                child.stdin.take(),
+                stdin_payload,
+                "stdin pipe unavailable after spawn",
+                AgentError,
+            );
 
             let _ = stdout_task.await;
             let _ = stderr_task.await;
 
             let exit_status = child.wait().await.ok();
-            await_optional_stdin_write(stdin_write_task).await?;
+            stdin::await_optional_stdin_write(
+                stdin_write_task,
+                "stdin write task failed",
+                AgentError,
+            )
+            .await?;
 
             // Clear the PID slot now that the child has exited.
             let _ = events.send(TurnEvent::PidUpdate(None));
@@ -205,67 +214,6 @@ impl AgentChannel for CliAgentChannel {
     fn shutdown_session(&self, _session_id: String) -> AgentFuture<Result<(), AgentError>> {
         Box::pin(async { Ok(()) })
     }
-}
-
-/// Starts one background stdin writer when the child needs prompt input.
-fn spawn_optional_stdin_write(
-    child_stdin: Option<tokio::process::ChildStdin>,
-    stdin_payload: Option<Vec<u8>>,
-) -> Option<JoinHandle<Result<(), AgentError>>> {
-    stdin_payload.map(|stdin_payload| {
-        tokio::spawn(async move { write_optional_stdin(child_stdin, stdin_payload).await })
-    })
-}
-
-/// Waits for one optional background stdin writer to finish.
-///
-/// # Errors
-/// Returns an error when the writer task fails or panics before the full
-/// prompt payload is delivered.
-async fn await_optional_stdin_write(
-    stdin_write_task: Option<JoinHandle<Result<(), AgentError>>>,
-) -> Result<(), AgentError> {
-    let Some(stdin_write_task) = stdin_write_task else {
-        return Ok(());
-    };
-
-    stdin_write_task
-        .await
-        .map_err(|error| AgentError(format!("stdin write task failed: {error}")))?
-}
-
-/// Writes one optional stdin payload into the spawned CLI subprocess.
-///
-/// # Errors
-/// Returns an error when stdin was requested but unavailable or writing the
-/// payload fails.
-async fn write_optional_stdin(
-    child_stdin: Option<tokio::process::ChildStdin>,
-    stdin_payload: Vec<u8>,
-) -> Result<(), AgentError> {
-    let mut child_stdin =
-        child_stdin.ok_or_else(|| AgentError("stdin pipe unavailable after spawn".to_string()))?;
-    if let Err(error) = child_stdin.write_all(&stdin_payload).await
-        && !is_broken_pipe_error(&error)
-    {
-        return Err(AgentError(format!(
-            "Failed to write stdin payload: {error}"
-        )));
-    }
-    if let Err(error) = child_stdin.shutdown().await
-        && !is_broken_pipe_error(&error)
-    {
-        return Err(AgentError(format!(
-            "Failed to close stdin payload: {error}"
-        )));
-    }
-
-    Ok(())
-}
-
-/// Returns whether one stdin write error is the expected closed-pipe case.
-fn is_broken_pipe_error(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::BrokenPipe
 }
 
 /// Reads stdout line-by-line, classifying each line and forwarding events.
@@ -337,55 +285,13 @@ fn format_cli_turn_exit_error(
     stdout: &str,
     stderr: &str,
 ) -> AgentError {
-    if let Some(guidance) = known_cli_turn_exit_guidance(kind, stdout, stderr) {
-        return AgentError(guidance);
-    }
-
-    let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
-    let output_detail = cli_turn_output_detail(stdout, stderr);
-
-    AgentError(format!(
-        "Agent command failed with exit code {exit_code}: {output_detail}"
+    AgentError(error::format_agent_cli_exit_error(
+        kind,
+        "Agent command",
+        exit_code,
+        stdout,
+        stderr,
     ))
-}
-
-/// Returns provider-specific guidance for known CLI turn failures.
-fn known_cli_turn_exit_guidance(kind: AgentKind, stdout: &str, stderr: &str) -> Option<String> {
-    match kind {
-        AgentKind::Claude if is_claude_authentication_error(stdout, stderr) => {
-            Some(claude_authentication_error_message())
-        }
-        AgentKind::Claude | AgentKind::Codex | AgentKind::Gemini => None,
-    }
-}
-
-/// Builds the actionable Claude authentication refresh guidance message.
-fn claude_authentication_error_message() -> String {
-    "Claude command failed because authentication expired or is missing.\nRun `claude auth login` \
-     to refresh your Anthropic session, verify with `claude auth status`, then retry."
-        .to_string()
-}
-
-/// Detects Claude CLI authentication failures surfaced through stdout/stderr.
-fn is_claude_authentication_error(stdout: &str, stderr: &str) -> bool {
-    let combined_output = format!("{stdout}\n{stderr}").to_ascii_lowercase();
-
-    combined_output.contains("oauth token has expired")
-        || combined_output.contains("failed to authenticate")
-        || combined_output.contains("authentication_error")
-}
-
-/// Formats captured stdout/stderr into one compact CLI turn error detail.
-fn cli_turn_output_detail(stdout: &str, stderr: &str) -> String {
-    let trimmed_stdout = stdout.trim();
-    let trimmed_stderr = stderr.trim();
-
-    match (trimmed_stdout.is_empty(), trimmed_stderr.is_empty()) {
-        (false, false) => format!("stdout: {trimmed_stdout}; stderr: {trimmed_stderr}"),
-        (false, true) => format!("stdout: {trimmed_stdout}"),
-        (true, false) => format!("stderr: {trimmed_stderr}"),
-        (true, true) => "no output".to_string(),
-    }
 }
 
 #[cfg(test)]

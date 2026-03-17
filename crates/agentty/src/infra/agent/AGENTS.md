@@ -14,11 +14,14 @@ When backend protocol or provider parsing behavior changes, update:
 
 - [`app_server/`](app_server/) - Provider-specific app-server client implementations kept private to agent backends.
 - [`app_server.rs`](app_server.rs) - Router-only module for provider-specific app-server clients under `agent/`.
-- [`backend.rs`](backend.rs) - Shared backend trait, backend factory, and resume prompt construction.
+- [`backend.rs`](backend.rs) - Shared backend trait and transport request types.
+- [`cli/`](cli/) - Shared CLI subprocess stdin/error helpers reused by turns and one-shot prompts.
+- [`cli.rs`](cli.rs) - Router-only shared CLI helper module.
 - [`claude.rs`](claude.rs) - Claude CLI backend command construction.
-- [`codex.rs`](codex.rs) - Codex backend transport command construction and app-server client selection.
-- [`gemini.rs`](gemini.rs) - Gemini backend transport command construction and app-server client selection.
+- [`codex.rs`](codex.rs) - Codex backend runtime command construction.
+- [`gemini.rs`](gemini.rs) - Gemini backend runtime command construction.
 - [`prompt.rs`](prompt.rs) - Shared prompt preparation helpers for transcript replay and protocol instruction injection.
+- [`provider.rs`](provider.rs) - Central provider registry for transport policy, parsers, and app-server client factories.
 - [`protocol/`](protocol/) - Structured response protocol subsystem split into model, schema, and parse modules.
 - [`protocol.rs`](protocol.rs) - Protocol module router and public re-exports for structured response handling.
 - [`response_parser.rs`](response_parser.rs) - Provider-specific parsing for final and streaming output.

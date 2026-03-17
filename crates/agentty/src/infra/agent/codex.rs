@@ -1,10 +1,7 @@
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 
-use super::backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
-use crate::infra::agent::app_server::RealCodexAppServerClient;
-use crate::infra::app_server::AppServerClient;
+use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 
 /// Keeps Codex setup wired through [`AgentBackend`] while always routing turns
 /// through the Codex app-server runtime.
@@ -18,19 +15,6 @@ impl AgentBackend for CodexBackend {
     fn setup(&self, _folder: &Path) -> Result<(), AgentBackendError> {
         // Codex CLI needs no config files
         Ok(())
-    }
-
-    fn transport(&self) -> AgentTransport {
-        AgentTransport::AppServer
-    }
-
-    fn app_server_client(
-        &self,
-        default_client: Option<Arc<dyn AppServerClient>>,
-    ) -> Option<Arc<dyn AppServerClient>> {
-        Some(default_client.unwrap_or_else(|| {
-            Arc::new(RealCodexAppServerClient::new()) as Arc<dyn AppServerClient>
-        }))
     }
 
     fn build_command<'request>(

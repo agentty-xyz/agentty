@@ -8,8 +8,10 @@ backend implementations.
 
 ## Directory Index
 
-- [`codex.rs`](codex.rs) - Codex app-server transport and per-session runtime management.
-- [`gemini.rs`](gemini.rs) - Gemini ACP transport and per-session runtime management.
+- [`codex/`](codex/) - Codex app-server runtime implementation details.
+- [`codex.rs`](codex.rs) - Router-only Codex app-server module.
+- [`gemini/`](gemini/) - Gemini ACP runtime implementation details.
+- [`gemini.rs`](gemini.rs) - Router-only Gemini app-server module.
 - [`AGENTS.md`](AGENTS.md) - Local module guidance and directory index.
 - [`CLAUDE.md`](CLAUDE.md) - Symlink to AGENTS.md.
 - [`GEMINI.md`](GEMINI.md) - Symlink to AGENTS.md.

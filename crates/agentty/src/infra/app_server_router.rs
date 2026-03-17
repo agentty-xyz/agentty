@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use crate::domain::agent::{AgentKind, AgentModel};
-use crate::infra::agent::app_server::{RealCodexAppServerClient, RealGeminiAcpClient};
+use crate::domain::agent::AgentKind;
+use crate::infra::agent;
 use crate::infra::app_server::{
     AppServerClient, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse,
@@ -21,8 +21,10 @@ impl RoutingAppServerClient {
     /// Creates a router backed by production Codex and Gemini clients.
     pub fn new() -> Self {
         Self::new_with_clients(
-            Arc::new(RealCodexAppServerClient::new()),
-            Arc::new(RealGeminiAcpClient::new()),
+            agent::create_app_server_client(AgentKind::Codex, None)
+                .expect("Codex should provide an app-server client"),
+            agent::create_app_server_client(AgentKind::Gemini, None)
+                .expect("Gemini should provide an app-server client"),
         )
     }
 
@@ -55,10 +57,10 @@ impl AppServerClient for RoutingAppServerClient {
         let model = request.model.clone();
 
         Box::pin(async move {
-            let model = model.parse::<AgentModel>().map_err(|error| {
-                format!("App-server routing failed for unknown model `{model}`: {error}")
-            })?;
-            match model.kind() {
+            let provider_kind = agent::provider_kind_for_model(&model)
+                .map_err(|error| format!("App-server routing failed for {error}"))?;
+
+            match provider_kind {
                 AgentKind::Codex => codex_client.run_turn(request, stream_tx).await,
                 AgentKind::Gemini => gemini_client.run_turn(request, stream_tx).await,
                 AgentKind::Claude => {
@@ -82,7 +84,7 @@ impl AppServerClient for RoutingAppServerClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::agent::ReasoningLevel;
+    use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::infra::app_server::MockAppServerClient;
 
     #[tokio::test]

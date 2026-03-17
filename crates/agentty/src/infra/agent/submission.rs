@@ -5,17 +5,16 @@
 //! still accepting non-empty plain-text utility responses as compatibility
 //! fallback answer text.
 
-use std::io;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use tokio::io::AsyncWriteExt as _;
-use tokio::task::JoinHandle;
-
 use super::backend::{AgentBackend, BuildCommandRequest};
+use super::cli::{error, stdin};
 use super::protocol::{AgentResponse, ProtocolRequestProfile, parse_agent_response_strict};
-use super::{ParsedResponse, create_backend, parse_response};
+use super::{
+    ParsedResponse, create_app_server_client, create_backend, parse_response, transport_mode,
+};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionStats;
 use crate::infra::app_server::{AppServerClient, AppServerTurnRequest};
@@ -85,15 +84,16 @@ pub(crate) async fn submit_one_shot_with_stats_and_app_server_client(
 ) -> Result<OneShotSubmission, String> {
     let backend = create_backend(request.model.kind());
 
-    if backend.transport().uses_app_server() {
-        let app_server_client = backend
-            .app_server_client(app_server_client_override)
-            .ok_or_else(|| {
-                format!(
-                    "{} backend did not provide an app-server client",
-                    request.model.kind()
-                )
-            })?;
+    if transport_mode(request.model.kind()).uses_app_server() {
+        let app_server_client =
+            create_app_server_client(request.model.kind(), app_server_client_override).ok_or_else(
+                || {
+                    format!(
+                        "{} provider did not provide an app-server client",
+                        request.model.kind()
+                    )
+                },
+            )?;
 
         return submit_one_shot_with_app_server_client(app_server_client.as_ref(), request).await;
     }
@@ -230,9 +230,8 @@ async fn execute_one_shot_command(
     let command = backend
         .build_command(build_request)
         .map_err(|error| format!("Failed to build one-shot agent command: {error}"))?;
-    let stdin_payload =
-        super::backend::build_command_stdin_payload(request.model.kind(), build_request)
-            .map_err(|error| format!("Failed to build one-shot agent stdin payload: {error}"))?;
+    let stdin_payload = super::build_command_stdin_payload(request.model.kind(), build_request)
+        .map_err(|error| format!("Failed to build one-shot agent stdin payload: {error}"))?;
     let mut tokio_command = tokio::process::Command::from(command);
     tokio_command
         .stdin(if stdin_payload.is_some() {
@@ -246,12 +245,22 @@ async fn execute_one_shot_command(
         .spawn()
         .map_err(|error| format!("Failed to execute one-shot agent command: {error}"))?;
     pid_guard.update_from_child(&child);
-    let stdin_write_task = spawn_optional_stdin_write(child.stdin.take(), stdin_payload);
+    let stdin_write_task = stdin::spawn_optional_stdin_write(
+        child.stdin.take(),
+        stdin_payload,
+        "one-shot stdin pipe unavailable after spawn",
+        std::convert::identity,
+    );
     let output = child
         .wait_with_output()
         .await
         .map_err(|error| format!("Failed to execute one-shot agent command: {error}"))?;
-    await_optional_stdin_write(stdin_write_task).await?;
+    stdin::await_optional_stdin_write(
+        stdin_write_task,
+        "One-shot stdin write task failed",
+        std::convert::identity,
+    )
+    .await?;
 
     if output.status.signal().is_some() {
         return Err("One-shot agent command was interrupted".to_string());
@@ -273,63 +282,6 @@ async fn execute_one_shot_command(
     Ok(parsed_response)
 }
 
-/// Starts one background stdin writer when the child needs prompt input.
-fn spawn_optional_stdin_write(
-    child_stdin: Option<tokio::process::ChildStdin>,
-    stdin_payload: Option<Vec<u8>>,
-) -> Option<JoinHandle<Result<(), String>>> {
-    stdin_payload.map(|stdin_payload| {
-        tokio::spawn(async move { write_optional_stdin(child_stdin, stdin_payload).await })
-    })
-}
-
-/// Waits for one optional background stdin writer to finish.
-///
-/// # Errors
-/// Returns an error when the writer task fails or panics before the full
-/// payload is sent.
-async fn await_optional_stdin_write(
-    stdin_write_task: Option<JoinHandle<Result<(), String>>>,
-) -> Result<(), String> {
-    let Some(stdin_write_task) = stdin_write_task else {
-        return Ok(());
-    };
-
-    stdin_write_task
-        .await
-        .map_err(|error| format!("One-shot stdin write task failed: {error}"))?
-}
-
-/// Writes one optional stdin payload into the spawned one-shot subprocess.
-///
-/// # Errors
-/// Returns an error when stdin was requested but not available or the write
-/// fails before EOF is signaled.
-async fn write_optional_stdin(
-    child_stdin: Option<tokio::process::ChildStdin>,
-    stdin_payload: Vec<u8>,
-) -> Result<(), String> {
-    let mut child_stdin =
-        child_stdin.ok_or_else(|| "one-shot stdin pipe unavailable after spawn".to_string())?;
-    if let Err(error) = child_stdin.write_all(&stdin_payload).await
-        && !is_broken_pipe_error(&error)
-    {
-        return Err(format!("Failed to write one-shot stdin payload: {error}"));
-    }
-    if let Err(error) = child_stdin.shutdown().await
-        && !is_broken_pipe_error(&error)
-    {
-        return Err(format!("Failed to close one-shot stdin payload: {error}"));
-    }
-
-    Ok(())
-}
-
-/// Returns whether one stdin write error is the expected closed-pipe case.
-fn is_broken_pipe_error(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::BrokenPipe
-}
-
 /// Formats one non-zero one-shot command exit into a user-facing error.
 fn format_one_shot_exit_error(
     agent_kind: AgentKind,
@@ -337,57 +289,13 @@ fn format_one_shot_exit_error(
     stdout: &str,
     stderr: &str,
 ) -> String {
-    if let Some(guidance) = known_one_shot_exit_guidance(agent_kind, stdout, stderr) {
-        return guidance;
-    }
-
-    let exit_code = exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string());
-    let output_detail = one_shot_output_detail(stdout, stderr);
-
-    format!("One-shot agent command failed with exit code {exit_code}: {output_detail}")
-}
-
-/// Returns provider-specific guidance for known one-shot command failures.
-fn known_one_shot_exit_guidance(
-    agent_kind: AgentKind,
-    stdout: &str,
-    stderr: &str,
-) -> Option<String> {
-    match agent_kind {
-        AgentKind::Claude if is_claude_authentication_error(stdout, stderr) => {
-            Some(claude_authentication_error_message())
-        }
-        AgentKind::Claude | AgentKind::Codex | AgentKind::Gemini => None,
-    }
-}
-
-/// Builds the actionable Claude authentication refresh guidance message.
-fn claude_authentication_error_message() -> String {
-    "One-shot Claude command failed because authentication expired or is missing.\nRun `claude \
-     auth login` to refresh your Anthropic session, verify with `claude auth status`, then retry."
-        .to_string()
-}
-
-/// Detects Claude CLI authentication failures surfaced through stdout/stderr.
-fn is_claude_authentication_error(stdout: &str, stderr: &str) -> bool {
-    let combined_output = format!("{stdout}\n{stderr}").to_ascii_lowercase();
-
-    combined_output.contains("oauth token has expired")
-        || combined_output.contains("failed to authenticate")
-        || combined_output.contains("authentication_error")
-}
-
-/// Formats captured stdout/stderr into one compact error detail string.
-fn one_shot_output_detail(stdout: &str, stderr: &str) -> String {
-    let trimmed_stdout = stdout.trim();
-    let trimmed_stderr = stderr.trim();
-
-    match (trimmed_stdout.is_empty(), trimmed_stderr.is_empty()) {
-        (false, false) => format!("stdout: {trimmed_stdout}; stderr: {trimmed_stderr}"),
-        (false, true) => format!("stdout: {trimmed_stdout}"),
-        (true, false) => format!("stderr: {trimmed_stderr}"),
-        (true, true) => "no output".to_string(),
-    }
+    error::format_agent_cli_exit_error(
+        agent_kind,
+        "One-shot agent command",
+        exit_code,
+        stdout,
+        stderr,
+    )
 }
 
 /// Clears the shared one-shot child PID slot when one exists.

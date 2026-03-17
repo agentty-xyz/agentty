@@ -573,13 +573,14 @@ impl SessionTaskService {
         backend: &dyn agent::AgentBackend,
         request: agent::OneShotRequest<'_>,
     ) -> Result<agent::OneShotSubmission, String> {
-        if backend.transport().uses_app_server() {
-            let app_server_client = backend.app_server_client(None).ok_or_else(|| {
-                format!(
-                    "{} backend did not provide an app-server client",
-                    session_model.kind()
-                )
-            })?;
+        if agent::transport_mode(session_model.kind()).uses_app_server() {
+            let app_server_client = agent::create_app_server_client(session_model.kind(), None)
+                .ok_or_else(|| {
+                    format!(
+                        "{} provider did not provide an app-server client",
+                        session_model.kind()
+                    )
+                })?;
 
             return agent::submit_one_shot_with_app_server_client(
                 app_server_client.as_ref(),
@@ -717,7 +718,6 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
-    use crate::infra::agent::AgentTransport;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::AgentRequestKind;
     use crate::infra::git::MockGitClient;
@@ -748,14 +748,6 @@ mod tests {
             .insert_session("session-id", model, "main", "Review", project_id)
             .await
             .expect("failed to insert session");
-    }
-
-    /// Configures one mocked backend to behave like a direct CLI transport.
-    fn expect_cli_transport(backend: &mut MockAgentBackend) {
-        backend
-            .expect_transport()
-            .times(1)
-            .return_const(AgentTransport::Cli);
     }
 
     #[test]
@@ -859,7 +851,6 @@ mod tests {
         // Arrange
         let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
-        expect_cli_transport(&mut backend);
         backend
             .expect_build_command()
             .times(1)
@@ -1129,7 +1120,6 @@ mod tests {
         let child_pid = Arc::new(Mutex::new(None));
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
-        expect_cli_transport(&mut backend);
         backend.expect_build_command().times(1).returning(|request| {
             assert!(matches!(
                 request.request_kind,
@@ -1191,7 +1181,6 @@ mod tests {
         let output = Arc::new(Mutex::new(String::new()));
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
-        expect_cli_transport(&mut backend);
         backend
             .expect_build_command()
             .times(1)
@@ -1249,7 +1238,6 @@ mod tests {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
-        expect_cli_transport(&mut backend);
         backend
             .expect_build_command()
             .times(1)

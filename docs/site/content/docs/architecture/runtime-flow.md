@@ -145,11 +145,11 @@ Session workers are transport-agnostic through `AgentChannel`:
 ```text
 app/session/workflow/worker.rs
   └─ create_agent_channel(kind, override)
-       └─ AgentBackend
-            ├─ transport() -> Cli
+       └─ provider registry (`infra/agent/provider.rs`)
+            ├─ transport_mode() -> Cli
             │    └─ CliAgentChannel        (Claude; subprocess per turn)
-            └─ transport() -> AppServer
-                 ├─ app_server_client()
+            └─ transport_mode() -> AppServer
+                 ├─ create_app_server_client()
                  └─ AppServerAgentChannel  (Codex/Gemini; persistent runtime per session)
                       └─ AppServerClient
                            ├─ RealCodexAppServerClient
@@ -196,12 +196,15 @@ Streaming behavior differs by transport/provider:
 - CLI prompt submission can stream the fully rendered prompt through stdin for
   providers that would otherwise exceed argv limits on large diffs or one-shot
   utility prompts.
+- Shared CLI subprocess helpers under `crates/agentty/src/infra/agent/cli/`
+  now own stdin piping and provider-aware exit guidance so session turns and
+  one-shot prompts use the same subprocess behavior.
 - App-server channel (`AppServerAgentChannel`): bridges `AppServerStreamEvent` to `TurnEvent`.
 - One-shot prompt submission asks the concrete backend for its transport path,
   so app-server providers (Codex and Gemini) resolve their own runtime client
   and Claude stays on direct CLI subprocess execution.
 - Codex thought phases (`thinking`/`plan`/`reasoning`/`thought`) stream as `ThoughtDelta`.
-- Provider capabilities in `crates/agentty/src/infra/agent/backend.rs` centralize whether transports stream assistant chunks live, require strict final protocol validation, or classify app-server phase labels as thought output, while concrete backends now own both app-server client selection and runtime command construction.
+- Provider capabilities in `crates/agentty/src/infra/agent/provider.rs` centralize whether transports stream assistant chunks live, require strict final protocol validation, classify app-server phase labels as thought output, and construct provider app-server clients.
 - Strict providers suppress streamed assistant chunks when needed so malformed first-pass protocol JSON is not persisted.
 - Worker persistence behavior: streamed `ThoughtDelta` and `Progress` updates drive transient progress badges and are not appended to session transcript output.
 
@@ -211,7 +214,7 @@ Final-output validation:
 - Claude and Gemini use strict protocol parsing and return an error immediately when invalid.
 - Codex uses permissive parse fallback (schema already supplied via app-server `outputSchema` path).
 - One-shot agent submissions use strict protocol parsing and surface schema errors directly to the caller before returning utility results to app/session workflows, including auto-commit and rebase conflict assistance.
-- App-server restart retries and context-reset transcript replays still preserve the original protocol profile for normal prompt rendering.
+- App-server restart retries and context-reset transcript replays still preserve the original protocol profile for normal prompt rendering through the shared `infra/app_server/` prompt and retry modules.
 
 ## Clarification Question Loop
 

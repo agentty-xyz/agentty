@@ -10,7 +10,8 @@ Implementations of external interfaces (Database, Git, System).
 - [`GEMINI.md`](GEMINI.md) - Symlink to AGENTS.md.
 - [`agent/`](agent/) - Provider-specific backend builders and response parsing modules.
 - [`agent.rs`](agent.rs) - Agent module root that wires provider modules under `agent/`.
-- [`app_server.rs`](app_server.rs) - Shared app-server trait and turn request/response event types.
+- [`app_server/`](app_server/) - Shared app-server contract, prompt, registry, and retry modules.
+- [`app_server.rs`](app_server.rs) - Router-only app-server module with shared public re-exports.
 - [`channel/`](channel/) - Provider-agnostic `AgentChannel` trait and CLI/app-server adapters.
 - [`channel.rs`](channel.rs) - Channel module root with `AgentChannel` trait, types, and factory.
 - [`app_server_router.rs`](app_server_router.rs) - Routes app-server turn execution to the provider-specific client for each model.

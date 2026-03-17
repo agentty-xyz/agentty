@@ -13,12 +13,19 @@ use tokio::io::{AsyncWriteExt, BufReader, Lines};
 
 /// Default timeout for initialization handshakes and session creation.
 ///
-/// Set conservatively to absorb slower cold starts from provider runtimes and
-/// first-run model initialization without failing healthy sessions.
-pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Gemini ACP cold starts can take materially longer than a typical
+/// request/response round trip while the runtime initializes tools and model
+/// state, so the shared startup window stays measured in minutes rather than
+/// seconds to avoid aborting healthy app-server bootstraps.
+pub const STARTUP_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Default timeout for a single prompt turn.
-pub const TURN_TIMEOUT: Duration = Duration::from_mins(5);
+///
+/// App-server turns may legitimately run for long periods while agents plan,
+/// execute tools, and compact context, so the shared turn window is aligned
+/// with the long-running Codex behavior instead of the shorter bootstrap
+/// timeout.
+pub const TURN_TIMEOUT: Duration = Duration::from_hours(4);
 
 /// Writes one JSON-RPC payload as a newline-delimited line to `stdin`.
 ///

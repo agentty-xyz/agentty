@@ -18,11 +18,10 @@ pub fn create_agent_channel(
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
 ) -> Arc<dyn AgentChannel> {
     let backend = agent::create_backend(kind);
-    let transport = backend.transport();
+    let transport = agent::transport_mode(kind);
 
     if transport.uses_app_server() {
-        let app_server_client = backend
-            .app_server_client(app_server_client_override)
+        let app_server_client = agent::create_app_server_client(kind, app_server_client_override)
             .expect("app-server backend should provide an app-server client");
 
         Arc::new(AppServerAgentChannel::new(app_server_client, kind))

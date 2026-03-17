@@ -27,8 +27,8 @@ The traits below are mocked with `mockall`. Most use
 | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and dispatching open commands. |
 | `TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux command boundary that keeps multi-command `send-keys` flows deterministic in unit tests. |
 | `AgentChannel` | `infra/channel.rs` | Provider-agnostic turn execution (session init, run turn, shutdown). |
-| `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup, transport ownership, transport command construction, and app-server client selection. |
-| `AppServerClient` | `infra/app_server.rs` | Provider-specific app-server RPC execution and session runtime lifecycle. |
+| `AgentBackend` | `infra/agent/backend.rs` | Per-provider setup and transport command construction. |
+| `AppServerClient` | `infra/app_server/contract.rs` | Provider-specific app-server RPC execution and session runtime lifecycle. |
 | `EventSource` | `runtime/event.rs` | Terminal event polling for deterministic event-loop tests. |
 | `Clock` | `app/session/core.rs` | Shared wall-clock and monotonic time boundary used by session orchestration and runtime helpers such as pasted-image file naming. |
 | `Backend` (generic) | `runtime/core.rs` | Runtime accepts `Terminal<B: Backend>` via `run_with_backend`, enabling in-process TUI tests with `TestBackend` without a real terminal. |
@@ -38,7 +38,8 @@ The traits below are mocked with `mockall`. Most use
 | `VersionCommandRunner` | `infra/version.rs` | npm/curl command execution for update checks. |
 | `GitCommandRunner` | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
 | `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance execution boundary. |
-| `GeminiRuntimeTransport` | `infra/agent/app_server/gemini.rs` | ACP stdio transport boundary for Gemini runtime protocol tests. |
+| `AppServerClient` retry helpers | `infra/app_server/retry.rs` | Shared restart-and-replay orchestration for provider runtimes without duplicating lifecycle policy in each provider. |
+| `GeminiRuntimeTransport` | `infra/agent/app_server/gemini/client.rs` | ACP stdio transport boundary for Gemini runtime protocol tests. |
 
 <a id="architecture-boundary-testing-guidance"></a>
 When adding higher-level flows involving multiple external commands, prefer

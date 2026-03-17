@@ -74,16 +74,18 @@ choose the correct module when implementing changes.
 | - `cli.rs` | `CliAgentChannel` - CLI subprocess adapter (Claude). |
 | - `app_server.rs` | `AppServerAgentChannel` - app-server RPC adapter (Codex/Gemini). |
 | `crates/agentty/src/infra/agent/` | Per-provider backend command builders and response parsing: |
-| - `backend.rs` | `AgentBackend` trait, provider capability descriptors, backend-owned transport selection, and shared final-response policy. |
+| - `backend.rs` | `AgentBackend` trait and shared backend request/error types. |
+| - `provider.rs` | Central provider registry for transport mode, parser policy, stdin strategy, and app-server client factories. |
+| - `cli.rs` + `infra/agent/cli/` | Router plus shared CLI subprocess stdin/error helpers reused by session turns and one-shot prompts. |
 | - `claude.rs` | Claude backend implementation. |
-| - `app_server.rs` + `infra/agent/app_server/` | Router plus provider-specific app-server clients kept private to the agent backend module. |
-| - `codex.rs` | Codex backend implementation that owns Codex app-server client selection and runtime command construction. |
-| - `gemini.rs` | Gemini backend implementation that owns Gemini ACP client selection and runtime command construction. |
+| - `app_server.rs` + `infra/agent/app_server/` | Router plus provider-specific app-server client trees kept private to the agent backend module. |
+| - `codex.rs` | Codex backend runtime command construction. |
+| - `gemini.rs` | Gemini backend runtime command construction. |
 | - `prompt.rs` | Shared prompt preparation (`prepare_prompt_text`) for transcript replay and protocol preamble injection. |
 | - `protocol.rs` + `infra/agent/protocol/` | Router plus focused protocol submodules: `model.rs` for the wire contract, `schema.rs` for prompt/transport schema generation, and `parse.rs` for final/stream parsing helpers. |
 | - `response_parser.rs` | Provider-specific final/stream output parsing and usage extraction for Claude, Gemini, and Codex. |
 | - `submission.rs` | Shared one-shot prompt execution and strict protocol validation for generated titles, session commit messages, assist prompts, and review text, asking each concrete backend to provide either an app-server client or direct CLI execution path. |
-| `crates/agentty/src/infra/app_server.rs` | `AppServerClient` trait and shared request/response stream types. |
+| `crates/agentty/src/infra/app_server.rs` + `infra/app_server/` | Router plus shared app-server contract, prompt shaping, runtime registry, and restart/retry modules. |
 | `crates/agentty/src/infra/app_server_router.rs` | `RoutingAppServerClient` - reusable app-server router kept for tests and integration entry points that want one shared client across providers. |
 | `crates/agentty/src/infra/app_server_transport.rs` | Shared stdio JSON-RPC transport utilities for app-server processes. |
 | `crates/agentty/src/infra/file_index.rs` | Gitignore-aware file indexing and fuzzy filtering for `@` mentions in prompts. |
