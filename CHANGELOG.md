@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.5] - 2026-03-17
+
+### Added
+
+- Add `AGENTS.md` files for app-server, CLI, and shared modules.
+- Add the tech debt error handling implementation plan.
+
+### Changed
+
+- Publish session branches with `git push --force-with-lease`.
+- Update agent test expectations for generic agent wording and the current commit message model.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.6.4] - 2026-03-16
 
 ### Refactored
