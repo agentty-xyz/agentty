@@ -828,7 +828,8 @@ impl App {
             .services
             .db()
             .get_project(project_id)
-            .await?
+            .await
+            .map_err(|e| e.to_string())?
             .map(Self::project_from_row)
             .ok_or_else(|| format!("Project with id `{project_id}` was not found"))?;
         let git_branch = self
@@ -1124,21 +1125,22 @@ impl App {
                 Ok(Some((created_at, updated_at))) => Some((updated_at - created_at).max(0)),
                 Ok(None) | Err(_) => None,
             };
-        let usage_rows_result =
-            self.services
-                .db()
-                .load_session_usage(session_id)
-                .await
-                .map(|usage_rows| {
-                    usage_rows
-                        .into_iter()
-                        .map(|row| SessionStatsUsage {
-                            input_tokens: row.input_tokens.unsigned_abs(),
-                            model: row.model,
-                            output_tokens: row.output_tokens.unsigned_abs(),
-                        })
-                        .collect()
-                });
+        let usage_rows_result = self
+            .services
+            .db()
+            .load_session_usage(session_id)
+            .await
+            .map_err(|e| e.to_string())
+            .map(|usage_rows| {
+                usage_rows
+                    .into_iter()
+                    .map(|row| SessionStatsUsage {
+                        input_tokens: row.input_tokens.unsigned_abs(),
+                        model: row.model,
+                        output_tokens: row.output_tokens.unsigned_abs(),
+                    })
+                    .collect()
+            });
 
         SessionStatsSnapshot {
             session_duration_seconds,

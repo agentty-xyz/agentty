@@ -35,7 +35,7 @@ async fn run() -> Result<(), String> {
     let git_branch = git_client.detect_git_info(working_dir.clone()).await;
 
     let db_path = home.join(DB_DIR).join(DB_FILE);
-    let db = Database::open(&db_path).await?;
+    let db = Database::open(&db_path).await.map_err(|e| e.to_string())?;
 
     let mut app = App::new(auto_update, base_path, working_dir, git_branch, db).await?;
 

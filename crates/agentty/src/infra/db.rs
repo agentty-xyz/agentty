@@ -10,6 +10,25 @@ use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{ReviewRequest, SessionStats};
 use crate::domain::setting::SettingName;
 
+/// Typed error returned by [`Database`] operations.
+///
+/// Wraps the underlying `SQLx`, migration, and I/O failures so callers can
+/// distinguish error categories without parsing opaque strings.
+#[derive(Debug, thiserror::Error)]
+pub enum DbError {
+    /// A SQL query or connection-pool operation failed.
+    #[error("{0}")]
+    Query(#[from] sqlx::Error),
+
+    /// An embedded schema migration failed during database open.
+    #[error("{0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
+
+    /// A filesystem operation failed (e.g. creating the database directory).
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+}
+
 /// Subdirectory under the agentty home where the database file is stored.
 pub const DB_DIR: &str = "db";
 
@@ -360,11 +379,9 @@ impl Database {
     /// # Errors
     /// Returns an error if the directory cannot be created, the database cannot
     /// be opened, or migrations fail.
-    pub async fn open(db_path: &Path) -> Result<Self, String> {
+    pub async fn open(db_path: &Path) -> Result<Self, DbError> {
         if let Some(parent) = db_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|err| format!("Failed to create database directory: {err}"))?;
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         let options = SqliteConnectOptions::new()
@@ -376,13 +393,9 @@ impl Database {
         let pool = SqlitePoolOptions::new()
             .max_connections(DB_POOL_MAX_CONNECTIONS)
             .connect_with(options)
-            .await
-            .map_err(|err| format!("Failed to connect to database: {err}"))?;
+            .await?;
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|err| format!("Failed to run migrations: {err}"))?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(Self { pool })
     }
@@ -401,7 +414,7 @@ impl Database {
         &self,
         path: &str,
         git_branch: Option<&str>,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, DbError> {
         sqlx::query(
             r"
 INSERT INTO project (path, git_branch, created_at, updated_at)
@@ -414,8 +427,7 @@ SET git_branch = excluded.git_branch,
         .bind(path)
         .bind(git_branch)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to upsert project: {err}"))?;
+        .await?;
 
         let row = sqlx::query_as!(
             RequiredI64ValueRow,
@@ -427,8 +439,7 @@ WHERE path = ?
             path
         )
         .fetch_one(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to fetch project id: {err}"))?;
+        .await?;
 
         Ok(row.value)
     }
@@ -437,7 +448,7 @@ WHERE path = ?
     ///
     /// # Errors
     /// Returns an error if the project lookup query fails.
-    pub async fn get_project(&self, id: i64) -> Result<Option<ProjectRow>, String> {
+    pub async fn get_project(&self, id: i64) -> Result<Option<ProjectRow>, DbError> {
         let row = sqlx::query_as!(
             ProjectRow,
             r#"
@@ -455,8 +466,7 @@ WHERE id = ?
             id
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to get project: {err}"))?;
+        .await?;
 
         Ok(row)
     }
@@ -465,7 +475,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if project rows cannot be read from the database.
-    pub async fn load_projects_with_stats(&self) -> Result<Vec<ProjectListRow>, String> {
+    pub async fn load_projects_with_stats(&self) -> Result<Vec<ProjectListRow>, DbError> {
         let rows = sqlx::query_as!(
             ProjectListQueryRow,
             r#"
@@ -499,8 +509,7 @@ ORDER BY p.is_favorite DESC,
             "#
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load projects: {err}"))?;
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -512,7 +521,7 @@ ORDER BY p.is_favorite DESC,
     ///
     /// # Errors
     /// Returns an error if the project row cannot be updated.
-    pub async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), String> {
+    pub async fn touch_project_last_opened(&self, project_id: i64) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -527,8 +536,7 @@ WHERE id = ?
         .bind(now)
         .bind(project_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update last-opened project timestamp: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -541,7 +549,7 @@ WHERE id = ?
         &self,
         project_id: i64,
         is_favorite: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -556,8 +564,7 @@ WHERE id = ?
         .bind(now)
         .bind(project_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update project favorite flag: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -573,7 +580,7 @@ WHERE id = ?
         base_branch: &str,
         status: &str,
         project_id: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 INSERT INTO session (id, model, base_branch, status, project_id, prompt, output)
@@ -588,8 +595,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
         .bind("")
         .bind("")
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to insert session: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -604,7 +610,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
     pub async fn insert_session_creation_activity_now(
         &self,
         session_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         self.insert_session_creation_activity_at(session_id, unix_timestamp_now())
             .await
     }
@@ -620,7 +626,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
         &self,
         session_id: &str,
         timestamp_seconds: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 INSERT INTO session_activity (session_id, created_at)
@@ -631,8 +637,7 @@ ON CONFLICT(session_id) DO NOTHING
         .bind(session_id)
         .bind(timestamp_seconds)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to persist session activity: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -644,7 +649,7 @@ ON CONFLICT(session_id) DO NOTHING
     pub async fn load_sessions_for_project(
         &self,
         project_id: i64,
-    ) -> Result<Vec<SessionRow>, String> {
+    ) -> Result<Vec<SessionRow>, DbError> {
         let rows = sqlx::query_as!(
             SessionJoinRow,
             r#"
@@ -682,8 +687,7 @@ ORDER BY session.updated_at DESC, session.id
             project_id
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load sessions: {err}"))?;
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -695,7 +699,7 @@ ORDER BY session.updated_at DESC, session.id
     ///
     /// # Errors
     /// Returns an error if session rows cannot be read from the database.
-    pub async fn load_sessions(&self) -> Result<Vec<SessionRow>, String> {
+    pub async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError> {
         let rows = sqlx::query_as!(
             SessionJoinRow,
             r#"
@@ -731,8 +735,7 @@ ORDER BY session.updated_at DESC, session.id
 "#
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load sessions: {err}"))?;
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -745,7 +748,7 @@ ORDER BY session.updated_at DESC, session.id
     /// # Errors
     /// Returns an error if activity timestamps cannot be read from the
     /// database.
-    pub async fn load_session_activity_timestamps(&self) -> Result<Vec<i64>, String> {
+    pub async fn load_session_activity_timestamps(&self) -> Result<Vec<i64>, DbError> {
         let rows = sqlx::query_as!(
             TimestampValueRow,
             r"
@@ -755,8 +758,7 @@ ORDER BY id
 ",
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load session activity timestamps: {err}"))?;
+        .await?;
 
         Ok(rows.into_iter().map(|row| row.created_at).collect())
     }
@@ -768,7 +770,7 @@ ORDER BY id
     ///
     /// # Errors
     /// Returns an error if metadata cannot be queried from the database.
-    pub async fn load_sessions_metadata(&self) -> Result<(i64, i64), String> {
+    pub async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError> {
         let row = sqlx::query_as!(
             SessionMetadataRow,
             r#"
@@ -778,8 +780,7 @@ FROM session
 "#
         )
         .fetch_one(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load session metadata: {err}"))?;
+        .await?;
 
         Ok((row.session_count, row.max_updated_at))
     }
@@ -788,7 +789,7 @@ FROM session
     ///
     /// # Errors
     /// Returns an error if the session row cannot be deleted.
-    pub async fn delete_session(&self, id: &str) -> Result<(), String> {
+    pub async fn delete_session(&self, id: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 DELETE FROM session
@@ -797,8 +798,7 @@ WHERE id = ?
         )
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to delete session: {err}"))?;
+        .await?;
         Ok(())
     }
 
@@ -806,7 +806,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the status update fails.
-    pub async fn update_session_status(&self, id: &str, status: &str) -> Result<(), String> {
+    pub async fn update_session_status(&self, id: &str, status: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -817,8 +817,7 @@ WHERE id = ?
         .bind(status)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session status: {err}"))?;
+        .await?;
         Ok(())
     }
 
@@ -828,7 +827,11 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the timestamp update fails.
-    pub async fn update_session_updated_at(&self, id: &str, updated_at: i64) -> Result<(), String> {
+    pub async fn update_session_updated_at(
+        &self,
+        id: &str,
+        updated_at: i64,
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -839,8 +842,7 @@ WHERE id = ?
         .bind(updated_at)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session updated_at: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -851,7 +853,11 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the timestamp update fails.
-    pub async fn update_session_created_at(&self, id: &str, created_at: i64) -> Result<(), String> {
+    pub async fn update_session_created_at(
+        &self,
+        id: &str,
+        created_at: i64,
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -862,8 +868,7 @@ WHERE id = ?
         .bind(created_at)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session created_at: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -872,15 +877,14 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if deleting activity rows fails.
-    pub async fn clear_session_activity(&self) -> Result<(), String> {
+    pub async fn clear_session_activity(&self) -> Result<(), DbError> {
         sqlx::query(
             r"
 DELETE FROM session_activity
 ",
         )
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to clear session activity: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -889,7 +893,7 @@ DELETE FROM session_activity
     ///
     /// # Errors
     /// Returns an error if backfilling activity rows fails.
-    pub async fn backfill_session_activity_from_sessions(&self) -> Result<(), String> {
+    pub async fn backfill_session_activity_from_sessions(&self) -> Result<(), DbError> {
         sqlx::query(
             r"
 INSERT INTO session_activity (session_id, created_at)
@@ -898,8 +902,7 @@ FROM session
 ",
         )
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to backfill session activity: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -910,7 +913,7 @@ FROM session
     ///
     /// # Errors
     /// Returns an error if the size update fails.
-    pub async fn update_session_size(&self, id: &str, size: &str) -> Result<(), String> {
+    pub async fn update_session_size(&self, id: &str, size: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -923,8 +926,7 @@ WHERE id = ?
         .bind(id)
         .bind(size)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session size: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -933,7 +935,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the questions update fails.
-    pub async fn update_session_questions(&self, id: &str, questions: &str) -> Result<(), String> {
+    pub async fn update_session_questions(&self, id: &str, questions: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -944,8 +946,7 @@ WHERE id = ?
         .bind(questions)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session questions: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -954,7 +955,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the prompt update fails.
-    pub async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), String> {
+    pub async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -965,8 +966,7 @@ WHERE id = ?
         .bind(prompt)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session prompt: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -975,7 +975,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the title update fails.
-    pub async fn update_session_title(&self, id: &str, title: &str) -> Result<(), String> {
+    pub async fn update_session_title(&self, id: &str, title: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -986,8 +986,7 @@ WHERE id = ?
         .bind(title)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session title: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1001,7 +1000,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the summary update fails.
-    pub async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), String> {
+    pub async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1012,8 +1011,7 @@ WHERE id = ?
         .bind(summary)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session summary: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1026,7 +1024,11 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the stats update fails.
-    pub async fn update_session_stats(&self, id: &str, stats: &SessionStats) -> Result<(), String> {
+    pub async fn update_session_stats(
+        &self,
+        id: &str,
+        stats: &SessionStats,
+    ) -> Result<(), DbError> {
         if stats.input_tokens == 0 && stats.output_tokens == 0 {
             return Ok(());
         }
@@ -1043,8 +1045,7 @@ WHERE id = ?
         .bind(stats.output_tokens.cast_signed())
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session stats: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1053,7 +1054,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the session row cannot be updated.
-    pub async fn update_session_model(&self, id: &str, model: &str) -> Result<(), String> {
+    pub async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1064,8 +1065,7 @@ WHERE id = ?
         .bind(model)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session model: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1082,7 +1082,7 @@ WHERE id = ?
         &self,
         id: &str,
         provider_conversation_id: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1093,8 +1093,7 @@ WHERE id = ?
         .bind(provider_conversation_id)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session provider conversation id: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1108,7 +1107,7 @@ WHERE id = ?
         &self,
         id: &str,
         published_upstream_ref: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1119,8 +1118,7 @@ WHERE id = ?
         .bind(published_upstream_ref)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to update session published upstream ref: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1137,7 +1135,7 @@ WHERE id = ?
         &self,
         id: &str,
         review_request: Option<&ReviewRequest>,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         if let Some(review_request) = review_request {
             sqlx::query(
                 r"
@@ -1177,8 +1175,7 @@ SET display_id = excluded.display_id,
             .bind(review_request.summary.title.as_str())
             .bind(review_request.summary.web_url.as_str())
             .execute(&self.pool)
-            .await
-            .map_err(|err| format!("Failed to upsert session review request: {err}"))?;
+            .await?;
         } else {
             sqlx::query(
                 r"
@@ -1188,8 +1185,7 @@ WHERE session_id = ?
             )
             .bind(id)
             .execute(&self.pool)
-            .await
-            .map_err(|err| format!("Failed to clear session review request: {err}"))?;
+            .await?;
         }
 
         Ok(())
@@ -1202,7 +1198,7 @@ WHERE session_id = ?
     ///
     /// # Errors
     /// Returns an error if the output update fails.
-    pub async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), String> {
+    pub async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1213,8 +1209,7 @@ WHERE id = ?
         .bind(output)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to replace session output: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1223,7 +1218,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the output append update fails.
-    pub async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), String> {
+    pub async fn append_session_output(&self, id: &str, chunk: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1234,8 +1229,7 @@ WHERE id = ?
         .bind(chunk)
         .bind(id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to append session output: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1244,7 +1238,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the backfill update fails.
-    pub async fn backfill_session_project(&self, project_id: i64) -> Result<(), String> {
+    pub async fn backfill_session_project(&self, project_id: i64) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
@@ -1254,8 +1248,7 @@ WHERE project_id IS NULL
         )
         .bind(project_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to backfill sessions: {err}"))?;
+        .await?;
         Ok(())
     }
 
@@ -1263,7 +1256,7 @@ WHERE project_id IS NULL
     ///
     /// # Errors
     /// Returns an error if the base branch lookup query fails.
-    pub async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, String> {
+    pub async fn get_session_base_branch(&self, id: &str) -> Result<Option<String>, DbError> {
         let row = sqlx::query_as!(
             RequiredStringValueRow,
             r#"
@@ -1274,8 +1267,7 @@ WHERE id = ?
             id
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to get base branch: {err}"))?;
+        .await?;
 
         Ok(row.map(|row| row.value))
     }
@@ -1288,7 +1280,7 @@ WHERE id = ?
     pub async fn get_session_provider_conversation_id(
         &self,
         id: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, DbError> {
         let row = sqlx::query_as!(
             OptionalStringValueRow,
             r#"
@@ -1299,8 +1291,7 @@ WHERE id = ?
             id
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to get provider conversation id: {err}"))?;
+        .await?;
 
         Ok(row.and_then(|row| row.value))
     }
@@ -1314,7 +1305,7 @@ WHERE id = ?
         operation_id: &str,
         session_id: &str,
         kind: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         let queued_at = unix_timestamp_now();
 
         sqlx::query(
@@ -1328,8 +1319,7 @@ VALUES (?, ?, ?, 'queued', ?)
         .bind(kind)
         .bind(queued_at)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to insert session operation: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1340,7 +1330,7 @@ VALUES (?, ?, ?, 'queued', ?)
     /// Returns an error if operation rows cannot be read.
     pub async fn load_unfinished_session_operations(
         &self,
-    ) -> Result<Vec<SessionOperationRow>, String> {
+    ) -> Result<Vec<SessionOperationRow>, DbError> {
         let rows = sqlx::query_as!(
             SessionOperationRow,
             r#"
@@ -1354,8 +1344,7 @@ ORDER BY queued_at ASC, id ASC
             "#
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load unfinished session operations: {err}"))?;
+        .await?;
 
         Ok(rows)
     }
@@ -1369,7 +1358,7 @@ ORDER BY queued_at ASC, id ASC
     pub async fn is_session_operation_unfinished(
         &self,
         operation_id: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, DbError> {
         let row = sqlx::query_as!(
             RequiredBoolValueRow,
             r#"
@@ -1383,8 +1372,7 @@ SELECT EXISTS(
             operation_id
         )
         .fetch_one(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to check unfinished operation state: {err}"))?;
+        .await?;
 
         Ok(row.value)
     }
@@ -1393,7 +1381,7 @@ SELECT EXISTS(
     ///
     /// # Errors
     /// Returns an error if the operation row cannot be updated.
-    pub async fn mark_session_operation_running(&self, operation_id: &str) -> Result<(), String> {
+    pub async fn mark_session_operation_running(&self, operation_id: &str) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -1410,8 +1398,7 @@ WHERE id = ?
         .bind(now)
         .bind(operation_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to mark session operation as running: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1420,7 +1407,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the operation row cannot be updated.
-    pub async fn mark_session_operation_done(&self, operation_id: &str) -> Result<(), String> {
+    pub async fn mark_session_operation_done(&self, operation_id: &str) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -1437,8 +1424,7 @@ WHERE id = ?
         .bind(now)
         .bind(operation_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to mark session operation as done: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1451,7 +1437,7 @@ WHERE id = ?
         &self,
         operation_id: &str,
         error: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -1469,8 +1455,7 @@ WHERE id = ?
         .bind(error)
         .bind(operation_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to mark session operation as failed: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1483,7 +1468,7 @@ WHERE id = ?
         &self,
         operation_id: &str,
         reason: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -1501,8 +1486,7 @@ WHERE id = ?
         .bind(reason)
         .bind(operation_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to mark session operation as canceled: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1514,7 +1498,7 @@ WHERE id = ?
     pub async fn request_cancel_for_session_operations(
         &self,
         session_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session_operation
@@ -1525,8 +1509,7 @@ WHERE session_id = ?
         )
         .bind(session_id)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to request cancel for session operations: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1539,7 +1522,7 @@ WHERE session_id = ?
     pub async fn is_cancel_requested_for_session_operations(
         &self,
         session_id: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, DbError> {
         let row = sqlx::query_as!(
             RequiredBoolValueRow,
             r#"
@@ -1554,8 +1537,7 @@ SELECT EXISTS(
             session_id
         )
         .fetch_one(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to check cancel request for session operations: {err}"))?;
+        .await?;
 
         Ok(row.value)
     }
@@ -1564,7 +1546,7 @@ SELECT EXISTS(
     ///
     /// # Errors
     /// Returns an error if operation rows cannot be updated.
-    pub async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), String> {
+    pub async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError> {
         let now = unix_timestamp_now();
 
         sqlx::query(
@@ -1582,8 +1564,7 @@ WHERE status IN ('queued', 'running')
         .bind(now)
         .bind(reason)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to fail unfinished session operations: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1592,7 +1573,7 @@ WHERE status IN ('queued', 'running')
     ///
     /// # Errors
     /// Returns an error if the setting row cannot be written.
-    pub async fn upsert_setting(&self, name: &str, value: &str) -> Result<(), String> {
+    pub async fn upsert_setting(&self, name: &str, value: &str) -> Result<(), DbError> {
         sqlx::query(
             r"
 INSERT INTO setting (name, value)
@@ -1604,8 +1585,7 @@ SET value = excluded.value
         .bind(name)
         .bind(value)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to upsert setting: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1619,7 +1599,7 @@ SET value = excluded.value
         project_id: i64,
         name: &str,
         value: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 INSERT INTO project_setting (project_id, name, value)
@@ -1632,8 +1612,7 @@ SET value = excluded.value
         .bind(name)
         .bind(value)
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to upsert project setting: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1642,7 +1621,7 @@ SET value = excluded.value
     ///
     /// # Errors
     /// Returns an error if the setting lookup query fails.
-    pub async fn get_setting(&self, name: &str) -> Result<Option<String>, String> {
+    pub async fn get_setting(&self, name: &str) -> Result<Option<String>, DbError> {
         let row = sqlx::query_as!(
             RequiredStringValueRow,
             r#"
@@ -1653,8 +1632,7 @@ WHERE name = ?
             name
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to get setting: {err}"))?;
+        .await?;
 
         Ok(row.map(|row| row.value))
     }
@@ -1667,7 +1645,7 @@ WHERE name = ?
         &self,
         project_id: i64,
         name: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, DbError> {
         let row = sqlx::query_as!(
             RequiredStringValueRow,
             r#"
@@ -1680,8 +1658,7 @@ WHERE project_id = ?
             name
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to get project setting: {err}"))?;
+        .await?;
 
         Ok(row.map(|row| row.value))
     }
@@ -1694,7 +1671,7 @@ WHERE project_id = ?
         &self,
         project_id: i64,
         reasoning_level: ReasoningLevel,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         self.upsert_project_setting(
             project_id,
             SettingName::ReasoningLevel.as_str(),
@@ -1712,7 +1689,7 @@ WHERE project_id = ?
     pub async fn load_project_reasoning_level(
         &self,
         project_id: i64,
-    ) -> Result<ReasoningLevel, String> {
+    ) -> Result<ReasoningLevel, DbError> {
         let setting_value = self
             .get_project_setting(project_id, SettingName::ReasoningLevel.as_str())
             .await?;
@@ -1729,7 +1706,10 @@ WHERE project_id = ?
     ///
     /// # Errors
     /// Returns an error if settings persistence fails.
-    pub async fn set_reasoning_level(&self, reasoning_level: ReasoningLevel) -> Result<(), String> {
+    pub async fn set_reasoning_level(
+        &self,
+        reasoning_level: ReasoningLevel,
+    ) -> Result<(), DbError> {
         self.upsert_setting(
             SettingName::ReasoningLevel.as_str(),
             reasoning_level.codex(),
@@ -1743,7 +1723,7 @@ WHERE project_id = ?
     ///
     /// # Errors
     /// Returns an error if settings lookup fails.
-    pub async fn load_reasoning_level(&self) -> Result<ReasoningLevel, String> {
+    pub async fn load_reasoning_level(&self) -> Result<ReasoningLevel, DbError> {
         let setting_value = self
             .get_setting(SettingName::ReasoningLevel.as_str())
             .await?;
@@ -1760,7 +1740,7 @@ WHERE project_id = ?
     ///
     /// # Errors
     /// Returns an error if the session lookup query fails.
-    pub async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, String> {
+    pub async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, DbError> {
         let row = sqlx::query_as!(
             OptionalI64ValueRow,
             r#"
@@ -1771,8 +1751,7 @@ WHERE id = ?
             session_id
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load session project id: {err}"))?;
+        .await?;
 
         Ok(row.and_then(|row| row.value))
     }
@@ -1781,26 +1760,26 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if the session summary lookup query fails.
-    pub async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, String> {
-        sqlx::query_scalar::<_, Option<String>>(
-            r#"
+    pub async fn load_session_summary(&self, session_id: &str) -> Result<Option<String>, DbError> {
+        let row = sqlx::query_scalar::<_, Option<String>>(
+            r"
 SELECT summary
 FROM session
 WHERE id = ?
-"#,
+",
         )
         .bind(session_id)
         .fetch_optional(&self.pool)
-        .await
-        .map(|row| row.flatten())
-        .map_err(|err| format!("Failed to load session summary: {err}"))
+        .await?;
+
+        Ok(row.flatten())
     }
 
     /// Persists the active project identifier in application settings.
     ///
     /// # Errors
     /// Returns an error if settings persistence fails.
-    pub async fn set_active_project_id(&self, project_id: i64) -> Result<(), String> {
+    pub async fn set_active_project_id(&self, project_id: i64) -> Result<(), DbError> {
         self.upsert_setting("ActiveProjectId", &project_id.to_string())
             .await
     }
@@ -1809,7 +1788,7 @@ WHERE id = ?
     ///
     /// # Errors
     /// Returns an error if settings lookup fails.
-    pub async fn load_active_project_id(&self) -> Result<Option<i64>, String> {
+    pub async fn load_active_project_id(&self) -> Result<Option<i64>, DbError> {
         let setting_value = sqlx::query_as!(
             RequiredStringValueRow,
             r#"
@@ -1819,8 +1798,7 @@ WHERE name = 'ActiveProjectId'
 "#
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load active project id: {err}"))?
+        .await?
         .map(|row| row.value);
 
         Ok(setting_value.and_then(|value| value.parse::<i64>().ok()))
@@ -1839,7 +1817,7 @@ WHERE name = 'ActiveProjectId'
         session_id: &str,
         model: &str,
         stats: &SessionStats,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         if stats.input_tokens == 0 && stats.output_tokens == 0 {
             return Ok(());
         }
@@ -1859,8 +1837,7 @@ ON CONFLICT(session_id, model) DO UPDATE SET
         .bind(stats.input_tokens.cast_signed())
         .bind(stats.output_tokens.cast_signed())
         .execute(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to upsert session usage: {err}"))?;
+        .await?;
 
         Ok(())
     }
@@ -1872,7 +1849,7 @@ ON CONFLICT(session_id, model) DO UPDATE SET
     pub async fn load_session_usage(
         &self,
         session_id: &str,
-    ) -> Result<Vec<SessionUsageRow>, String> {
+    ) -> Result<Vec<SessionUsageRow>, DbError> {
         let rows = sqlx::query_as!(
             SessionUsageRow,
             r#"
@@ -1884,8 +1861,7 @@ ORDER BY model
             session_id
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load session usage: {err}"))?;
+        .await?;
 
         Ok(rows)
     }
@@ -1899,7 +1875,7 @@ ORDER BY model
     pub async fn load_session_timestamps(
         &self,
         session_id: &str,
-    ) -> Result<Option<(i64, i64)>, String> {
+    ) -> Result<Option<(i64, i64)>, DbError> {
         let row = sqlx::query_as!(
             SessionTimestampsRow,
             r#"
@@ -1910,8 +1886,7 @@ WHERE id = ?
             session_id
         )
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| format!("Failed to load session timestamps: {err}"))?;
+        .await?;
 
         Ok(row.map(|row| (row.created_at, row.updated_at)))
     }
@@ -1931,7 +1906,7 @@ impl Database {
     ///
     /// # Errors
     /// Returns an error if the database connection or migrations fail.
-    pub async fn open_in_memory() -> Result<Self, String> {
+    pub async fn open_in_memory() -> Result<Self, DbError> {
         let options = SqliteConnectOptions::new()
             .filename(":memory:")
             .journal_mode(SqliteJournalMode::Wal)
@@ -1940,13 +1915,9 @@ impl Database {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
-            .await
-            .map_err(|err| format!("Failed to connect to in-memory database: {err}"))?;
+            .await?;
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|err| format!("Failed to run migrations: {err}"))?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(Self { pool })
     }
@@ -3344,4 +3315,74 @@ WHERE model = ?
         // Assert
         assert!(project.is_favorite);
     }
+
+    #[tokio::test]
+    async fn query_on_dropped_table_returns_db_error_query() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        sqlx::query("DROP TABLE session")
+            .execute(database.pool())
+            .await
+            .expect("failed to drop table");
+
+        // Act
+        let result = database.load_sessions_metadata().await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(DbError::Query(_))),
+            "expected DbError::Query variant"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_error_display_includes_underlying_message() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        sqlx::query("DROP TABLE session")
+            .execute(database.pool())
+            .await
+            .expect("failed to drop table");
+
+        // Act
+        let result = database.load_sessions_metadata().await;
+
+        // Assert
+        let error = result.expect_err("expected query on dropped table to fail");
+        let display_text = error.to_string();
+        assert!(
+            !display_text.is_empty(),
+            "DbError Display should produce a non-empty message"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_with_unwritable_parent_returns_db_error_io() {
+        // Arrange — place the database path under a regular file so
+        // `create_dir_all` fails with an I/O error.
+        let temp = tempdir().expect("failed to create temp directory");
+        let blocking_file = temp.path().join("not_a_dir");
+        std::fs::write(&blocking_file, b"").expect("failed to create blocking file");
+        let db_path = blocking_file.join("nested").join("db.sqlite");
+
+        // Act
+        let result = Database::open(&db_path).await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(DbError::Io(_))),
+            "expected DbError::Io variant"
+        );
+    }
+
+    // NOTE: `DbError::Migration` is not directly tested because
+    // `Database::open` and `Database::open_in_memory` run migrations
+    // atomically after connecting — there is no injection point to
+    // pre-corrupt the schema before migrations execute. The `#[from]`
+    // derive mapping from `sqlx::migrate::MigrateError` is validated
+    // at compile time by `thiserror`.
 }

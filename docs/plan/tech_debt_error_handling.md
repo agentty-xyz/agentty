@@ -16,20 +16,21 @@ All database operations return typed `DbError` variants instead of opaque string
 
 ### Substeps
 
-- [ ] **Add `thiserror` workspace dependency.** Add `thiserror = "2"` to `[workspace.dependencies]` in root `Cargo.toml` and `thiserror = { workspace = true }` to `crates/agentty/Cargo.toml` `[dependencies]`.
-- [ ] **Define `DbError` enum.** Add a `#[derive(Debug, thiserror::Error)]` enum in `crates/agentty/src/infra/db.rs` with at minimum `Query(#[from] sqlx::Error)` and `Migration(String)` variants. Replace the manual `.map_err(|error| format!(...))` calls in each function with `?` or the appropriate variant constructor.
-- [ ] **Migrate constructor and connection methods.** Convert `Database::open()` and `Database::open_in_memory()` to return `Result<Self, DbError>`.
-- [ ] **Migrate remaining CRUD methods.** Convert all session, project, settings, and activity functions (33 remaining `pub` methods) to return `Result<..., DbError>`.
-- [ ] **Add `.map_err(|e| e.to_string())` bridges at call sites.** In `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/`, `crates/agentty/src/app/setting.rs`, `crates/agentty/src/app/task.rs`, and `crates/agentty/src/main.rs`, add temporary `.map_err(|e| e.to_string())` on every `self.db.*` or `self.services.db.*` call so the app layer continues to compile with `String` errors until step 6.
+- [x] **Add `thiserror` workspace dependency.** Add `thiserror = "2"` to `[workspace.dependencies]` in root `Cargo.toml` and `thiserror = { workspace = true }` to `crates/agentty/Cargo.toml` `[dependencies]`.
+- [x] **Define `DbError` enum.** Add a `#[derive(Debug, thiserror::Error)]` enum in `crates/agentty/src/infra/db.rs` with `Query(#[from] sqlx::Error)`, `Migration(#[from] sqlx::migrate::MigrateError)`, and `Io(#[from] std::io::Error)` variants. Replace the manual `.map_err(|error| format!(...))` calls in each function with `?`.
+- [x] **Migrate constructor and connection methods.** Convert `Database::open()` and `Database::open_in_memory()` to return `Result<Self, DbError>`.
+- [x] **Migrate remaining CRUD methods.** Convert all session, project, settings, and activity functions (33 remaining `pub` methods) to return `Result<..., DbError>`.
+- [x] **Add `.map_err(|e| e.to_string())` bridges at call sites.** In `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/app/session/workflow/merge.rs`, `crates/agentty/src/app/session/workflow/task.rs`, `crates/agentty/src/app/session/workflow/worker.rs`, and `crates/agentty/src/main.rs`, add temporary `.map_err(|e| e.to_string())` on `?`-propagated `db.*` calls so the app layer continues to compile with `String` errors until step 5.
 
 ### Tests
 
-- [ ] Verify all existing `db.rs` tests pass with the new `DbError` return types.
-- [ ] Add at least one test asserting that a specific `DbError` variant is returned for a known failure mode (e.g., query on a dropped table returns `DbError::Query`).
+- [x] Verify all existing `db.rs` tests pass with the new `DbError` return types.
+- [x] Add at least one test asserting that a specific `DbError` variant is returned for a known failure mode (e.g., query on a dropped table returns `DbError::Query`).
+- [x] Add test asserting `DbError::Io` variant when `Database::open()` hits an unwritable parent path. `DbError::Migration` is not directly testable because `open` runs migrations atomically after connecting with no injection point; the `#[from]` mapping is validated at compile time.
 
 ### Docs
 
-- [ ] Add `///` doc comment to the `DbError` enum and each variant.
+- [x] Add `///` doc comment to the `DbError` enum and each variant.
 
 ## 2) Introduce `GitError` for `infra/git/` internals and `GitClient` trait
 
@@ -229,8 +230,8 @@ All flagged convention violations from the tech-debt audit are resolved.
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| `thiserror` dependency | Not in workspace deps; 4 error enums exist with manual `Display`/`Error` impls | Planned (step 1) |
-| `infra/db.rs` errors | 36 functions return `Result<..., String>` | Planned (step 1) |
+| `thiserror` dependency | Added to workspace deps; `DbError` uses `thiserror::Error` derive | Done (step 1) |
+| `infra/db.rs` errors | All functions return `Result<..., DbError>`; callers bridge with `.map_err(\|e\| e.to_string())` | Done (step 1) |
 | `infra/git/` errors | 74 function signatures return `Result<..., String>` | Planned (step 2) |
 | App-server client errors | 14 functions return `Result<..., String>` | Planned (step 3) |
 | `FsClient`/version/clipboard errors | 14 functions return `Result<..., String>` | Planned (step 4) |

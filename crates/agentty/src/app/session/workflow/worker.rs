@@ -155,7 +155,8 @@ impl SessionWorkerService {
         services
             .db()
             .insert_session_operation(&operation_id, &session_id, command.kind())
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
 
         let sender = self.ensure_session_worker(services, &runtime);
         if sender.send(command).is_err() {

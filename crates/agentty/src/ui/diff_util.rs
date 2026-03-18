@@ -236,7 +236,7 @@ fn review_agent_comments(summary: Option<&str>) -> Vec<String> {
         }
 
         let list_stripped = strip_markdown_list_prefix(trimmed_line);
-        let heading_stripped = strip_markdown_heading_prefix(&list_stripped).to_string();
+        let heading_stripped = strip_markdown_heading_prefix(list_stripped).to_string();
 
         if is_protocol_summary_heading(&heading_stripped) {
             continue;

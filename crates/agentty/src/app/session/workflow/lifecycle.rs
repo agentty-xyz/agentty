@@ -378,17 +378,23 @@ impl SessionManager {
         services
             .db()
             .update_session_model(session_id, session_model.as_str())
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
         if model_changed {
             services
                 .db()
                 .update_session_provider_conversation_id(session_id, None)
-                .await?;
+                .await
+                .map_err(|e| e.to_string())?;
 
             self.clear_session_worker(session_id);
         }
 
-        let session_project_id = services.db().load_session_project_id(session_id).await?;
+        let session_project_id = services
+            .db()
+            .load_session_project_id(session_id)
+            .await
+            .map_err(|e| e.to_string())?;
 
         if Self::should_persist_last_used_model_as_default(services, session_project_id).await?
             && let Some(project_id) = session_project_id
@@ -400,7 +406,8 @@ impl SessionManager {
                     SettingName::DefaultSmartModel.as_str(),
                     session_model.as_str(),
                 )
-                .await?;
+                .await
+                .map_err(|e| e.to_string())?;
         }
 
         services.emit_app_event(AppEvent::SessionModelUpdated {
@@ -428,7 +435,8 @@ impl SessionManager {
         let should_persist = services
             .db()
             .get_project_setting(project_id, SettingName::LastUsedModelAsDefault.as_str())
-            .await?
+            .await
+            .map_err(|e| e.to_string())?
             .and_then(|setting_value| setting_value.parse::<bool>().ok())
             .unwrap_or(false);
 
@@ -733,7 +741,8 @@ impl SessionManager {
         services
             .db()
             .update_session_review_request(&session_id, Some(&review_request))
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
 
         let Some(session) = self.state.sessions.get_mut(session_index) else {
             return Err(SESSION_NOT_FOUND_ERROR.to_string());
@@ -756,7 +765,8 @@ impl SessionManager {
         services
             .db()
             .update_session_published_upstream_ref(session_id, Some(&published_upstream_ref))
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
 
         let session_index = self.session_index_or_err(session_id)?;
         let Some(session) = self.state.sessions.get_mut(session_index) else {

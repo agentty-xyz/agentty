@@ -226,7 +226,8 @@ impl SessionTaskService {
         let base_branch = context
             .db
             .get_session_base_branch(&context.id)
-            .await?
+            .await
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "Missing session base branch for auto-commit".to_string())?;
 
         Self::commit_session_changes(

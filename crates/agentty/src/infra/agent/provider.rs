@@ -130,7 +130,7 @@ pub(crate) fn build_command_stdin_payload(
 pub(crate) fn provider_kind_for_model(model: &str) -> Result<AgentKind, String> {
     model
         .parse::<AgentModel>()
-        .map(|model| model.kind())
+        .map(crate::domain::agent::AgentModel::kind)
         .map_err(|error| format!("unknown model `{model}`: {error}"))
 }
 

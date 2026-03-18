@@ -1031,9 +1031,7 @@ fn preferred_completed_assistant_message(assistant_messages: &[String]) -> Strin
         }
 
         let response = parse_agent_response_strict(trimmed_message).ok()?;
-        if response.summary.is_none() {
-            return None;
-        }
+        response.summary.as_ref()?;
 
         Some(trimmed_message.to_string())
     }) {

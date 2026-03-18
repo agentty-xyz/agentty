@@ -439,7 +439,7 @@ impl SessionMergeService {
                 )
                 .await;
 
-                return Err(error);
+                return Err(error.to_string());
             }
         };
 
@@ -495,7 +495,8 @@ impl SessionMergeService {
         let base_branch = services
             .db()
             .get_session_base_branch(&session.id)
-            .await?
+            .await
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "No git worktree for this session".to_string())?;
 
         let handles = manager
@@ -1250,8 +1251,10 @@ impl SessionManager {
     ) -> String {
         let trimmed_summary = session_summary.map(str::trim).unwrap_or_default();
         let summary_text = serde_json::from_str::<AgentResponseSummary>(trimmed_summary)
-            .map(|summary_payload| summary_payload.session)
-            .unwrap_or_else(|_| trimmed_summary.to_string());
+            .map_or_else(
+                |_| trimmed_summary.to_string(),
+                |summary_payload| summary_payload.session,
+            );
         let trimmed_commit_message = commit_message.trim();
 
         format!("# Summary\n\n{summary_text}\n\n# Commit\n\n{trimmed_commit_message}")

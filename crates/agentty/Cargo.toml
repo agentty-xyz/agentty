@@ -32,6 +32,7 @@ serde_json.workspace = true
 semver.workspace = true
 sqlx.workspace = true
 time.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
