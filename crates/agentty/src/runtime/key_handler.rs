@@ -362,6 +362,9 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         ConfirmationIntent::DeleteSession => {
             handle_delete_confirmation(app, confirmation_session_id).await
         }
+        ConfirmationIntent::CancelSession => {
+            handle_cancel_session_confirmation(app, confirmation_session_id).await
+        }
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
         }
@@ -384,6 +387,21 @@ async fn handle_delete_confirmation(
     {
         app.sessions.table_state.select(Some(session_index));
         app.delete_selected_session().await;
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Cancels the confirmed review session, when still present, and returns to
+/// list mode.
+async fn handle_cancel_session_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<String>,
+) -> io::Result<EventResult> {
+    app.mode = AppMode::List;
+
+    if let Some(session_id) = confirmation_session_id {
+        let _ = app.cancel_session(&session_id).await;
     }
 
     Ok(EventResult::Continue)
@@ -603,6 +621,27 @@ mod tests {
         new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await
     }
 
+    fn set_session_status_for_test(
+        app: &mut App,
+        session_id: &str,
+        status: crate::domain::session::Status,
+    ) {
+        if let Some(session) = app
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = status;
+        }
+
+        if let Some(handles) = app.sessions.handles.get(session_id)
+            && let Ok(mut current_status) = handles.status.lock()
+        {
+            *current_status = status;
+        }
+    }
+
     #[tokio::test]
     async fn test_handle_view_info_popup_key_restores_view_mode() {
         // Arrange
@@ -725,6 +764,43 @@ mod tests {
 
         // Assert
         assert!(matches!(cancel_mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_confirmation_decision_confirm_cancels_session_when_context_exists() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        set_session_status_for_test(
+            &mut app,
+            &session_id,
+            crate::domain::session::Status::Review,
+        );
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::CancelSession,
+            confirmation_message: "Cancel session \"test\"?".to_string(),
+            confirmation_title: "Confirm Cancel".to_string(),
+            restore_view: None,
+            session_id: Some(session_id.clone()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(app.mode, AppMode::List));
+        app.sessions.sync_from_handles();
+        assert!(matches!(
+            app.sessions.sessions.first(),
+            Some(session) if session.id == session_id
+                && session.status == crate::domain::session::Status::Canceled
+        ));
     }
 
     #[tokio::test]

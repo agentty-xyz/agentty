@@ -21,7 +21,8 @@ use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, Prompt
 /// Pressing `q` opens a confirmation overlay instead of quitting immediately,
 /// with `No` selected by default. Pressing `Enter` on the `Projects` tab
 /// selects the active project and then moves focus to `Tab::Sessions`.
-/// `Tab` cycles tabs forward and `Shift+Tab` cycles tabs backward.
+/// `d` and `c` open delete/cancel confirmation overlays for the selected
+/// session, and `Tab` cycles tabs forward while `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
         return handle_settings_text_input(app, key).await;
@@ -78,8 +79,19 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             }
         }
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
-            if let Some(session_id) = app.selected_session().map(|s| s.id.clone()) {
-                let _ = app.cancel_session(&session_id).await;
+            let selected_session = app.selected_session().and_then(|session| {
+                (session.status == Status::Review)
+                    .then(|| (session.id.clone(), session.display_title().to_string()))
+            });
+            if let Some((session_id, session_title)) = selected_session {
+                app.mode = AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::CancelSession,
+                    confirmation_message: format!("Cancel session \"{session_title}\"?"),
+                    confirmation_title: "Confirm Cancel".to_string(),
+                    restore_view: None,
+                    session_id: Some(session_id),
+                    selected_confirmation_index: DEFAULT_OPTION_INDEX,
+                };
             }
         }
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'s') => {
@@ -1074,6 +1086,68 @@ mod tests {
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
         assert_eq!(app.sessions.sessions.len(), 1);
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_cancel_key_opens_cancel_confirmation_for_review_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let expected_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.sessions.sessions[0].status = Status::Review;
+        let expected_session_title = app.sessions.sessions[0].display_title().to_string();
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(Some(0));
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::CancelSession,
+                ref confirmation_message,
+                ref confirmation_title,
+                restore_view: None,
+                session_id: Some(ref mode_session_id),
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
+            } if mode_session_id == &expected_session_id
+                && confirmation_title == "Confirm Cancel"
+                && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_cancel_key_ignores_non_review_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let _session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(Some(0));
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
         assert!(matches!(app.mode, AppMode::List));
     }
 

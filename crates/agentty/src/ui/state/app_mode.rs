@@ -35,6 +35,8 @@ pub enum ConfirmationIntent {
     Quit,
     /// Confirms deleting a selected session.
     DeleteSession,
+    /// Confirms canceling a selected review session.
+    CancelSession,
     /// Confirms queueing merge for the active view session.
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
