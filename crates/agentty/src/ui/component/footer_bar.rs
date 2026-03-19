@@ -11,6 +11,7 @@ use crate::ui::{Component, style};
 pub struct FooterBar {
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
+    git_upstream_ref: Option<String>,
     working_dir: String,
 }
 
@@ -20,6 +21,7 @@ impl FooterBar {
         Self {
             git_branch: None,
             git_status: None,
+            git_upstream_ref: None,
             working_dir,
         }
     }
@@ -36,6 +38,22 @@ impl FooterBar {
     pub fn git_status(mut self, status: Option<(u32, u32)>) -> Self {
         self.git_status = status;
         self
+    }
+
+    /// Sets the upstream reference tracked by the active branch.
+    #[must_use]
+    pub fn git_upstream_ref(mut self, upstream_ref: Option<String>) -> Self {
+        self.git_upstream_ref = upstream_ref;
+        self
+    }
+
+    /// Returns the footer branch label, including the tracked upstream when
+    /// available.
+    fn branch_label(&self, branch: &str) -> String {
+        match self.git_upstream_ref.as_deref() {
+            Some(upstream_ref) => format!("{branch} -> {upstream_ref}"),
+            None => branch.to_string(),
+        }
     }
 }
 
@@ -77,9 +95,10 @@ impl Component for FooterBar {
             } else {
                 String::new()
             };
+            let branch_label = self.branch_label(branch);
 
             let branch_span = Span::styled(
-                format!("{status_text}{} {branch}", Icon::GitBranch),
+                format!("{status_text}{} {branch_label}", Icon::GitBranch),
                 Style::default().fg(style::palette::SUCCESS),
             );
             let branch_width = branch_span.width();
@@ -127,6 +146,7 @@ mod tests {
         assert_eq!(footer.working_dir, path);
         assert_eq!(footer.git_branch, branch);
         assert_eq!(footer.git_status, None);
+        assert_eq!(footer.git_upstream_ref, None);
     }
 
     #[test]
@@ -141,6 +161,7 @@ mod tests {
         assert_eq!(footer.working_dir, path);
         assert_eq!(footer.git_branch, None);
         assert_eq!(footer.git_status, None);
+        assert_eq!(footer.git_upstream_ref, None);
     }
 
     #[test]
@@ -200,6 +221,30 @@ mod tests {
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
         assert!(text.contains("↓2 ↑1"));
         assert!(text.contains("main"));
+    }
+
+    #[test]
+    fn test_footer_bar_render_with_git_upstream_reference() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(80, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let footer = FooterBar::new("/tmp/project".to_string())
+            .git_branch(Some("main".to_string()))
+            .git_upstream_ref(Some("origin/main".to_string()));
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let content = buffer.content();
+        let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("main -> origin/main"));
     }
 
     #[test]
@@ -286,9 +331,11 @@ mod tests {
     #[test]
     fn test_footer_bar_render_keeps_one_space_after_branch_name() {
         // Arrange
-        let backend = ratatui::backend::TestBackend::new(25, 1);
+        let backend = ratatui::backend::TestBackend::new(40, 1);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-        let footer = FooterBar::new("/tmp/p".to_string()).git_branch(Some("main".to_string()));
+        let footer = FooterBar::new("/tmp/p".to_string())
+            .git_branch(Some("main".to_string()))
+            .git_upstream_ref(Some("origin/main".to_string()));
 
         // Act
         terminal

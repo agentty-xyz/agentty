@@ -27,6 +27,10 @@ Agentty organizes its interface into four tabs, accessible with `Tab`:
 In session chat view, the status and session title render in a dedicated
 header row above the output panel.
 
+The footer always shows the active directory. When the current branch tracks an
+upstream, the footer branch badge renders `local -> remote`, for example
+`main -> origin/main`.
+
 ## Session Lifecycle
 
 <a id="usage-session-lifecycle"></a>

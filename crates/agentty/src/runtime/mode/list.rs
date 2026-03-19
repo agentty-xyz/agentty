@@ -1206,6 +1206,7 @@ mod tests {
             app.active_project_id(),
             app.projects.project_name().to_string(),
             Some("develop".to_string()),
+            None,
             base_dir.path().to_path_buf(),
         );
 

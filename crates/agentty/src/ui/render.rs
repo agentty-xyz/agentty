@@ -28,20 +28,35 @@ pub trait Component {
 pub struct RenderContext<'a> {
     /// Identifier of the currently active project.
     pub active_project_id: i64,
+    /// Active top-level tab selection.
     pub current_tab: Tab,
+    /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
+    /// Current upstream reference tracked by the active project branch.
+    pub git_upstream_ref: Option<&'a str>,
+    /// Latest ahead/behind counts for the active project branch.
     pub git_status: Option<(u32, u32)>,
+    /// Newer stable version when one is available.
     pub latest_available_version: Option<&'a str>,
+    /// Current app mode and its transient state.
     pub mode: &'a AppMode,
+    /// Table selection state for the projects list.
     pub project_table_state: &'a mut TableState,
+    /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
+    /// Background progress messages keyed by session id.
     pub session_progress_messages: &'a HashMap<String, String>,
+    /// Mutable project-scoped settings snapshot.
     pub settings: &'a mut SettingsManager,
+    /// Daily session activity series used by the stats view.
     pub stats_activity: &'a [DailyActivity],
+    /// Session rows available for rendering.
     pub sessions: &'a [Session],
+    /// Table selection state for the session list.
     pub table_state: &'a mut TableState,
     /// Background auto-update progress state for the status bar.
     pub update_status: Option<&'a UpdateStatus>,
+    /// Working directory for the active project.
     pub working_dir: &'a Path,
 }
 
@@ -75,6 +90,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
         context.sessions,
         context.working_dir,
         context.git_branch,
+        context.git_upstream_ref,
         context.git_status,
     );
 
@@ -94,6 +110,7 @@ fn render_footer_bar(
     sessions: &[Session],
     working_dir: &Path,
     git_branch: Option<&str>,
+    git_upstream_ref: Option<&str>,
     git_status: Option<(u32, u32)>,
 ) {
     let session_id = match mode {
@@ -105,6 +122,10 @@ fn render_footer_bar(
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
         | AppMode::Diff { session_id, .. }
+        | AppMode::ViewInfoPopup {
+            restore_view: ConfirmationViewMode { session_id, .. },
+            ..
+        }
         | AppMode::OpenCommandSelector {
             restore_view: ConfirmationViewMode { session_id, .. },
             ..
@@ -125,21 +146,24 @@ fn render_footer_bar(
             .find(|session| session.id == session_identifier)
     });
 
-    let (footer_dir, footer_branch, footer_status) = match session_for_footer {
+    let (footer_dir, footer_branch, footer_upstream_ref, footer_status) = match session_for_footer {
         Some(session) => (
             session.folder.to_string_lossy().to_string(),
             Some(session_branch(&session.id)),
+            session.published_upstream_ref.clone(),
             None,
         ),
         None => (
             working_dir.to_string_lossy().to_string(),
             git_branch.map(std::string::ToString::to_string),
+            git_upstream_ref.map(std::string::ToString::to_string),
             git_status,
         ),
     };
 
     component::footer_bar::FooterBar::new(footer_dir)
         .git_branch(footer_branch)
+        .git_upstream_ref(footer_upstream_ref)
         .git_status(footer_status)
         .render(f, footer_bar_area);
 }
@@ -211,6 +235,7 @@ mod tests {
                     &sessions,
                     Path::new("/tmp/workspace-root"),
                     Some("main"),
+                    Some("origin/main"),
                     Some((2, 1)),
                 );
             })
@@ -220,6 +245,89 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("/tmp/session-view-folder"));
         assert!(text.contains(&session_branch(session_id)));
+    }
+
+    #[test]
+    fn render_footer_bar_prefers_session_upstream_reference_for_view_mode() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let session_id = "upstream";
+        let mut session = session_fixture(session_id, "/tmp/session-view-folder");
+        session.published_upstream_ref = Some("origin/agentty/upstream".to_string());
+        let mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.to_string(),
+            scroll_offset: None,
+        };
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_footer_bar(
+                    frame,
+                    frame.area(),
+                    &mode,
+                    &sessions,
+                    Path::new("/tmp/workspace-root"),
+                    Some("main"),
+                    Some("origin/main"),
+                    Some((2, 1)),
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("agentty/upstream -> origin/agentty/upstream"));
+    }
+
+    #[test]
+    fn render_footer_bar_prefers_session_branch_for_view_info_popup() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 3);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let session_id = "popup";
+        let mut session = session_fixture(session_id, "/tmp/session-popup-folder");
+        session.published_upstream_ref = Some("origin/agentty/popup".to_string());
+        let mode = AppMode::ViewInfoPopup {
+            is_loading: false,
+            loading_label: "Publishing branch".to_string(),
+            message: "Published".to_string(),
+            restore_view: ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message: None,
+                review_text: None,
+                scroll_offset: None,
+                session_id: session_id.to_string(),
+            },
+            title: "Branch pushed".to_string(),
+        };
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_footer_bar(
+                    frame,
+                    frame.area(),
+                    &mode,
+                    &sessions,
+                    Path::new("/tmp/workspace-root"),
+                    Some("main"),
+                    Some("origin/main"),
+                    Some((2, 1)),
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("agentty/popup -> origin/agentty/popup"));
+        assert!(!text.contains("main -> origin/main"));
     }
 
     #[test]
@@ -243,6 +351,7 @@ mod tests {
                     &sessions,
                     working_dir,
                     git_branch,
+                    Some("origin/feature/test-render"),
                     git_status,
                 );
             })
@@ -251,7 +360,7 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("/tmp/current-workspace"));
-        assert!(text.contains("feature/test-render"));
+        assert!(text.contains("feature/test-render -> origin/feature/test-render"));
     }
 
     #[test]

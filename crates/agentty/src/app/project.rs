@@ -15,6 +15,7 @@ pub struct ProjectManager {
     git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
     git_status_cancel: Arc<AtomicBool>,
+    git_upstream_ref: Option<String>,
     project_items: Vec<ProjectListItem>,
     table_state: TableState,
     working_dir: PathBuf,
@@ -27,6 +28,7 @@ impl ProjectManager {
         active_project_name: String,
         git_branch: Option<String>,
         git_status_cancel: Arc<AtomicBool>,
+        git_upstream_ref: Option<String>,
         project_items: Vec<ProjectListItem>,
         working_dir: PathBuf,
     ) -> Self {
@@ -36,6 +38,7 @@ impl ProjectManager {
             git_branch,
             git_status: None,
             git_status_cancel,
+            git_upstream_ref,
             project_items,
             table_state: TableState::default(),
             working_dir,
@@ -68,6 +71,12 @@ impl ProjectManager {
     /// Returns the git branch of the active project, when available.
     pub(crate) fn git_branch(&self) -> Option<&str> {
         self.git_branch.as_deref()
+    }
+
+    /// Returns the upstream reference tracked by the active project branch,
+    /// when available.
+    pub(crate) fn git_upstream_ref(&self) -> Option<&str> {
+        self.git_upstream_ref.as_deref()
     }
 
     /// Returns whether a git branch is configured for the active project.
@@ -155,12 +164,14 @@ impl ProjectManager {
         active_project_id: i64,
         active_project_name: String,
         git_branch: Option<String>,
+        git_upstream_ref: Option<String>,
         working_dir: PathBuf,
     ) {
         self.active_project_id = active_project_id;
         self.active_project_name = active_project_name;
         self.git_branch = git_branch;
         self.git_status = None;
+        self.git_upstream_ref = git_upstream_ref;
         self.working_dir = working_dir;
         self.select_active_project_row();
     }
@@ -282,8 +293,32 @@ mod tests {
             "agentty".to_string(),
             Some("main".to_string()),
             Arc::new(AtomicBool::new(false)),
+            Some("origin/main".to_string()),
             project_items,
             PathBuf::from("/tmp/agentty"),
         )
+    }
+
+    #[test]
+    fn test_update_active_project_context_replaces_upstream_reference() {
+        // Arrange
+        let mut manager = project_manager_fixture();
+
+        // Act
+        manager.update_active_project_context(
+            2,
+            "service".to_string(),
+            Some("feature/footer".to_string()),
+            Some("origin/feature/footer".to_string()),
+            PathBuf::from("/tmp/service"),
+        );
+
+        // Assert
+        assert_eq!(manager.active_project_id(), 2);
+        assert_eq!(manager.project_name(), "service");
+        assert_eq!(manager.git_branch(), Some("feature/footer"));
+        assert_eq!(manager.git_upstream_ref(), Some("origin/feature/footer"));
+        assert_eq!(manager.working_dir(), Path::new("/tmp/service"));
+        assert_eq!(manager.git_status(), None);
     }
 }

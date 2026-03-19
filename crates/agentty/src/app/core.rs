@@ -546,6 +546,7 @@ impl App {
             active_project_id,
             startup_working_dir,
             startup_git_branch,
+            startup_git_upstream_ref,
             project_items,
             active_project_name,
         ) = Self::load_startup_project_context(
@@ -576,6 +577,7 @@ impl App {
             active_project_name,
             startup_git_branch,
             Arc::clone(&git_status_cancel),
+            startup_git_upstream_ref,
             project_items,
             startup_working_dir.clone(),
         );
@@ -731,6 +733,12 @@ impl App {
         self.projects.git_branch()
     }
 
+    /// Returns the upstream reference tracked by the active project branch,
+    /// when available.
+    pub fn git_upstream_ref(&self) -> Option<&str> {
+        self.projects.git_upstream_ref()
+    }
+
     /// Returns the latest ahead/behind snapshot from reducer-applied events.
     pub fn git_status_info(&self) -> Option<(u32, u32)> {
         self.projects.git_status()
@@ -753,6 +761,7 @@ impl App {
         let current_tab = self.tabs.current();
         let working_dir = self.projects.working_dir().to_path_buf();
         let git_branch = self.projects.git_branch().map(str::to_string);
+        let git_upstream_ref = self.projects.git_upstream_ref().map(str::to_string);
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
         let update_status = self.update_status().cloned();
@@ -769,6 +778,7 @@ impl App {
                 active_project_id,
                 current_tab,
                 git_branch: git_branch.as_deref(),
+                git_upstream_ref: git_upstream_ref.as_deref(),
                 git_status,
                 latest_available_version: latest_available_version.as_deref(),
                 update_status: update_status.as_ref(),
@@ -837,6 +847,12 @@ impl App {
             .git_client()
             .detect_git_info(project.path.clone())
             .await;
+        let git_upstream_ref = Self::load_git_upstream_ref(
+            self.services.git_client().as_ref(),
+            project.path.as_path(),
+            git_branch.as_deref(),
+        )
+        .await;
         let _ = self
             .services
             .db()
@@ -854,6 +870,7 @@ impl App {
             project.id,
             project.display_label(),
             git_branch,
+            git_upstream_ref,
             project.path,
         );
         self.settings = SettingsManager::new(&self.services, project.id).await;
@@ -2140,7 +2157,17 @@ impl App {
         working_dir: &Path,
         git_branch: Option<String>,
         current_project_id: i64,
-    ) -> Result<(i64, PathBuf, Option<String>, Vec<ProjectListItem>, String), String> {
+    ) -> Result<
+        (
+            i64,
+            PathBuf,
+            Option<String>,
+            Option<String>,
+            Vec<ProjectListItem>,
+            String,
+        ),
+        String,
+    > {
         let startup_active_project_id =
             Self::resolve_startup_active_project_id(db, fs_client, current_project_id).await;
         let startup_active_project = Self::load_project(
@@ -2158,6 +2185,12 @@ impl App {
                 .detect_git_info(startup_working_dir.clone())
                 .await
         };
+        let startup_git_upstream_ref = Self::load_git_upstream_ref(
+            git_client.as_ref(),
+            startup_working_dir.as_path(),
+            startup_git_branch.as_deref(),
+        )
+        .await;
         let active_project_id = db
             .upsert_project(
                 &startup_working_dir.to_string_lossy(),
@@ -2194,9 +2227,26 @@ impl App {
             active_project_id,
             startup_working_dir,
             startup_git_branch,
+            startup_git_upstream_ref,
             project_items,
             active_project_name,
         ))
+    }
+
+    /// Resolves the configured upstream reference for one project branch.
+    async fn load_git_upstream_ref(
+        git_client: &dyn GitClient,
+        working_dir: &Path,
+        git_branch: Option<&str>,
+    ) -> Option<String> {
+        if git_branch.is_none() {
+            return None;
+        }
+
+        git_client
+            .current_upstream_reference(working_dir.to_path_buf())
+            .await
+            .ok()
     }
 
     /// Resolves startup active project id from settings, falling back to the
@@ -2899,6 +2949,65 @@ mod tests {
         // Assert
         assert_eq!(app.settings.default_smart_model, AgentModel::Gpt53Codex);
         assert_eq!(app.settings.open_command, "cargo test");
+    }
+
+    #[tokio::test]
+    async fn test_switch_project_updates_active_git_upstream_reference() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let second_project_dir = tempdir().expect("failed to create second temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let second_project_path = second_project_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let first_project_id = database
+            .upsert_project(&base_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert first project");
+        let second_project_id = database
+            .upsert_project(&second_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert second project");
+        database
+            .set_active_project_id(first_project_id)
+            .await
+            .expect("failed to persist initial active project");
+        let mut app = App::new(true, base_path.clone(), base_path, None, database)
+            .await
+            .expect("failed to build app");
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("feature/footer-bar".to_string()) }));
+        mock_git_client
+            .expect_current_upstream_reference()
+            .once()
+            .returning(|_| Box::pin(async { Ok("origin/feature/footer-bar".to_string()) }));
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(0..)
+            .returning(|path| Box::pin(async move { Some(path) }));
+        mock_git_client
+            .expect_fetch_remote()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_get_ahead_behind()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok((0, 0)) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.switch_project(second_project_id)
+            .await
+            .expect("failed to switch project");
+
+        // Assert
+        assert_eq!(app.git_branch(), Some("feature/footer-bar"));
+        assert_eq!(app.git_upstream_ref(), Some("origin/feature/footer-bar"));
     }
 
     #[tokio::test]

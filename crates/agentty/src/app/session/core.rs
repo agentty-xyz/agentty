@@ -377,6 +377,9 @@ mod tests {
         mock.expect_detect_git_info()
             .times(0..)
             .returning(|_| Box::pin(async { Some("main".to_string()) }));
+        mock.expect_current_upstream_reference()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
         mock.expect_find_git_repo_root()
             .times(0..)
             .returning(move |_| {
@@ -3291,6 +3294,7 @@ mod tests {
             app.active_project_id(),
             app.projects.project_name().to_string(),
             Some("develop".to_string()),
+            None,
             dir.path().to_path_buf(),
         );
         let repo_root = dir.path().to_path_buf();
