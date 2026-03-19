@@ -29,7 +29,7 @@ layer boundaries.
 
 ## Add a Keybinding or Mode Interaction
 
-1. Update the handler in `crates/agentty/src/runtime/mode/`.
+1. Update the handler in `crates/agentty/src/runtime/mode/`, or in `crates/agentty/src/runtime/key_handler.rs` when the interaction is a cross-mode overlay dispatch.
 1. If a new mode/state is needed, extend `crates/agentty/src/ui/state/app_mode.rs`.
 1. If help content changes, update `crates/agentty/src/ui/state/help_action.rs` as needed.
 1. Update `docs/site/content/docs/usage/keybindings.md`.
@@ -58,6 +58,6 @@ layer boundaries.
 1. Update docs in `docs/site/content/docs/` whenever user-facing behavior changes.
 1. Update `docs/site/content/docs/architecture/module-map.md`, `docs/site/content/docs/architecture/runtime-flow.md`, and `docs/site/content/docs/architecture/testability-boundaries.md` when architecture responsibilities change.
 1. When adding/removing files in `runtime/mode/`, update the runtime-mode file list in `docs/site/content/docs/architecture/module-map.md`.
-1. When changing `TurnRequest`/`TurnEvent`/`TurnResult` shapes in `infra/channel.rs`, update the key-types table in `docs/site/content/docs/architecture/runtime-flow.md`.
+1. When changing `TurnRequest`/`TurnEvent`/`TurnResult` shapes in `crates/agentty/src/infra/channel/contract.rs` (re-exported by `crates/agentty/src/infra/channel.rs`), update the key-types table in `docs/site/content/docs/architecture/runtime-flow.md`.
 1. When adding/removing `#[cfg_attr(test, mockall::automock)]` external-boundary traits, update `docs/site/content/docs/architecture/testability-boundaries.md`.
 1. Run quality gates from `AGENTS.md` before opening a PR.

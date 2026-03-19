@@ -5,11 +5,12 @@
 - Avoid near-identical local variable names in the same function (for example, `gitdir` and `git_dir`). Use one clear naming style with distinct, descriptive names.
 - Prefer `module.rs` plus `module/` for nested modules. Avoid `mod.rs` module roots.
 - Session status flow:
-  - Status state machine is: `New` -> `InProgress`, `Review` -> (`InProgress` | `Done` | `Canceled`), `InProgress` -> `Review`.
+  - Status state machine is: `New` -> (`InProgress` | `Rebasing`), (`Review` | `Question`) -> (`InProgress` | `Queued` | `Rebasing` | `Merging` | `Canceled`), `Queued` -> (`Merging` | `Review`), (`InProgress` | `Rebasing`) -> (`Review` | `Question`), and `Merging` -> (`Done` | `Review`).
   - `New` is set when `create_session()` creates a blank session before the user types a prompt.
-  - `InProgress` can be entered from `New` (first prompt) or `Review` (reply).
-  - `Done` can only be entered from `Review` (local merge).
-  - When agent response finishes, all changes are auto-committed and status is set to `Review`.
+  - `InProgress` can be entered from `New` (first prompt) or from `Review`/`Question` (reply).
+  - `Question` is set when a completed turn returns structured clarification questions.
+  - `Done` can only be entered from `Merging` after local merge cleanup succeeds.
+  - When agent response finishes, all changes are auto-committed and status is set to `Review` or `Question`.
   - While agent is preparing a response, status is `InProgress`.
 
 ## Docs Sync
@@ -21,7 +22,7 @@ When changing architecture-level behavior under `src/`, update:
 - `docs/site/content/docs/architecture/testability-boundaries.md` — trait boundaries for external integrations.
 - `docs/site/content/docs/architecture/change-recipes.md` — contributor-safe change paths.
 - Keep the runtime-mode file list in `module-map.md` aligned with actual files under `runtime/mode/`.
-- Keep the key-type tables/field descriptions in `runtime-flow.md` aligned with `infra/channel.rs` (`TurnRequest`, `TurnEvent`, `TurnResult`, `TurnMode`).
+- Keep the key-type tables/field descriptions in `runtime-flow.md` aligned with `infra/channel/contract.rs` (re-exported by `infra/channel.rs`) for `TurnRequest`, `TurnEvent`, and `TurnResult`.
 - Keep `testability-boundaries.md` aligned with active `#[cfg_attr(test, mockall::automock)]` trait boundaries that guard external/time/process integrations.
 
 ## Directory Index

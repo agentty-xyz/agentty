@@ -37,6 +37,7 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/app/project.rs` | `ProjectManager` - project CRUD and selection orchestration. |
 | `crates/agentty/src/app/service.rs` | `AppServices` dependency container (`Database`, `FsClient`, `GitClient`, `ReviewRequestClient`, optional app-server test override, event sender). |
 | `crates/agentty/src/app/session_state.rs` | `SessionState` - per-session runtime state container. |
+| `crates/agentty/src/app/session/workflow.rs` | Router-only session workflow module that re-exports shared workflow state and exposes child workflow modules. |
 | `crates/agentty/src/app/setting.rs` | `SettingsManager` - settings management and persistence. |
 | `crates/agentty/src/app/tab.rs` | `TabManager` - top-level tab definitions and tab selection state. |
 | `crates/agentty/src/app/task.rs` | App-scoped background tasks (git status polling, version checks, review assists, app-server turns). |
@@ -71,6 +72,8 @@ choose the correct module when implementing changes.
 | `crates/agentty/src/infra/git.rs` + `infra/git/` | Git module router plus async git workflow commands (`merge.rs`, `rebase.rs`, `repo.rs`, `sync.rs`, `worktree.rs`), including the single-session-commit sync path that stages changes and amends `HEAD` after the first session commit exists. |
 | `crates/agentty/src/infra/git/client.rs` | `GitClient` trait boundary, `RealGitClient` production adapter, and git client integration tests. |
 | `crates/agentty/src/infra/channel.rs` + `infra/channel/` | `AgentChannel` trait and provider-agnostic turn execution: |
+| - `contract.rs` | Shared `AgentChannel` trait plus turn request/event/result types. |
+| - `factory.rs` | Provider-to-channel routing factory (`create_agent_channel`). |
 | - `cli.rs` | `CliAgentChannel` - CLI subprocess adapter (Claude). |
 | - `app_server.rs` | `AppServerAgentChannel` - app-server RPC adapter (Codex/Gemini). |
 | `crates/agentty/src/infra/agent/` | Per-provider backend command builders and response parsing: |
@@ -109,10 +112,13 @@ choose the correct module when implementing changes.
 | Path | What lives here |
 |------|------------------|
 | `crates/agentty/src/runtime.rs` | Runtime module router and public runtime entry re-exports. |
+| `crates/agentty/src/runtime/clipboard_image.rs` | Clipboard image capture and temp PNG persistence helpers for prompt-mode attachments. |
 | `crates/agentty/src/runtime/core.rs` | Terminal lifecycle, event/render loop orchestration, `TerminalGuard`. |
 | `crates/agentty/src/runtime/terminal.rs` | Terminal setup/cleanup and raw-mode lifecycle helpers. |
 | `crates/agentty/src/runtime/event.rs` | `EventSource` trait, event reader spawn, tick processing, and app-event integration. |
 | `crates/agentty/src/runtime/key_handler.rs` | Mode dispatch for key events. |
+| `crates/agentty/src/runtime/mode.rs` | Router-only runtime-mode module that exposes per-`AppMode` handlers. |
+| `crates/agentty/src/runtime/timing.rs` | Shared runtime frame-timing constants. |
 | `crates/agentty/src/runtime/mode/` | Key handlers for each `AppMode`: |
 | - `list.rs` | Session list mode. |
 | - `session_view.rs` | Session view mode navigation. |
@@ -130,11 +136,15 @@ choose the correct module when implementing changes.
 |------|------------------|
 | `crates/agentty/src/ui/render.rs` | Frame composition and render context. |
 | `crates/agentty/src/ui/router.rs` | Mode-to-page routing for content rendering. |
+| `crates/agentty/src/ui/component.rs` | Router-only component module exposing reusable widgets and overlays. |
 | `crates/agentty/src/ui/layout.rs` | Layout helper utilities. |
 | `crates/agentty/src/ui/overlay.rs` | Overlay rendering dispatch (help, info, confirmation). |
 | `crates/agentty/src/ui/markdown.rs` | Markdown rendering utilities. |
 | `crates/agentty/src/ui/diff_util.rs` | Diff parsing and rendering helpers. |
 | `crates/agentty/src/ui/icon.rs` | Icon constants and helpers. |
+| `crates/agentty/src/ui/page.rs` | Router-only page module exposing full-screen pages. |
+| `crates/agentty/src/ui/state.rs` | Router-only UI-state module exposing mode, help, and prompt state. |
+| `crates/agentty/src/ui/style.rs` | Shared semantic color palette and session status styling helpers. |
 | `crates/agentty/src/ui/text_util.rs` | Text manipulation helpers. |
 | `crates/agentty/src/ui/activity_heatmap.rs` | Activity heatmap visualization. |
 | `crates/agentty/src/ui/util.rs` | General UI utilities. |
@@ -152,6 +162,8 @@ choose the correct module when implementing changes.
 | - `footer_bar.rs` | Footer bar widget. |
 | - `help_overlay.rs` | Help overlay component. |
 | - `info_overlay.rs` | Info overlay component. |
+| - `open_command_overlay.rs` | Open-command selector overlay. |
+| - `publish_branch_overlay.rs` | Session branch-publish overlay. |
 | - `session_output.rs` | Session output display widget. |
 | - `status_bar.rs` | Status bar widget. |
 | - `tab.rs` | Tabs navigation widget. |

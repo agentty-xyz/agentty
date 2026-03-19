@@ -157,7 +157,7 @@ app/session/workflow/worker.rs
 ```
 
 <a id="architecture-key-types"></a>
-Key types (`infra/channel.rs`):
+Key types (`infra/channel/contract.rs`, re-exported by `infra/channel.rs`):
 
 | Type | Purpose |
 |------|---------|
@@ -179,7 +179,7 @@ Provider conversation id flow:
 Provider output is normalized to one structured response protocol:
 
 1. Prompt builders prepend the shared protocol preamble template and the self-descriptive `schemars` document, so every provider sees the same `answer`/`questions`/optional-`summary` schema and transport-enforced `outputSchema` paths can normalize that same contract separately.
-   `crates/agentty/resources/protocol_instruction_prompt.md` owns the normal request wrapper, `crates/agentty/src/infra/agent/prompt.rs` owns shared prompt preparation, and `crates/agentty/src/infra/agent/protocol.rs` routes to the authoritative protocol model/schema/parse submodules.
+   `crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md` owns the normal request wrapper, `crates/agentty/src/infra/agent/prompt.rs` owns shared prompt preparation, and `crates/agentty/src/infra/agent/protocol.rs` routes to the authoritative protocol model/schema/parse submodules.
 1. The caller selects one canonical `AgentRequestKind` before transport handoff, and the transport derives the matching `ProtocolRequestProfile` from it. Session turns use `SessionStart` or `SessionResume`, while isolated utility prompts use `UtilityPrompt`.
 1. Session discussion turns typically populate `summary.turn` and `summary.session`, while one-shot prompts may leave `summary` unused.
 1. Channels stream deltas/progress as `TurnEvent`.
@@ -251,8 +251,9 @@ Detached/background execution paths and their trigger conditions:
 | Per-turn turn-event consumer | Every queued turn execution | `run_channel_turn` | Output append, progress updates, pid slot updates | Consumes `TurnEvent` stream and applies immediate side effects. |
 | CLI stdout/stderr readers | Every CLI-backed turn | `CliAgentChannel::run_turn` | `TurnEvent` stream + raw buffers | Reads subprocess streams and emits incremental deltas/progress. |
 | App-server stream bridge | Every app-server-backed turn | `AppServerAgentChannel::run_turn` | `TurnEvent` stream | Bridges `AppServerStreamEvent` to unified turn events. |
+| Clipboard image persistence | Prompt input `Ctrl+V` or `Alt+V` | `runtime/mode/prompt::handle_prompt_image_paste` | Temp PNG under `AGENTTY_ROOT/tmp/<session-id>/images/`, prompt attachment state | Reads a clipboard image or PNG path via `spawn_blocking`, persists it, and inserts an inline `[Image #n]` placeholder. |
 | Session title generation | First `Start` turn, before main turn execution | `spawn_start_turn_title_generation` | DB title + `AppEvent::RefreshSessions` | Runs one-shot title prompt in background and persists generated title if valid. |
-| At-mention file indexing | Prompt input activates `@` mention mode | `runtime/mode/prompt::activate_at_mention` | `AppEvent::AtMentionEntriesLoaded` | Lists session files (`spawn_blocking`) and updates mention picker entries. |
+| At-mention file indexing | Prompt input or question free-text input activates `@` mention mode | `runtime/mode/prompt::activate_at_mention`, `runtime/mode/question::activate_question_at_mention` | `AppEvent::AtMentionEntriesLoaded` | Lists session files (`spawn_blocking`) and updates mention picker entries for the active composer. |
 | Background session-size refresh | Enter on session in list mode | `App::refresh_session_size_in_background` | DB size + `AppEvent::RefreshSessions` | Computes diff-size bucket without blocking key handling path. |
 | Session-view branch-publish action | Session view `p` in `Review`, then publish popup `Enter` | `App::start_publish_branch_action` | `AppEvent::BranchPublishActionCompleted` | Collects an optional remote branch name before first publish, locks to the existing upstream after publish, then runs `git push --force-with-lease` for the session branch in the background and updates the session-view popup with success or recovery guidance. |
 | Deferred session cleanup | Delete with deferred cleanup path | `delete_selected_session_deferred_cleanup` | Filesystem/git side effects | Removes worktree folder and branch asynchronously after DB deletion. |

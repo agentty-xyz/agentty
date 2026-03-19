@@ -22,7 +22,7 @@ Agentty organizes its interface into four tabs, accessible with `Tab`:
 | **Sessions** | List, create, and manage agent sessions. When a project is active, this tab appears as `Sessions (<project-name>)`. |
 | **Projects** | Select between projects (git repositories) in a split view: Agentty info (ASCII art, version, short description) on top, project table below. Agentty skips stale entries whose project directories no longer exist. |
 | **Stats** | View usage statistics. |
-| **Settings** | Configure reasoning level, default models, the session commit coauthor trailer, and `Open Commands` for the active project. |
+| **Settings** | Configure reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status and session title render in a dedicated
 header row above the output panel.
@@ -49,8 +49,9 @@ Session statuses and what you can do in each state:
 | **Canceled** | Session was canceled by the user and its worktree checkout was removed. | read-only view (`q`, scroll, help) |
 
 Settings values are stored per active project. Switching projects reloads that
-project's `Reasoning Level`, default models, `Coauthored by Agentty` toggle,
-and `Open Commands`.
+project's `Reasoning Level`, `Default Smart Model` mode (explicit model or
+`Last used model as default`), `Default Fast Model`, `Default Review Model`,
+`Coauthored by Agentty` toggle, and `Open Commands`.
 
 When a session enters **Review**, Agentty starts generating the focused review
 in the background. Pressing `f` opens the cached review immediately when it is
@@ -137,13 +138,13 @@ skip with `no answer`), and Agentty sends one consolidated follow-up message
 back to the same session before returning it to normal execution.
 
 <a id="usage-question-options"></a>
-Questions always include predefined answer options. Agentty displays them as
-a numbered list under an "Options:" header with the first option
-pre-selected. A "Type custom answer" entry always appears at the end of the
-list. Use `j`/`k` or `Up`/`Down` to navigate options and `Enter` to submit
-the highlighted choice. If you select "Type custom answer" and press
-`Enter`, the option list is replaced by a free-text input where you can type
-any response. Press `Esc` at any point to skip the question with
+Questions may include predefined answer options. Agentty displays them as an
+optional numbered list under an "Options:" header with the first option
+pre-selected when options exist. Use `j`/`k` or `Up`/`Down` to navigate
+options and `Enter` to submit the highlighted choice. Moving above the first
+option or below the last option switches into the free-text answer input shown
+below the list. Questions without predefined options open directly in that
+free-text input. Press `Esc` at any point to skip the question with
 `no answer`.
 
 ## Session Sizes

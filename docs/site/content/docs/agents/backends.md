@@ -71,7 +71,7 @@ For SSO-backed accounts, use `claude auth login --sso`.
 Agentty prompts all backends to reference files using repository-root-relative
 POSIX paths. This keeps file references consistent in session output and reviews.
 The rule is carried by the shared prompt preamble in
-`crates/agentty/resources/protocol_instruction_prompt.md`.
+`crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`.
 
 - Allowed forms: `path`, `path:line`, `path:line:column`
 - Example: `crates/agentty/src/infra/agent/prompt.rs:48`
@@ -81,7 +81,7 @@ The rule is carried by the shared prompt preamble in
 
 <a id="backends-structured-response-protocol"></a>
 Agentty prepends one shared protocol preamble from
-`crates/agentty/resources/protocol_instruction_prompt.md`. That template
+`crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`. That template
 contains the repository-root-relative file path rules, the structured response
 instructions, the explicit `---` separator that separates the task body, and
 the full self-descriptive JSON Schema generated from the protocol subsystem in

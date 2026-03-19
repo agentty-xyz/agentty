@@ -56,7 +56,7 @@ accented row text, even while cursor selection moves to other rows.
 The Settings tab includes:
 
 - `Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex and Claude turns in the active project.
-- `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active project.
+- `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active project. `Default Smart Model` can also cycle to `Last used model as default`.
 - `Coauthored by Agentty` to enable or disable the `Co-Authored-By` trailer on generated session commit messages for the active project.
 - `Open Commands` for launching session worktrees in the active project (one command per line).
 
@@ -156,18 +156,18 @@ streaming the prompt.
 
 ## Question Input — Option Selection
 
-When predefined options are shown (including "Type custom answer"):
+When predefined options are shown:
 
 | Key | Action |
 |-----|--------|
 | `j` / `k` / `Up` / `Down` | Navigate options |
-| `Enter` | Choose highlighted option (or enter free-text mode for "Type custom answer") |
+| `Enter` | Choose highlighted option |
 | `Tab` | Switch focus to chat output for scrolling |
 | `Esc` | Skip current question (`no answer`) |
 
 ## Question Input — Free Text
 
-After selecting "Type custom answer", or when no predefined options exist:
+After moving above or below the predefined option list, or when no predefined options exist:
 
 | Key | Action |
 |-----|--------|

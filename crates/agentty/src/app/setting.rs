@@ -132,7 +132,7 @@ pub struct SettingsManager {
     pub open_command: String,
     /// Reasoning effort preference for models that support this setting.
     ///
-    /// Currently applied to Codex turns.
+    /// Currently applied to Codex and Claude turns.
     pub reasoning_level: ReasoningLevel,
     /// Table selection state for the settings page.
     pub table_state: TableState,
