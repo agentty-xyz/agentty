@@ -186,7 +186,7 @@ Every non-router file with public functions in `crates/agentty/src/` has at leas
 ### Tests
 
 - [ ] All new tests follow Arrange/Act/Assert structure with explicit comments.
-- [ ] Run `cargo test -q -- --test-threads=1` to verify full suite passes.
+- [ ] Run `cargo test -q` with the shared-host validation budget from `AGENTS.md` (`half` of logical CPUs, capped at `4` test threads per agent) to verify the full suite passes.
 
 ### Docs
 

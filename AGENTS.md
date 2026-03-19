@@ -170,7 +170,14 @@ Run this sequence before handoff, commit, or opening a review:
 1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
 1. **Validate:** `pre-commit run --all-files`
 1. **Lint:** `pre-commit run clippy --all-files --hook-stage manual`
-1. **Test:** `cargo test -q -- --test-threads=1`
+1. **Test:** Run `cargo test -q` with a shared-host thread budget so multiple agents can validate at once without oversubscribing the machine:
+   ```sh
+   test_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+   test_threads=$((test_threads / 2))
+   if [ "$test_threads" -lt 1 ]; then test_threads=1; fi
+   if [ "$test_threads" -gt 4 ]; then test_threads=4; fi
+   cargo test -q -- --test-threads="$test_threads"
+   ```
 
 Focused tests are allowed during development, but they do not replace the final
 full-suite run.

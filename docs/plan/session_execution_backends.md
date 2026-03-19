@@ -123,7 +123,7 @@ The repository has deterministic close-and-reopen regression coverage for backen
 
 ### Tests
 
-- [ ] Keep the new close-and-reopen scenarios in the default regression path and run the repository validation gates, including the full `pre-commit` checks and `cargo test -q -- --test-threads=1`.
+- [ ] Keep the new close-and-reopen scenarios in the default regression path and run the repository validation gates, including the full `pre-commit` checks and `cargo test -q` with the shared-host validation budget from `AGENTS.md` (`half` of logical CPUs, capped at `4` test threads per agent).
 
 ### Docs
 

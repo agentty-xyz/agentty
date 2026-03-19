@@ -53,7 +53,7 @@ Run the following checks before opening a pull request:
 pre-commit run rustfmt-fix --all-files --hook-stage manual
 pre-commit run clippy-fix --all-files --hook-stage manual
 pre-commit run --all-files
-cargo test -q -- --test-threads=1
+cargo test -q
 ```
 
 `pre-commit run --all-files` now includes the workspace coverage ratchet via
