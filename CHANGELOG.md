@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.7] - 2026-03-19
+
+### Added
+
+- Add session follow-up task implementation plan.
+
+### Changed
+
+- Require strict protocol JSON for Codex, utility, and all agent responses.
+- Prefer structured Gemini completion payload and accept wire-type defaults.
+- Track published session branch git statuses across refreshes.
+- Support keyboard enhancement flags in terminal runtime.
+- Optimize session activity and refresh queries.
+- Limit home-directory project scans to startup.
+- Clarify that agents do not create commits automatically.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.6.6] - 2026-03-18
 
 ### Added
