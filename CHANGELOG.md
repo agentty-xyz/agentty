@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.8] - 2026-03-19
+
+### Added
+
+- Add a scrollbar to long diffs.
+
+### Changed
+
+- Change Esc in question mode to end the turn instead of skipping one question.
+- Clarify read-only git command guidance in agent prompts.
+- Refine Rust-native TUI E2E framework plan.
+
+### Fixed
+
+- Recover trailing protocol payload from wrapped provider output.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.6.7] - 2026-03-19
 
 ### Added
