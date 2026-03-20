@@ -207,6 +207,10 @@ Streaming behavior differs by transport/provider:
 - Codex thought phases (`thinking`/`plan`/`reasoning`/`thought`) stream as `ThoughtDelta`.
 - Provider capabilities in `crates/agentty/src/infra/agent/provider.rs` centralize whether transports stream assistant chunks live, require strict final protocol validation, classify app-server phase labels as thought output, and construct provider app-server clients.
 - Strict providers suppress streamed assistant chunks when needed so malformed first-pass protocol JSON is not persisted.
+- Gemini ACP still accumulates streamed assistant chunks internally for its
+  final turn result, but the runtime now prefers the completed
+  `session/prompt` payload whenever that payload parses as protocol JSON and
+  the streamed accumulation does not.
 - Worker persistence behavior: streamed `ThoughtDelta` and `Progress` updates drive transient progress badges and are not appended to session transcript output.
 
 <a id="architecture-agent-interaction-validation"></a>

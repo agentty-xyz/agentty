@@ -188,6 +188,10 @@ Agentty validates final agent output against the structured response protocol.
   JSON object.
 - Partial protocol JSON fragments are suppressed during streaming so raw JSON
   wrappers do not leak into live transcript output.
+- Gemini ACP final turn assembly now prefers the completed `session/prompt`
+  payload when it contains valid protocol JSON and the earlier streamed chunk
+  accumulation does not, so strict validation sees the authoritative
+  structured response.
 
 ## Session Resume Behavior
 

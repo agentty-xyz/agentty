@@ -414,11 +414,10 @@ impl RealGeminiAcpClient {
                         ));
                     }
                     let prompt_completion = parse_prompt_completion_response(&response_value)?;
-                    if assistant_message.trim().is_empty()
-                        && let Some(fallback_message) = prompt_completion.assistant_message
-                    {
-                        assistant_message = fallback_message;
-                    }
+                    assistant_message = select_preferred_assistant_message(
+                        &assistant_message,
+                        prompt_completion.assistant_message.as_deref(),
+                    );
 
                     return Ok((
                         assistant_message,
@@ -750,6 +749,37 @@ fn select_permission_option_id_from_value(options: &Value) -> Option<String> {
         .and_then(|option| option.get("optionId"))
         .and_then(Value::as_str)
         .map(ToString::to_string)
+}
+
+/// Selects the most reliable final assistant payload for one Gemini turn.
+///
+/// Gemini ACP can stream partial assistant chunks before it returns the final
+/// `session/prompt` completion payload. When the streamed accumulation is not
+/// valid protocol JSON but the completion payload is, prefer the completion
+/// payload so strict protocol validation sees the fully structured response.
+fn select_preferred_assistant_message(
+    streamed_message: &str,
+    completion_message: Option<&str>,
+) -> String {
+    let Some(completion_message) = completion_message.filter(|message| !message.trim().is_empty())
+    else {
+        return streamed_message.to_string();
+    };
+
+    if streamed_message.trim().is_empty() {
+        return completion_message.to_string();
+    }
+
+    let streamed_is_protocol =
+        agent::protocol::parse_agent_response_strict(streamed_message).is_ok();
+    let completion_is_protocol =
+        agent::protocol::parse_agent_response_strict(completion_message).is_ok();
+
+    if completion_is_protocol && !streamed_is_protocol {
+        return completion_message.to_string();
+    }
+
+    streamed_message.to_string()
 }
 
 /// Parses one completed `session/prompt` response into normalized turn fields.
@@ -1152,6 +1182,49 @@ mod tests {
             });
     }
 
+    /// Configures one prompt completion response that includes final assistant
+    /// text in the `result.message.content` payload.
+    fn expect_prompt_completion_with_message(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+        prompt_id: Arc<Mutex<Option<String>>>,
+        assistant_message: String,
+    ) {
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(move || {
+                let response_id = prompt_id
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.clone())
+                    .unwrap_or_else(|| "session-prompt-1".to_string());
+                let assistant_message = assistant_message.clone();
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": response_id,
+                            "result": {
+                                "usage": {
+                                    "inputTokens": 5,
+                                    "outputTokens": 8
+                                },
+                                "message": {
+                                    "content": [{
+                                        "text": assistant_message
+                                    }]
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
     /// Configures one prompt completion error response using the captured
     /// `session/prompt` request id.
     fn expect_prompt_completion_error(
@@ -1473,6 +1546,8 @@ mod tests {
         assert_eq!(session_id, Err("initialize failed".to_string()));
     }
 
+    /// Verifies Gemini keeps streamed chunk text when the completion payload
+    /// only supplies usage metadata.
     #[tokio::test]
     async fn run_turn_with_runtime_handles_permission_progress_chunk_and_completion() {
         // Arrange
@@ -1502,6 +1577,62 @@ mod tests {
             Ok(("Chunk text".to_string(), 2_u64, 3_u64))
         );
         assert_turn_stream_events(&mut stream_rx);
+    }
+
+    /// Verifies Gemini prefers the final completion payload when it contains a
+    /// full structured response and the streamed chunk text does not.
+    #[tokio::test]
+    async fn run_turn_with_runtime_prefers_structured_completion_payload() {
+        // Arrange
+        let mut transport = MockGeminiRuntimeTransport::new();
+        let mut sequence = Sequence::new();
+        let prompt_id = Arc::new(Mutex::new(None::<String>));
+        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+        let structured_response = serde_json::json!({
+            "answer": "I have successfully added \"hello world\" to the top of your `README.md` file.",
+            "questions": [],
+            "summary": {
+                "session": "Added \"hello world\" to `README.md`.",
+                "turn": "Added \"hello world\" to `README.md` using string replacement."
+            }
+        })
+        .to_string();
+
+        expect_session_prompt_request(&mut transport, &mut sequence, Arc::clone(&prompt_id));
+        expect_assistant_chunk_update(&mut transport, &mut sequence);
+        expect_prompt_completion_with_message(
+            &mut transport,
+            &mut sequence,
+            Arc::clone(&prompt_id),
+            structured_response.clone(),
+        );
+
+        // Act
+        let run_turn_result = RealGeminiAcpClient::run_turn_with_runtime(
+            &mut transport,
+            "session-1",
+            "Prompt",
+            stream_tx,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(run_turn_result, Ok((structured_response, 5_u64, 8_u64)));
+        let stream_event = stream_rx
+            .try_recv()
+            .expect("streamed chunk should still be forwarded");
+        assert_eq!(
+            stream_event,
+            AppServerStreamEvent::AssistantMessage {
+                is_delta: true,
+                message: "Chunk text".to_string(),
+                phase: None,
+            }
+        );
+        assert!(
+            stream_rx.try_recv().is_err(),
+            "only the streamed assistant chunk should be emitted"
+        );
     }
 
     /// Verifies prompt execution returns the JSON-RPC error message from the
@@ -1962,6 +2093,22 @@ mod tests {
             prompt_completion.err(),
             Some("Gemini ACP `session/prompt` response missing `result`".to_string())
         );
+    }
+
+    /// Verifies structured completion payloads override non-protocol streamed
+    /// text during final Gemini turn assembly.
+    #[test]
+    fn select_preferred_assistant_message_prefers_structured_completion_payload() {
+        // Arrange
+        let streamed_message = "I have successfully added hello world.";
+        let completion_message = r#"{"answer":"Structured.","questions":[],"summary":{"session":"Session summary","turn":"Turn summary"}}"#;
+
+        // Act
+        let selected_message =
+            select_preferred_assistant_message(streamed_message, Some(completion_message));
+
+        // Assert
+        assert_eq!(selected_message, completion_message);
     }
 
     #[test]
