@@ -184,7 +184,7 @@ Provider output is normalized to one structured response protocol:
 1. The caller selects one canonical `AgentRequestKind` before transport handoff, and the transport derives the matching `ProtocolRequestProfile` from it. Session turns use `SessionStart` or `SessionResume`, while isolated utility prompts use `UtilityPrompt`.
 1. Session discussion turns typically populate `summary.turn` and `summary.session`, while one-shot prompts may leave `summary` unused.
 1. Channels stream deltas/progress as `TurnEvent`.
-1. Final output is parsed to protocol `answer`, `questions`, and the optional structured summary. The final assistant payload itself must be the shared protocol JSON object on every transport and request profile, while direct deserialization into the shared wire type still accepts summary-only or otherwise defaulted top-level fields.
+1. Final output is parsed to protocol `answer`, `questions`, and the optional structured summary. The final assistant payload itself must match the shared protocol JSON object, while direct deserialization into the shared wire type still accepts summary-only or otherwise defaulted top-level fields.
 1. Worker persists final display text, raw summary payload, and question payloads, then emits `AgentResponseReceived`.
 
 <a id="architecture-agent-interaction-streaming"></a>
@@ -216,7 +216,8 @@ Streaming behavior differs by transport/provider:
 <a id="architecture-agent-interaction-validation"></a>
 Final-output validation:
 
-- Claude, Gemini, and Codex use strict protocol parsing and return an error immediately when invalid.
+- Claude, Gemini, and Codex use strict protocol parsing and return an error
+  immediately when invalid.
 - One-shot agent submissions still surface schema errors directly to the
   caller whenever the shared parser rejects the final output, including plain
   text, wrapped JSON, blank utility responses, and non-utility prompts that

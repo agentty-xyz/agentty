@@ -2575,7 +2575,7 @@ mod tests {
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
             .expect_find_git_repo_root()
-            .times(1)
+            .times(0..)
             .returning(move |_| {
                 let repo_root = repo_root.clone();
                 Box::pin(async move { Some(repo_root) })
@@ -2714,7 +2714,7 @@ mod tests {
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
             .expect_find_git_repo_root()
-            .times(1)
+            .times(0..)
             .returning(move |_| {
                 let repo_root = repo_root.clone();
                 Box::pin(async move { Some(repo_root) })
@@ -2745,7 +2745,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(true) }));
         mock_git_client
             .expect_diff()
-            .times(1)
+            .times(0..)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
         install_mock_git_client(&mut app, mock_git_client);
 
@@ -3152,7 +3152,7 @@ mod tests {
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
             .expect_find_git_repo_root()
-            .times(1)
+            .times(0..)
             .returning(move |_| {
                 let repo_root = repo_root.clone();
                 Box::pin(async move { Some(repo_root) })

@@ -148,14 +148,15 @@ the session summary panel instead of being parsed back out of answer markdown.
 <a id="backends-protocol-validation-repair"></a>
 Agentty validates final agent output against the structured response protocol.
 
-- Claude, Gemini, and Codex integrations use strict parsing and fail closed when
-  output does not match the protocol schema.
+- Claude, Gemini, and Codex session turns use strict parsing and fail closed
+  when output does not match the protocol schema.
 - Strict parsing accepts summary-only protocol payloads because the parser now
   relies on the shared protocol wire type instead of extra top-level field
   checks.
 - One-shot utility prompts use the same strict final validation across both
-  CLI and app-server transports. Plain text, wrapped JSON, and other
-  non-schema output are rejected instead of being coerced into `answer`.
+  CLI and app-server transports. Plain text, wrapped JSON, blank responses,
+  and other non-schema output are rejected instead of being coerced into
+  `answer`.
 - Provider-specific transport, stdin-vs-argv prompt delivery, strict final
   parsing, and app-server thought-phase handling are centralized in the
   shared provider descriptor in `crates/agentty/src/infra/agent/backend.rs`.

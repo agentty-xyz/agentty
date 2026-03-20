@@ -161,14 +161,18 @@ impl Drop for TerminalGuard {
 /// When supported, keyboard enhancement flags are also enabled so modified
 /// Enter keys remain distinguishable over transports like SSH and `tmux`.
 pub(crate) fn setup_terminal(guard: &TerminalGuard) -> io::Result<TuiTerminal> {
-    setup_terminal_with_operation(&CROSSTERM_TERMINAL_OPERATION, guard)
+    let stdout = prepare_terminal_stdout_with_operation(&CROSSTERM_TERMINAL_OPERATION, guard)?;
+    let backend = CrosstermBackend::new(stdout);
+
+    Terminal::new(backend)
 }
 
-/// Enables terminal modes with the supplied operation provider.
-fn setup_terminal_with_operation(
+/// Enables terminal modes with the supplied operation provider and returns the
+/// configured stdout handle for later terminal construction.
+fn prepare_terminal_stdout_with_operation(
     operation: &dyn TerminalOperation,
     guard: &TerminalGuard,
-) -> io::Result<TuiTerminal> {
+) -> io::Result<io::Stdout> {
     operation.enable_raw_mode()?;
 
     let keyboard_enhancement_enabled =
@@ -177,9 +181,8 @@ fn setup_terminal_with_operation(
 
     let mut stdout = io::stdout();
     operation.enter_alternate_screen(&mut stdout, keyboard_enhancement_enabled)?;
-    let backend = CrosstermBackend::new(stdout);
 
-    Terminal::new(backend)
+    Ok(stdout)
 }
 
 /// Restores terminal modes and ignores failures so drop paths do not panic.
@@ -210,7 +213,7 @@ mod tests {
         operation.expect_supports_keyboard_enhancement().times(0);
 
         // Act
-        let result = setup_terminal_with_operation(&operation, &guard);
+        let result = prepare_terminal_stdout_with_operation(&operation, &guard);
 
         // Assert
         let error = result.expect_err("setup should fail when raw mode fails");
@@ -238,7 +241,7 @@ mod tests {
             .returning(|_, _| Err(io::Error::other("enter failed")));
 
         // Act
-        let result = setup_terminal_with_operation(&operation, &guard);
+        let result = prepare_terminal_stdout_with_operation(&operation, &guard);
 
         // Assert
         let error = result.expect_err("setup should fail when alternate screen fails");
@@ -267,11 +270,10 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         // Act
-        let result = setup_terminal_with_operation(&operation, &guard);
+        let result = prepare_terminal_stdout_with_operation(&operation, &guard);
 
         // Assert
-        let _terminal =
-            result.expect("setup should succeed when keyboard enhancement is supported");
+        let _stdout = result.expect("setup should succeed when keyboard enhancement is supported");
         assert!(guard.keyboard_enhancement_enabled());
     }
 
@@ -297,10 +299,10 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         // Act
-        let result = setup_terminal_with_operation(&operation, &guard);
+        let result = prepare_terminal_stdout_with_operation(&operation, &guard);
 
         // Assert
-        let _terminal = result.expect("setup should fall back when support query fails");
+        let _stdout = result.expect("setup should fall back when support query fails");
         assert!(!guard.keyboard_enhancement_enabled());
     }
 

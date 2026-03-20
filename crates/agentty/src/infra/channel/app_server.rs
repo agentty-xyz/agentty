@@ -252,7 +252,11 @@ mod tests {
                     is_delta: true,
                 });
 
-                Box::pin(async { Ok(make_ok_response("Hello world")) })
+                Box::pin(async {
+                    Ok(make_ok_response(
+                        r#"{"answer":"Hello world","questions":[],"summary":null}"#,
+                    ))
+                })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -283,7 +287,11 @@ mod tests {
                     is_delta: false,
                 });
 
-                Box::pin(async { Ok(make_ok_response("Full paragraph")) })
+                Box::pin(async {
+                    Ok(make_ok_response(
+                        r#"{"answer":"Full paragraph","questions":[],"summary":null}"#,
+                    ))
+                })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -424,7 +432,11 @@ mod tests {
                     "Running tool".to_string(),
                 ));
 
-                Box::pin(async { Ok(make_ok_response("")) })
+                Box::pin(async {
+                    Ok(make_ok_response(
+                        r#"{"answer":"","questions":[],"summary":null}"#,
+                    ))
+                })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -489,7 +501,11 @@ mod tests {
                     is_delta: true,
                 });
 
-                Box::pin(async { Ok(make_ok_response("")) })
+                Box::pin(async {
+                    Ok(make_ok_response(
+                        r#"{"answer":"","questions":[],"summary":null}"#,
+                    ))
+                })
             });
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
@@ -658,9 +674,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Codex turns do not run repair fallback when final output is
-    /// plain text.
-    async fn test_run_turn_codex_keeps_plain_text_without_repair_retry() {
+    /// Verifies Codex turns surface invalid plain-text output instead of
+    /// accepting it as a final response.
+    async fn test_run_turn_codex_rejects_plain_text_without_repair_retry() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -671,13 +687,14 @@ mod tests {
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
 
         // Act
-        let result = channel
+        let error = channel
             .run_turn("sess-1".to_string(), make_turn_request(), events_tx)
             .await
-            .expect("turn should succeed");
+            .expect_err("plain-text turn should fail");
 
         // Assert
-        assert_eq!(result.assistant_message.to_display_text(), "plain");
+        assert!(error.0.contains("did not match the required JSON schema"));
+        assert!(error.0.contains("response:\nplain"));
     }
 
     #[tokio::test]
@@ -714,7 +731,8 @@ mod tests {
             .returning(|_request, _stream_tx| {
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
-                        assistant_message: "Result".to_string(),
+                        assistant_message: r#"{"answer":"Result","questions":[],"summary":null}"#
+                            .to_string(),
                         context_reset: true,
                         input_tokens: 100,
                         output_tokens: 50,
@@ -762,7 +780,8 @@ mod tests {
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
-                        assistant_message: "ok".to_string(),
+                        assistant_message: r#"{"answer":"ok","questions":[],"summary":null}"#
+                            .to_string(),
                         context_reset: false,
                         input_tokens: 1,
                         output_tokens: 1,

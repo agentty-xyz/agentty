@@ -846,9 +846,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies plain-text one-shot output still generates a valid session
-    /// commit message via the CLI backend path.
-    async fn test_generate_session_commit_message_with_backend_accepts_plain_text_output() {
+    /// Verifies plain-text one-shot output is rejected for session commit
+    /// message generation.
+    async fn test_generate_session_commit_message_with_backend_rejects_plain_text_output() {
         // Arrange — use a CLI-backed model so the mock backend is exercised.
         // App-server-backed models (Codex, Gemini) bypass `build_command`
         // entirely and route through the shared app-server client.
@@ -876,7 +876,7 @@ mod tests {
             });
 
         // Act
-        let commit_message = SessionTaskService::generate_session_commit_message_with_backend(
+        let error = SessionTaskService::generate_session_commit_message_with_backend(
             temp_directory.path(),
             AgentModel::ClaudeSonnet46,
             "diff --git a/a.rs b/a.rs",
@@ -885,13 +885,11 @@ mod tests {
             false,
         )
         .await
-        .expect("plain-text one-shot commit message should succeed");
+        .expect_err("plain-text one-shot commit message should fail");
 
         // Assert
-        assert_eq!(
-            commit_message,
-            "Refactor agent prompt and protocol handling"
-        );
+        assert!(error.contains("did not match the required JSON schema"));
+        assert!(error.contains("response:\nRefactor agent prompt and protocol handling"));
     }
 
     #[test]
@@ -1172,9 +1170,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies assist tasks accept plain-text one-shot output and persist
-    /// it as answer text.
-    async fn test_run_agent_assist_task_accepts_plain_text_output() {
+    /// Verifies assist tasks reject plain-text one-shot output that does not
+    /// satisfy the shared protocol schema.
+    async fn test_run_agent_assist_task_rejects_plain_text_output() {
         // Arrange
         let database = Database::open_in_memory()
             .await
@@ -1202,7 +1200,7 @@ mod tests {
             });
 
         // Act
-        SessionTaskService::run_agent_assist_task_with_backend(
+        let error = SessionTaskService::run_agent_assist_task_with_backend(
             RunAgentAssistTaskInput {
                 app_event_tx,
                 child_pid: Arc::new(Mutex::new(None)),
@@ -1216,17 +1214,19 @@ mod tests {
             &backend,
         )
         .await
-        .expect("plain-text utility output should succeed");
+        .expect_err("plain-text utility output should fail");
 
         // Assert
+        assert!(error.contains("did not match the required JSON schema"));
+        assert!(error.contains("response:\nplain text"));
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
-        assert!(output_text.contains("plain text"));
+        assert!(output_text.is_empty());
         let sessions = database
             .load_sessions()
             .await
             .expect("failed to load sessions");
-        assert_eq!(sessions[0].input_tokens, 2);
-        assert_eq!(sessions[0].output_tokens, 1);
+        assert_eq!(sessions[0].input_tokens, 0);
+        assert_eq!(sessions[0].output_tokens, 0);
     }
 
     #[tokio::test]

@@ -131,10 +131,10 @@ pub(crate) fn provider_kind_for_model(model: &str) -> Result<AgentKind, String> 
 struct AgentProviderDescriptor {
     app_server_client_factory:
         fn(Option<Arc<dyn AppServerClient>>) -> Option<Arc<dyn AppServerClient>>,
+    app_server_thought_policy: AppServerThoughtPolicy,
     backend_factory: fn() -> Box<dyn AgentBackend>,
     parse_response: fn(&str, &str) -> ParsedResponse,
     parse_stream_output_line: fn(&str) -> Option<(String, bool)>,
-    app_server_thought_policy: AppServerThoughtPolicy,
     prompt_transport: AgentPromptTransport,
     stream_app_server_assistant_messages: bool,
     transport: AgentTransport,
@@ -149,20 +149,20 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
                         as Arc<dyn AppServerClient>
                 }))
             },
+            app_server_thought_policy: AppServerThoughtPolicy::None,
             backend_factory: || Box::new(super::gemini::GeminiBackend),
             parse_response: super::response_parser::parse_gemini_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
-            app_server_thought_policy: AppServerThoughtPolicy::None,
             prompt_transport: AgentPromptTransport::Stdin,
             stream_app_server_assistant_messages: false,
             transport: AgentTransport::AppServer,
         },
         AgentKind::Claude => AgentProviderDescriptor {
             app_server_client_factory: |_default_client| None,
+            app_server_thought_policy: AppServerThoughtPolicy::None,
             backend_factory: || Box::new(super::claude::ClaudeBackend),
             parse_response: super::response_parser::parse_claude_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_claude_stream_output_line,
-            app_server_thought_policy: AppServerThoughtPolicy::None,
             prompt_transport: AgentPromptTransport::Stdin,
             stream_app_server_assistant_messages: false,
             transport: AgentTransport::Cli,
@@ -174,10 +174,10 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
                         as Arc<dyn AppServerClient>
                 }))
             },
+            app_server_thought_policy: AppServerThoughtPolicy::PhaseLabel,
             backend_factory: || Box::new(super::codex::CodexBackend),
             parse_response: super::response_parser::parse_codex_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_codex_stream_output_line,
-            app_server_thought_policy: AppServerThoughtPolicy::PhaseLabel,
             prompt_transport: AgentPromptTransport::Argv,
             stream_app_server_assistant_messages: true,
             transport: AgentTransport::AppServer,
