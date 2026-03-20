@@ -3,7 +3,7 @@ use std::io;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
@@ -55,7 +55,13 @@ where
 
             Ok(mode::question::handle(app, terminal_rect, key).await)
         }
-        AppMode::Diff { .. } => Ok(mode::diff::handle(app, key)),
+        AppMode::Diff { .. } => {
+            let size = terminal.size().map_err(backend_err)?;
+            let terminal_rect = Rect::new(0, 0, size.width, size.height);
+            let content_area = content_area_for_terminal(terminal_rect);
+
+            Ok(mode::diff::handle(app, content_area, key))
+        }
         AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
         AppMode::OpenCommandSelector { .. } => {
             unreachable!("open-command selector mode is handled before dispatch matching")
@@ -64,6 +70,20 @@ where
             unreachable!("publish-branch input mode is handled before dispatch matching")
         }
     }
+}
+
+/// Returns the central content area after removing the global status and
+/// footer bars from the full terminal rectangle.
+fn content_area_for_terminal(terminal_rect: Rect) -> Rect {
+    let outer_chunks = Layout::default()
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(terminal_rect);
+
+    outer_chunks[1]
 }
 
 /// Handles key input while a session-scoped informational popup is visible.
@@ -640,6 +660,18 @@ mod tests {
         {
             *current_status = status;
         }
+    }
+
+    #[test]
+    fn test_content_area_for_terminal_excludes_global_bars() {
+        // Arrange
+        let terminal_rect = Rect::new(0, 0, 120, 30);
+
+        // Act
+        let content_area = content_area_for_terminal(terminal_rect);
+
+        // Assert
+        assert_eq!(content_area, Rect::new(0, 1, 120, 28));
     }
 
     #[tokio::test]

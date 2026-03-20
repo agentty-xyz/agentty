@@ -1,26 +1,20 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::domain::session::Session;
-use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
+use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::state::help_action;
 use crate::ui::util::{
-    DiffLine, DiffLineKind, diff_line_change_totals, max_diff_line_number, parse_diff_lines,
-    wrap_diff_content,
+    DiffLine, DiffLineKind, diff_line_change_totals, parse_diff_lines, selected_diff_lines,
 };
-use crate::ui::{Component, Page, style};
+use crate::ui::{Component, Page, diff_util, style};
 
-const BORDER_HORIZONTAL_WIDTH: u16 = 2;
-const FOOTER_HEIGHT: u16 = 1;
-const GUTTER_EXTRA_WIDTH: usize = 2;
-const LINE_NUMBER_COLUMN_COUNT: usize = 2;
-const LAYOUT_MARGIN: u16 = 1;
-const MIN_GUTTER_WIDTH: usize = 1;
 const SCROLL_X_OFFSET: u16 = 0;
-const SIGN_COLUMN_WIDTH: usize = 1;
+const SCROLLBAR_TRACK_SYMBOL: &str = "│";
+const SCROLLBAR_THUMB_SYMBOL: &str = "█";
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
 
 /// Renders the current session's git diff in a scrollable page.
@@ -74,22 +68,59 @@ impl<'a> DiffPage<'a> {
             ),
         ]);
 
-        let max_num = max_diff_line_number(parsed);
-        let gutter_width = if max_num == 0 {
-            MIN_GUTTER_WIDTH
-        } else {
-            max_num.ilog10() as usize + MIN_GUTTER_WIDTH
-        };
+        let mut layout = diff_util::diff_render_layout(parsed, area, false);
+        let mut lines = self.build_diff_lines(parsed, layout);
+        let mut show_scrollbar =
+            diff_util::diff_has_scrollable_overflow(lines.len(), layout.viewport_height);
 
-        // gutter: "old│new " = gutter_width * 2 + 2 (separator + trailing space)
-        // sign column: 1 char
-        let prefix_width =
-            gutter_width * LINE_NUMBER_COLUMN_COUNT + GUTTER_EXTRA_WIDTH + SIGN_COLUMN_WIDTH;
-        let inner_width = area.width.saturating_sub(BORDER_HORIZONTAL_WIDTH) as usize;
+        if show_scrollbar {
+            layout = diff_util::diff_render_layout(parsed, area, true);
+            lines = self.build_diff_lines(parsed, layout);
+            show_scrollbar =
+                diff_util::diff_has_scrollable_overflow(lines.len(), layout.viewport_height);
+        }
+        let total_lines = lines.len();
 
+        let scroll_offset = diff_util::clamp_diff_scroll_offset(
+            self.scroll_offset,
+            total_lines,
+            layout.viewport_height,
+        );
+
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .scroll((scroll_offset, SCROLL_X_OFFSET));
+
+        f.render_widget(paragraph, area);
+
+        if show_scrollbar {
+            self.render_diff_scrollbar(f, area, layout.viewport_height, scroll_offset, total_lines);
+        }
+    }
+
+    /// Returns the style used for added diff lines.
+    fn addition_line_style() -> Style {
+        Style::default()
+            .fg(style::palette::SUCCESS)
+            .bg(style::palette::SURFACE_SUCCESS)
+    }
+
+    /// Returns the style used for removed diff lines.
+    fn deletion_line_style() -> Style {
+        Style::default()
+            .fg(style::palette::DANGER)
+            .bg(style::palette::SURFACE_DANGER)
+    }
+
+    /// Builds wrapped diff lines for the diff panel, optionally reserving one
+    /// column for the scrollbar thumb.
+    fn build_diff_lines<'line>(
+        &self,
+        parsed: &[DiffLine<'line>],
+        layout: diff_util::DiffRenderLayout,
+    ) -> Vec<Line<'line>> {
         let gutter_style = Style::default().fg(style::palette::TEXT_SUBTLE);
-
-        let mut lines: Vec<Line<'_>> = Vec::with_capacity(parsed.len());
+        let mut lines: Vec<Line<'line>> = Vec::with_capacity(parsed.len());
 
         for diff_line in parsed {
             let (sign, content_style) = match diff_line.kind {
@@ -118,17 +149,17 @@ impl<'a> DiffPage<'a> {
             };
 
             let old_str = match diff_line.old_line {
-                Some(num) => format!("{num:>gutter_width$}"),
-                None => " ".repeat(gutter_width),
+                Some(num) => format!("{num:>width$}", width = layout.gutter_width),
+                None => " ".repeat(layout.gutter_width),
             };
             let new_str = match diff_line.new_line {
-                Some(num) => format!("{num:>gutter_width$}"),
-                None => " ".repeat(gutter_width),
+                Some(num) => format!("{num:>width$}", width = layout.gutter_width),
+                None => " ".repeat(layout.gutter_width),
             };
 
             let gutter_text = format!("{old_str}│{new_str} ");
-            let content_available = inner_width.saturating_sub(prefix_width);
-            let chunks = wrap_diff_content(diff_line.content, content_available);
+            let content_available = layout.content_width.saturating_sub(layout.prefix_width);
+            let chunks = diff_util::wrap_diff_content(diff_line.content, content_available);
 
             for (idx, chunk) in chunks.iter().enumerate() {
                 if idx == WRAPPED_CHUNK_START_INDEX {
@@ -139,7 +170,7 @@ impl<'a> DiffPage<'a> {
                     ]));
                 } else {
                     lines.push(Line::from(vec![
-                        Span::styled(" ".repeat(prefix_width), gutter_style),
+                        Span::styled(" ".repeat(layout.prefix_width), gutter_style),
                         Span::styled(*chunk, content_style),
                     ]));
                 }
@@ -150,45 +181,65 @@ impl<'a> DiffPage<'a> {
             lines.push(Line::from(" No changes found. "));
         }
 
-        let paragraph = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title(title))
-            .scroll((self.scroll_offset, SCROLL_X_OFFSET));
-
-        f.render_widget(paragraph, area);
+        lines
     }
 
-    /// Returns the style used for added diff lines.
-    fn addition_line_style() -> Style {
-        Style::default()
-            .fg(style::palette::SUCCESS)
-            .bg(style::palette::SURFACE_SUCCESS)
-    }
+    /// Renders a slim scrollbar inside the diff panel so users can see their
+    /// position in long diffs at a glance.
+    fn render_diff_scrollbar(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        viewport_height: u16,
+        scroll_offset: u16,
+        total_lines: usize,
+    ) {
+        if viewport_height == 0 {
+            return;
+        }
 
-    /// Returns the style used for removed diff lines.
-    fn deletion_line_style() -> Style {
-        Style::default()
-            .fg(style::palette::DANGER)
-            .bg(style::palette::SURFACE_DANGER)
+        if !diff_util::diff_has_scrollable_overflow(total_lines, viewport_height) {
+            return;
+        }
+
+        let track_height = usize::from(viewport_height);
+        let thumb_height = (track_height * track_height / total_lines).max(1);
+        let max_scroll = total_lines.saturating_sub(track_height);
+        let max_thumb_offset = track_height.saturating_sub(thumb_height);
+        let thumb_offset = if max_scroll == 0 {
+            0
+        } else {
+            usize::from(scroll_offset) * max_thumb_offset / max_scroll
+        };
+
+        let scrollbar_area = diff_util::diff_scrollbar_area(area, viewport_height);
+        let mut scrollbar_lines = Vec::with_capacity(track_height);
+
+        for line_index in 0..track_height {
+            let is_thumb_line =
+                line_index >= thumb_offset && line_index < thumb_offset + thumb_height;
+            let (symbol, symbol_style) = if is_thumb_line {
+                (
+                    SCROLLBAR_THUMB_SYMBOL,
+                    Style::default().fg(style::palette::WARNING),
+                )
+            } else {
+                (
+                    SCROLLBAR_TRACK_SYMBOL,
+                    Style::default().fg(style::palette::TEXT_SUBTLE),
+                )
+            };
+
+            scrollbar_lines.push(Line::from(Span::styled(symbol, symbol_style)));
+        }
+
+        f.render_widget(Paragraph::new(scrollbar_lines), scrollbar_area);
     }
 }
 
 impl Page for DiffPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(FOOTER_HEIGHT)])
-            .margin(LAYOUT_MARGIN)
-            .split(area);
-
-        let content_area = chunks[0];
-        let footer_area = chunks[1];
-
-        let content_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-            .split(content_area);
-
-        let file_list_area = content_layout[0];
-        let diff_area = content_layout[1];
+        let areas = diff_util::diff_page_areas(area);
 
         let parsed = parse_diff_lines(&self.diff);
         let (total_added_lines, total_removed_lines) = diff_line_change_totals(&parsed);
@@ -196,12 +247,12 @@ impl Page for DiffPage<'_> {
 
         FileExplorer::new(&parsed)
             .selected_index(self.file_explorer_selected_index)
-            .render(f, file_list_area);
+            .render(f, areas.file_list_area);
 
         let filtered = selected_diff_lines(&parsed, &tree_items, self.file_explorer_selected_index);
         self.render_diff_content(
             f,
-            diff_area,
+            areas.diff_area,
             &filtered,
             total_added_lines,
             total_removed_lines,
@@ -209,33 +260,7 @@ impl Page for DiffPage<'_> {
 
         let help_message =
             Paragraph::new(help_action::footer_line(&help_action::diff_footer_actions()));
-        f.render_widget(help_message, footer_area);
-    }
-}
-
-/// Returns diff lines for the selected file explorer item.
-///
-/// When `selected_index` is out of bounds, the full parsed diff is returned so
-/// the diff panel continues to show meaningful content.
-fn selected_diff_lines<'a>(
-    parsed_lines: &[DiffLine<'a>],
-    tree_items: &[FileTreeItem],
-    selected_index: usize,
-) -> Vec<DiffLine<'a>> {
-    let Some(selected_item) = tree_items.get(selected_index) else {
-        return parsed_lines.iter().map(clone_diff_line).collect();
-    };
-
-    FileExplorer::filter_diff_lines(parsed_lines, selected_item)
-}
-
-/// Clones a parsed diff line while preserving borrowed content.
-fn clone_diff_line<'a>(diff_line: &DiffLine<'a>) -> DiffLine<'a> {
-    DiffLine {
-        kind: diff_line.kind,
-        old_line: diff_line.old_line,
-        new_line: diff_line.new_line,
-        content: diff_line.content,
+        f.render_widget(help_message, areas.footer_area);
     }
 }
 
@@ -394,5 +419,56 @@ mod tests {
             background_cell_count(buffer, style::palette::SURFACE_DANGER) > 0,
             "expected removed lines to include danger background tint"
         );
+    }
+
+    #[test]
+    fn test_render_shows_scrollbar_for_overflowing_diff() {
+        // Arrange
+        let session = session_fixture();
+        let diff = (0..80)
+            .map(|index| format!("+line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut diff_page = DiffPage::new(&session, diff, 12, 0);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut diff_page, frame, area);
+            })
+            .expect("failed to draw diff page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains(SCROLLBAR_TRACK_SYMBOL));
+        assert!(text.contains(SCROLLBAR_THUMB_SYMBOL));
+    }
+
+    #[test]
+    fn test_render_clamps_overscroll_to_last_visible_diff_lines() {
+        // Arrange
+        let session = session_fixture();
+        let diff = (0..40)
+            .map(|index| format!("+line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut diff_page = DiffPage::new(&session, diff, u16::MAX, 0);
+        let backend = ratatui::backend::TestBackend::new(80, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut diff_page, frame, area);
+            })
+            .expect("failed to draw diff page");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("line 39"));
     }
 }

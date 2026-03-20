@@ -1,4 +1,16 @@
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
 use crate::infra::agent::protocol::AgentResponseSummary;
+use crate::ui::component::file_explorer::{FileExplorer, FileTreeItem};
+
+const BORDER_HORIZONTAL_WIDTH: u16 = 2;
+const FOOTER_HEIGHT: u16 = 1;
+const GUTTER_EXTRA_WIDTH: usize = 2;
+const LINE_NUMBER_COLUMN_COUNT: usize = 2;
+const LAYOUT_MARGIN: u16 = 1;
+const MIN_GUTTER_WIDTH: usize = 1;
+const SCROLLBAR_WIDTH: usize = 1;
+const SIGN_COLUMN_WIDTH: usize = 1;
 
 /// The kind of a line in a unified diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,12 +23,29 @@ pub enum DiffLineKind {
 }
 
 /// A parsed line from a unified diff, with optional old/new line numbers.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffLine<'a> {
     pub kind: DiffLineKind,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
     pub content: &'a str,
+}
+
+/// Shared page areas used by the diff view after applying its layout splits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffPageAreas {
+    pub diff_area: Rect,
+    pub file_list_area: Rect,
+    pub footer_area: Rect,
+}
+
+/// Shared wrapping and viewport measurements for rendering the diff panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffRenderLayout {
+    pub content_width: usize,
+    pub gutter_width: usize,
+    pub prefix_width: usize,
+    pub viewport_height: u16,
 }
 
 /// Extract `(old_start, old_count, new_start, new_count)` from a hunk header
@@ -150,6 +179,144 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     }
 
     chunks
+}
+
+/// Returns the shared diff-page areas after applying the page margin, footer,
+/// and file-list split used by the diff view.
+pub fn diff_page_areas(terminal_area: Rect) -> DiffPageAreas {
+    let page_chunks = Layout::default()
+        .constraints([Constraint::Min(0), Constraint::Length(FOOTER_HEIGHT)])
+        .margin(LAYOUT_MARGIN)
+        .split(terminal_area);
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        .split(page_chunks[0]);
+
+    DiffPageAreas {
+        diff_area: content_layout[1],
+        file_list_area: content_layout[0],
+        footer_area: page_chunks[1],
+    }
+}
+
+/// Returns the wrapping metrics used to render one diff panel.
+pub fn diff_render_layout(
+    parsed_lines: &[DiffLine<'_>],
+    diff_area: Rect,
+    reserve_scrollbar_width: bool,
+) -> DiffRenderLayout {
+    let max_num = max_diff_line_number(parsed_lines);
+    let gutter_width = if max_num == 0 {
+        MIN_GUTTER_WIDTH
+    } else {
+        max_num.ilog10() as usize + MIN_GUTTER_WIDTH
+    };
+    let prefix_width =
+        gutter_width * LINE_NUMBER_COLUMN_COUNT + GUTTER_EXTRA_WIDTH + SIGN_COLUMN_WIDTH;
+    let scrollbar_width = usize::from(reserve_scrollbar_width) * SCROLLBAR_WIDTH;
+    let content_width = diff_area
+        .width
+        .saturating_sub(BORDER_HORIZONTAL_WIDTH)
+        .saturating_sub(scrollbar_width as u16) as usize;
+    let viewport_height = diff_area.height.saturating_sub(BORDER_HORIZONTAL_WIDTH);
+
+    DiffRenderLayout {
+        content_width,
+        gutter_width,
+        prefix_width,
+        viewport_height,
+    }
+}
+
+/// Returns whether a diff panel needs scrolling for the given viewport.
+pub fn diff_has_scrollable_overflow(line_count: usize, viewport_height: u16) -> bool {
+    line_count > usize::from(viewport_height) && viewport_height > 0
+}
+
+/// Clamps a diff scroll offset to the last visible line in the viewport.
+pub fn clamp_diff_scroll_offset(
+    scroll_offset: u16,
+    line_count: usize,
+    viewport_height: u16,
+) -> u16 {
+    let max_scroll = line_count.saturating_sub(usize::from(viewport_height)) as u16;
+
+    scroll_offset.min(max_scroll)
+}
+
+/// Returns the inner scrollbar track rectangle for the diff panel.
+pub fn diff_scrollbar_area(diff_area: Rect, viewport_height: u16) -> Rect {
+    Rect::new(
+        diff_area.x + diff_area.width.saturating_sub(BORDER_HORIZONTAL_WIDTH),
+        diff_area.y + 1,
+        1,
+        viewport_height,
+    )
+}
+
+/// Counts rendered diff rows after gutter formatting and content wrapping.
+pub fn rendered_diff_line_count(parsed_lines: &[DiffLine<'_>], layout: DiffRenderLayout) -> usize {
+    let content_available = layout.content_width.saturating_sub(layout.prefix_width);
+    let mut rendered_line_count = 0;
+
+    for diff_line in parsed_lines {
+        match diff_line.kind {
+            DiffLineKind::FileHeader => {
+                if diff_line.content.starts_with("diff ") && rendered_line_count > 0 {
+                    rendered_line_count += 1;
+                }
+
+                rendered_line_count += 1;
+            }
+            DiffLineKind::HunkHeader => rendered_line_count += 1,
+            DiffLineKind::Context | DiffLineKind::Addition | DiffLineKind::Deletion => {
+                rendered_line_count +=
+                    wrap_diff_content(diff_line.content, content_available).len();
+            }
+        }
+    }
+
+    if rendered_line_count == 0 {
+        return 1;
+    }
+
+    rendered_line_count
+}
+
+/// Returns the largest valid vertical scroll offset for the diff panel.
+///
+/// The calculation mirrors diff-page layout, wrapping, and scrollbar width so
+/// runtime key handling can clamp scroll state to what the user can actually
+/// see.
+pub fn diff_view_max_scroll_offset(parsed_lines: &[DiffLine<'_>], terminal_area: Rect) -> u16 {
+    let diff_area = diff_page_areas(terminal_area).diff_area;
+    let mut layout = diff_render_layout(parsed_lines, diff_area, false);
+    if layout.viewport_height == 0 {
+        return 0;
+    }
+
+    let mut rendered_line_count = rendered_diff_line_count(parsed_lines, layout);
+    if diff_has_scrollable_overflow(rendered_line_count, layout.viewport_height) {
+        layout = diff_render_layout(parsed_lines, diff_area, true);
+        rendered_line_count = rendered_diff_line_count(parsed_lines, layout);
+    }
+
+    clamp_diff_scroll_offset(u16::MAX, rendered_line_count, layout.viewport_height)
+}
+
+/// Returns diff lines for the selected file-tree item, or the full diff when
+/// the selection is out of bounds.
+pub fn selected_diff_lines<'a>(
+    parsed_lines: &[DiffLine<'a>],
+    tree_items: &[FileTreeItem],
+    selected_index: usize,
+) -> Vec<DiffLine<'a>> {
+    let Some(selected_item) = tree_items.get(selected_index) else {
+        return parsed_lines.to_vec();
+    };
+
+    FileExplorer::filter_diff_lines(parsed_lines, selected_item)
 }
 
 const DEFAULT_REVIEW_COMMENT: &str = "Agent summary unavailable; review the highlighted changes.";
@@ -775,6 +942,33 @@ index abc..def 100644
 
         // Assert
         assert_eq!(chunks, vec!["abcd"]);
+    }
+
+    #[test]
+    fn test_diff_view_max_scroll_offset_returns_zero_for_short_diff() {
+        // Arrange
+        let parsed_lines = parse_diff_lines("+short");
+        let terminal_area = Rect::new(0, 0, 120, 30);
+
+        // Act
+        let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area);
+
+        // Assert
+        assert_eq!(max_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_diff_view_max_scroll_offset_counts_wrapped_overflow() {
+        // Arrange
+        let diff = format!("+{}", "0123456789".repeat(20));
+        let parsed_lines = parse_diff_lines(&diff);
+        let terminal_area = Rect::new(0, 0, 30, 8);
+
+        // Act
+        let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area);
+
+        // Assert
+        assert!(max_scroll_offset > 0);
     }
 
     #[test]

@@ -738,10 +738,11 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) {
     let diff = load_view_session_diff(app, view_context).await;
 
     app.mode = AppMode::Diff {
-        session_id: view_context.session_id.clone(),
         diff,
-        scroll_offset: 0,
         file_explorer_selected_index: 0,
+        scroll_cache: None,
+        session_id: view_context.session_id.clone(),
+        scroll_offset: 0,
     };
 }
 

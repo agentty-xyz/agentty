@@ -334,6 +334,7 @@ fn render_session_or_diff_mode(
         AppMode::Diff {
             diff,
             file_explorer_selected_index,
+            scroll_cache: _,
             scroll_offset,
             session_id,
         } => render_diff_mode(
@@ -641,10 +642,11 @@ mod tests {
         session.title = Some("Diff Session".to_string());
         let sessions = vec![session];
         let mode = AppMode::Diff {
-            session_id: session_id.to_string(),
             diff: String::new(),
-            scroll_offset: 0,
             file_explorer_selected_index: 0,
+            scroll_cache: None,
+            session_id: session_id.to_string(),
+            scroll_offset: 0,
         };
         let progress_messages = HashMap::new();
 

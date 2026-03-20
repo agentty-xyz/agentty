@@ -1,3 +1,5 @@
+use ratatui::layout::Rect;
+
 use super::help_action::{self, HelpAction, ViewHelpState, ViewSessionState};
 use super::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -66,6 +68,14 @@ impl ConfirmationViewMode {
             scroll_offset: self.scroll_offset,
         }
     }
+}
+
+/// Cached scroll bounds for the current diff selection and content area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiffScrollCache {
+    pub content_area: Rect,
+    pub file_explorer_selected_index: usize,
+    pub max_scroll_offset: u16,
 }
 
 /// Tracks which panel has input focus during question-answer mode.
@@ -177,11 +187,18 @@ pub enum AppMode {
         session_id: String,
         scroll_offset: Option<u16>,
     },
+    /// Focused diff view with file-tree navigation and independent scrolling.
     Diff {
-        session_id: String,
+        /// Raw git diff rendered in the right-hand panel.
         diff: String,
-        scroll_offset: u16,
+        /// Selected file or folder in the left explorer tree.
         file_explorer_selected_index: usize,
+        /// Cached max scroll bound for the current content-area and selection.
+        scroll_cache: Option<DiffScrollCache>,
+        /// Session whose diff is currently visible.
+        session_id: String,
+        /// Vertical offset inside the rendered diff panel.
+        scroll_offset: u16,
     },
 
     /// Interactive clarification flow that asks agent questions one-by-one.
@@ -228,10 +245,10 @@ pub enum HelpContext {
         scroll_offset: Option<u16>,
     },
     Diff {
-        session_id: String,
         diff: String,
-        scroll_offset: u16,
         file_explorer_selected_index: usize,
+        session_id: String,
+        scroll_offset: u16,
     },
 }
 
@@ -272,15 +289,16 @@ impl HelpContext {
                 scroll_offset,
             },
             HelpContext::Diff {
-                session_id,
                 diff,
-                scroll_offset,
                 file_explorer_selected_index,
+                session_id,
+                scroll_offset,
             } => AppMode::Diff {
-                session_id,
                 diff,
-                scroll_offset,
                 file_explorer_selected_index,
+                scroll_cache: None,
+                session_id,
+                scroll_offset,
             },
         }
     }

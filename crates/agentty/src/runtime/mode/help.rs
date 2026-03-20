@@ -202,6 +202,7 @@ mod tests {
             AppMode::Diff {
                 ref session_id,
                 ref diff,
+                scroll_cache: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
             } if session_id == "s1" && diff == "diff content"
