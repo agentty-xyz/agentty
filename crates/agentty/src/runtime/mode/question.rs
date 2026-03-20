@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 
 use crate::app::{App, AppEvent};
 use crate::domain::input::InputState;
+use crate::domain::session::Status;
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPrompt;
 use crate::infra::file_index;
@@ -20,7 +21,8 @@ const NO_ANSWER: &str = "no answer";
 /// `Tab` toggles focus between the question panel and the chat output for
 /// scrolling. When chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
 /// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
-/// typed answer (or `no answer` when blank), `Esc` skips the current question.
+/// typed answer (or `no answer` when blank), and `Esc` ends the entire turn
+/// without sending a reply, reverting the session to `Review`.
 pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
     if handle_focus_toggle(app, key) {
         return EventResult::Continue;
@@ -40,6 +42,7 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
 
     match action {
         QuestionAction::Submit(response) => submit_response(app, response).await,
+        QuestionAction::EndTurn => end_turn_no_answer(app).await,
         QuestionAction::Continue => sync_question_at_mention_state(app),
     }
 
@@ -226,6 +229,9 @@ pub(crate) fn default_option_index(
 /// Semantic action emitted by one question-mode key event.
 enum QuestionAction {
     Submit(String),
+    /// Ends the entire question turn, filling all remaining questions with
+    /// `no answer`.
+    EndTurn,
     Continue,
 }
 
@@ -255,7 +261,7 @@ fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionActio
         let is_navigating_options = selected_option_index.is_some();
 
         match key.code {
-            KeyCode::Esc => QuestionAction::Submit(NO_ANSWER.to_string()),
+            KeyCode::Esc => QuestionAction::EndTurn,
             KeyCode::Enter | KeyCode::Char('\r' | '\n')
                 if !is_navigating_options && input_key::should_insert_newline(key) =>
             {
@@ -665,6 +671,47 @@ async fn submit_response(app: &mut App, response: String) {
         .await;
 }
 
+/// Ends the question turn without sending a reply to the agent.
+///
+/// Triggered by `Esc`. The session status is reverted to `Review` so the
+/// user can inspect the current diff or start a new follow-up manually.
+/// If the database write fails the mode stays on `Question` so the user
+/// can retry, avoiding a split between persisted and in-memory state.
+async fn end_turn_no_answer(app: &mut App) {
+    let AppMode::Question { session_id, .. } = &app.mode else {
+        return;
+    };
+
+    let session_id = session_id.clone();
+
+    if app
+        .services
+        .db()
+        .update_session_status(&session_id, &Status::Review.to_string())
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    if let Some(session) = app
+        .sessions
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = Status::Review;
+    }
+
+    app.mode = AppMode::View {
+        done_session_output_mode: DoneSessionOutputMode::Summary,
+        review_status_message: None,
+        review_text: None,
+        session_id,
+        scroll_offset: None,
+    };
+}
+
 /// Writes one response into question mode and returns completion payload when
 /// all questions are answered.
 fn store_question_response(
@@ -800,26 +847,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_skips_question_with_no_answer() {
-        // Arrange
+    async fn test_handle_escape_ends_turn_and_transitions_to_view() {
+        // Arrange — two unanswered questions. Esc should cancel the question
+        // turn and transition to View without sending a reply.
         let mut app = new_test_app().await;
         app.mode = AppMode::Question {
             at_mention_state: None,
-            session_id: "missing-session".to_string(),
+            session_id: "session-esc".to_string(),
             questions: vec![
                 QuestionItem {
-                    options: vec!["Detailed".to_string(), "Brief".to_string()],
-                    text: "Need design details?".to_string(),
+                    options: vec!["Yes".to_string(), "No".to_string()],
+                    text: "First question?".to_string(),
                 },
                 QuestionItem {
-                    options: vec!["Yes".to_string(), "No".to_string()],
-                    text: "Need acceptance tests?".to_string(),
+                    options: vec!["A".to_string(), "B".to_string()],
+                    text: "Second question?".to_string(),
                 },
             ],
             responses: Vec::new(),
             current_index: 0,
             focus: QuestionFocus::Answer,
-            input: InputState::with_text("typed answer".to_string()),
+            input: InputState::with_text("partial answer".to_string()),
             scroll_offset: None,
             selected_option_index: Some(0),
         };
@@ -832,16 +880,78 @@ mod tests {
         )
         .await;
 
-        // Assert
+        // Assert — transitions to View mode with no reply sent.
         assert!(matches!(
             app.mode,
-            AppMode::Question {
-                current_index: 1,
-                ref responses,
-                ref input,
+            AppMode::View {
+                ref session_id,
+                done_session_output_mode: DoneSessionOutputMode::Summary,
                 ..
-            } if responses == &vec![NO_ANSWER.to_string()] && input.text().is_empty()
+            } if session_id == "session-esc"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_escape_sets_in_memory_session_status_to_review() {
+        // Arrange — session exists in memory with Question status. Esc should
+        // revert it to Review.
+        use std::path::PathBuf;
+
+        use crate::domain::agent::AgentModel;
+        use crate::domain::session::{Session, SessionSize, SessionStats};
+
+        let mut app = new_test_app().await;
+        let session_id = "session-review-check";
+        app.sessions.sessions.push(Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            folder: PathBuf::from("/tmp/test"),
+            id: session_id.to_string(),
+            model: AgentModel::Gemini3FlashPreview,
+            output: String::new(),
+            project_name: String::new(),
+            prompt: String::new(),
+            published_upstream_ref: None,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Question,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        });
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            session_id: session_id.to_string(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Q?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — session status updated to Review in memory.
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session should exist");
+        assert_eq!(session.status, Status::Review);
     }
 
     #[tokio::test]

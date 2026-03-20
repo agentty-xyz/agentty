@@ -2275,9 +2275,7 @@ impl App {
         working_dir: &Path,
         git_branch: Option<&str>,
     ) -> Option<String> {
-        if git_branch.is_none() {
-            return None;
-        }
+        git_branch?;
 
         git_client
             .current_upstream_reference(working_dir.to_path_buf())

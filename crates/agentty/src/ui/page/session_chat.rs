@@ -586,7 +586,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
     } else {
         ("", 0)
     };
-    let input_placeholder = "Type custom answer (Enter: send, Esc: skip)";
+    let input_placeholder = "Type answer (Enter: send, Esc: end turn)";
     let available_above = usize::from(chunks[3].y.saturating_sub(bottom_area.y));
     let at_mention_max_visible = available_above
         .saturating_sub(2)
@@ -633,11 +633,7 @@ fn render_question_help_footer(f: &mut Frame, area: Rect, help_height: u16, focu
     help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
 
     if !is_chat_focused {
-        help_actions.push(help_action::HelpAction::new(
-            "skip",
-            "Esc",
-            "Skip (no answer)",
-        ));
+        help_actions.push(help_action::HelpAction::new("end turn", "Esc", "End turn"));
     }
 
     let help_para = Paragraph::new(help_action::footer_line(&help_actions))

@@ -163,7 +163,7 @@ When predefined options are shown:
 | `j` / `k` / `Up` / `Down` | Navigate options |
 | `Enter` | Choose highlighted option |
 | `Tab` | Switch focus to chat output for scrolling |
-| `Esc` | Skip current question (`no answer`) |
+| `Esc` | End turn — return to review without answering |
 
 ## Question Input — Free Text
 
@@ -174,7 +174,7 @@ After moving above or below the predefined option list, or when no predefined op
 | `Enter` | Submit typed response |
 | `Alt+Enter` or `Shift+Enter` | Insert newline |
 | `Ctrl+J` / `Ctrl+M` | Insert newline (macOS terminal compat) |
-| `Esc` | Skip current question (`no answer`) |
+| `Esc` | End turn — return to review without answering |
 | `Left` / `Right` | Move cursor |
 | `Up` / `Down` | Move cursor across wrapped lines |
 | `Backspace` / `Delete` | Delete character |
@@ -203,6 +203,7 @@ When chat output is focused (press `Tab` to switch):
 | `Tab` | Switch focus back to answer input |
 
 <a id="usage-question-input-submit-flow"></a>
-After the last question is answered (or skipped), Agentty sends one follow-up
-message to the session with each question and its response, then returns to
-session view.
+After the last question is answered, Agentty sends one follow-up message to the
+session with each question and its response, then returns to session view.
+Pressing `Esc` at any point ends the turn immediately without sending a reply
+and returns the session to review.
