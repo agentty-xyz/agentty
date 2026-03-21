@@ -602,7 +602,10 @@ async fn apply_successful_turn_result(
         .update_session_summary(&context.session_id, &summary_text)
         .await;
 
-    if let Some(summary_output) = build_summary_transcript_output(&assistant_message) {
+    let summary_prefix = summary_transcript_prefix(&context.output);
+    if let Some(summary_output) =
+        build_summary_transcript_output(&assistant_message, &summary_prefix)
+    {
         SessionTaskService::append_session_output(
             &context.output,
             &context.db,
@@ -734,6 +737,27 @@ async fn load_project_model_setting(
         .and_then(|setting_value| AgentModel::from_str(&setting_value).ok())
 }
 
+/// Returns the spacer that should precede the summary transcript block.
+///
+/// Summary markdown should stay visually separated from any previously
+/// streamed assistant text. When the current transcript already ends with a
+/// blank line, no extra spacing is needed.
+fn summary_transcript_prefix(output: &Arc<Mutex<String>>) -> String {
+    let Ok(output) = output.lock() else {
+        return String::new();
+    };
+
+    if output.is_empty() || output.ends_with("\n\n") {
+        return String::new();
+    }
+
+    if output.ends_with('\n') {
+        return "\n".to_string();
+    }
+
+    "\n\n".to_string()
+}
+
 /// Builds the persisted transcript chunk for one parsed assistant response.
 ///
 /// Prefers the top-level `answer` text so normal chat output stays concise.
@@ -795,8 +819,12 @@ fn persisted_session_summary_payload(assistant_message: &agent::AgentResponse) -
 ///
 /// Returns `None` only when no summary struct is present on the response.
 /// Empty fields fall back to `"No changes"` so sections stay visually
-/// consistent even when both fields are empty.
-fn build_summary_transcript_output(assistant_message: &agent::AgentResponse) -> Option<String> {
+/// consistent even when both fields are empty. `summary_prefix` is prepended
+/// when the existing transcript needs extra spacing before the summary block.
+fn build_summary_transcript_output(
+    assistant_message: &agent::AgentResponse,
+    summary_prefix: &str,
+) -> Option<String> {
     let summary = assistant_message.summary.as_ref()?;
     let turn = summary.turn.trim();
     let session = summary.session.trim();
@@ -809,7 +837,7 @@ fn build_summary_transcript_output(assistant_message: &agent::AgentResponse) -> 
     };
 
     Some(format!(
-        "## Change Summary\n### Current Turn\n{turn_text}\n\n### Session \
+        "{summary_prefix}## Change Summary\n### Current Turn\n{turn_text}\n\n### Session \
          Changes\n{session_text}\n\n"
     ))
 }
@@ -1404,6 +1432,72 @@ mod tests {
         assert!(output.contains("- Active review now reloads summary from persistence."));
     }
 
+    #[tokio::test]
+    /// Verifies streamed assistant text is separated from the appended summary
+    /// block even when the stream ended without a trailing newline.
+    async fn test_apply_turn_result_separates_summary_from_streamed_output() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "sess1",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let output = Arc::new(Mutex::new("Hey! How can I help you today?".to_string()));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            db,
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::clone(&output),
+            session_id: "sess1".to_string(),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = Ok(TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Hey! How can I help you today?".to_string(),
+                questions: Vec::new(),
+                summary: Some(AgentResponseSummary {
+                    turn: "No changes".to_string(),
+                    session: "No changes".to_string(),
+                }),
+            },
+            context_reset: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: None,
+        });
+
+        // Act
+        let status =
+            apply_turn_result(&context, AgentModel::Gemini3FlashPreview, turn_result, true)
+                .await
+                .expect("turn result should succeed");
+        let output = output.lock().expect("output lock poisoned");
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert!(output.contains("Hey! How can I help you today?\n\n## Change Summary"));
+    }
+
     #[test]
     /// Formats a populated summary payload as a markdown transcript block.
     fn test_build_summary_transcript_output_returns_formatted_markdown() {
@@ -1418,7 +1512,7 @@ mod tests {
         };
 
         // Act
-        let output = build_summary_transcript_output(&assistant_message);
+        let output = build_summary_transcript_output(&assistant_message, "");
 
         // Assert
         assert_eq!(
@@ -1442,7 +1536,7 @@ mod tests {
         };
 
         // Act
-        let output = build_summary_transcript_output(&assistant_message);
+        let output = build_summary_transcript_output(&assistant_message, "");
 
         // Assert
         assert_eq!(output, None);
@@ -1463,7 +1557,7 @@ mod tests {
         };
 
         // Act
-        let output = build_summary_transcript_output(&assistant_message);
+        let output = build_summary_transcript_output(&assistant_message, "");
 
         // Assert
         let text = output.expect("should return some output when summary struct is present");
@@ -1485,7 +1579,7 @@ mod tests {
         };
 
         // Act
-        let output = build_summary_transcript_output(&assistant_message);
+        let output = build_summary_transcript_output(&assistant_message, "");
 
         // Assert
         let text = output.expect("should return some output");
@@ -1507,12 +1601,59 @@ mod tests {
         };
 
         // Act
-        let output = build_summary_transcript_output(&assistant_message);
+        let output = build_summary_transcript_output(&assistant_message, "");
 
         // Assert
         let text = output.expect("should return some output");
         assert!(text.contains("- Fixed the bug."));
         assert!(text.contains("No changes"));
+    }
+
+    #[test]
+    /// Includes the requested leading spacer before the summary heading.
+    fn test_build_summary_transcript_output_includes_requested_prefix() {
+        // Arrange
+        let assistant_message = AgentResponse {
+            answer: String::new(),
+            questions: Vec::new(),
+            summary: Some(AgentResponseSummary {
+                turn: "- Fixed the bug.".to_string(),
+                session: "- Session summary stays readable.".to_string(),
+            }),
+        };
+
+        // Act
+        let output = build_summary_transcript_output(&assistant_message, "\n\n");
+
+        // Assert
+        assert_eq!(
+            output,
+            Some(
+                "\n\n## Change Summary\n### Current Turn\n- Fixed the bug.\n\n### Session \
+                 Changes\n- Session summary stays readable.\n\n"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    /// Returns only the spacing needed to keep the summary block separated
+    /// from existing transcript output.
+    fn test_summary_transcript_prefix_matches_existing_spacing() {
+        // Arrange
+        let no_spacing_needed = Arc::new(Mutex::new("answer\n\n".to_string()));
+        let single_newline = Arc::new(Mutex::new("answer\n".to_string()));
+        let no_newline = Arc::new(Mutex::new("answer".to_string()));
+
+        // Act
+        let no_spacing_prefix = summary_transcript_prefix(&no_spacing_needed);
+        let single_newline_prefix = summary_transcript_prefix(&single_newline);
+        let no_newline_prefix = summary_transcript_prefix(&no_newline);
+
+        // Assert
+        assert_eq!(no_spacing_prefix, "");
+        assert_eq!(single_newline_prefix, "\n");
+        assert_eq!(no_newline_prefix, "\n\n");
     }
 
     #[tokio::test]
