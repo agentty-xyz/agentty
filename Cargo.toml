@@ -17,6 +17,7 @@ homepage = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
 ag-forge = { path = "crates/ag-forge", version = "0.6.7" }
+ag-tui-test = { path = "crates/ag-tui-test", version = "0.6.7" }
 agent-client-protocol = "0.10.2"
 arboard = { version = "3", features = ["image-data"] }
 askama = "0.15.4"
@@ -27,6 +28,7 @@ dirs = "6.0"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 mockall = "0.14"
+portable-pty = "0.9"
 pulldown-cmark = "0.13.1"
 ratatui = "0.30.0"
 schemars = { version = "1", features = ["derive"] }
@@ -43,6 +45,7 @@ tracing-subscriber = "0.3"
 unicode-width = "0.2"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+vt100 = "0.16"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
