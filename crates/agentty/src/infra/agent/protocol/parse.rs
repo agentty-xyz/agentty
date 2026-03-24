@@ -32,8 +32,10 @@ pub(crate) fn normalize_turn_response(
 ///
 /// When a provider prepends stray prose before the final schema object, this
 /// still recovers the trailing protocol payload as long as nothing except
-/// whitespace follows the JSON object. Top-level fields may rely on the wire
-/// type's defaults.
+/// whitespace follows the JSON object. As a further resilience fallback,
+/// markdown code fences wrapping the JSON object are stripped before parsing
+/// when neither direct parsing nor trailing-object recovery succeeds.
+/// Top-level fields may rely on the wire type's defaults.
 ///
 /// # Errors
 /// Returns [`AgentResponseParseError`] when no valid protocol payload is found.
@@ -45,11 +47,16 @@ pub(crate) fn parse_agent_response_strict(
         return Err(AgentResponseParseError::Empty);
     }
 
-    let Some(response) = parse_structured_json_response_with_recovery(trimmed) else {
-        return Err(AgentResponseParseError::InvalidFormat);
-    };
+    if let Some(response) = parse_structured_json_response_with_recovery(trimmed) {
+        return Ok(response);
+    }
 
-    Ok(response)
+    if let Some(inner) = strip_markdown_code_fence(trimmed) {
+        return parse_structured_json_response(inner)
+            .map_err(|_| AgentResponseParseError::InvalidFormat);
+    }
+
+    Err(AgentResponseParseError::InvalidFormat)
 }
 
 /// Normalizes one streamed assistant chunk for transcript display.
@@ -118,6 +125,22 @@ fn recover_embedded_structured_json_response(raw: &str) -> Option<AgentResponse>
     }
 
     None
+}
+
+/// Strips a leading markdown code fence and trailing closing fence from a
+/// trimmed response payload, returning the inner content if the pattern
+/// matches.
+fn strip_markdown_code_fence(trimmed: &str) -> Option<&str> {
+    let rest = trimmed.strip_prefix("```")?;
+    let body_start = rest.find('\n').map(|index| index + 1)?;
+    let body = &rest[body_start..];
+    let inner = body.strip_suffix("```")?.trim();
+
+    if inner.is_empty() {
+        return None;
+    }
+
+    Some(inner)
 }
 
 /// Returns whether one stream chunk looks like partial protocol JSON payload.
@@ -374,9 +397,8 @@ mod tests {
     }
 
     #[test]
-    /// Strict parsing rejects code-fenced JSON because the full response must
-    /// be the schema object itself.
-    fn test_parse_agent_response_strict_rejects_code_fenced_payload() {
+    /// Strict parsing strips code fences and recovers the inner JSON payload.
+    fn test_parse_agent_response_strict_strips_code_fenced_payload() {
         // Arrange
         let raw = concat!(
             "```json\n",
@@ -388,7 +410,51 @@ mod tests {
         let response = parse_agent_response_strict(raw);
 
         // Assert
-        assert_eq!(response, Err(AgentResponseParseError::InvalidFormat));
+        assert_eq!(
+            response.expect("response should parse").answer,
+            "Need details."
+        );
+    }
+
+    #[test]
+    /// Strict parsing strips code fences even when leading/trailing whitespace
+    /// surrounds the fenced block.
+    fn test_parse_agent_response_strict_strips_code_fenced_payload_with_whitespace() {
+        // Arrange
+        let raw = concat!(
+            "\n\n```json\n",
+            r#"{"answer":"Recovered.","questions":[],"summary":null}"#,
+            "\n```\n"
+        );
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(
+            response.expect("response should parse").answer,
+            "Recovered."
+        );
+    }
+
+    #[test]
+    /// Strict parsing strips plain code fences without a language tag.
+    fn test_parse_agent_response_strict_strips_plain_code_fenced_payload() {
+        // Arrange
+        let raw = concat!(
+            "```\n",
+            r#"{"answer":"Plain fence.","questions":[],"summary":null}"#,
+            "\n```"
+        );
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(
+            response.expect("response should parse").answer,
+            "Plain fence."
+        );
     }
 
     #[test]

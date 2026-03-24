@@ -57,3 +57,26 @@ Session review-request publication and refresh follow this rule directly:
 `SessionManager` combines `GitClient` with `ReviewRequestClient` so tests can
 cover branch publish, duplicate detection, stored-link reuse, and archived
 session refresh without live forge auth or network state.
+
+## TUI E2E Testing Framework (`ag-tui-test`)
+
+<a id="architecture-tui-e2e-framework"></a>
+The `ag-tui-test` workspace crate provides a dual-oracle model for TUI end-to-end
+testing. The PTY path (`portable-pty` + `vt100`) is the semantic oracle for text,
+style, and location assertions; the VHS path is the visual oracle and review
+artifact generator.
+
+| Module | Purpose |
+|--------|---------|
+| `session` | PTY executor: spawns binaries in a pseudo-terminal, writes input, captures ANSI output. |
+| `frame` | Terminal frame parser: converts ANSI bytes into a cell grid with text, color, and style access. |
+| `region` | Rectangular region definitions with named anchors (top row, footer, quadrants, percentages). |
+| `locator` | Text locators with style/color filtering for identifying TUI controls. |
+| `assertion` | Structured matcher APIs: `assert_text_in_region`, `assert_span_is_highlighted`, `assert_match_count`. |
+| `recipe` | Agent-friendly helpers: `expect_selected_tab`, `expect_keybinding_hint`, `expect_dialog_title`. |
+| `scenario` / `step` | Scenario DSL: compose user journeys from steps, compile to PTY or VHS. |
+| `vhs` | VHS tape compiler: generates `.tape` files from scenarios for visual screenshot capture. |
+| `calibration` | Cell-to-pixel geometry mapping for screenshot overlays. |
+| `overlay` | Bounding box and indicator rendering onto screenshot PNGs. |
+| `snapshot` | Paired baseline workflow: visual PNG + semantic frame sidecar with environment-driven update mode. |
+| `artifact` | Artifact directory management for test captures and failure diagnostics. |
