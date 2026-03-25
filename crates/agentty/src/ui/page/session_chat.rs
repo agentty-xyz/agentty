@@ -556,26 +556,43 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         ])
         .split(bottom_area);
 
+    let is_chat_focused = focus == QuestionFocus::Chat;
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
     if panel_layout.question_height > 0 {
+        let title_color = if is_chat_focused {
+            style::palette::TEXT_MUTED
+        } else {
+            style::palette::QUESTION
+        };
         let title_line = Line::from(Span::styled(
             &question_title,
             Style::default()
-                .fg(style::palette::QUESTION)
+                .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         ));
+        let text_color = if is_chat_focused {
+            style::palette::TEXT_MUTED
+        } else {
+            Color::Yellow
+        };
         let mut lines = vec![title_line];
         lines.extend(
             wrap_lines(question, usize::from(bottom_area.width.max(1)))
                 .into_iter()
-                .map(|line| line.style(Style::default().fg(Color::Yellow))),
+                .map(|line| line.style(Style::default().fg(text_color))),
         );
         let question_para = Paragraph::new(lines);
         f.render_widget(question_para, chunks[0]);
     }
 
     if options_height > 0 {
-        render_question_options(f, chunks[1], options, selected_option_index);
+        render_question_options(
+            f,
+            chunks[1],
+            options,
+            selected_option_index,
+            is_chat_focused,
+        );
     }
 
     // Always render the input widget so the panel height stays stable
@@ -605,7 +622,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
     };
     let chat_input = ChatInput::new("Answer", display_text, display_cursor)
         .placeholder(input_placeholder)
-        .active(is_free_text_mode);
+        .active(is_free_text_mode && !is_chat_focused);
     if panel_layout.input_height > 0 {
         chat_input.render(f, chunks[3]);
     }
@@ -757,18 +774,26 @@ fn render_question_options(
     area: Rect,
     options: &[String],
     selected_option_index: Option<usize>,
+    dimmed: bool,
 ) {
     let mut lines: Vec<Line<'_>> = Vec::with_capacity(options.len() + 1);
+    let header_color = if dimmed {
+        style::palette::TEXT_MUTED
+    } else {
+        Color::Yellow
+    };
     lines.push(Line::from(Span::styled(
         "Options:",
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(header_color),
     )));
 
     for (option_index, option_text) in options.iter().enumerate() {
         let is_selected = selected_option_index == Some(option_index);
         let prefix = if is_selected { "▸ " } else { "  " };
         let label = format!("{prefix}{}. {option_text}", option_index + 1);
-        let style = if is_selected {
+        let style = if dimmed {
+            Style::default().fg(style::palette::TEXT_MUTED)
+        } else if is_selected {
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
