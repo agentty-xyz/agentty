@@ -22,25 +22,43 @@ use ag_tui_test::recipe;
 use ag_tui_test::region::Region;
 use ag_tui_test::scenario::Scenario;
 use ag_tui_test::session::PtySessionBuilder;
+use ag_tui_test::snapshot::{self, SnapshotConfig};
 
 /// Return the path to the compiled agentty binary.
 fn binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_agentty"))
 }
 
+/// Build a [`SnapshotConfig`] with baselines committed alongside the tests
+/// and failure artifacts written under the workspace `target/` directory.
+fn snapshot_config() -> SnapshotConfig {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let baselines_dir = manifest_dir.join("tests").join("e2e_baselines");
+    let artifacts_dir = manifest_dir.join("tests").join("e2e_artifacts");
+
+    SnapshotConfig::new(baselines_dir, artifacts_dir)
+}
+
 /// Create a `PtySessionBuilder` with a clean isolated environment.
 ///
-/// Sets `AGENTTY_ROOT` to a temporary directory and uses 80x24 terminal.
-fn test_builder(temp_root: &std::path::Path) -> PtySessionBuilder {
+/// Sets `AGENTTY_ROOT` to a temporary directory, creates a deterministic
+/// `test-project` working directory so frame snapshots are stable across
+/// machines, and uses 80x24 terminal.
+///
+/// # Errors
+///
+/// Returns an error if directory creation fails.
+fn test_builder(temp_root: &std::path::Path) -> std::io::Result<PtySessionBuilder> {
     let agentty_root = temp_root.join("agentty_root");
     let workdir = temp_root.join("test-project");
 
-    std::fs::create_dir_all(&agentty_root).ok();
-    std::fs::create_dir_all(&workdir).ok();
+    std::fs::create_dir_all(&agentty_root)?;
+    std::fs::create_dir_all(&workdir)?;
 
-    PtySessionBuilder::new(binary_path())
+    Ok(PtySessionBuilder::new(binary_path())
         .size(80, 24)
         .env("AGENTTY_ROOT", agentty_root.to_string_lossy())
+        .workdir(workdir))
 }
 
 /// Verify that agentty startup renders the Projects tab as selected.
@@ -51,21 +69,24 @@ fn test_builder(temp_root: &std::path::Path) -> PtySessionBuilder {
 #[ignore = "requires agentty binary — run with: cargo test --test e2e -- --ignored"]
 fn startup_shows_projects_tab() {
     // Arrange
-    let temp = tempfile::TempDir::new().ok();
-    let Some(temp) = &temp else { return };
-    let builder = test_builder(temp.path());
+    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let builder = test_builder(temp.path()).expect("failed to create test builder");
 
     let scenario = Scenario::new("startup")
         .wait_for_stable_frame(500, 5000)
         .capture();
 
     // Act
-    let result = scenario.run(builder);
+    let frame = scenario.run(builder).expect("scenario execution failed");
 
     // Assert
-    if let Ok(frame) = result {
-        recipe::expect_selected_tab(&frame, "Projects");
-    }
+    recipe::expect_selected_tab(&frame, "Projects");
+    snapshot::assert_frame_snapshot_matches(
+        &snapshot_config(),
+        "startup_projects_tab",
+        &frame.all_text(),
+    )
+    .expect("frame snapshot should match baseline");
 }
 
 /// Verify that Tab key switches between tabs.
@@ -76,9 +97,8 @@ fn startup_shows_projects_tab() {
 #[ignore = "requires agentty binary — run with: cargo test --test e2e -- --ignored"]
 fn tab_key_switches_tabs() {
     // Arrange
-    let temp = tempfile::TempDir::new().ok();
-    let Some(temp) = &temp else { return };
-    let builder = test_builder(temp.path());
+    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let builder = test_builder(temp.path()).expect("failed to create test builder");
 
     let scenario = Scenario::new("tab_switch")
         .wait_for_stable_frame(500, 5000)
@@ -87,14 +107,11 @@ fn tab_key_switches_tabs() {
         .capture();
 
     // Act
-    let result = scenario.run(builder);
+    let frame = scenario.run(builder).expect("scenario execution failed");
 
-    // Assert
-    if let Ok(frame) = result {
-        // After pressing Tab, "Sessions" should be selected.
-        recipe::expect_selected_tab(&frame, "Sessions");
-        recipe::expect_unselected_tab(&frame, "Projects");
-    }
+    // Assert — after pressing Tab, "Sessions" should be selected.
+    recipe::expect_selected_tab(&frame, "Sessions");
+    recipe::expect_unselected_tab(&frame, "Projects");
 }
 
 /// Verify that the footer shows keybinding hints on startup.
@@ -102,25 +119,21 @@ fn tab_key_switches_tabs() {
 #[ignore = "requires agentty binary — run with: cargo test --test e2e -- --ignored"]
 fn startup_shows_footer_hints() {
     // Arrange
-    let temp = tempfile::TempDir::new().ok();
-    let Some(temp) = &temp else { return };
-    let builder = test_builder(temp.path());
+    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+    let builder = test_builder(temp.path()).expect("failed to create test builder");
 
     let scenario = Scenario::new("footer_hints")
         .wait_for_stable_frame(500, 5000)
         .capture();
 
     // Act
-    let result = scenario.run(builder);
+    let frame = scenario.run(builder).expect("scenario execution failed");
 
     // Assert
-    if let Ok(frame) = result {
-        let footer = Region::footer(frame.cols(), frame.rows());
-        let footer_text = frame.text_in_region(&footer);
-        // Footer should contain at least some keybinding hints.
-        assert!(
-            !footer_text.trim().is_empty(),
-            "Footer should contain keybinding hints"
-        );
-    }
+    let footer = Region::footer(frame.cols(), frame.rows());
+    let footer_text = frame.text_in_region(&footer);
+    assert!(
+        !footer_text.trim().is_empty(),
+        "Footer should contain keybinding hints"
+    );
 }

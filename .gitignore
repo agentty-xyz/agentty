@@ -2,5 +2,7 @@
 .agentty/
 docs/site/public/
 
-# E2E test artifacts (actual screenshots saved on comparison failure)
+# E2E test artifacts (actual screenshots and frame dumps saved on comparison failure)
 *_actual.png
+*_frame_actual.txt
+**/e2e_artifacts/

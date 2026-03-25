@@ -30,6 +30,8 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(500);
 /// The session owns the PTY child process and provides methods to send
 /// input, wait for output, and capture terminal frames for assertion.
 pub struct PtySession {
+    /// Path to the binary being driven.
+    binary_path: PathBuf,
     /// Number of columns in the terminal grid.
     cols: u16,
     /// Number of rows in the terminal grid.
@@ -40,8 +42,8 @@ pub struct PtySession {
     writer: Box<dyn Write + Send>,
     /// Receiver for output bytes read from the PTY in a background thread.
     output_receiver: mpsc::Receiver<Vec<u8>>,
-    /// The child process handle.
-    _child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// The child process handle, killed on drop.
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 impl PtySession {
@@ -52,14 +54,15 @@ impl PtySession {
     /// Returns an error if the PTY cannot be created or the binary cannot
     /// be spawned.
     pub fn spawn(binary_path: &Path) -> Result<Self, PtySessionError> {
-        Self::spawn_with_size(binary_path, DEFAULT_COLS, DEFAULT_ROWS, &[])
+        Self::spawn_with_size(binary_path, DEFAULT_COLS, DEFAULT_ROWS, &[], None)
     }
 
-    /// Spawn a binary in a new PTY session with custom dimensions and
-    /// environment variables.
+    /// Spawn a binary in a new PTY session with custom dimensions,
+    /// environment variables, and an optional working directory.
     ///
     /// Each entry in `env_vars` is a `(key, value)` pair that will be set
-    /// in the child process environment.
+    /// in the child process environment. When `workdir` is `Some`, the
+    /// child process starts in that directory.
     ///
     /// # Errors
     ///
@@ -70,6 +73,7 @@ impl PtySession {
         cols: u16,
         rows: u16,
         env_vars: &[(&str, &str)],
+        workdir: Option<&Path>,
     ) -> Result<Self, PtySessionError> {
         let pty_system = NativePtySystem::default();
 
@@ -83,6 +87,9 @@ impl PtySession {
             .map_err(|err| PtySessionError::PtyCreation(err.to_string()))?;
 
         let mut command = CommandBuilder::new(binary_path);
+        if let Some(directory) = workdir {
+            command.cwd(directory);
+        }
         for (key, value) in env_vars {
             command.env(key, value);
         }
@@ -105,12 +112,13 @@ impl PtySession {
         thread::spawn(move || read_pty_output(reader, &output_sender));
 
         Ok(Self {
+            binary_path: binary_path.to_path_buf(),
             cols,
             rows,
             output_buffer: Vec::new(),
             writer,
             output_receiver,
-            _child: child,
+            child,
         })
     }
 
@@ -295,8 +303,19 @@ impl PtySession {
     }
 
     /// Return the path to the binary being driven.
-    pub fn binary_path(&self) -> Option<&Path> {
-        None
+    pub fn binary_path(&self) -> &Path {
+        &self.binary_path
+    }
+}
+
+/// Terminates the PTY child process on drop to prevent orphan leaks.
+///
+/// Errors from `kill()` and `wait()` are intentionally discarded because the
+/// child may have already exited or been reaped.
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -355,9 +374,11 @@ fn key_to_bytes(key: &str) -> Vec<u8> {
         "pagedown" => vec![0x1b, b'[', b'6', b'~'],
         "space" => vec![b' '],
         other => {
-            // Check for ctrl+ combinations.
+            // Check for ctrl+ combinations (exactly one a–z letter).
             if let Some(character) = other.strip_prefix("ctrl+")
+                && character.len() == 1
                 && let Some(byte) = character.bytes().next()
+                && byte.to_ascii_lowercase().is_ascii_lowercase()
             {
                 // Ctrl+A = 0x01, Ctrl+Z = 0x1a.
                 let ctrl_byte = byte.to_ascii_lowercase() - b'a' + 1;
@@ -382,6 +403,8 @@ pub struct PtySessionBuilder {
     rows: u16,
     /// Environment variables for the child process.
     env_vars: Vec<(String, String)>,
+    /// Optional working directory for the child process.
+    workdir: Option<PathBuf>,
 }
 
 impl PtySessionBuilder {
@@ -392,6 +415,7 @@ impl PtySessionBuilder {
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             env_vars: Vec::new(),
+            workdir: None,
         }
     }
 
@@ -410,6 +434,13 @@ impl PtySessionBuilder {
         self
     }
 
+    /// Set the working directory for the child process.
+    pub fn workdir(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.workdir = Some(directory.into());
+
+        self
+    }
+
     /// Spawn the PTY session with the configured settings.
     ///
     /// # Errors
@@ -423,6 +454,72 @@ impl PtySessionBuilder {
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
 
-        PtySession::spawn_with_size(&self.binary_path, self.cols, self.rows, &env_refs)
+        PtySession::spawn_with_size(
+            &self.binary_path,
+            self.cols,
+            self.rows,
+            &env_refs,
+            self.workdir.as_deref(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_to_bytes_returns_ctrl_a() {
+        // Arrange / Act
+        let bytes = key_to_bytes("ctrl+a");
+
+        // Assert — Ctrl+A = 0x01.
+        assert_eq!(bytes, vec![0x01]);
+    }
+
+    #[test]
+    fn key_to_bytes_returns_ctrl_z() {
+        // Arrange / Act
+        let bytes = key_to_bytes("ctrl+z");
+
+        // Assert — Ctrl+Z = 0x1a.
+        assert_eq!(bytes, vec![0x1a]);
+    }
+
+    #[test]
+    fn key_to_bytes_ctrl_multi_char_falls_through() {
+        // Arrange / Act — "ctrl+ab" must not silently resolve to Ctrl+A.
+        let bytes = key_to_bytes("ctrl+ab");
+
+        // Assert
+        assert_eq!(bytes, "ctrl+ab".as_bytes());
+    }
+
+    #[test]
+    fn key_to_bytes_ctrl_non_alpha_falls_through() {
+        // Arrange / Act — ctrl+[ is not a valid ctrl+letter combination.
+        let bytes = key_to_bytes("ctrl+[");
+
+        // Assert — falls through to raw bytes instead of panicking.
+        assert_eq!(bytes, "ctrl+[".as_bytes());
+    }
+
+    #[test]
+    fn key_to_bytes_known_keys() {
+        // Arrange / Act / Assert
+        assert_eq!(key_to_bytes("enter"), vec![b'\r']);
+        assert_eq!(key_to_bytes("tab"), vec![b'\t']);
+        assert_eq!(key_to_bytes("escape"), vec![0x1b]);
+        assert_eq!(key_to_bytes("backspace"), vec![0x7f]);
+        assert_eq!(key_to_bytes("space"), vec![b' ']);
+    }
+
+    #[test]
+    fn key_to_bytes_unknown_key_returns_raw_bytes() {
+        // Arrange / Act
+        let bytes = key_to_bytes("x");
+
+        // Assert
+        assert_eq!(bytes, vec![b'x']);
     }
 }

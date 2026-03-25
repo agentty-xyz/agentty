@@ -61,13 +61,15 @@ pub fn is_update_mode() -> bool {
 
 /// Compare an actual screenshot against its stored baseline.
 ///
-/// In update mode (or when no baseline exists), saves the actual as the
-/// new baseline. Otherwise, performs pixel-level comparison and returns
-/// an error if the difference exceeds the configured threshold.
+/// In update mode, saves the actual as the new baseline. When not in
+/// update mode a committed baseline must already exist — a missing
+/// baseline is treated as an error so CI never silently passes without
+/// a reference.
 ///
 /// # Errors
 ///
-/// Returns an error if the images differ beyond tolerance or if I/O fails.
+/// Returns an error if the baseline is missing (outside update mode),
+/// the images differ beyond tolerance, or if I/O fails.
 pub fn assert_snapshot_matches(
     config: &SnapshotConfig,
     name: &str,
@@ -80,11 +82,18 @@ pub fn assert_snapshot_matches(
 
     let baseline_path = config.baseline_dir.join(format!("{name}.png"));
 
-    if is_update_mode() || !baseline_path.exists() {
+    if is_update_mode() {
         fs::copy(actual_screenshot, &baseline_path)
             .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
         return Ok(());
+    }
+
+    if !baseline_path.exists() {
+        return Err(SnapshotError::MissingBaseline {
+            name: name.to_string(),
+            baseline_path,
+        });
     }
 
     let diff_percent =
@@ -93,7 +102,8 @@ pub fn assert_snapshot_matches(
     if diff_percent > config.diff_percent_threshold {
         // Save the actual screenshot as a failure artifact.
         let actual_artifact = config.artifact_dir.join(format!("{name}_actual.png"));
-        let _ = fs::copy(actual_screenshot, &actual_artifact);
+        fs::copy(actual_screenshot, &actual_artifact)
+            .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
         return Err(SnapshotError::Mismatch {
             name: name.to_string(),
@@ -109,12 +119,15 @@ pub fn assert_snapshot_matches(
 
 /// Compare a frame text dump against its stored semantic baseline.
 ///
-/// In update mode (or when no baseline exists), saves the actual dump as
-/// the new baseline. Otherwise, compares exact text content.
+/// In update mode, saves the actual dump as the new baseline. When not
+/// in update mode a committed baseline must already exist — a missing
+/// baseline is treated as an error so CI never silently passes without
+/// a reference.
 ///
 /// # Errors
 ///
-/// Returns an error if the text differs or if I/O fails.
+/// Returns an error if the baseline is missing (outside update mode),
+/// the text differs, or if I/O fails.
 pub fn assert_frame_snapshot_matches(
     config: &SnapshotConfig,
     name: &str,
@@ -122,14 +135,23 @@ pub fn assert_frame_snapshot_matches(
 ) -> Result<(), SnapshotError> {
     fs::create_dir_all(&config.baseline_dir)
         .map_err(|err| SnapshotError::IoError(err.to_string()))?;
+    fs::create_dir_all(&config.artifact_dir)
+        .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
     let baseline_path = config.baseline_dir.join(format!("{name}_frame.txt"));
 
-    if is_update_mode() || !baseline_path.exists() {
+    if is_update_mode() {
         fs::write(&baseline_path, actual_text)
             .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
         return Ok(());
+    }
+
+    if !baseline_path.exists() {
+        return Err(SnapshotError::MissingBaseline {
+            name: name.to_string(),
+            baseline_path,
+        });
     }
 
     let expected_text = fs::read_to_string(&baseline_path)
@@ -137,7 +159,8 @@ pub fn assert_frame_snapshot_matches(
 
     if actual_text != expected_text {
         let actual_artifact = config.artifact_dir.join(format!("{name}_frame_actual.txt"));
-        let _ = fs::write(&actual_artifact, actual_text);
+        fs::write(&actual_artifact, actual_text)
+            .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
         return Err(SnapshotError::FrameMismatch {
             name: name.to_string(),
@@ -170,6 +193,19 @@ pub enum SnapshotError {
         baseline_path: PathBuf,
         /// Path to the saved actual file.
         actual_path: PathBuf,
+    },
+
+    /// No committed baseline file found (outside update mode).
+    #[error(
+        "Missing baseline for '{name}'. Run with {UPDATE_ENV_VAR}=1 to create it.\n\
+         Expected: {}",
+        baseline_path.display()
+    )]
+    MissingBaseline {
+        /// Name of the snapshot.
+        name: String,
+        /// Expected baseline file path.
+        baseline_path: PathBuf,
     },
 
     /// Semantic frame text did not match baseline.
@@ -287,60 +323,54 @@ mod tests {
     }
 
     #[test]
-    fn frame_snapshot_creates_baseline_when_missing() {
+    fn frame_snapshot_returns_missing_baseline_error_outside_update_mode() {
         // Arrange
-        let temp = tempfile::TempDir::new().ok();
-        if let Some(temp) = &temp {
-            let config =
-                SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"));
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let config =
+            SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"));
 
-            // Act
-            let result = assert_frame_snapshot_matches(&config, "test", "Hello World");
+        // Act
+        let result = assert_frame_snapshot_matches(&config, "test", "Hello World");
 
-            // Assert
-            assert!(result.is_ok());
-            let baseline = config.baseline_dir.join("test_frame.txt");
-            assert!(baseline.exists());
-        }
+        // Assert
+        assert!(
+            matches!(result, Err(SnapshotError::MissingBaseline { .. })),
+            "expected MissingBaseline error, got {result:?}"
+        );
     }
 
     #[test]
     fn frame_snapshot_matches_identical_content() {
         // Arrange
-        let temp = tempfile::TempDir::new().ok();
-        if let Some(temp) = &temp {
-            let config =
-                SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"));
-            // Create baseline first.
-            let baseline_path = config.baseline_dir.join("test_frame.txt");
-            fs::create_dir_all(&config.baseline_dir).ok();
-            fs::write(&baseline_path, "Hello World").ok();
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let config =
+            SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"));
+        let baseline_path = config.baseline_dir.join("test_frame.txt");
+        fs::create_dir_all(&config.baseline_dir).expect("failed to create baseline dir");
+        fs::write(&baseline_path, "Hello World").expect("failed to write baseline");
 
-            // Act
-            let result = assert_frame_snapshot_matches(&config, "test", "Hello World");
+        // Act
+        let result = assert_frame_snapshot_matches(&config, "test", "Hello World");
 
-            // Assert
-            assert!(result.is_ok());
-        }
+        // Assert
+        assert!(result.is_ok());
     }
 
     #[test]
     fn frame_snapshot_detects_mismatch() {
         // Arrange
-        let temp = tempfile::TempDir::new().ok();
-        if let Some(temp) = &temp {
-            let config =
-                SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"));
-            let baseline_path = config.baseline_dir.join("test_frame.txt");
-            fs::create_dir_all(&config.baseline_dir).ok();
-            fs::write(&baseline_path, "Hello World").ok();
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let config =
+            SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"));
+        let baseline_path = config.baseline_dir.join("test_frame.txt");
+        fs::create_dir_all(&config.baseline_dir).expect("failed to create baseline dir");
+        fs::write(&baseline_path, "Hello World").expect("failed to write baseline");
 
-            // Act
-            let result = assert_frame_snapshot_matches(&config, "test", "Goodbye World");
+        // Act
+        let result = assert_frame_snapshot_matches(&config, "test", "Goodbye World");
 
-            // Assert
-            assert!(result.is_err());
-        }
+        // Assert
+        assert!(result.is_err());
     }
 
     #[test]

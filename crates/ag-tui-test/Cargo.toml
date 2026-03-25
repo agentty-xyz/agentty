@@ -16,4 +16,5 @@ image.workspace = true
 portable-pty.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+unicode-width.workspace = true
 vt100.workspace = true

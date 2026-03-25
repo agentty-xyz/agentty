@@ -5,6 +5,8 @@
 //! colors, and style flags so assertions can inspect terminal state without
 //! screenshot OCR.
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::locator::MatchedSpan;
 use crate::region::Region;
 
@@ -198,19 +200,38 @@ impl TerminalFrame {
     /// Find all occurrences of `needle` in the terminal grid.
     ///
     /// Returns matched spans with their position, style, and color data.
+    /// Uses a byte-offset-to-column mapping so multibyte and wide characters
+    /// are located at the correct terminal column. Returns an empty list when
+    /// `needle` is empty.
     pub fn find_text(&self, needle: &str) -> Vec<MatchedSpan> {
+        if needle.is_empty() {
+            return Vec::new();
+        }
+
         let mut matches = Vec::new();
 
         for row in 0..self.rows() {
-            let row_content = self.row_text(row);
+            let (row_content, byte_to_col) = self.row_text_with_column_map(row);
             let mut search_start = 0;
 
-            while let Some(col_offset) = row_content[search_start..].find(needle) {
-                let col = u16::try_from(search_start + col_offset).unwrap_or(u16::MAX);
-                let span =
-                    self.extract_span(row, col, u16::try_from(needle.len()).unwrap_or(u16::MAX));
+            while let Some(byte_offset) = row_content[search_start..].find(needle) {
+                let match_byte_start = search_start + byte_offset;
+                let match_byte_end = match_byte_start + needle.len();
+
+                let start_col = byte_to_col[match_byte_start];
+                let end_col = byte_to_col[match_byte_end];
+                let span_length = end_col - start_col;
+
+                let span = self.extract_span(row, start_col, span_length);
                 matches.push(span);
-                search_start += col_offset + 1;
+
+                // Advance by one full character to stay on a character
+                // boundary (byte + 1 may land inside a multi-byte char).
+                search_start = match_byte_start
+                    + row_content[match_byte_start..]
+                        .chars()
+                        .next()
+                        .map_or(1, char::len_utf8);
             }
         }
 
@@ -244,6 +265,56 @@ impl TerminalFrame {
         let cell = self.parser.screen().cell(row, col)?;
 
         Some(CellStyle::from_cell(cell))
+    }
+
+    /// Build row text with a parallel byte-offset-to-column mapping.
+    ///
+    /// Returns `(text, byte_to_col)` where `byte_to_col[i]` is the terminal
+    /// column that produced byte `i`. An extra sentinel entry at
+    /// `byte_to_col[text.len()]` holds the column immediately after the last
+    /// cell, enabling end-of-match span calculations. Trailing whitespace is
+    /// trimmed to match [`Self::row_text`] behavior.
+    fn row_text_with_column_map(&self, row: u16) -> (String, Vec<u16>) {
+        let screen = self.parser.screen();
+        let cols = self.cols();
+        let mut text = String::with_capacity(usize::from(cols));
+        let mut byte_to_col = Vec::with_capacity(usize::from(cols) + 1);
+
+        for col in 0..cols {
+            let contents = screen.cell(row, col).map_or("", |cell| cell.contents());
+            if contents.is_empty() {
+                // Wide-char continuation cells produce no bytes.
+                continue;
+            }
+
+            for _ in 0..contents.len() {
+                byte_to_col.push(col);
+            }
+            text.push_str(contents);
+        }
+
+        // Trim trailing whitespace to match row_text().
+        let trimmed_len = text.trim_end().len();
+        text.truncate(trimmed_len);
+        byte_to_col.truncate(trimmed_len);
+
+        // Sentinel: column just past the last cell. Uses the Unicode
+        // display width of the last cell's content to account for wide
+        // characters that occupy two terminal columns.
+        let sentinel = if trimmed_len > 0 {
+            let last_col = byte_to_col[trimmed_len - 1];
+            let last_contents = screen
+                .cell(row, last_col)
+                .map_or("", |cell| cell.contents());
+            let display_width = UnicodeWidthStr::width(last_contents).max(1);
+
+            last_col + u16::try_from(display_width).unwrap_or(1)
+        } else {
+            0
+        };
+        byte_to_col.push(sentinel);
+
+        (text, byte_to_col)
     }
 
     /// Extract a [`MatchedSpan`] for a range of cells on a single row.
@@ -367,6 +438,35 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].rect.col, 0);
         assert_eq!(matches[1].rect.col, 8);
+    }
+
+    #[test]
+    fn find_text_with_empty_needle_returns_empty() {
+        // Arrange
+        let data = b"foo bar";
+        let frame = TerminalFrame::new(80, 24, data);
+
+        // Act
+        let matches = frame.find_text("");
+
+        // Assert
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn find_text_locates_multibyte_utf8_at_correct_column() {
+        // Arrange — "café" has a multi-byte é (2 bytes in UTF-8) but each
+        // character occupies exactly one terminal column.
+        let data = "café ok".as_bytes();
+        let frame = TerminalFrame::new(80, 24, data);
+
+        // Act
+        let matches = frame.find_text("ok");
+
+        // Assert — "ok" starts at terminal column 5, not byte offset 6.
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rect.col, 5);
+        assert_eq!(matches[0].rect.width, 2);
     }
 
     #[test]

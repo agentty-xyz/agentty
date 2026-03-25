@@ -152,53 +152,46 @@ mod tests {
     #[test]
     fn artifact_dir_creates_directory() {
         // Arrange
-        let temp = tempfile::TempDir::new().ok();
-        let temp = temp
-            .as_ref()
-            .map(|temp_dir| temp_dir.path().join("artifacts"));
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let artifact_path = temp.path().join("artifacts");
 
         // Act
-        let dir = temp.as_deref().map(ArtifactDir::new);
+        let dir = ArtifactDir::new(&artifact_path).expect("failed to create artifact dir");
 
         // Assert
-        if let Some(Ok(dir)) = dir {
-            assert!(dir.root().exists());
-        }
+        assert!(dir.root().exists());
     }
 
     #[test]
     fn screenshot_path_uses_name() {
         // Arrange
-        let temp = tempfile::TempDir::new().ok();
-        let dir = temp
-            .as_ref()
-            .and_then(|temp_dir| ArtifactDir::new(temp_dir.path().join("artifacts")).ok());
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let dir =
+            ArtifactDir::new(temp.path().join("artifacts")).expect("failed to create artifact dir");
 
-        // Act / Assert
-        if let Some(dir) = dir {
-            let path = dir.screenshot_path("startup");
-            assert!(path.ends_with("startup.png"));
-        }
+        // Act
+        let path = dir.screenshot_path("startup");
+
+        // Assert
+        assert!(path.ends_with("startup.png"));
     }
 
     #[test]
     fn save_frame_dump_writes_text() {
         // Arrange
-        let temp = tempfile::TempDir::new().ok();
-        let dir = temp
-            .as_ref()
-            .and_then(|temp_dir| ArtifactDir::new(temp_dir.path().join("artifacts")).ok());
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let dir =
+            ArtifactDir::new(temp.path().join("artifacts")).expect("failed to create artifact dir");
         let frame = TerminalFrame::new(80, 24, b"Hello World");
 
-        // Act / Assert
-        if let Some(dir) = dir {
-            let result = dir.save_frame_dump("test", &frame);
-            assert!(result.is_ok());
-            if let Ok(path) = result {
-                let content = fs::read_to_string(path);
-                assert!(content.is_ok_and(|content| content.contains("Hello World")));
-            }
-        }
+        // Act
+        let path = dir
+            .save_frame_dump("test", &frame)
+            .expect("failed to save frame dump");
+
+        // Assert
+        let content = fs::read_to_string(path).expect("failed to read frame dump");
+        assert!(content.contains("Hello World"));
     }
 
     #[test]

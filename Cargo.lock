@@ -27,6 +27,7 @@ dependencies = [
  "portable-pty",
  "tempfile",
  "thiserror 2.0.18",
+ "unicode-width",
  "vt100",
 ]
 

@@ -163,21 +163,32 @@ fn compile_tape(
     let _ = writeln!(tape, "Set Padding 0");
     let _ = writeln!(tape, "Set TypingSpeed 0");
     let _ = writeln!(tape);
-    let _ = writeln!(tape, "Output \"{}\"", gif_path.display());
+    let _ = writeln!(
+        tape,
+        "Output \"{}\"",
+        escape_vhs_double_quote(&gif_path.display().to_string())
+    );
     let _ = writeln!(tape);
 
     // Hidden setup: export environment variables.
     let _ = writeln!(tape, "Hide");
     for (key, value) in env_vars {
-        let _ = writeln!(tape, "Type \"export {key}='{value}'\"");
+        let escaped_value = escape_shell_single_quote(value);
+        let export_cmd = format!("export {key}='{escaped_value}'");
+        let _ = writeln!(tape, "Type \"{}\"", escape_vhs_double_quote(&export_cmd));
         let _ = writeln!(tape, "Enter");
         let _ = writeln!(tape, "Sleep 200ms");
     }
 
-    // Launch the binary.
+    // Launch the binary (shell-quoted for paths with spaces/metacharacters).
     let _ = writeln!(tape, "Show");
     let _ = writeln!(tape);
-    let _ = writeln!(tape, "Type \"{}\"", binary_path.display());
+    let escaped_binary = escape_shell_single_quote(&binary_path.display().to_string());
+    let _ = writeln!(
+        tape,
+        "Type \"{}\"",
+        escape_vhs_double_quote(&format!("'{escaped_binary}'"))
+    );
     let _ = writeln!(tape, "Enter");
     let _ = writeln!(tape);
 
@@ -199,7 +210,7 @@ fn compile_tape(
 fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
     match step {
         Step::WriteText(text) => {
-            let _ = writeln!(tape, "Type \"{text}\"");
+            let _ = writeln!(tape, "Type \"{}\"", escape_vhs_double_quote(text));
         }
         Step::PressKey(key) => {
             let vhs_key = key_to_vhs_command(key);
@@ -215,7 +226,11 @@ fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
         }
         Step::WaitForText { needle, timeout_ms } => {
             let timeout_secs = f64::from(*timeout_ms) / 1000.0;
-            let _ = writeln!(tape, "Wait+Screen \"{needle}\" {timeout_secs:.1}s",);
+            let _ = writeln!(
+                tape,
+                "Wait+Screen \"{}\" {timeout_secs:.1}s",
+                escape_vhs_double_quote(needle)
+            );
         }
         Step::WaitForStableFrame {
             stable_ms,
@@ -226,7 +241,11 @@ fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
             let _ = writeln!(tape, "Sleep {stable_ms}ms");
         }
         Step::Capture => {
-            let _ = writeln!(tape, "Screenshot \"{}\"", screenshot_path.display());
+            let _ = writeln!(
+                tape,
+                "Screenshot \"{}\"",
+                escape_vhs_double_quote(&screenshot_path.display().to_string())
+            );
         }
     }
 }
@@ -249,10 +268,24 @@ fn key_to_vhs_command(key: &str) -> String {
             if let Some(character) = other.strip_prefix("ctrl+") {
                 format!("Ctrl+{}", character.to_uppercase())
             } else {
-                format!("Type \"{other}\"")
+                format!("Type \"{}\"", escape_vhs_double_quote(other))
             }
         }
     }
+}
+
+/// Escape double quotes inside a string for use in VHS double-quoted
+/// arguments (e.g., `Type "..."`, `Screenshot "..."`).
+fn escape_vhs_double_quote(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Escape single quotes inside a value for use in a POSIX single-quoted
+/// shell string. The standard trick is to end the current single-quoted
+/// segment, insert an escaped single quote, and restart a new segment:
+/// `'` → `'\''`.
+fn escape_shell_single_quote(value: &str) -> String {
+    value.replace('\'', "'\\''")
 }
 
 /// Verify that VHS is installed and available on `PATH`.
@@ -369,5 +402,73 @@ mod tests {
 
         // Assert
         assert!(tape.contains("Sleep 500ms"));
+    }
+
+    #[test]
+    fn escape_vhs_double_quote_escapes_quotes_and_backslashes() {
+        // Arrange / Act / Assert
+        assert_eq!(escape_vhs_double_quote(r#"hello"world"#), r#"hello\"world"#);
+        assert_eq!(escape_vhs_double_quote(r"back\slash"), r"back\\slash");
+        assert_eq!(escape_vhs_double_quote("clean"), "clean");
+    }
+
+    #[test]
+    fn escape_shell_single_quote_wraps_internal_quotes() {
+        // Arrange / Act / Assert
+        assert_eq!(escape_shell_single_quote("it's"), "it'\\''s");
+        assert_eq!(escape_shell_single_quote("clean"), "clean");
+    }
+
+    #[test]
+    fn compile_tape_escapes_env_value_with_single_quote() {
+        // Arrange
+        let scenario = Scenario::new("test").capture();
+
+        // Act
+        let tape = compile_tape(
+            &scenario,
+            Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.png"),
+            &[("KEY", "it's a value")],
+        );
+
+        // Assert — the single quote is shell-escaped to '\'' and the
+        // backslash is then VHS-double-quote-escaped to '\\', giving '\\''
+        // in the final tape string.
+        assert!(tape.contains(r"it'\\''s a value"));
+    }
+
+    #[test]
+    fn compile_tape_shell_quotes_binary_path() {
+        // Arrange
+        let scenario = Scenario::new("test").capture();
+
+        // Act
+        let tape = compile_tape(
+            &scenario,
+            Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.png"),
+            &[],
+        );
+
+        // Assert — binary path is wrapped in single quotes for the shell.
+        assert!(tape.contains("Type \"'/usr/bin/echo'\""));
+    }
+
+    #[test]
+    fn compile_tape_shell_quotes_binary_path_with_spaces() {
+        // Arrange
+        let scenario = Scenario::new("test").capture();
+
+        // Act
+        let tape = compile_tape(
+            &scenario,
+            Path::new("/path with spaces/bin"),
+            Path::new("/tmp/shot.png"),
+            &[],
+        );
+
+        // Assert — spaces are safe inside single quotes.
+        assert!(tape.contains("Type \"'/path with spaces/bin'\""));
     }
 }
