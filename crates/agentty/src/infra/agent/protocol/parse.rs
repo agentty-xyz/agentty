@@ -1,5 +1,7 @@
 //! Structured response parsing and streaming normalization helpers.
 
+use serde_json::Value;
+
 use super::model::{
     AgentResponse, AgentResponseParseError, AgentResponseSummary, ProtocolRequestProfile,
 };
@@ -28,7 +30,8 @@ pub(crate) fn normalize_turn_response(
 
 /// Parses one raw assistant message strictly as protocol payload.
 ///
-/// The final assistant payload must match [`AgentResponse`].
+/// The final assistant payload must match [`AgentResponse`] and contain at
+/// least one recognized protocol key (`answer`, `questions`, or `summary`).
 ///
 /// When a provider prepends stray prose before the final schema object, this
 /// still recovers the trailing protocol payload as long as nothing except
@@ -52,8 +55,7 @@ pub(crate) fn parse_agent_response_strict(
     }
 
     if let Some(inner) = strip_markdown_code_fence(trimmed) {
-        return parse_structured_json_response(inner)
-            .map_err(|_| AgentResponseParseError::InvalidFormat);
+        return parse_structured_json_response(inner).ok_or(AgentResponseParseError::InvalidFormat);
     }
 
     Err(AgentResponseParseError::InvalidFormat)
@@ -89,31 +91,47 @@ pub(crate) fn normalize_stream_assistant_chunk(raw: &str) -> Option<String> {
 
 /// Attempts to parse one schema-driven structured JSON response.
 ///
-/// This relies on the protocol wire type to define the accepted response
-/// shape.
-fn parse_structured_json_response(raw: &str) -> Result<AgentResponse, serde_json::Error> {
-    serde_json::from_str(raw.trim())
+/// The raw text must parse as a JSON object containing at least one
+/// recognized protocol key (`answer`, `questions`, or `summary`). Returns
+/// `None` when parsing fails or no recognized keys are present.
+fn parse_structured_json_response(raw: &str) -> Option<AgentResponse> {
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+
+    if !value_has_recognized_protocol_key(&value) {
+        return None;
+    }
+
+    serde_json::from_value(value).ok()
+}
+
+/// Top-level keys the protocol recognizes in a structured response payload.
+const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "summary"];
+
+/// Returns whether a parsed JSON value is an object containing at least one
+/// recognized protocol key.
+fn value_has_recognized_protocol_key(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|object| PROTOCOL_KEYS.iter().any(|key| object.contains_key(*key)))
 }
 
 /// Parses one full protocol payload and then falls back to recovering a
 /// trailing schema object from wrapped provider output.
 fn parse_structured_json_response_with_recovery(raw: &str) -> Option<AgentResponse> {
-    parse_structured_json_response(raw)
-        .ok()
-        .or_else(|| recover_embedded_structured_json_response(raw))
+    parse_structured_json_response(raw).or_else(|| recover_embedded_structured_json_response(raw))
 }
 
 /// Recovers one trailing protocol payload from provider output that starts
 /// with extra prose before the final JSON object.
 ///
 /// This intentionally keeps trailing text strict: once a candidate JSON object
-/// parses successfully, only whitespace may remain after it.
+/// parses successfully, only whitespace may remain after it. The candidate
+/// must also contain at least one recognized protocol key.
 fn recover_embedded_structured_json_response(raw: &str) -> Option<AgentResponse> {
     for (start_index, _) in raw.match_indices('{').rev() {
         let candidate = &raw[start_index..];
-        let mut deserializer =
-            serde_json::Deserializer::from_str(candidate).into_iter::<AgentResponse>();
-        let Some(Ok(response)) = deserializer.next() else {
+        let mut deserializer = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
+        let Some(Ok(value)) = deserializer.next() else {
             continue;
         };
         let trailing_text = &candidate[deserializer.byte_offset()..];
@@ -121,7 +139,11 @@ fn recover_embedded_structured_json_response(raw: &str) -> Option<AgentResponse>
             continue;
         }
 
-        return Some(response);
+        if !value_has_recognized_protocol_key(&value) {
+            continue;
+        }
+
+        return serde_json::from_value(value).ok();
     }
 
     None
@@ -367,8 +389,9 @@ mod tests {
     }
 
     #[test]
-    /// Strict parsing rejects non-schema JSON payloads.
-    fn test_parse_agent_response_strict_rejects_non_schema_payload() {
+    /// Strict parsing rejects JSON objects with only unrecognized fields
+    /// because at least one protocol key must be present.
+    fn test_parse_agent_response_strict_rejects_unrecognized_only_fields() {
         // Arrange
         let raw = r#"{"message":"not the expected shape"}"#;
 
@@ -380,9 +403,9 @@ mod tests {
     }
 
     #[test]
-    /// Strict parsing accepts an empty JSON object because the protocol wire
-    /// type supplies defaults for omitted fields.
-    fn test_parse_agent_response_strict_accepts_empty_json_object() {
+    /// Strict parsing rejects an empty JSON object because no recognized
+    /// protocol key is present.
+    fn test_parse_agent_response_strict_rejects_empty_json_object() {
         // Arrange
         let raw = "{}";
 
@@ -390,10 +413,7 @@ mod tests {
         let response = parse_agent_response_strict(raw);
 
         // Assert
-        assert_eq!(
-            response.expect("response should parse"),
-            AgentResponse::plain("")
-        );
+        assert_eq!(response, Err(AgentResponseParseError::InvalidFormat));
     }
 
     #[test]
@@ -455,6 +475,144 @@ mod tests {
             response.expect("response should parse").answer,
             "Plain fence."
         );
+    }
+
+    #[test]
+    /// Strict parsing tolerates extra top-level fields that providers may add
+    /// beyond the protocol schema.
+    fn test_parse_agent_response_strict_tolerates_extra_top_level_fields() {
+        // Arrange
+        let raw =
+            r#"{"answer":"Hello.","questions":[],"summary":null,"reasoning":"internal thought"}"#;
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(response.expect("response should parse").answer, "Hello.");
+    }
+
+    #[test]
+    /// Strict parsing tolerates extra fields inside nested summary objects.
+    fn test_parse_agent_response_strict_tolerates_extra_summary_fields() {
+        // Arrange
+        let raw = r#"{"answer":"Done.","questions":[],"summary":{"turn":"Fixed bug","session":"Bug fix session","confidence":"high"}}"#;
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        let response = response.expect("response should parse");
+        assert_eq!(response.answer, "Done.");
+        assert_eq!(
+            response.summary,
+            Some(AgentResponseSummary {
+                session: "Bug fix session".to_string(),
+                turn: "Fixed bug".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    /// Strict parsing tolerates extra fields inside nested question objects.
+    fn test_parse_agent_response_strict_tolerates_extra_question_fields() {
+        // Arrange
+        let raw = r#"{"answer":"","questions":[{"text":"Which approach?","options":["A","B"],"priority":"high"}],"summary":null}"#;
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        let questions = response.expect("response should parse").question_items();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].text, "Which approach?");
+    }
+
+    #[test]
+    /// Stream normalization tolerates extra fields in a complete structured
+    /// payload.
+    fn test_normalize_stream_assistant_chunk_tolerates_extra_fields() {
+        // Arrange
+        let raw = r#"{"answer":"Streaming done.","questions":[],"summary":null,"metadata":{}}"#;
+
+        // Act
+        let normalized = normalize_stream_assistant_chunk(raw);
+
+        // Assert
+        assert_eq!(normalized, Some("Streaming done.".to_string()));
+    }
+
+    #[test]
+    /// Stream normalization passes unrecognized-only JSON through as plain
+    /// text instead of silently suppressing it as an empty protocol response.
+    fn test_normalize_stream_assistant_chunk_passes_unrecognized_json_as_plain_text() {
+        // Arrange
+        let raw = r#"{"message":"not the expected shape"}"#;
+
+        // Act
+        let normalized = normalize_stream_assistant_chunk(raw);
+
+        // Assert
+        assert_eq!(normalized, Some(raw.to_string()));
+    }
+
+    #[test]
+    /// Parser accepts a payload with `questions` but no `answer` key,
+    /// exercising the documented asymmetry where the parser is lenient
+    /// (any recognized key suffices) while the prompt schema requires
+    /// `answer`.
+    fn test_parse_agent_response_strict_accepts_questions_without_answer() {
+        // Arrange
+        let raw = r#"{"questions":[{"text":"Which approach?"}]}"#;
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        let response = response.expect("parser should accept questions-only payload");
+        assert_eq!(response.answer, "");
+        assert_eq!(response.question_items().len(), 1);
+    }
+
+    #[test]
+    /// Parser accepts a payload with `summary` but no `answer` key,
+    /// exercising the documented asymmetry where the parser is lenient
+    /// (any recognized key suffices) while the prompt schema requires
+    /// `answer`.
+    fn test_parse_agent_response_strict_accepts_summary_without_answer() {
+        // Arrange
+        let raw = r#"{"summary":{"turn":"Fixed bug","session":"Bug fix session"}}"#;
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        let response = response.expect("parser should accept summary-only payload");
+        assert_eq!(response.answer, "");
+        assert_eq!(
+            response.summary,
+            Some(AgentResponseSummary {
+                session: "Bug fix session".to_string(),
+                turn: "Fixed bug".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    /// Recovery path skips non-protocol JSON objects embedded in prose when
+    /// they contain no recognized protocol keys.
+    fn test_parse_agent_response_strict_rejects_wrapped_non_protocol_json() {
+        // Arrange
+        let raw = concat!(
+            "Some wrapper text\n",
+            r#"{"reasoning":"internal thought","confidence":0.9}"#
+        );
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(response, Err(AgentResponseParseError::InvalidFormat));
     }
 
     #[test]

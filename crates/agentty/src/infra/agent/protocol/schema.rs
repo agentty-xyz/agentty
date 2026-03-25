@@ -51,6 +51,8 @@ fn agent_response_json_schema() -> Value {
     let mut schema_value = serde_json::to_value(schema).unwrap_or(Value::Null);
 
     inject_dynamic_schema_guidance(&mut schema_value);
+    inject_additional_properties_false(&mut schema_value);
+    inject_minimum_required_protocol_key(&mut schema_value);
 
     schema_value
 }
@@ -76,6 +78,65 @@ fn inject_dynamic_schema_guidance(schema: &mut Value) {
              array when omitted."
         )),
     );
+}
+
+/// Recursively injects `additionalProperties: false` into every schema object
+/// that declares `properties` and does not already set `additionalProperties`.
+///
+/// The wire-format structs omit `#[serde(deny_unknown_fields)]` so
+/// deserialization tolerates extra fields that LLM providers sometimes add.
+/// This function restores the `additionalProperties: false` constraint in the
+/// generated JSON Schema so prompt-level guidance still tells models not to
+/// add extra fields. Pre-existing `additionalProperties` values (e.g. on
+/// map-like schema fields) are preserved.
+fn inject_additional_properties_false(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if object.contains_key("properties") && !object.contains_key("additionalProperties") {
+                object.insert("additionalProperties".to_string(), Value::Bool(false));
+            }
+
+            for nested_value in object.values_mut() {
+                inject_additional_properties_false(nested_value);
+            }
+        }
+        Value::Array(array) => {
+            for nested_value in array {
+                inject_additional_properties_false(nested_value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Ensures the top-level `required` array includes `answer` so the prompt
+/// schema rejects `{}` the same way the parser does.
+///
+/// The parser requires at least one recognized protocol key (`answer`,
+/// `questions`, or `summary`). The schema is intentionally stricter: it
+/// requires `answer` specifically, because models should always include it.
+/// If a model omits `answer` but includes another recognized key, the
+/// parser still accepts the payload gracefully thanks to `#[serde(default)]`.
+fn inject_minimum_required_protocol_key(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let required = object
+        .entry("required")
+        .or_insert_with(|| Value::Array(Vec::new()));
+
+    let Some(required_array) = required.as_array_mut() else {
+        return;
+    };
+
+    let already_listed = required_array
+        .iter()
+        .any(|value| value.as_str() == Some("answer"));
+
+    if !already_listed {
+        required_array.push(Value::String("answer".to_string()));
+    }
 }
 
 /// Pretty-prints one schema document for prompt or transport wiring.
@@ -251,6 +312,65 @@ mod tests {
     }
 
     #[test]
+    /// Ensures the prompt schema requires `answer` so empty objects are
+    /// rejected by schema validation the same way the parser rejects them.
+    fn test_agent_response_json_schema_requires_answer_key() {
+        // Arrange / Act
+        let schema = agent_response_json_schema();
+        let required_fields = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("schema required fields should exist");
+
+        // Assert
+        assert!(
+            required_fields
+                .iter()
+                .any(|value| value.as_str() == Some("answer")),
+            "prompt schema should require `answer` to align with parser key-presence check"
+        );
+    }
+
+    #[test]
+    /// Ensures every schema object with `properties` declares
+    /// `additionalProperties: false` so prompt guidance and transport
+    /// enforcement tell models not to add extra fields.
+    fn test_agent_response_json_schema_sets_additional_properties_false() {
+        // Arrange / Act
+        let schema = agent_response_json_schema();
+
+        // Assert
+        assert!(
+            all_properties_objects_deny_additional(&schema),
+            "every object with `properties` should set `additionalProperties: false`"
+        );
+    }
+
+    #[test]
+    /// `inject_additional_properties_false` preserves a pre-existing
+    /// `additionalProperties` value instead of overwriting it.
+    fn test_inject_additional_properties_false_preserves_existing_value() {
+        // Arrange
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "extra": { "type": "object", "additionalProperties": { "type": "string" } }
+            }
+        });
+
+        // Act
+        inject_additional_properties_false(&mut schema);
+
+        // Assert — top-level gets injected (was absent)
+        assert_eq!(schema["additionalProperties"], Value::Bool(false));
+        // Assert — nested keeps its original map-type constraint (was present)
+        assert_eq!(
+            schema["properties"]["extra"]["additionalProperties"],
+            serde_json::json!({ "type": "string" })
+        );
+    }
+
+    #[test]
     /// Ensures no schema object uses `$ref` with sibling keys.
     fn test_agent_response_output_schema_ref_objects_have_no_sibling_keywords() {
         // Arrange / Act
@@ -362,7 +482,7 @@ mod tests {
             "answer",
             "Markdown answer text for delivered work, status updates, or concise completion \
              notes. Keep clarification requests out of this field and emit them through \
-             `questions` instead. Defaults to an empty string when omitted.",
+             `questions` instead.",
         );
         assert_eq!(
             response_properties
@@ -507,6 +627,24 @@ mod tests {
                 object.values().all(all_properties_in_required)
             }
             Value::Array(array) => array.iter().all(all_properties_in_required),
+            _ => true,
+        }
+    }
+
+    /// Recursively checks that every object with `properties` sets
+    /// `additionalProperties: false`.
+    fn all_properties_objects_deny_additional(value: &Value) -> bool {
+        match value {
+            Value::Object(object) => {
+                if object.contains_key("properties")
+                    && object.get("additionalProperties") != Some(&Value::Bool(false))
+                {
+                    return false;
+                }
+
+                object.values().all(all_properties_objects_deny_additional)
+            }
+            Value::Array(array) => array.iter().all(all_properties_objects_deny_additional),
             _ => true,
         }
     }

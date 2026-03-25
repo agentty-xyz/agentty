@@ -36,7 +36,6 @@ pub enum ProtocolRequestProfile {
 /// The UI and persistence layers use this as the canonical clarification
 /// question representation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(
     title = "QuestionItem",
     description = "One clarification question emitted by the assistant protocol payload. Keep \
@@ -86,7 +85,6 @@ impl QuestionItem {
 /// summary inside `answer` message text. One-shot prompts set the top-level
 /// `summary` field to `null`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(
     title = "AgentResponseSummary",
     description = "Structured session summary block emitted alongside protocol messages instead \
@@ -113,7 +111,6 @@ pub struct AgentResponseSummary {
 /// Providers that support output schemas (for example, Codex app-server) are
 /// asked to emit this object as the entire assistant response payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(
     title = "AgentResponse",
     description = "Wire-format protocol payload used for schema-driven provider output. Return \
@@ -128,7 +125,7 @@ pub struct AgentResponse {
         title = "answer",
         description = "Markdown answer text for delivered work, status updates, or concise \
                        completion notes. Keep clarification requests out of this field and emit \
-                       them through `questions` instead. Defaults to an empty string when omitted."
+                       them through `questions` instead."
     )]
     pub answer: String,
     /// Ordered clarification questions emitted for this turn.
