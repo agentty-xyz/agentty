@@ -21,6 +21,12 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Read `docs/plan/AGENTS.md`, `docs/plan/roadmap.md`, and the related source files before writing.
    - Capture only the constraints that materially affect scope, sequencing, validation, or exclusions.
 
+1. **Choose the roadmap operation**
+
+   - For claiming an existing step before implementation, read `references/start-step.md` and keep the edit isolated to that step's `#### Assignee` field.
+   - For revising an existing pending step, read `references/update-step.md` and update only the named roadmap sections that need to change while preserving the canonical step structure.
+   - For inserting a new pending step, read `references/add-step.md` and draft the full canonical step block before reconciling any surrounding roadmap sections the new work affects.
+
 1. **Sync the roadmap when the skill changes**
 
    - When updating this `SKILL.md`, review `docs/plan/roadmap.md` and `docs/plan/AGENTS.md` in the same turn and sync them so they match the updated rules.
