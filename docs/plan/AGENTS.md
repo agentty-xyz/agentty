@@ -2,27 +2,12 @@
 
 Internal planning documents and UI design notes.
 
-Use `skills/implementation-plan/SKILL.md` for plan structure and implementation-planning requirements.
+Use `skills/implementation-plan/SKILL.md` for roadmap structure and implementation-planning requirements.
+Keep active planning consolidated in `docs/plan/roadmap.md`.
+Keep `docs/plan/roadmap.md` to one shared execution diagram and one shared `## Implementation Steps` section.
+Remove implemented steps from the roadmap instead of preserving completed execution detail.
 Keep size budgeting in the skill workflow only; do not render `### Size` sections inside `docs/plan/*.md` files.
 
 ## Directory Index
 
-- [`session_execution_backends.md`](session_execution_backends.md) - Implementation plan for backend-owned session execution that survives TUI exit and restart, with `LocalProcess` first and OCI backends reserved for follow-up work.
-
-- [`draft_session_prompt_collection.md`](draft_session_prompt_collection.md) - Implementation plan for draft sessions that collect multiple prompts before the first real agent turn starts.
-
-- [`end_to_end_test_structure.md`](end_to_end_test_structure.md) - Implementation plan for organizing deterministic local scenario tests and thin live smoke suites around git, forge, and agent workflows.
-
-- [`forge_review_request_support.md`](forge_review_request_support.md) - Implementation plan for adding forge-generic review request workflows across GitHub and GitLab.
-
-- [`sync_review_request.md`](sync_review_request.md) - Implementation plan for a manual `s` keybinding in session view that syncs review request status from the forge and transitions merged sessions to `Done` with worktree cleanup.
-
-- [`session_follow_up_tasks.md`](session_follow_up_tasks.md) - Implementation plan for session-emitted low-severity nitpick follow-up tasks that can launch sibling sessions while the source session stays active.
-
-- [`local_agent_availability.md`](local_agent_availability.md) - Implementation plan for startup-time agent CLI discovery and filtering settings plus `/model` choices to locally available backends.
-
-- [`multi_method_auto_update.md`](multi_method_auto_update.md) - Implementation plan for detecting the installation method and running the appropriate auto-update command for npm, cargo, sh, and npx.
-
-- [`session_in_progress_timer.md`](session_in_progress_timer.md) - Implementation plan for persisting and rendering cumulative session `InProgress` time in chat and list views.
-
-- [`tech_debt_error_handling.md`](tech_debt_error_handling.md) - Implementation plan for replacing 167 `Result<..., String>` functions with typed error enums, documenting ~170 silent `let _ =` discards, filling test coverage gaps, and fixing minor convention violations.
+- [`roadmap.md`](roadmap.md) - Canonical single-file project roadmap that consolidates the active implementation planning inventory.
