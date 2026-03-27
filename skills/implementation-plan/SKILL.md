@@ -33,7 +33,11 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Use named streams to explain parallel work, but do not split the roadmap into multiple per-feature step sections or multiple diagrams.
    - Keep already-landed behavior in `## Current State Snapshot`; do not retain implemented steps in `## Implementation Steps`.
    - Keep snapshot rows scannable: one short current-state sentence plus a status, without long file lists in the table cells.
-   - In each step, render `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
+   - In each step, render `ID`, `Assignee`, `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
+   - Render `#### ID` as the first subsection in every step and store a UUID there so the step keeps a stable identifier even if numbering or ordering changes.
+   - Render `#### Assignee` immediately after `#### ID` and store the owning GitHub user handle there in `@assignee` format, or use `No assignee` when the step is currently unowned.
+   - For the current direct-to-`main` team workflow, treat assignment as a visible roadmap change: the engineer claiming a step must land a dedicated commit that updates that step's exact `#### Assignee` field, push that commit so the team can see ownership, and only then start implementation in later commits.
+   - Do not mix assignee-claim edits with implementation changes in the same commit for the direct-to-`main` workflow.
    - Use size budgeting during roadmap creation, not after the fact. Before finalizing the roadmap, estimate the changed-line scope for each step, split oversized work into additional steps, and keep those size estimates in planning notes or reviewer reasoning rather than rendering a `#### Size` block in `docs/plan/` files.
    - Treat each step as one mergeable planned slice. Keep every planned step at `XL` or smaller, and split any step that would be `XXL` before handing off the plan.
    - Define `atomic` as one mergeable acceptance story: the step can land, be tested, documented, and reverted independently without needing a follow-up step just to become coherent or usable.
@@ -72,6 +76,8 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Verify every step was split using the size table below before handoff, even though the resulting plan should not render a `#### Size` section.
    - Verify no planned step is larger than `XL`; split oversized work before handoff.
    - Verify no step has more than `5` implementation checklist items under `#### Substeps`; split crowded steps before handoff.
+   - Verify every step starts with explicit `#### ID` and `#### Assignee` sections before `#### Why now`.
+   - Verify every `#### ID` value is a UUID and every `#### Assignee` value uses `@assignee` GitHub-handle format or the exact text `No assignee`.
    - Verify every step has explicit `#### Tests` and `#### Docs` sections when they are required by that slice.
    - Verify every `#### Substeps` checklist item starts with a human-readable title while keeping the detailed implementation guidance in the same item.
    - Reject steps that bundle multiple acceptance stories behind one title, one `#### Usable outcome`, or one combined validation block.
@@ -123,6 +129,14 @@ flowchart TD
 
 ### 1) `<Stream>`: <Step Title>
 
+#### ID
+
+`<uuid>`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 <rationale>
@@ -144,6 +158,14 @@ flowchart TD
 - [ ] <documentation updates needed for this step>
 
 ### 2) `<Stream>`: <Step Title>
+
+#### ID
+
+`<uuid>`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -172,6 +194,7 @@ flowchart TD
 ## Status Maintenance Rule
 
 - Keep only not-yet-implemented steps in `## Implementation Steps`.
+- In the current direct-to-`main` workflow, claim a step by landing and pushing a dedicated commit that updates only that step's exact `#### Assignee` field before implementation work begins.
 - After implementing a step, remove it from the roadmap and refresh the snapshot rows that changed.
 - When a step changes behavior, complete its `#### Tests` and `#### Docs` work in that same step before removing it.
 - If more work remains after a completed step, add a new pending step instead of preserving completed detail.

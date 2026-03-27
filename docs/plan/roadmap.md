@@ -31,6 +31,7 @@ Single-file roadmap for the active implementation backlog in `docs/plan/roadmap.
 - Start each stream with the smallest usable slice, then extend that stream only after the baseline slice lands.
 - Reflect already-landed behavior only in the snapshot above; do not keep implemented steps in the plan below.
 - Keep tests and documentation in the same step that changes behavior so each step stays mergeable on its own.
+- In the current direct-to-`main` workflow, engineers claim roadmap ownership by landing and pushing a dedicated assignee-only commit before any implementation commits.
 
 ## Suggested Execution Order
 
@@ -81,6 +82,14 @@ flowchart TD
 
 ### 1) `Runtime`: Ship backend-owned local turn execution that survives TUI exit
 
+#### ID
+
+`d35522de-fd37-4a4f-8b29-21bff5b9ab81`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Detached execution is the foundation for the session-runtime stream. Until a turn becomes a durable backend-owned unit, restart handling, output continuity, and detached follow-up semantics are all blocked.
@@ -105,6 +114,14 @@ A user can start a turn, Agentty can hand the persisted operation to a `LocalPro
 - [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/getting-started/overview.md`, and `docs/site/content/docs/architecture/testability-boundaries.md` for backend-owned detached session execution.
 
 ### 2) `Workflow`: Ship persisted draft sessions with explicit prompt collection and start
+
+#### ID
+
+`fea154a4-d490-4d16-82e4-db9eaf863c3e`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -131,6 +148,14 @@ A user can create a draft session, collect multiple prompts over time, reopen th
 
 ### 3) `Workflow`: Make collected draft prompts inspectable and editable before start
 
+#### ID
+
+`32f3150c-0b41-4e7c-b7e1-aa3fa5ec6b85`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Once draft collection exists, users need to curate the queue instead of treating it as write-only state.
@@ -155,6 +180,14 @@ A user can inspect saved draft prompts, edit them back into the composer, delete
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for draft inspection and editing controls.
 
 ### 4) `Workflow`: Harden draft start semantics and recovery
+
+#### ID
+
+`ea011218-b11c-4481-bfc4-fa6dd6ea0af0`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -181,6 +214,14 @@ Starting a draft session is atomic and restart-safe: the prompt queue is consume
 
 ### 5) `Workflow`: Persist and render emitted follow-up tasks
 
+#### ID
+
+`cbf025d6-2d29-4be7-b393-4ed3092ae66d`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 The follow-up-task stream needs a durable response contract and visible session-level output before launch behavior can be layered on top.
@@ -205,6 +246,14 @@ After a turn completes, the session shows a persisted list of low-severity follo
 - [ ] Update `docs/site/content/docs/architecture/runtime-flow.md` and `docs/site/content/docs/architecture/module-map.md`.
 
 ### 6) `Workflow`: Launch sibling sessions from follow-up tasks and retain task state
+
+#### ID
+
+`8f4402cd-beff-4b4d-b9f7-00efd834249b`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -231,6 +280,14 @@ A user can launch a follow-up task into a normal sibling session, keep the sourc
 
 ### 7) `Workflow`: Add background review-request status reconciliation
 
+#### ID
+
+`45819af7-fd66-46ce-892e-7065bedea964`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Manual publish/open/refresh already exists, so the next meaningful review-request slice is automatic status reconciliation rather than more manual surface area.
@@ -255,6 +312,14 @@ Linked sessions automatically reconcile to `Done` or `Canceled` after the remote
 - [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/architecture/runtime-flow.md`, `docs/site/content/docs/architecture/testability-boundaries.md`, and `docs/site/content/docs/architecture/module-map.md`.
 
 ### 8) `Platform`: Filter agent and model selection to locally available backends
+
+#### ID
+
+`8d3785d8-481b-40cb-8ee7-42b053f285b9`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -281,6 +346,14 @@ Startup resolves the locally available CLIs, settings only offer valid defaults,
 
 ### 9) `Platform`: Detect installation method and run the correct update path
 
+#### ID
+
+`13b76a8f-fc49-4766-8080-69adf764e804`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Auto-update and manual hints are still npm-only. The install-aware update slice is self-contained and can progress in parallel with the rest of the roadmap.
@@ -305,6 +378,14 @@ Agentty detects whether it was installed via npm, cargo, shell installer, or `np
 - [ ] Update `docs/site/content/docs/getting-started/installation.md`, `docs/site/content/docs/getting-started/overview.md`, `docs/site/content/docs/usage/workflow.md`, and `docs/site/content/docs/architecture/testability-boundaries.md`, plus `README.md` if it still implies npm-only updating.
 
 ### 10) `Platform`: Persist cumulative `InProgress` time and render it in session chat
+
+#### ID
+
+`f9270ba2-0905-4871-9cc9-9f02e041c88d`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -331,6 +412,14 @@ Session chat shows a compact cumulative active-work timer once a session has ent
 
 ### 11) `Platform`: Add the timer to the grouped session list
 
+#### ID
+
+`9f115af0-a382-46f4-8bf9-25886936e252`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Chat proves the timing model first; the list should extend that settled behavior rather than inventing separate timer math.
@@ -354,6 +443,14 @@ The Sessions tab shows a compact cumulative active-work timer for active and com
 - [ ] Extend the same `docs/site/content/docs/usage/workflow.md` update with a short note about the session-list timer column.
 
 ### 12) `Quality`: Ship one deterministic local session workflow slice
+
+#### ID
+
+`1c7b7080-deaf-4e2c-8e3c-df24e01d9251`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -379,6 +476,14 @@ A deterministic scenario test can create a disposable repo, run one scripted loc
 
 ### 13) `Quality`: Expand the harness for deterministic PR/MR workflow scenarios
 
+#### ID
+
+`7f1a098d-b00b-4ad9-a973-cfb050e0dc3c`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 The first deterministic session harness should immediately be reused for high-value review-request workflows before the suite grows more live-smoke coverage.
@@ -403,6 +508,14 @@ Deterministic local scenarios cover GitHub and GitLab review-request create, reu
 
 ### 14) `Quality`: Isolate live smoke suites and finalize suite guidance
 
+#### ID
+
+`b0bed796-c8aa-4e87-bf33-89d1c7cdf3c7`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 After deterministic local scenario coverage owns the main workflows, the live test layer should shrink to an explicit smoke suite with clear contributor guidance.
@@ -426,6 +539,14 @@ Live provider and forge smoke suites are clearly named, ignored by default, and 
 - [ ] Update `CONTRIBUTING.md` with the final suite-tier guidance.
 
 ### 15) `Runtime`: Reconcile backend leases on restart
+
+#### ID
+
+`fa98276c-5bb2-4ab7-80d4-6407f407d002`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -452,6 +573,14 @@ Reopening Agentty during a detached turn keeps healthy backend leases active, re
 
 ### 16) `Runtime`: Mirror live output across app restarts
 
+#### ID
+
+`b6232884-a24d-4360-883b-89191a5c3333`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Restart reconciliation is usable without live output, but it still feels broken when a reopened session cannot show active transcript updates.
@@ -475,6 +604,14 @@ A reopened session can attach to live detached output and continue showing fresh
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/architecture/runtime-flow.md`.
 
 ### 17) `Runtime`: Preserve detached stop, cancel, and reply semantics
+
+#### ID
+
+`797caeb4-080a-451c-aab4-5b39c03ef025`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -501,6 +638,14 @@ Users can stop detached work, keep review cancel separate from execution stop, a
 
 ### 18) `Runtime`: Validate close-and-reopen lifetime behavior end to end
 
+#### ID
+
+`12712fba-e015-4960-8bdc-8a6c1df5805a`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 The runtime stream needs final close-and-reopen regression coverage before detached execution can be treated as stable.
@@ -524,6 +669,14 @@ The repository has deterministic close-and-reopen regression coverage for backen
 - [ ] Refresh detached-session docs only if the validated behavior narrows the supported contract for the shipped backend-owned flow.
 
 ### 19) `Quality`: Introduce `GitError` for `infra/git/` and `GitClient`
+
+#### ID
+
+`7b743a5a-ee48-48ed-a9d6-689a50440a87`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -550,6 +703,14 @@ The git modules and `GitClient` return typed `GitError` variants instead of stri
 
 ### 20) `Quality`: Introduce typed errors for the remaining infra boundaries
 
+#### ID
+
+`7608043e-0adf-4a9d-95fc-1e6084fd75fb`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 After `GitError` lands, the remaining infra surfaces are small enough to finish in one follow-up slice before app-layer propagation removes the temporary bridges.
@@ -574,6 +735,14 @@ Gemini, Codex, filesystem, version, clipboard, and remaining leaf helpers all re
 - [ ] Keep the new infra error types documented in code and reflected in any touched directory indexes.
 
 ### 21) `Quality`: Propagate typed errors through the app layer
+
+#### ID
+
+`ed9de74b-2f42-446b-9bb3-506a2ba8e27b`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -600,6 +769,14 @@ Session workflow, app services, and the CLI entrypoint propagate structured app-
 
 ### 22) `Quality`: Document silent `let _ =` result discards
 
+#### ID
+
+`282012e4-e70f-4cd2-a5a3-550ff03f8974`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 Once the typed-error migration stabilizes, the next quality gap is distinguishing intentional fire-and-forget behavior from accidental swallow sites.
@@ -624,6 +801,14 @@ Every `let _ =` that discards a `Result` in the touched backlog has a short just
 
 ### 23) `Quality`: Add test modules for currently untested files
 
+#### ID
+
+`832c9729-5081-4db3-b5de-662a5b8df0ac`
+
+#### Assignee
+
+`No assignee`
+
 #### Why now
 
 The roadmap still tracks a small set of public non-router files that lack `#[cfg(test)]` coverage entirely.
@@ -647,6 +832,14 @@ Every targeted non-router file with public functions has at least a focused happ
 - [ ] No external docs changes are required for the missing-module test sweep.
 
 ### 24) `Quality`: Fix the remaining convention violations
+
+#### ID
+
+`d2e6ee6c-8f1f-4d9e-8a3f-d797e7231c1a`
+
+#### Assignee
+
+`No assignee`
 
 #### Why now
 
@@ -683,6 +876,7 @@ The remaining convention violations from the current audit are resolved without 
 ## Status Maintenance Rule
 
 - Keep only not-yet-implemented work in `## Implementation Steps`. Do not preserve completed steps in the roadmap.
+- In the current direct-to-`main` workflow, claim a step by landing and pushing a dedicated commit that updates only that step's exact `#### Assignee` field before implementation work begins.
 - After implementing a step, remove it from `## Implementation Steps`, refresh the snapshot rows that changed, and update the execution diagram only if the dependency graph changed materially.
 - When a step changes behavior, complete its `#### Tests` and `#### Docs` work in that same step before removing it from the roadmap.
 - If follow-up work remains after a step is otherwise complete, add a new pending step instead of keeping completed detail in place.
