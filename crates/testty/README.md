@@ -12,15 +12,22 @@ Add `testty` as a dev-dependency in the crate that contains your E2E
 tests:
 
 ```toml
+[dev-dependencies]
+testty = "0.6"
+tempfile = "3"
+```
+
+Inside this workspace, keep using shared workspace dependencies instead:
+
+```toml
 # crates/my-app/Cargo.toml
 [dev-dependencies]
 testty = { workspace = true }
 tempfile = { workspace = true }
 ```
 
-> **Note:** `workspace = true` requires a matching entry in the root
-> `Cargo.toml` under `[workspace.dependencies]`. If the dependency is not
-> declared there, Cargo will fail with a dependency-resolution error.
+> **Note:** `workspace = true` requires matching entries in the root
+> `Cargo.toml` under `[workspace.dependencies]`.
 
 Write a test that launches your binary, interacts with it, and asserts on
 the terminal state:

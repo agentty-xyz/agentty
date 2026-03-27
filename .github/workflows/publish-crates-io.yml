@@ -25,5 +25,8 @@ jobs:
       - name: Publish `ag-forge` to crates.io
         run: cargo publish -p ag-forge
 
+      - name: Publish `testty` to crates.io
+        run: cargo publish -p testty
+
       - name: Publish `agentty` to crates.io
         run: cargo publish -p agentty
