@@ -28,7 +28,9 @@
         </script>
     </head>
     <body class="site-body">
+        {# Resolve primary sections once so shared nav links track canonical section permalinks. #}
         {% set docs_section = get_section(path="docs/_index.md") %}
+        {% set blog_section = get_section(path="blog/_index.md") %}
         <nav class="site-nav">
             <div class="site-nav-inner">
                 <div class="site-nav-left">
@@ -51,6 +53,7 @@
                     <div class="site-nav-links">
                         {% block nav_links %}
                             <a class="site-nav-link" href="{{ config.base_url }}/">home</a>
+                            <a class="site-nav-link" href="{{ blog_section.permalink }}">blog</a>
                             <a class="site-nav-link" href="{{ docs_section.permalink }}">docs</a>
                         {% endblock nav_links %}
                     </div>

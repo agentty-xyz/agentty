@@ -493,6 +493,60 @@ svg {
     line-height: 1.65;
 }
 
+.blog-listing {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.blog-preview {
+    width: 100%;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 1.4rem;
+}
+
+.blog-preview-header {
+    margin-bottom: 0.8rem;
+}
+
+.blog-preview-date {
+    margin: 0 0 0.4rem;
+    color: var(--color-dim);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.blog-preview-title {
+    margin: 0;
+    font-size: 1.08rem;
+}
+
+.blog-preview-link {
+    color: var(--color-accent);
+    text-decoration: none;
+}
+
+.blog-preview-link:hover {
+    text-decoration: underline;
+}
+
+.blog-preview-summary {
+    margin: 0;
+    color: var(--color-muted);
+    line-height: 1.7;
+}
+
+.blog-preview-summary > :first-child {
+    margin-top: 0;
+}
+
+.blog-preview-summary > :last-child {
+    margin-bottom: 0;
+}
+
 .docs-layout {
     display: grid;
     grid-template-areas: "global content page";

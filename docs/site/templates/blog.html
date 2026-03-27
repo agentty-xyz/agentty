@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{# Render the blog landing page from a section tree so new subsections can list themselves automatically. #}
+{% macro render_blog_listing(section_path, show_heading=false) %}
+    {% set blog_listing_section = get_section(path=section_path) %}
+    {% if show_heading %}<h2 class="docs-section-title">{{ blog_listing_section.title }}</h2>{% endif %}
+    {% if blog_listing_section.pages | length > 0 %}
+        <section class="blog-listing">
+            {% for blog_post in blog_listing_section.pages %}
+                <article class="blog-preview">
+                    <header class="blog-preview-header">
+                        {% if blog_post.date %}
+                            <p class="blog-preview-date">{{ blog_post.date | date(format="%B %d, %Y") }}</p>
+                        {% endif %}
+                        <h3 class="blog-preview-title">
+                            <a class="blog-preview-link" href="{{ blog_post.permalink }}">{{ blog_post.title }}</a>
+                        </h3>
+                    </header>
+                    {% if blog_post.summary %}
+                        <div class="blog-preview-summary">{{ blog_post.summary | safe }}</div>
+                    {% elif blog_post.description %}
+                        <p class="blog-preview-summary">{{ blog_post.description }}</p>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </section>
+    {% endif %}
+    {% for subsection_path in blog_listing_section.subsections %}
+        {{ self::render_blog_listing(section_path=subsection_path, show_heading=true) }}
+    {% endfor %}
+{% endmacro render_blog_listing %}
+{% block title %}
+    {{ section.title }} | {{ config.title }}
+{% endblock title %}
+{% block canonical %}
+    {{ section.permalink }}
+{% endblock canonical %}
+{% block main_width_class %}
+    site-container
+{% endblock main_width_class %}
+{% block content %}
+    <header class="docs-section-header">
+        <h1 class="docs-page-title">{{ section.title }}</h1>
+        <p class="docs-section-intro">{{ section.content | safe }}</p>
+    </header>
+    {{ self::render_blog_listing(section_path="blog/_index.md") }}
+{% endblock content %}
