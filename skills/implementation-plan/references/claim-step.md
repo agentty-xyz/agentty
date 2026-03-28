@@ -4,7 +4,7 @@ Use this guide when an engineer wants to claim an existing `Ready Now` roadmap s
 
 ## Goal
 
-Make ownership visible first by updating only the target `Ready Now` step's `#### Assignee` field for the current user, then land that claim as its own reviewable commit before starting implementation work.
+Make ownership visible first by updating only the target `Ready Now` step's `#### Assignee` field for the current user, then land that claim as its own reviewable commit before starting implementation work. Keep roadmap actualization for completion as a separate follow-up step after the implementation lands.
 
 ## Workflow
 
@@ -19,3 +19,4 @@ Make ownership visible first by updating only the target `Ready Now` step's `###
 - Do not use this flow to rewrite `#### Why now`, `#### Usable outcome`, `#### Substeps`, `#### Tests`, or `#### Docs`.
 - Stop and clarify if the step is already assigned to someone other than `No assignee`.
 - Keep the claim isolated from implementation changes until automated leasing exists.
+- Do not remove or reshape the roadmap step during the claim. When the work is complete, actualize the roadmap separately by removing the implemented `Ready Now` step and refreshing any affected snapshot or queued follow-up entries.

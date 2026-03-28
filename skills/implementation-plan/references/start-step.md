@@ -14,9 +14,11 @@ Start the exact planned implementation for one `Ready Now` step without mixing i
 1. Implement the step exactly as written. Treat the roadmap text as the current execution contract instead of rewriting the step while work is in progress.
 1. If implementation reveals a real scope mistake, stop the execution flow and handle that roadmap change separately with `references/update-step.md`.
 1. Keep tests and docs attached to the same implementation slice described in the step before considering the work complete.
+1. Once the step is complete, actualize `docs/plan/roadmap.md` by removing the implemented item from `## Ready Now`, refreshing any changed snapshot rows, and adding or updating a compact queued or parked card if follow-up work still remains.
 
 ## Guardrails
 
 - Do not use this flow to claim ownership. Handle claiming first with `references/claim-step.md`.
 - Do not quietly expand one step into multiple sibling outcomes during implementation.
 - Do not leave roadmap-only claim edits mixed into the implementation diff.
+- Do not keep completed implementation detail in `## Ready Now` after the step lands.
