@@ -201,7 +201,7 @@ A deterministic scenario test can create a disposable repo, run one scripted loc
 
 #### Assignee
 
-`agentty/9ef45b3e`
+`@andagaev`
 
 #### Why now
 
