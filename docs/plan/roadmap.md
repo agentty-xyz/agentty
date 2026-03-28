@@ -390,7 +390,7 @@ The remaining convention violations from the current audit are resolved without 
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -420,7 +420,7 @@ A testty scenario can collect labeled captures into a `ProofReport` and output a
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -449,7 +449,7 @@ New proof output formats can be added as `ProofBackend` trait implementations wi
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -479,7 +479,7 @@ All visual proof backends (strip, GIF, HTML) need a way to convert `TerminalFram
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -508,7 +508,7 @@ A testty scenario produces a single vertical PNG strip with labeled, rendered fr
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -538,7 +538,7 @@ Frame diffs answer "what changed?" between captures. Without them, proof reviewe
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -567,7 +567,7 @@ A testty scenario produces an animated GIF showing each capture step with config
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -597,7 +597,7 @@ A testty scenario produces a self-contained HTML file with embedded images, step
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
@@ -625,7 +625,7 @@ Scenarios can be tagged with `Tier::Smoke`, `Tier::Feature`, or `Tier::Regressio
 
 #### Assignee
 
-`No assignee`
+`andagaev`
 
 #### Why now
 
