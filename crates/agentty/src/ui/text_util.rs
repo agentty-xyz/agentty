@@ -123,31 +123,32 @@ pub fn format_token_count(count: u64) -> String {
     count.to_string()
 }
 
-/// Formats elapsed seconds using a compact display suitable for dashboard
-/// summaries.
+/// Formats elapsed seconds as a compact `1h1m1s` label.
+///
+/// Hours and minutes are omitted when their value is zero, but seconds are
+/// always rendered so live timers never lose sub-minute visibility.
 pub fn format_duration_compact(duration_seconds: i64) -> String {
     if duration_seconds <= 0 {
-        return "0m".to_string();
+        return "0s".to_string();
     }
 
     let duration_seconds = u64::try_from(duration_seconds).unwrap_or(0);
-    let day_count = duration_seconds / 86_400;
-    let hour_count = (duration_seconds % 86_400) / 3_600;
+    let hour_count = duration_seconds / 3_600;
     let minute_count = (duration_seconds % 3_600) / 60;
-
-    if day_count > 0 {
-        return format!("{day_count}d {hour_count}h");
-    }
+    let second_count = duration_seconds % 60;
+    let mut label = String::new();
 
     if hour_count > 0 {
-        return format!("{hour_count}h {minute_count}m");
+        label.push_str(&format!("{hour_count}h"));
     }
 
     if minute_count > 0 {
-        return format!("{minute_count}m");
+        label.push_str(&format!("{minute_count}m"));
     }
 
-    "<1m".to_string()
+    label.push_str(&format!("{second_count}s"));
+
+    label
 }
 
 /// Splits one trailing footer line block from `text` when its last non-empty
@@ -351,14 +352,16 @@ mod tests {
         let less_than_one_minute = format_duration_compact(59);
         let one_minute = format_duration_compact(60);
         let one_hour = format_duration_compact(3_600);
-        let one_day = format_duration_compact(90_061);
+        let one_hour_one_minute_one_second = format_duration_compact(3_661);
+        let one_day_one_hour_one_minute_one_second = format_duration_compact(90_061);
 
         // Assert
-        assert_eq!(zero, "0m");
-        assert_eq!(less_than_one_minute, "<1m");
-        assert_eq!(one_minute, "1m");
-        assert_eq!(one_hour, "1h 0m");
-        assert_eq!(one_day, "1d 1h");
+        assert_eq!(zero, "0s");
+        assert_eq!(less_than_one_minute, "59s");
+        assert_eq!(one_minute, "1m0s");
+        assert_eq!(one_hour, "1h0s");
+        assert_eq!(one_hour_one_minute_one_second, "1h1m1s");
+        assert_eq!(one_day_one_hour_one_minute_one_second, "25h1m1s");
     }
 
     #[test]

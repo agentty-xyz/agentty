@@ -377,7 +377,7 @@ impl<'a> SessionChatPage<'a> {
         let status_label = session.status.to_string();
         let timer_label = session.has_in_progress_timer().then(|| {
             format!(
-                " ({})",
+                " [{}]",
                 format_duration_compact(
                     session.in_progress_duration_seconds(wall_clock_unix_seconds)
                 )
@@ -1784,8 +1784,8 @@ mod tests {
         let later_header = SessionChatPage::session_header_text(&session, 80, 3_720);
 
         // Assert
-        assert!(early_header.contains("InProgress (<1m) - Timer Session"));
-        assert!(later_header.contains("InProgress (1h 1m) - Timer Session"));
+        assert!(early_header.contains("InProgress [30s] - Timer Session"));
+        assert!(later_header.contains("InProgress [1h1m0s] - Timer Session"));
     }
 
     #[test]
@@ -1802,7 +1802,7 @@ mod tests {
 
         // Assert
         assert_eq!(earlier_header, later_header);
-        assert!(earlier_header.contains("Review (1h 1m) - Frozen Timer"));
+        assert!(earlier_header.contains("Review [1h1m0s] - Frozen Timer"));
     }
 
     #[test]
@@ -1828,7 +1828,7 @@ mod tests {
 
         // Assert
         let header_row = buffer_row_text(terminal.backend().buffer(), 1, 34);
-        assert!(header_row.contains("InProgress (1h 1m)"));
+        assert!(header_row.contains("InProgress [1h1m0s]"));
         assert!(header_row.contains("..."));
     }
 
