@@ -71,9 +71,10 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 
 /// Applies scroll keys when the chat output area is focused.
 ///
-/// Returns `true` when the key was consumed as a scroll action. `Enter` and
-/// `Esc` are not intercepted — they always reach the question handler so
-/// users can submit or skip regardless of focus.
+/// Returns `true` when the key was consumed as a scroll action. `Enter`
+/// switches focus back to `Answer` so it cannot accidentally submit a
+/// response while scrolling. `Esc` is not intercepted — it always reaches
+/// the question handler so users can end the turn regardless of focus.
 fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool {
     if !matches!(
         &app.mode,
@@ -87,11 +88,19 @@ fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool
 
     let metrics = question_view_metrics(app, terminal_size);
 
-    let AppMode::Question { scroll_offset, .. } = &mut app.mode else {
+    let AppMode::Question {
+        focus,
+        scroll_offset,
+        ..
+    } = &mut app.mode
+    else {
         return false;
     };
 
     match key.code {
+        KeyCode::Enter => {
+            *focus = QuestionFocus::Answer;
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             *scroll_offset = scroll_offset_down(*scroll_offset, metrics, 1);
         }
@@ -1800,6 +1809,36 @@ mod tests {
                 scroll_offset: None,
                 ..
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_in_chat_focus_switches_to_answer_without_submitting() {
+        // Arrange — chat focused, pressing Enter should return focus to Answer
+        // without submitting the question response.
+        let mut app = new_test_app().await;
+        app.mode = question_mode_with_options();
+        if let AppMode::Question { focus, .. } = &mut app.mode {
+            *focus = QuestionFocus::Chat;
+        }
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — focus switched to Answer, no response submitted.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Answer,
+                current_index: 0,
+                ref responses,
+                ..
+            } if responses.is_empty()
         ));
     }
 
