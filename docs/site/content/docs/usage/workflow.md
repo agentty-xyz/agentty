@@ -121,9 +121,9 @@ New → InProgress → Review → Done
 ```
 
 While a session is **InProgress**, Agentty keeps the `Thinking...` status badge
-for streamed activity. Assistant content streams live when available; if
-assistant content already streamed, Agentty skips duplicate final-answer append
-at turn completion.
+and may update its transient loader text from provider thought or tool-status
+events until the turn completes. The chat transcript itself is updated only
+after the final turn result is parsed and persisted.
 
 <a id="usage-title-refinement"></a>
 When the first prompt is submitted for a new session, Agentty stores that

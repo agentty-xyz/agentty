@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -44,7 +42,7 @@ impl<'a> SessionOutput<'a> {
         }
     }
 
-    /// Sets the active progress message.
+    /// Sets transient thinking text rendered in the loader row.
     #[must_use]
     pub fn active_progress(mut self, active_progress: &'a str) -> Self {
         self.active_progress = Some(active_progress);
@@ -111,8 +109,10 @@ impl<'a> SessionOutput<'a> {
     /// current session state.
     ///
     /// `Status::Done` includes an inline `t` toggle hint that switches between
-    /// summary and full output views. Wrapping width follows the configured
-    /// output panel borders so line metrics stay in sync with rendered content.
+    /// summary and full output views. Active statuses append only the generic
+    /// loader row so transcript text stays stable until the turn completes.
+    /// Wrapping width follows the configured output panel borders so line
+    /// metrics stay in sync with rendered content.
     fn output_lines(
         session: &Session,
         output_area: Rect,
@@ -402,18 +402,16 @@ impl<'a> SessionOutput<'a> {
         start_index
     }
 
+    /// Returns the loader label for active session states.
     fn status_message(status: Status, active_progress: Option<&str>) -> String {
-        if let Some(progress) = active_progress
-            .map(str::trim)
-            .filter(|progress| !progress.is_empty())
-        {
-            let base_progress = progress.trim_end_matches('.');
-
-            return format!("{base_progress}{}", Self::animated_progress_suffix());
-        }
-
         match status {
-            Status::InProgress => "Thinking...".to_string(),
+            Status::InProgress => active_progress
+                .map(str::trim)
+                .filter(|progress| !progress.is_empty())
+                .map_or_else(
+                    || "Thinking...".to_string(),
+                    |progress| format!("Thinking... {progress}"),
+                ),
             Status::Queued => "Waiting in merge queue...".to_string(),
             Status::Rebasing => "Rebasing...".to_string(),
             Status::Merging => "Merging...".to_string(),
@@ -433,21 +431,6 @@ impl<'a> SessionOutput<'a> {
             | Status::Question
             | Status::Done
             | Status::Canceled => Icon::Pending,
-        }
-    }
-
-    fn animated_progress_suffix() -> &'static str {
-        let tick = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            / 300;
-
-        match tick % 4 {
-            0 => "",
-            1 => ".",
-            2 => "..",
-            _ => "...",
         }
     }
 
@@ -1081,34 +1064,60 @@ mod tests {
     }
 
     #[test]
-    fn test_status_message_uses_active_progress_with_animated_suffix() {
-        // Arrange & Act
-        let message = SessionOutput::status_message(Status::InProgress, Some("Searching the web"));
-        let suffix = &message["Searching the web".len()..];
+    fn test_output_lines_use_generic_in_progress_loader() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "some output".to_string();
+        session.status = Status::InProgress;
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            session.status,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
 
         // Assert
-        assert!(message.starts_with("Searching the web"));
-        assert!(matches!(suffix, "" | "." | ".." | "..."));
+        assert!(text.contains("Thinking..."));
+    }
+
+    #[test]
+    fn test_status_message_for_in_progress_includes_thinking_text() {
+        // Arrange & Act
+        let message =
+            SessionOutput::status_message(Status::InProgress, Some("Inspecting changed files"));
+
+        // Assert
+        assert_eq!(message, "Thinking... Inspecting changed files");
     }
 
     #[test]
     fn test_builder_methods() {
         // Arrange
         let session = session_fixture();
+        let active_progress = "Inspecting changed files";
         let review_status_message = "Preparing review...";
         let review_text = "Assisted review";
-        let progress = "Scanning...";
 
         // Act
         let output = SessionOutput::new(&session)
-            .active_progress(progress)
+            .active_progress(active_progress)
             .done_session_output_mode(DoneSessionOutputMode::Output)
             .review_status_message(Some(review_status_message))
             .review_text(Some(review_text))
             .scroll_offset(10);
 
         // Assert
-        assert_eq!(output.active_progress, Some(progress));
+        assert_eq!(output.active_progress, Some(active_progress));
         assert_eq!(
             output.done_session_output_mode,
             DoneSessionOutputMode::Output

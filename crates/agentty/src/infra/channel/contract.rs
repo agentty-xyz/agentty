@@ -294,14 +294,12 @@ pub struct TurnRequest {
 /// Incremental event emitted during one agent turn.
 ///
 /// Events are sent through an [`mpsc::UnboundedSender`] as the turn
-/// progresses, enabling real-time streaming of agent output and progress
-/// updates to the UI.
+/// progresses, enabling transient loader updates without appending partial turn
+/// output into the persisted transcript.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TurnEvent {
-    /// A fragment of the assistant's text response.
-    AssistantDelta(String),
-    /// A streamed thinking/planning fragment shown separately from transcript
-    /// output.
+    /// A streamed thinking/planning or tool-status fragment shown in the
+    /// transient loader.
     ThoughtDelta(String),
     /// The turn completed successfully with final token counts.
     Completed {
@@ -320,8 +318,6 @@ pub enum TurnEvent {
     /// (`Some(pid)`) and again after the child exits (`None`). Consumers
     /// update the shared PID slot used by cancellation signals.
     PidUpdate(Option<u32>),
-    /// A progress description label (tool use, thinking, etc.).
-    Progress(String),
 }
 
 /// Normalized result returned when one agent turn completes successfully.
@@ -384,9 +380,9 @@ pub trait AgentChannel: Send + Sync {
 
     /// Executes one prompt turn and streams incremental events to `events`.
     ///
-    /// Implementations emit [`TurnEvent::AssistantDelta`],
-    /// [`TurnEvent::ThoughtDelta`], and [`TurnEvent::Progress`] as output
-    /// arrives. When the turn finishes, [`TurnResult`] is returned.
+    /// Implementations may emit [`TurnEvent::ThoughtDelta`] values for
+    /// transient loader updates. Final transcript output is derived from the
+    /// returned [`TurnResult`] after the turn finishes.
     ///
     /// # Errors
     /// Returns [`AgentError`] when the turn cannot be executed (spawn failure,

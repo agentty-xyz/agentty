@@ -573,7 +573,6 @@ mod tests {
             scroll_offset: None,
         };
         let progress_messages = HashMap::new();
-
         // Act
         terminal
             .draw(|frame| {
@@ -649,7 +648,6 @@ mod tests {
             scroll_offset: 0,
         };
         let progress_messages = HashMap::new();
-
         // Act
         terminal
             .draw(|frame| {

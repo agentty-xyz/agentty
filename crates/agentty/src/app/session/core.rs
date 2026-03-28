@@ -251,7 +251,7 @@ mod tests {
     use crate::infra::agent::AgentResponse;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
-    use crate::infra::channel::{AgentRequestKind, MockAgentChannel, TurnEvent, TurnResult};
+    use crate::infra::channel::{AgentRequestKind, MockAgentChannel, TurnResult};
     use crate::infra::db::Database;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
@@ -2255,7 +2255,8 @@ mod tests {
         let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
 
         // One channel handles both turns; a counter distinguishes them so the
-        // correct delta text is emitted and mode assertions are made per turn.
+        // correct final response text is returned and mode assertions are made
+        // per turn.
         let turn_count = Arc::new(Mutex::new(0usize));
         let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         let mut mock_channel = MockAgentChannel::new();
@@ -2263,7 +2264,7 @@ mod tests {
         let done_capture = done_tx.clone();
         mock_channel
             .expect_run_turn()
-            .returning(move |_, req, event_tx| {
+            .returning(move |_, req, _event_tx| {
                 let turn_index = {
                     let mut count = turn_count_capture.lock().expect("lock poisoned");
                     let current = *count;
@@ -2283,12 +2284,11 @@ mod tests {
                     );
                     format!("--prompt {} --resume latest\n", req.prompt)
                 };
-                let _ = event_tx.send(TurnEvent::AssistantDelta(delta_text));
                 let done = done_capture.clone();
                 Box::pin(async move {
                     let _ = done.send(());
                     Ok(TurnResult {
-                        assistant_message: AgentResponse::plain(""),
+                        assistant_message: AgentResponse::plain(&delta_text),
                         context_reset: false,
                         input_tokens: 0,
                         output_tokens: 0,

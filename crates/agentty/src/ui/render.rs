@@ -46,7 +46,7 @@ pub struct RenderContext<'a> {
     pub projects: &'a [ProjectListItem],
     /// Latest session-branch ahead/behind snapshots keyed by session id.
     pub session_git_statuses: &'a HashMap<String, Option<(u32, u32)>>,
-    /// Background progress messages keyed by session id.
+    /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<String, String>,
     /// Mutable project-scoped settings snapshot.
     pub settings: &'a mut SettingsManager,

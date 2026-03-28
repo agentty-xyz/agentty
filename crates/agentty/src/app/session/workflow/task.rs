@@ -558,10 +558,7 @@ impl SessionTaskService {
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
             },
         )
-        .await
-        .inspect_err(|_error| {
-            Self::clear_session_progress(&app_event_tx, &id);
-        })?;
+        .await?;
 
         let answer_text = assist_submission.response.to_answer_display_text();
         if !answer_text.trim().is_empty() {
@@ -574,8 +571,6 @@ impl SessionTaskService {
         let _ = db
             .upsert_session_usage(&id, session_model.as_str(), &assist_submission.stats)
             .await;
-
-        Self::clear_session_progress(&app_event_tx, &id);
 
         Ok(())
     }
@@ -671,12 +666,12 @@ impl SessionTaskService {
         });
     }
 
-    /// Clears the transient progress message for one session.
+    /// Clears the transient thinking message for one session.
     pub(crate) fn clear_session_progress(app_event_tx: &mpsc::UnboundedSender<AppEvent>, id: &str) {
         Self::set_session_progress(app_event_tx, id, None);
     }
 
-    /// Emits a transient progress message update for one session.
+    /// Emits a transient thinking message update for one session.
     pub(crate) fn set_session_progress(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         id: &str,

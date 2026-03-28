@@ -89,34 +89,6 @@ pub(crate) fn parse_agent_response_strict(
     })
 }
 
-/// Normalizes one streamed assistant chunk for transcript display.
-///
-/// Returns:
-/// - `Some(display_text)` for plain text chunks or complete structured JSON
-///   payloads containing non-empty `answer` text.
-/// - `None` for protocol JSON fragments that should be suppressed until the
-///   final assembled response arrives.
-pub(crate) fn normalize_stream_assistant_chunk(raw: &str) -> Option<String> {
-    if raw.trim().is_empty() {
-        return None;
-    }
-
-    if let Some(response) = parse_structured_json_response_with_recovery(raw) {
-        let display_text = response.to_answer_display_text();
-        if display_text.trim().is_empty() {
-            return None;
-        }
-
-        return Some(display_text);
-    }
-
-    if is_likely_protocol_json_fragment(raw) {
-        return None;
-    }
-
-    Some(raw.to_string())
-}
-
 /// Builds one multi-line debug report for a protocol parsing failure.
 ///
 /// The report summarizes response sizing, markdown wrapping, JSON parse
@@ -264,41 +236,6 @@ fn find_last_embedded_json_value(raw: &str) -> Option<Value> {
     }
 
     None
-}
-
-/// Returns whether one stream chunk looks like partial protocol JSON payload.
-fn is_likely_protocol_json_fragment(raw: &str) -> bool {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    if is_json_punctuation_only(trimmed) {
-        return true;
-    }
-
-    let has_protocol_key = trimmed.contains("\"answer\"")
-        || trimmed.contains("\"questions\"")
-        || trimmed.contains("\"text\"")
-        || trimmed.contains("\"options\"")
-        || trimmed.contains("\"summary\"");
-    if !has_protocol_key {
-        return false;
-    }
-
-    trimmed.contains('{')
-        || trimmed.contains('}')
-        || trimmed.contains('[')
-        || trimmed.contains(']')
-        || trimmed.contains(':')
-        || trimmed.contains(',')
-}
-
-/// Returns whether a chunk contains only JSON punctuation/signature symbols.
-fn is_json_punctuation_only(value: &str) -> bool {
-    value
-        .chars()
-        .all(|character| matches!(character, '{' | '}' | '[' | ']' | ':' | ',' | '"'))
 }
 
 /// Appends stable character-boundary diagnostics for one trimmed response.
@@ -516,90 +453,6 @@ mod tests {
     }
 
     #[test]
-    /// Keeps only the answer field when a full structured payload arrives in a
-    /// stream chunk.
-    fn test_normalize_stream_assistant_chunk_structured_payload() {
-        // Arrange
-        let raw = r#"{"answer":"Done.","questions":[{"text":"Need clarification.","options":[]}],"summary":null}"#;
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, Some("Done.".to_string()));
-    }
-
-    #[test]
-    /// Keeps only the answer field when wrapped prose precedes a full
-    /// structured payload in one stream chunk.
-    fn test_normalize_stream_assistant_chunk_recovers_wrapped_structured_payload() {
-        // Arrange
-        let raw = concat!(
-            "Let me format that cleanly.\n",
-            r#"{"answer":"Done.","questions":[],"summary":null}"#
-        );
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, Some("Done.".to_string()));
-    }
-
-    #[test]
-    /// Suppresses question-only payloads while streaming.
-    fn test_normalize_stream_assistant_chunk_question_only_payload() {
-        // Arrange
-        let raw = r#"{"answer":"","questions":[{"text":"Need clarification.","options":[]}],"summary":null}"#;
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, None);
-    }
-
-    #[test]
-    /// Suppresses summary-only payloads while streaming because they do not
-    /// add transcript text.
-    fn test_normalize_stream_assistant_chunk_summary_only_payload() {
-        // Arrange
-        let raw = r#"{"summary":{"session":"Current diff summary","turn":"Turn summary"}}"#;
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, None);
-    }
-
-    #[test]
-    /// Suppresses partial protocol fragments while streaming.
-    fn test_normalize_stream_assistant_chunk_protocol_fragment() {
-        // Arrange
-        let raw = r#"{"answer":"#;
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, None);
-    }
-
-    #[test]
-    /// Preserves plain text stream chunks unchanged.
-    fn test_normalize_stream_assistant_chunk_plain_text() {
-        // Arrange
-        let raw = "Plain response line";
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, Some("Plain response line".to_string()));
-    }
-
-    #[test]
     /// Fills in empty summaries for session turns.
     fn test_normalize_turn_response_fills_missing_summary_for_session_turn() {
         // Arrange
@@ -769,34 +622,6 @@ mod tests {
         let questions = response.expect("response should parse").question_items();
         assert_eq!(questions.len(), 1);
         assert_eq!(questions[0].text, "Which approach?");
-    }
-
-    #[test]
-    /// Stream normalization tolerates extra fields in a complete structured
-    /// payload.
-    fn test_normalize_stream_assistant_chunk_tolerates_extra_fields() {
-        // Arrange
-        let raw = r#"{"answer":"Streaming done.","questions":[],"summary":null,"metadata":{}}"#;
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, Some("Streaming done.".to_string()));
-    }
-
-    #[test]
-    /// Stream normalization passes unrecognized-only JSON through as plain
-    /// text instead of silently suppressing it as an empty protocol response.
-    fn test_normalize_stream_assistant_chunk_passes_unrecognized_json_as_plain_text() {
-        // Arrange
-        let raw = r#"{"message":"not the expected shape"}"#;
-
-        // Act
-        let normalized = normalize_stream_assistant_chunk(raw);
-
-        // Assert
-        assert_eq!(normalized, Some(raw.to_string()));
     }
 
     #[test]

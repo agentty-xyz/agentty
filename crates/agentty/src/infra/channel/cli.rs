@@ -20,10 +20,10 @@ use crate::infra::channel::{
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
 ///
 /// Stdout lines are classified by
-/// [`agent::parse_stream_output_line`] and forwarded as
-/// [`TurnEvent::AssistantDelta`] or [`TurnEvent::Progress`]. A kill signal
-/// transitions the turn to a failed state with a `[Stopped]` banner. A spawn
-/// failure is surfaced through [`AgentError`].
+/// [`agent::parse_stream_output_line`] and transient loader updates are
+/// forwarded as [`TurnEvent::ThoughtDelta`]. A kill signal transitions the
+/// turn to a failed state with a `[Stopped]` banner. A spawn failure is
+/// surfaced through [`AgentError`].
 pub struct CliAgentChannel {
     /// Provider-specific command builder.
     backend: Arc<dyn AgentBackend>,
@@ -76,10 +76,10 @@ impl AgentChannel for CliAgentChannel {
     /// Spawns a CLI process for the turn and streams its output as events.
     ///
     /// Stdout lines are parsed with the provider-specific stream parser and
-    /// forwarded as [`TurnEvent::AssistantDelta`] (response content) or
-    /// [`TurnEvent::Progress`] (tool-use labels, thinking labels). After the
-    /// process exits, usage statistics are extracted from the raw stdout/stderr
-    /// and returned in [`TurnResult`].
+    /// loader-oriented interim text is forwarded as
+    /// [`TurnEvent::ThoughtDelta`]. After the process exits, usage
+    /// statistics are extracted from the raw stdout/stderr and the final
+    /// parsed response is returned in [`TurnResult`].
     ///
     /// # Errors
     /// Returns [`AgentError`] when command construction fails, the process
@@ -220,18 +220,13 @@ impl AgentChannel for CliAgentChannel {
     }
 }
 
-/// Reads stdout line-by-line, classifying each line and forwarding events.
+/// Reads stdout line-by-line, classifying each line and forwarding loader
+/// updates.
 ///
-/// Recognized response-content lines produce [`TurnEvent::AssistantDelta`];
-/// progress lines produce [`TurnEvent::Progress`]. Unrecognized lines and
-/// empty-after-trim results are silently skipped. The raw bytes are also
-/// accumulated in `raw_buffer` for final response parsing after the process
-/// exits.
-///
-/// Response content is streamed live through the best-effort heuristic
-/// normalizer. Partial protocol JSON fragments may leak through, but the
-/// worker layer always appends the clean final parsed response at turn
-/// completion so the authoritative output is present regardless.
+/// Only non-response-content stream lines are forwarded as
+/// [`TurnEvent::ThoughtDelta`]. Final assistant transcript output is parsed
+/// from the accumulated raw stdout after the process exits. The raw bytes are
+/// also accumulated in `raw_buffer` for final response parsing.
 async fn stream_stdout(
     stdout: tokio::process::ChildStdout,
     kind: AgentKind,
@@ -250,37 +245,18 @@ async fn stream_stdout(
             continue;
         };
 
-        let event = if is_response_content {
-            let Some(normalized_text) = normalize_stream_response_content(&text) else {
-                continue;
-            };
-            if normalized_text.trim().is_empty() {
-                continue;
-            }
+        if is_response_content {
+            continue;
+        }
 
-            TurnEvent::AssistantDelta(normalized_text)
-        } else {
-            if text.trim().is_empty() {
-                continue;
-            }
-
-            TurnEvent::Progress(text)
-        };
+        let trimmed_text = text.trim();
+        if trimmed_text.is_empty() {
+            continue;
+        }
 
         // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = events.send(event);
+        let _ = events.send(TurnEvent::ThoughtDelta(trimmed_text.to_string()));
     }
-}
-
-/// Normalizes one response-content stream chunk before transcript emission.
-///
-/// For structured protocol chunks that already contain a complete JSON payload,
-/// this strips the protocol wrapper and returns only `answer` display text.
-///
-/// Partial protocol JSON fragments are suppressed so raw JSON does not leak
-/// into session output while streaming.
-fn normalize_stream_response_content(text: &str) -> Option<String> {
-    agent::protocol::normalize_stream_assistant_chunk(text)
 }
 
 /// Formats one failed CLI turn into a user-facing error.
@@ -338,8 +314,7 @@ mod tests {
 
     #[tokio::test]
     /// Verifies spawn failure returns `Err` with a descriptive message and
-    /// does not emit any `AssistantDelta` events (the worker appends the
-    /// error to session output once via `apply_turn_result`).
+    /// does not emit any turn events when the process never starts.
     async fn test_run_turn_spawn_failure_returns_err_without_delta() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -371,8 +346,7 @@ mod tests {
 
     #[tokio::test]
     /// Verifies kill-by-signal returns `Err` with a `[Stopped]` message and
-    /// does not emit an `AssistantDelta` event (the worker appends the error
-    /// to session output once via `apply_turn_result`).
+    /// does not emit any loader updates.
     async fn test_run_turn_kill_signal_returns_err_without_stopped_delta() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
@@ -400,7 +374,7 @@ mod tests {
             "error was: {error_message}"
         );
 
-        // Drain `PidUpdate` events and verify no `AssistantDelta` was emitted.
+        // Drain `PidUpdate` events and verify no loader update was emitted.
         while let Ok(event) = events_rx.try_recv() {
             assert!(
                 matches!(event, TurnEvent::PidUpdate(_)),
@@ -739,10 +713,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies strict protocol providers stream assistant deltas live and
-    /// forward progress events alongside them. The worker layer appends
-    /// the clean final parsed response at turn completion.
-    async fn test_run_turn_streams_deltas_and_progress_for_strict_protocol_provider() {
+    /// Verifies CLI channels surface only transient loader text while the
+    /// final assistant response is returned at turn completion.
+    async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut mock_backend = MockAgentBackend::new();
@@ -770,72 +743,13 @@ mod tests {
             .expect("turn should succeed");
 
         // Assert
-        let mut saw_progress = false;
-        let mut saw_delta = false;
+        let mut saw_loader_update = false;
         while let Ok(event) = events_rx.try_recv() {
-            match event {
-                TurnEvent::AssistantDelta(_) => saw_delta = true,
-                TurnEvent::Progress(label) => {
-                    saw_progress = true;
-                    assert_eq!(label, "Running a command");
-                }
-                _ => {}
+            if matches!(event, TurnEvent::ThoughtDelta(_)) {
+                saw_loader_update = true;
             }
         }
-        assert!(saw_progress, "progress events should be forwarded");
-        assert!(saw_delta, "assistant deltas should be streamed live");
+        assert!(saw_loader_update, "loader updates should be streamed live");
         assert_eq!(result.assistant_message.to_display_text(), "final answer");
-    }
-
-    #[test]
-    /// Verifies plain stream chunks are returned unchanged.
-    fn test_normalize_stream_response_content_keeps_plain_text() {
-        // Arrange
-        let text = "Plain response line";
-
-        // Act
-        let normalized_text = normalize_stream_response_content(text);
-
-        // Assert
-        assert_eq!(normalized_text, Some(text.to_string()));
-    }
-
-    #[test]
-    /// Verifies structured JSON stream chunks keep only `answer` text.
-    fn test_normalize_stream_response_content_keeps_answer_text_only() {
-        // Arrange
-        let text = r#"{"answer":"Done.","questions":[{"text":"Need clarification.","options":[]}],"summary":null}"#;
-
-        // Act
-        let normalized_text = normalize_stream_response_content(text);
-
-        // Assert
-        assert_eq!(normalized_text, Some("Done.".to_string()));
-    }
-
-    #[test]
-    /// Verifies structured JSON chunks without `answer` text are suppressed.
-    fn test_normalize_stream_response_content_suppresses_question_only_payload() {
-        // Arrange
-        let text = r#"{"answer":"","questions":[{"text":"Need clarification.","options":[]}],"summary":null}"#;
-
-        // Act
-        let normalized_text = normalize_stream_response_content(text);
-
-        // Assert
-        assert_eq!(normalized_text, None);
-    }
-
-    #[test]
-    /// Verifies partial protocol JSON chunks are suppressed during streaming.
-    fn test_normalize_stream_response_content_suppresses_json_fragment() {
-        // Arrange
-        let text = r#"{"answer":"#;
-
-        // Act
-        let normalized_text = normalize_stream_response_content(text);
-
-        // Assert
-        assert_eq!(normalized_text, None);
     }
 }

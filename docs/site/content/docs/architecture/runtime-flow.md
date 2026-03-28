@@ -70,7 +70,7 @@ Agentty uses four primary runtime data channels:
 |---------|-------------|-------------|---------|---------|
 | Terminal `Event` channel (`runtime/event.rs`) | Event-reader thread | `runtime::process_events()` | `crossterm::Event` | User input and terminal events. |
 | App event bus (`AppEvent`) | App background tasks, workers, task helpers | `App::apply_app_events()` reducer | `AppEvent` variants | Safe cross-task app-state mutation. |
-| Turn event stream (`TurnEvent`) | `AgentChannel` implementations | Session worker `consume_turn_events()` | Stream deltas/progress/pid | Real-time turn output and progress updates. |
+| Turn event stream (`TurnEvent`) | `AgentChannel` implementations | Session worker `consume_turn_events()` | Loader-thought/pid | Transient loader updates and PID updates while final transcript output waits for the completed turn result. |
 | Session handles (`SessionHandles`) | Workers/session task helpers | `SessionState::sync_from_handles()` | Shared `Arc<Mutex<...>>` output/status/pid | Fast snapshot sync without full DB reload. |
 
 ## App Event Reducer Flow
@@ -81,7 +81,7 @@ Agentty uses four primary runtime data channels:
 Flow:
 
 1. Drain queued events (`first_event` + `try_recv` loop).
-1. Reduce into `AppEventBatch` (coalesces refresh, git status, model/progress updates).
+1. Reduce into `AppEventBatch` (coalesces refresh, git status, model, and loader-thinking updates).
 1. Apply side effects in stable order.
 
 Reducer behaviors that matter for data flow:
@@ -90,7 +90,7 @@ Reducer behaviors that matter for data flow:
 - `reload_projects()` now reloads only persisted project rows; the expensive home-directory repository discovery pass runs only during `App::new()`.
 - `BranchPublishActionCompleted` swaps the session-view popup from loading to success or blocked/failure copy after a manual branch push finishes.
 - `SessionUpdated` marks touched sessions so reducer can call `sync_session_from_handle()` selectively.
-- `SessionProgressUpdated` updates transient progress labels used by UI.
+- `SessionProgressUpdated` refreshes transient loader text used by the session view.
 - `AgentResponseReceived` routes question-mode transitions for active view sessions.
 - After touched-session sync, terminal statuses (`Done`, `Canceled`) drop per-session worker senders so workers can shut down runtimes.
 
@@ -105,7 +105,7 @@ From prompt submit to persisted result:
 1. `SessionWorkerService` lazily creates or reuses a per-session worker queue.
 1. Worker marks operation `running`, checks cancel flags, then runs channel turn.
 1. Worker creates `TurnRequest` (reasoning level, model, prompt, `request_kind`, replay output, provider conversation id).
-1. Worker spawns `consume_turn_events()` and sets initial progress (`Thinking`).
+1. Worker spawns `consume_turn_events()`.
 1. `AgentChannel::run_turn()` streams `TurnEvent` values and returns `TurnResult`.
 1. Worker applies final result:
 1. Append final assistant transcript output when no assistant chunks were already streamed (`answer` text, fallback `question` text).
@@ -163,7 +163,7 @@ Key types (`infra/channel/contract.rs`, re-exported by `infra/channel.rs`):
 | Type | Purpose |
 |------|---------|
 | `TurnRequest` | Input payload: `reasoning_level`, folder, `live_session_output`, model, `request_kind`, prompt, and `provider_conversation_id`. |
-| `TurnEvent` | Incremental stream events: `AssistantDelta`, `ThoughtDelta`, `Progress`, `Completed`, `Failed`, `PidUpdate`. |
+| `TurnEvent` | Incremental stream events: `ThoughtDelta`, `Completed`, `Failed`, `PidUpdate`. |
 | `TurnResult` | Normalized output: `assistant_message`, token counts, `provider_conversation_id`. |
 | `AgentRequestKind` | `SessionStart`, `SessionResume` (with optional session output replay), or `UtilityPrompt`. |
 
@@ -183,38 +183,41 @@ Provider output is normalized to one structured response protocol:
    `crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md` owns the normal request wrapper, `crates/agentty/src/infra/agent/prompt.rs` owns shared prompt preparation, and `crates/agentty/src/infra/agent/protocol.rs` routes to the authoritative protocol model/schema/parse submodules.
 1. The caller selects one canonical `AgentRequestKind` before transport handoff, and the transport derives the matching `ProtocolRequestProfile` from it. Session turns use `SessionStart` or `SessionResume`, while isolated utility prompts use `UtilityPrompt`.
 1. Session discussion turns typically populate `summary.turn` and `summary.session`, while one-shot prompts may leave `summary` unused.
-1. Channels stream deltas/progress as `TurnEvent`.
+1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values when providers surface thought or tool-status text during the turn.
 1. Final output is parsed to protocol `answer`, `questions`, and the optional structured summary. The final assistant payload itself must match the shared protocol JSON object, while direct deserialization into the shared wire type still accepts summary-only or otherwise defaulted top-level fields. If a provider prepends prose before one final schema object, parsing now recovers that trailing payload as long as nothing except whitespace follows it. Rejected payloads now surface parse diagnostics including response sizing, JSON parser location/category, and discovered top-level keys.
 1. Worker persists final display text, raw summary payload, and question payloads, then emits `AgentResponseReceived`.
 
 <a id="architecture-agent-interaction-streaming"></a>
 Streaming behavior differs by transport/provider:
 
-- CLI channel (`CliAgentChannel`): parses stdout lines into `AssistantDelta`
-  and `Progress`; keeps raw output for final parse. Claude now uses its
-  documented `stream-json` output path here so compaction/tool-use progress can
-  surface without waiting for a single final JSON payload.
+- CLI channel (`CliAgentChannel`): parses stdout lines into loader-only
+  `ThoughtDelta` updates for non-response progress/thought text and keeps raw
+  output for final parse. Claude now uses its documented `stream-json` output
+  path here so compaction/tool-use progress can surface without waiting for a
+  single final JSON payload.
 - CLI prompt submission can stream the fully rendered prompt through stdin for
   providers that would otherwise exceed argv limits on large diffs or one-shot
   utility prompts.
 - Shared CLI subprocess helpers under `crates/agentty/src/infra/agent/cli/`
   now own stdin piping and provider-aware exit guidance so session turns and
   one-shot prompts use the same subprocess behavior.
-- App-server channel (`AppServerAgentChannel`): bridges `AppServerStreamEvent` to `TurnEvent`.
+- App-server channel (`AppServerAgentChannel`): routes provider thought phases
+  and progress updates to transient loader text, while withholding assistant
+  transcript chunks until the completed turn result is parsed.
 - One-shot prompt submission asks the concrete backend for its transport path,
   so app-server providers (Codex and Gemini) resolve their own runtime client
   and Claude stays on direct CLI subprocess execution.
-- Codex thought phases (`thinking`/`plan`/`reasoning`/`thought`) stream as `ThoughtDelta`.
-- Provider capabilities in `crates/agentty/src/infra/agent/provider.rs` centralize whether transports stream assistant chunks live, require strict final protocol validation, classify app-server phase labels as thought output, and construct provider app-server clients.
-- Strict providers suppress streamed assistant chunks when needed so malformed first-pass protocol JSON is not persisted.
-- Wrapped stream chunks that end in one valid protocol payload are normalized
-  down to that payload's `answer`, so recovered schema output does not persist
-  any prefatory prose.
+- Provider capabilities in `crates/agentty/src/infra/agent/provider.rs`
+  centralize strict final protocol validation, CLI stream classification,
+  app-server thought-phase handling, and provider app-server client
+  construction.
 - Gemini ACP still accumulates streamed assistant chunks internally for its
   final turn result, but the runtime now prefers the completed
   `session/prompt` payload whenever that payload parses as protocol JSON and
   the streamed accumulation does not.
-- Worker persistence behavior: streamed `ThoughtDelta` and `Progress` updates drive transient progress badges and are not appended to session transcript output.
+- Worker persistence behavior: `ThoughtDelta` updates refresh the loader only,
+  while assistant transcript output is appended once from the final parsed turn
+  result.
 
 <a id="architecture-agent-interaction-validation"></a>
 Final-output validation:
@@ -261,8 +264,8 @@ Detached/background execution paths and their trigger conditions:
 | Git status poller loop | App startup (if project has git branch), project switch, and session refreshes that change published session branches | `TaskService::spawn_git_status_task` | `AppEvent::GitStatusUpdated` | Periodic fetch plus one repo-level branch-tracking snapshot, then maps that snapshot to the active project branch and all published session branches in that project (about every 30s). |
 | Version check one-shot | App startup | `TaskService::spawn_version_check_task` | `AppEvent::VersionAvailabilityUpdated` | Checks npm latest version tag and reports update availability. |
 | Per-session worker loop | First command enqueue for a session | `SessionWorkerService::spawn_session_worker` | DB `session_operation` updates, app/session updates | Serializes all turn commands per session and manages channel lifecycle. |
-| Per-turn turn-event consumer | Every queued turn execution | `run_channel_turn` | Output append, progress updates, pid slot updates | Consumes `TurnEvent` stream and applies immediate side effects. |
-| CLI stdout/stderr readers | Every CLI-backed turn | `CliAgentChannel::run_turn` | `TurnEvent` stream + raw buffers | Reads subprocess streams and emits incremental deltas/progress. |
+| Per-turn turn-event consumer | Every queued turn execution | `run_channel_turn` | Loader updates, pid slot updates | Consumes `TurnEvent` stream and applies immediate side effects. |
+| CLI stdout/stderr readers | Every CLI-backed turn | `CliAgentChannel::run_turn` | `TurnEvent` stream + raw buffers | Reads subprocess streams and emits transient loader updates while buffering final output. |
 | App-server stream bridge | Every app-server-backed turn | `AppServerAgentChannel::run_turn` | `TurnEvent` stream | Bridges `AppServerStreamEvent` to unified turn events. |
 | Clipboard image persistence | Prompt input `Ctrl+V` or `Alt+V` | `runtime/mode/prompt::handle_prompt_image_paste` | Temp PNG under `AGENTTY_ROOT/tmp/<session-id>/images/`, prompt attachment state | Reads a clipboard image or PNG path via `spawn_blocking`, persists it, and inserts an inline `[Image #n]` placeholder. |
 | Session title generation | First `Start` turn, before main turn execution | `spawn_start_turn_title_generation` | DB title + `AppEvent::RefreshSessions` | Runs one-shot title prompt in background and persists generated title if valid. |

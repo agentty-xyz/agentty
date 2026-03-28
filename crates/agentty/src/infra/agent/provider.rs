@@ -77,12 +77,6 @@ pub(crate) fn parse_turn_response(
     ))
 }
 
-/// Returns whether app-server assistant chunks should be forwarded while the
-/// turn is still in progress.
-pub(crate) fn should_stream_app_server_assistant_messages(kind: AgentKind) -> bool {
-    provider_descriptor(kind).stream_app_server_assistant_messages
-}
-
 /// Returns whether one app-server assistant chunk should be treated as
 /// thought text instead of transcript output.
 pub(crate) fn is_app_server_thought_chunk(
@@ -139,7 +133,6 @@ struct AgentProviderDescriptor {
     parse_response: fn(&str, &str) -> ParsedResponse,
     parse_stream_output_line: fn(&str) -> Option<(String, bool)>,
     prompt_transport: AgentPromptTransport,
-    stream_app_server_assistant_messages: bool,
     transport: AgentTransport,
 }
 
@@ -157,7 +150,6 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_gemini_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_gemini_stream_output_line,
             prompt_transport: AgentPromptTransport::Stdin,
-            stream_app_server_assistant_messages: false,
             transport: AgentTransport::AppServer,
         },
         AgentKind::Claude => AgentProviderDescriptor {
@@ -167,7 +159,6 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_claude_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_claude_stream_output_line,
             prompt_transport: AgentPromptTransport::Stdin,
-            stream_app_server_assistant_messages: false,
             transport: AgentTransport::Cli,
         },
         AgentKind::Codex => AgentProviderDescriptor {
@@ -182,7 +173,6 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             parse_response: super::response_parser::parse_codex_response_with_fallback,
             parse_stream_output_line: super::response_parser::parse_codex_stream_output_line,
             prompt_transport: AgentPromptTransport::Argv,
-            stream_app_server_assistant_messages: true,
             transport: AgentTransport::AppServer,
         },
     }

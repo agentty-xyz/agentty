@@ -19,7 +19,8 @@ use crate::infra::channel::{
 ///
 /// Turn execution is delegated to [`AppServerClient::run_turn`].
 /// [`AppServerStreamEvent`]s emitted by the provider are bridged to
-/// [`TurnEvent::AssistantDelta`] and [`TurnEvent::Progress`] as they arrive.
+/// [`TurnEvent::ThoughtDelta`] values when transient loader text should be
+/// updated.
 pub struct AppServerAgentChannel {
     /// Provider-specific app-server client.
     client: Arc<dyn AppServerClient>,
@@ -48,19 +49,11 @@ impl AgentChannel for AppServerAgentChannel {
 
     /// Runs one app-server turn and bridges stream events to [`TurnEvent`]s.
     ///
-    /// [`AppServerStreamEvent::AssistantMessage`] events are routed to either
-    /// [`TurnEvent::AssistantDelta`] or [`TurnEvent::ThoughtDelta`] for
-    /// non-strict providers. Strict providers suppress assistant stream chunks
-    /// and rely on final payload parsing to avoid leaking malformed first-pass
-    /// output before validation finishes.
-    ///
-    /// Codex thought-style deltas (`phase: thinking/plan`) are emitted as
-    /// [`TurnEvent::ThoughtDelta`]. Other assistant chunks are normalized via
-    /// [`normalize_stream_assistant_chunk`] and emitted as
-    /// [`TurnEvent::AssistantDelta`].
-    ///
-    /// [`AppServerStreamEvent::ProgressUpdate`] events are forwarded as
-    /// [`TurnEvent::Progress`].
+    /// Assistant stream chunks are never appended directly to the transcript.
+    /// Instead, Codex thought-style deltas (`phase: thinking/plan`) and
+    /// provider progress updates are bridged to [`TurnEvent::ThoughtDelta`] so
+    /// the UI loader can reflect transient state while the final persisted
+    /// output still comes only from the parsed [`TurnResult`].
     ///
     /// # Errors
     /// Returns [`AgentError`] when [`AppServerClient::run_turn`] fails.
@@ -72,9 +65,6 @@ impl AgentChannel for AppServerAgentChannel {
     ) -> AgentFuture<Result<TurnResult, AgentError>> {
         let client = Arc::clone(&self.client);
         let kind = self.kind;
-        let should_stream_assistant_messages =
-            agent::should_stream_app_server_assistant_messages(kind);
-
         Box::pin(async move {
             let request = AppServerTurnRequest {
                 folder: req.folder,
@@ -100,10 +90,6 @@ impl AgentChannel for AppServerAgentChannel {
                                 phase,
                                 is_delta,
                             } => {
-                                if !should_stream_assistant_messages {
-                                    continue;
-                                }
-
                                 let trimmed = message.trim_end();
                                 if trimmed.trim().is_empty() {
                                     continue;
@@ -120,25 +106,15 @@ impl AgentChannel for AppServerAgentChannel {
 
                                     continue;
                                 }
-
-                                let formatted = if is_delta {
-                                    normalize_delta_assistant_message(trimmed)
-                                } else {
-                                    format_non_delta_assistant_message(trimmed)
-                                };
-                                let Some(formatted) = formatted else {
-                                    continue;
-                                };
-                                if formatted.trim().is_empty() {
+                            }
+                            AppServerStreamEvent::ProgressUpdate(progress) => {
+                                let trimmed = progress.trim();
+                                if trimmed.is_empty() {
                                     continue;
                                 }
 
                                 // Fire-and-forget: receiver may be dropped during shutdown.
-                                let _ = events.send(TurnEvent::AssistantDelta(formatted));
-                            }
-                            AppServerStreamEvent::ProgressUpdate(progress) => {
-                                // Fire-and-forget: receiver may be dropped during shutdown.
-                                let _ = events.send(TurnEvent::Progress(progress));
+                                let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
                             }
                         }
                     }
@@ -185,28 +161,6 @@ impl AgentChannel for AppServerAgentChannel {
     }
 }
 
-/// Normalizes one streamed delta assistant message.
-///
-/// For protocol JSON fragments, returns [`None`] so partial JSON is not
-/// appended to session output.
-fn normalize_delta_assistant_message(message: &str) -> Option<String> {
-    agent::protocol::normalize_stream_assistant_chunk(message)
-}
-
-/// Normalizes one complete non-delta assistant message.
-///
-/// The app-server emits non-delta assistant messages as complete chunks. This
-/// helper parses protocol wrappers and returns only `answer` display text,
-/// preserving paragraph spacing.
-///
-/// Returns [`None`] when the payload is only a suppressed protocol fragment.
-fn format_non_delta_assistant_message(message: &str) -> Option<String> {
-    let normalized = agent::protocol::normalize_stream_assistant_chunk(message)?;
-    let normalized = normalized.trim_end();
-
-    Some(format!("{normalized}\n\n"))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -243,9 +197,10 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies `AssistantMessage` with `is_delta: true` is forwarded as an
-    /// `AssistantDelta` event with the message text unchanged.
-    async fn test_run_turn_bridges_delta_assistant_message_unchanged() {
+    /// Verifies non-thought assistant deltas are withheld from the unified
+    /// event stream so transcript output is only appended from the final turn
+    /// result.
+    async fn test_run_turn_suppresses_non_thought_assistant_delta_streaming() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -273,14 +228,20 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        let event = events_rx.try_recv().expect("should have received an event");
-        assert_eq!(event, TurnEvent::AssistantDelta("Hello world".to_string()));
+        let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(!events.is_empty());
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, TurnEvent::PidUpdate(_))),
+            "only pid events should be emitted, got: {events:?}"
+        );
     }
 
     #[tokio::test]
-    /// Verifies Codex non-delta assistant chunks are forwarded as
-    /// `AssistantDelta` events.
-    async fn test_run_turn_codex_forwards_non_delta_assistant_messages() {
+    /// Verifies completed assistant chunks are also withheld from the unified
+    /// event stream so the transcript only changes when the turn completes.
+    async fn test_run_turn_suppresses_non_delta_assistant_messages() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -308,17 +269,20 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        let event = events_rx.try_recv().expect("should have received an event");
-        assert_eq!(
-            event,
-            TurnEvent::AssistantDelta("Full paragraph\n\n".to_string())
+        let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(!events.is_empty());
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, TurnEvent::PidUpdate(_))),
+            "only pid events should be emitted, got: {events:?}"
         );
     }
 
     #[tokio::test]
-    /// Verifies Codex non-delta structured JSON chunks are normalized and
-    /// forwarded as `AssistantDelta`.
-    async fn test_run_turn_codex_forwards_non_delta_structured_json_streaming() {
+    /// Verifies structured assistant payload chunks are not emitted as live
+    /// transcript output.
+    async fn test_run_turn_suppresses_non_delta_structured_json_streaming() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -346,8 +310,14 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        let event = events_rx.try_recv().expect("should have received an event");
-        assert_eq!(event, TurnEvent::AssistantDelta("Done.\n\n".to_string()));
+        let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(!events.is_empty());
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, TurnEvent::PidUpdate(_))),
+            "only pid events should be emitted, got: {events:?}"
+        );
     }
 
     #[tokio::test]
@@ -389,8 +359,8 @@ mod tests {
 
     #[tokio::test]
     /// Verifies Codex thought-phase matching is case-insensitive for streamed
-    /// delta routing.
-    async fn test_run_turn_routes_codex_thinking_delta_with_uppercase_phase_to_thought_event() {
+    /// thought routing.
+    async fn test_run_turn_routes_uppercase_codex_thinking_delta_to_thought_event() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -426,8 +396,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies `ProgressUpdate` events are forwarded as `Progress` events.
-    async fn test_run_turn_bridges_progress_update_as_progress_event() {
+    /// Verifies `ProgressUpdate` events drive the transient thinking loader.
+    async fn test_run_turn_routes_progress_update_events_to_thought_delta() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
@@ -453,8 +423,10 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-        let event = events_rx.try_recv().expect("should have received an event");
-        assert_eq!(event, TurnEvent::Progress("Running tool".to_string()));
+        let event = events_rx
+            .try_recv()
+            .expect("should have received a progress event");
+        assert_eq!(event, TurnEvent::ThoughtDelta("Running tool".to_string()));
     }
 
     #[tokio::test]
@@ -492,8 +464,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies whitespace-only `AssistantMessage` is not forwarded as an
-    /// `AssistantDelta` event.
+    /// Verifies whitespace-only `AssistantMessage` does not emit a thinking
+    /// update.
     async fn test_run_turn_skips_whitespace_only_assistant_messages() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
@@ -524,15 +496,15 @@ mod tests {
         assert!(result.is_ok());
         while let Ok(event) = events_rx.try_recv() {
             assert!(
-                !matches!(event, TurnEvent::AssistantDelta(_)),
-                "no AssistantDelta should be emitted for whitespace-only messages, got: {event:?}"
+                !matches!(event, TurnEvent::ThoughtDelta(_)),
+                "no ThoughtDelta should be emitted for whitespace-only messages, got: {event:?}"
             );
         }
     }
 
     #[tokio::test]
-    /// Verifies delta protocol JSON fragments are not forwarded as
-    /// `AssistantDelta` events.
+    /// Verifies delta protocol JSON fragments do not emit transient loader
+    /// updates.
     async fn test_run_turn_skips_delta_protocol_json_fragments() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
@@ -564,8 +536,8 @@ mod tests {
         assert_eq!(result.assistant_message.to_display_text(), "Final answer.");
         while let Ok(event) = events_rx.try_recv() {
             assert!(
-                !matches!(event, TurnEvent::AssistantDelta(_)),
-                "no AssistantDelta should be emitted for protocol fragments, got: {event:?}"
+                !matches!(event, TurnEvent::ThoughtDelta(_)),
+                "no ThoughtDelta should be emitted for protocol fragments, got: {event:?}"
             );
         }
     }
@@ -607,8 +579,8 @@ mod tests {
         );
         while let Ok(event) = events_rx.try_recv() {
             assert!(
-                !matches!(event, TurnEvent::AssistantDelta(_)),
-                "no AssistantDelta should be emitted for strict providers, got: {event:?}"
+                !matches!(event, TurnEvent::ThoughtDelta(_)),
+                "no ThoughtDelta should be emitted for strict providers, got: {event:?}"
             );
         }
     }

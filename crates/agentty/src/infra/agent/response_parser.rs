@@ -375,7 +375,9 @@ pub(super) fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(Strin
             || item_type == "thought"
         {
             let delta = item.delta.as_ref().or(item.text.as_ref())?.clone();
-            return Some((delta, true));
+            let is_response_content = item_type == "agent_message" || item_type == "agentmessage";
+
+            return Some((delta, is_response_content));
         }
     }
 
@@ -398,7 +400,9 @@ pub(super) fn parse_codex_stream_output_line(stdout_line: &str) -> Option<(Strin
         return None;
     }
 
-    Some((text, true))
+    let is_response_content = item_type == "agent_message" || item_type == "agentmessage";
+
+    Some((text, is_response_content))
 }
 
 fn parse_claude_response_payload(stdout: &str) -> Option<ParsedResponse> {
@@ -1024,6 +1028,19 @@ mod tests {
 
         // Assert
         assert_eq!(parsed_line, Some(("Final answer".to_string(), true)));
+    }
+
+    #[test]
+    fn test_parse_stream_output_line_codex_marks_reasoning_as_loader_text() {
+        // Arrange
+        let reasoning_line =
+            r#"{"type":"item.updated","item":{"type":"reasoning","delta":"Inspecting files"}}"#;
+
+        // Act
+        let parsed_line = parse_codex_stream_output_line(reasoning_line);
+
+        // Assert
+        assert_eq!(parsed_line, Some(("Inspecting files".to_string(), false)));
     }
 
     #[test]

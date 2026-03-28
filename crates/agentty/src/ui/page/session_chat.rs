@@ -62,8 +62,8 @@ impl<'a> SessionChatPage<'a> {
     /// width.
     ///
     /// This mirrors the exact wrapping and footer line rules used during
-    /// rendering, including review text, so scroll math can stay in
-    /// sync with what users see.
+    /// rendering, including review text and generic active-status loaders, so
+    /// scroll math can stay in sync with what users see.
     pub(crate) fn rendered_output_line_count(
         session: &Session,
         output_width: u16,

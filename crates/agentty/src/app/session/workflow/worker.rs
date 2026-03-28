@@ -349,18 +349,10 @@ impl SessionWorkerService {
 
         let consumer = tokio::spawn(consume_turn_events(
             event_rx,
-            Arc::clone(&context.output),
-            context.db.clone(),
             context.app_event_tx.clone(),
             context.session_id.clone(),
             Arc::clone(&context.child_pid),
         ));
-
-        SessionTaskService::set_session_progress(
-            &context.app_event_tx,
-            &context.session_id,
-            Some("Thinking".to_string()),
-        );
 
         spawn_start_turn_title_generation(
             context,
@@ -381,16 +373,9 @@ impl SessionWorkerService {
         )
         .await;
 
-        let streamed_assistant_content = consumer.await.unwrap_or(false);
-        SessionTaskService::clear_session_progress(&context.app_event_tx, &context.session_id);
+        let _ = consumer.await;
 
-        let result = apply_turn_result(
-            context,
-            session_model,
-            turn_result,
-            streamed_assistant_content,
-        )
-        .await;
+        let result = apply_turn_result(context, session_model, turn_result).await;
 
         if let Some(session_size) = SessionTaskService::refresh_persisted_session_size(
             &context.db,
@@ -537,13 +522,10 @@ impl SessionManager {
 /// `Ok(Status)` on success or `Err(description)` on turn failure after
 /// appending the error to session output.
 ///
-/// The final parsed response appends non-empty protocol `answer` text only
-/// when no assistant stream chunks were already appended for this turn. This
-/// avoids duplicate assistant output while preserving streamed answers.
-///
-/// When no `answer` text exists, worker output falls back to joined
-/// question text so clarification prompts remain visible while thought-only
-/// responses are not persisted as final transcript output.
+/// The final parsed response appends non-empty protocol `answer` text once the
+/// turn completes. When no `answer` text exists, worker output falls back to
+/// joined question text so clarification prompts remain visible while
+/// thought-only responses are not persisted as final transcript output.
 ///
 /// The raw agent `summary` payload is persisted here so refresh-driven UI
 /// rendering can reload it from the database and show separate `Current Turn`
@@ -558,13 +540,9 @@ async fn apply_turn_result(
     context: &SessionWorkerContext,
     session_model: AgentModel,
     turn_result: Result<TurnResult, AgentError>,
-    streamed_assistant_content: bool,
 ) -> Result<Status, SessionError> {
     match turn_result {
-        Ok(result) => {
-            apply_successful_turn_result(context, session_model, result, streamed_assistant_content)
-                .await
-        }
+        Ok(result) => apply_successful_turn_result(context, session_model, result).await,
         Err(error) => {
             let message = format!("\n{}\n", error.0.trim());
             SessionTaskService::append_session_output(
@@ -587,7 +565,6 @@ async fn apply_successful_turn_result(
     context: &SessionWorkerContext,
     session_model: AgentModel,
     result: TurnResult,
-    streamed_assistant_content: bool,
 ) -> Result<Status, SessionError> {
     let TurnResult {
         assistant_message,
@@ -597,9 +574,7 @@ async fn apply_successful_turn_result(
         ..
     } = result;
 
-    if let Some(message) =
-        build_assistant_transcript_output(&assistant_message, streamed_assistant_content)
-    {
+    if let Some(message) = build_assistant_transcript_output(&assistant_message) {
         SessionTaskService::append_session_output(
             &context.output,
             &context.db,
@@ -762,7 +737,7 @@ async fn load_project_model_setting(
 /// Returns the spacer that should precede the summary transcript block.
 ///
 /// Summary markdown should stay visually separated from any previously
-/// streamed assistant text. When the current transcript already ends with a
+/// persisted assistant text. When the current transcript already ends with a
 /// blank line, no extra spacing is needed.
 fn summary_transcript_prefix(output: &Arc<Mutex<String>>) -> String {
     let Ok(output) = output.lock() else {
@@ -783,23 +758,12 @@ fn summary_transcript_prefix(output: &Arc<Mutex<String>>) -> String {
 /// Builds the persisted transcript chunk for one parsed assistant response.
 ///
 /// Prefers the top-level `answer` text so normal chat output stays concise.
-///
-/// When `streamed_assistant_content` is `true`, non-empty `answer` text is not
-/// appended again to avoid duplicate output in the transcript.
-///
 /// Falls back to joined question text when no answer is present so
 /// clarification prompts stay visible while thought-only responses are not
 /// persisted as final transcript output.
-fn build_assistant_transcript_output(
-    assistant_message: &agent::AgentResponse,
-    streamed_assistant_content: bool,
-) -> Option<String> {
+fn build_assistant_transcript_output(assistant_message: &agent::AgentResponse) -> Option<String> {
     let answer_text = assistant_message.to_answer_display_text();
     if !answer_text.trim().is_empty() {
-        if streamed_assistant_content {
-            return None;
-        }
-
         return Some(format!("{}\n\n", answer_text.trim_end()));
     }
 
@@ -866,48 +830,20 @@ fn build_summary_transcript_output(
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
 ///
-/// - [`TurnEvent::AssistantDelta`]: appends text to the session output buffer
-///   and emits [`AppEvent::OutputAppended`].
-/// - [`TurnEvent::ThoughtDelta`]: updates the live progress indicator.
-/// - [`TurnEvent::Progress`]: updates the live progress indicator.
+/// - [`TurnEvent::ThoughtDelta`]: updates the transient thinking loader text.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
 /// - [`TurnEvent::Completed`] / [`TurnEvent::Failed`]: reserved; ignored here
 ///   because completion is signalled by `run_turn`'s return value.
-///
-/// Returns `true` when at least one non-empty [`TurnEvent::AssistantDelta`]
-/// was appended to transcript output.
 async fn consume_turn_events(
     mut event_rx: mpsc::UnboundedReceiver<TurnEvent>,
-    output: Arc<Mutex<String>>,
-    db: Database,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     session_id: String,
     child_pid: Arc<Mutex<Option<u32>>>,
-) -> bool {
-    let mut streamed_assistant_content = false;
+) {
     let mut active_progress: Option<String> = None;
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            TurnEvent::AssistantDelta(text) => {
-                if text.trim().is_empty() {
-                    continue;
-                }
-
-                if active_progress.take().is_some() {
-                    SessionTaskService::set_session_progress(&app_event_tx, &session_id, None);
-                }
-
-                SessionTaskService::append_session_output(
-                    &output,
-                    &db,
-                    &app_event_tx,
-                    &session_id,
-                    &text,
-                )
-                .await;
-                streamed_assistant_content = true;
-            }
             TurnEvent::ThoughtDelta(thought) => {
                 let Some(thought) = normalize_thinking_stream_text(&thought) else {
                     continue;
@@ -917,26 +853,7 @@ async fn consume_turn_events(
                 }
 
                 active_progress = Some(thought.clone());
-                SessionTaskService::set_session_progress(
-                    &app_event_tx,
-                    &session_id,
-                    Some(thought.clone()),
-                );
-            }
-            TurnEvent::Progress(progress) => {
-                let Some(progress) = normalize_thinking_stream_text(&progress) else {
-                    continue;
-                };
-                if active_progress.as_deref() == Some(progress.as_str()) {
-                    continue;
-                }
-
-                active_progress = Some(progress.clone());
-                SessionTaskService::set_session_progress(
-                    &app_event_tx,
-                    &session_id,
-                    Some(progress.clone()),
-                );
+                SessionTaskService::set_session_progress(&app_event_tx, &session_id, Some(thought));
             }
             TurnEvent::PidUpdate(pid) => {
                 if let Ok(mut guard) = child_pid.lock() {
@@ -951,16 +868,11 @@ async fn consume_turn_events(
     }
 
     if active_progress.take().is_some() {
-        SessionTaskService::set_session_progress(&app_event_tx, &session_id, None);
+        SessionTaskService::clear_session_progress(&app_event_tx, &session_id);
     }
-
-    streamed_assistant_content
 }
 
-/// Returns one normalized thinking/progress text line.
-///
-/// The worker stores this normalized form in progress state so repeated
-/// updates can be de-duplicated reliably.
+/// Returns one normalized thinking text line.
 fn normalize_thinking_stream_text(text: &str) -> Option<String> {
     let trimmed_text = text.trim();
     if trimmed_text.is_empty() {
@@ -1069,31 +981,13 @@ mod tests {
         };
 
         // Act
-        let transcript_output = build_assistant_transcript_output(&response, false);
+        let transcript_output = build_assistant_transcript_output(&response);
 
         // Assert
         assert_eq!(
             transcript_output,
             Some("Implemented the fix.\n\n".to_string())
         );
-    }
-
-    #[test]
-    /// Ensures transcript output suppresses final answer append when assistant
-    /// chunks already streamed during the turn.
-    fn test_build_assistant_transcript_output_skips_answer_when_assistant_streamed() {
-        // Arrange
-        let response = AgentResponse {
-            answer: "Implemented the fix.".to_string(),
-            questions: Vec::new(),
-            summary: None,
-        };
-
-        // Act
-        let transcript_output = build_assistant_transcript_output(&response, true);
-
-        // Assert
-        assert_eq!(transcript_output, None);
     }
 
     #[test]
@@ -1108,7 +1002,7 @@ mod tests {
         };
 
         // Act
-        let transcript_output = build_assistant_transcript_output(&response, false);
+        let transcript_output = build_assistant_transcript_output(&response);
 
         // Assert
         assert_eq!(
@@ -1128,7 +1022,7 @@ mod tests {
         };
 
         // Act
-        let transcript_output = build_assistant_transcript_output(&response, false);
+        let transcript_output = build_assistant_transcript_output(&response);
 
         // Assert
         assert_eq!(transcript_output, None);
@@ -1165,207 +1059,64 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies streamed thought/progress updates stay in the live progress
-    /// badge and are not appended to transcript output.
-    async fn test_consume_turn_events_keeps_streamed_thinking_updates_out_of_transcript() {
+    /// Verifies non-output events do not append transcript content.
+    async fn test_consume_turn_events_ignores_pid_only_events_for_transcript_output() {
         // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let output = Arc::new(Mutex::new(String::new()));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let child_pid = Arc::new(Mutex::new(None));
 
         event_tx
-            .send(TurnEvent::ThoughtDelta(
-                "Reviewing changed files".to_string(),
-            ))
+            .send(TurnEvent::PidUpdate(Some(4242)))
+            .expect("failed to send pid update");
+        drop(event_tx);
+
+        // Act
+        consume_turn_events(
+            event_rx,
+            app_event_tx,
+            "session-1".to_string(),
+            Arc::clone(&child_pid),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(*child_pid.lock().expect("pid lock poisoned"), Some(4242));
+        assert!(app_event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    /// Verifies thought deltas update the loader state without appending
+    /// transcript output.
+    async fn test_consume_turn_events_routes_thought_delta_to_progress_state_only() {
+        // Arrange
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let child_pid = Arc::new(Mutex::new(None));
+
+        event_tx
+            .send(TurnEvent::ThoughtDelta("Inspecting files".to_string()))
             .expect("failed to send thought delta");
-        event_tx
-            .send(TurnEvent::Progress("Running tests".to_string()))
-            .expect("failed to send progress update");
         drop(event_tx);
 
         // Act
-        let streamed_assistant_content = consume_turn_events(
-            event_rx,
-            Arc::clone(&output),
-            db,
-            app_event_tx,
-            "session-1".to_string(),
-            child_pid,
-        )
-        .await;
+        consume_turn_events(event_rx, app_event_tx, "session-1".to_string(), child_pid).await;
 
-        let mut progress_messages = Vec::new();
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::SessionProgressUpdated {
-                progress_message, ..
-            } = event
-            {
-                progress_messages.push(progress_message);
-            }
-        }
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
 
         // Assert
-        assert!(!streamed_assistant_content);
-        assert_eq!(output.lock().expect("output lock poisoned").as_str(), "");
         assert_eq!(
-            progress_messages,
+            events,
             vec![
-                Some("Reviewing changed files".to_string()),
-                Some("Running tests".to_string()),
-                None,
+                AppEvent::SessionProgressUpdated {
+                    progress_message: Some("Inspecting files".to_string()),
+                    session_id: "session-1".to_string(),
+                },
+                AppEvent::SessionProgressUpdated {
+                    progress_message: None,
+                    session_id: "session-1".to_string(),
+                },
             ]
-        );
-    }
-
-    #[tokio::test]
-    /// Verifies duplicate streamed thinking/progress updates are suppressed for
-    /// progress events and never append transcript output.
-    async fn test_consume_turn_events_suppresses_duplicate_thinking_updates() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let output = Arc::new(Mutex::new(String::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let child_pid = Arc::new(Mutex::new(None));
-
-        event_tx
-            .send(TurnEvent::Progress("Running tests".to_string()))
-            .expect("failed to send first progress update");
-        event_tx
-            .send(TurnEvent::Progress("Running tests".to_string()))
-            .expect("failed to send duplicate progress update");
-        event_tx
-            .send(TurnEvent::ThoughtDelta("Running tests".to_string()))
-            .expect("failed to send duplicate thought update");
-        event_tx
-            .send(TurnEvent::ThoughtDelta("Summarizing results".to_string()))
-            .expect("failed to send new thought update");
-        drop(event_tx);
-
-        // Act
-        let _ = consume_turn_events(
-            event_rx,
-            Arc::clone(&output),
-            db,
-            app_event_tx,
-            "session-1".to_string(),
-            child_pid,
-        )
-        .await;
-
-        let mut progress_messages = Vec::new();
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::SessionProgressUpdated {
-                progress_message, ..
-            } = event
-            {
-                progress_messages.push(progress_message);
-            }
-        }
-
-        // Assert
-        assert_eq!(output.lock().expect("output lock poisoned").as_str(), "");
-        assert_eq!(
-            progress_messages,
-            vec![
-                Some("Running tests".to_string()),
-                Some("Summarizing results".to_string()),
-                None,
-            ]
-        );
-    }
-
-    #[tokio::test]
-    /// Verifies generic badge progress updates stay in progress state only and
-    /// do not append transcript output.
-    async fn test_consume_turn_events_keeps_badge_updates_out_of_transcript() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let output = Arc::new(Mutex::new(String::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-        let child_pid = Arc::new(Mutex::new(None));
-
-        event_tx
-            .send(TurnEvent::ThoughtDelta("Thinking".to_string()))
-            .expect("failed to send thought update");
-        event_tx
-            .send(TurnEvent::Progress("Phase: plan".to_string()))
-            .expect("failed to send phase progress update");
-        event_tx
-            .send(TurnEvent::Progress("Using tool: Cargo.toml".to_string()))
-            .expect("failed to send tool progress update");
-        drop(event_tx);
-
-        // Act
-        let streamed_any_content = consume_turn_events(
-            event_rx,
-            Arc::clone(&output),
-            db,
-            app_event_tx,
-            "session-1".to_string(),
-            child_pid,
-        )
-        .await;
-
-        let mut progress_messages = Vec::new();
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::SessionProgressUpdated {
-                progress_message, ..
-            } = event
-            {
-                progress_messages.push(progress_message);
-            }
-        }
-
-        // Assert
-        assert!(!streamed_any_content);
-        assert_eq!(output.lock().expect("output lock poisoned").as_str(), "");
-        assert_eq!(
-            progress_messages,
-            vec![
-                Some("Thinking".to_string()),
-                Some("Phase: plan".to_string()),
-                Some("Using tool: Cargo.toml".to_string()),
-                None,
-            ]
-        );
-    }
-
-    #[tokio::test]
-    /// Verifies assistant stream chunks mark the turn as streamed-assistant
-    /// output.
-    async fn test_consume_turn_events_returns_true_for_assistant_delta() {
-        // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
-        let output = Arc::new(Mutex::new(String::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let child_pid = Arc::new(Mutex::new(None));
-
-        event_tx
-            .send(TurnEvent::AssistantDelta("Partial answer".to_string()))
-            .expect("failed to send assistant delta");
-        drop(event_tx);
-
-        // Act
-        let streamed_assistant_content = consume_turn_events(
-            event_rx,
-            Arc::clone(&output),
-            db,
-            app_event_tx,
-            "session-1".to_string(),
-            child_pid,
-        )
-        .await;
-
-        // Assert
-        assert!(streamed_assistant_content);
-        assert_eq!(
-            output.lock().expect("output lock poisoned").as_str(),
-            "Partial answer"
         );
     }
 
@@ -1423,14 +1174,9 @@ mod tests {
         });
 
         // Act
-        let status = apply_turn_result(
-            &context,
-            AgentModel::Gemini3FlashPreview,
-            turn_result,
-            false,
-        )
-        .await
-        .expect("turn result should succeed");
+        let status = apply_turn_result(&context, AgentModel::Gemini3FlashPreview, turn_result)
+            .await
+            .expect("turn result should succeed");
         let sessions = db.load_sessions().await.expect("failed to load sessions");
 
         // Assert
@@ -1455,8 +1201,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies streamed assistant text is separated from the appended summary
-    /// block even when the stream ended without a trailing newline.
+    /// Verifies persisted assistant text is separated from the appended
+    /// summary block even when prior output ended without a trailing newline.
     async fn test_apply_turn_result_separates_summary_from_streamed_output() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -1509,10 +1255,9 @@ mod tests {
         });
 
         // Act
-        let status =
-            apply_turn_result(&context, AgentModel::Gemini3FlashPreview, turn_result, true)
-                .await
-                .expect("turn result should succeed");
+        let status = apply_turn_result(&context, AgentModel::Gemini3FlashPreview, turn_result)
+            .await
+            .expect("turn result should succeed");
         let output = output.lock().expect("output lock poisoned");
 
         // Assert

@@ -123,7 +123,7 @@ pub(crate) enum AppEvent {
     },
     /// Requests a full session list refresh.
     RefreshSessions,
-    /// Indicates compact live progress text for an in-progress session.
+    /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
         session_id: String,
@@ -178,8 +178,8 @@ struct AppEventBatch {
     session_git_status_updates: HashMap<String, Option<(u32, u32)>>,
     session_ids: HashSet<String>,
     session_model_updates: HashMap<String, AgentModel>,
-    session_size_updates: HashMap<String, SessionSize>,
     session_progress_updates: HashMap<String, Option<String>>,
+    session_size_updates: HashMap<String, SessionSize>,
     should_force_reload: bool,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     update_status: Option<UpdateStatus>,
@@ -422,7 +422,7 @@ pub struct App {
     /// Serializes local merge requests so only one merge workflow runs at a
     /// time.
     merge_queue: MergeQueue,
-    /// Tracks per-session progress messages rendered while background work is
+    /// Tracks per-session thinking text rendered while background work is
     /// active.
     session_progress_messages: HashMap<String, String>,
     /// Interacts with tmux panes for session-specific terminal workflows.
@@ -619,8 +619,8 @@ impl App {
             review_cache: HashMap::new(),
             latest_available_version: None,
             merge_queue: MergeQueue::default(),
-            update_status: None,
             session_progress_messages: HashMap::new(),
+            update_status: None,
             sync_main_runner: clients.sync_main_runner,
             tmux_client: clients.tmux_client,
         })
@@ -775,9 +775,9 @@ impl App {
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
         let session_git_statuses = self.sessions.session_git_statuses().clone();
+        let session_progress_messages = self.session_progress_messages.clone();
         let update_status = self.update_status().cloned();
         let projects = self.projects.project_items().to_vec();
-        let session_progress_messages = self.session_progress_messages.clone();
         let mode = &self.mode;
         let project_table_state = self.projects.project_table_state_mut();
         let (sessions, stats_activity, table_state) = self.sessions.render_parts();
@@ -981,16 +981,11 @@ impl App {
         self.sessions.session_index_for_id(session_id)
     }
 
-    /// Returns compact live progress text for a session, if available.
+    /// Returns compact live thinking text for a session, if available.
     pub fn session_progress_message(&self, session_id: &str) -> Option<&str> {
         self.session_progress_messages
             .get(session_id)
             .map(std::string::String::as_str)
-    }
-
-    /// Returns a snapshot of compact live progress text by session id.
-    pub fn session_progress_snapshot(&self) -> HashMap<String, String> {
-        self.session_progress_messages.clone()
     }
 
     /// Deletes the selected session and schedules list refresh.
@@ -1964,21 +1959,6 @@ impl App {
         }
     }
 
-    fn retain_valid_session_progress_messages(&mut self) {
-        self.session_progress_messages.retain(|session_id, _| {
-            self.sessions
-                .sessions
-                .iter()
-                .find(|session| session.id == *session_id)
-                .is_some_and(|session| {
-                    matches!(
-                        session.status,
-                        Status::InProgress | Status::Rebasing | Status::Merging
-                    )
-                })
-        });
-    }
-
     /// Builds one background-task snapshot for a branch-publish action.
     fn branch_publish_task_session(&self, session_id: &str) -> Option<BranchPublishTaskSession> {
         self.sessions
@@ -2010,6 +1990,17 @@ impl App {
         match publish_branch_action {
             PublishBranchAction::Push => "Pushing branch".to_string(),
         }
+    }
+
+    /// Drops thinking text for sessions that are no longer actively running.
+    fn retain_valid_session_progress_messages(&mut self) {
+        self.session_progress_messages.retain(|session_id, _| {
+            self.sessions
+                .sessions
+                .iter()
+                .find(|session| session.id == *session_id)
+                .is_some_and(|session| matches!(session.status, Status::InProgress))
+        });
     }
 
     /// Returns the loading popup body for one branch-publish action.
