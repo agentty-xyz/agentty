@@ -6,7 +6,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI; sibling-session launch behavior remains queued. | Partial |
+| Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI, but they still cannot launch sibling sessions or retain launched/open state. | Partial |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, chat shows the timer, and the session list still has no time column. | Partial |
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
 | Typed errors and hygiene | `DbError` is landed, but git, app-server, remaining infra surfaces, and the app layer still expose string errors; discard comments, missing module tests, and convention cleanup remain open. | Partial |
@@ -30,6 +30,62 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - Keep tests and documentation attached to the same `Ready Now` step that changes behavior.
 
 ## Ready Now
+
+### [8f4402cd-beff-4b4d-b9f7-00efd834249b] Workflow: Launch sibling sessions from follow-up tasks and retain task state
+
+#### Assignee
+
+`No assignee`
+
+#### Why now
+
+The follow-up task persistence slice is already landed, so the next workflow step should deliver the remaining user-visible action instead of leaving stored tasks as read-only output.
+
+#### Usable outcome
+
+Selecting a persisted follow-up task can launch it into a sibling session, and the original session keeps the launched and open task state stable across reopen and refresh flows.
+
+#### Substeps
+
+- [ ] **Add the sibling-session launch path.** Wire one persisted follow-up task through `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session_state.rs`, and `crates/agentty/src/app/session/workflow/load.rs` so the app can create a sibling session from stored task content without inventing a parallel session-creation path.
+- [ ] **Expose the launch action in session view.** Update `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and `crates/agentty/src/ui/state/help_action.rs` so the selected follow-up task can be launched from the existing session UI with a clear launched/open affordance.
+- [ ] **Persist launched-task state through reloads.** Extend `crates/agentty/src/infra/db.rs`, `crates/agentty/src/domain/session.rs`, and any required migration under `crates/agentty/migrations/` so launched and open task state survives refresh, app restart, and session reopen.
+
+#### Tests
+
+- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/load.rs`, `crates/agentty/src/infra/db.rs`, and `crates/agentty/src/runtime/mode/session_view.rs` for sibling-session launch, persisted task-state reload, and the session-view action path.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for launching follow-up tasks into sibling sessions and the resulting task-state behavior.
+
+### [9f115af0-a382-46f4-8bf9-25886936e252] Platform: Add the timer to the grouped session list
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+The active-work timer already persists and renders in session chat, so the next platform slice should reuse that same timing path in the list view instead of leaving the grouped list behind.
+
+#### Usable outcome
+
+The grouped session list shows the same cumulative active-work timer that session chat shows, including live updates for in-progress sessions and frozen totals for completed intervals.
+
+#### Substeps
+
+- [ ] **Add the timer column to the grouped list.** Update `crates/agentty/src/ui/page/session_list.rs` to render a timer column and reuse duration helpers from `crates/agentty/src/domain/session.rs` and `crates/agentty/src/ui/text_util.rs` instead of introducing list-specific timing math.
+- [ ] **Thread the render-time clock through list rendering.** Keep `crates/agentty/src/ui/render.rs` and `crates/agentty/src/ui/router.rs` aligned so the grouped session list reads the same `wall_clock_unix_seconds` render context already used by session chat.
+- [ ] **Preserve grouped-table behavior with the new column.** Extend the grouped-row layout logic and tests in `crates/agentty/src/ui/page/session_list.rs` so selection, placeholders, truncation, and width calculations stay stable with the timer present.
+
+#### Tests
+
+- [ ] Extend `crates/agentty/src/ui/page/session_list.rs` and `crates/agentty/src/ui/text_util.rs` tests to cover active and completed timers in grouped session rows.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/usage/workflow.md` to note that the session list now surfaces cumulative active-work time.
 
 ### [1c7b7080-deaf-4e2c-8e3c-df24e01d9251] Quality: Ship one deterministic local session workflow slice
 
@@ -92,39 +148,13 @@ The git modules and `GitClient` return typed `GitError` variants instead of stri
 
 ```mermaid
 flowchart TD
+    R1["[8f4402cd] Workflow: sibling-session launch"]
+    R2["[9f115af0] Platform: session-list timer"]
     R3["[1c7b7080] Quality: deterministic local session harness"]
     R4["[7b743a5a] Quality: GitError migration"]
 ```
 
 ## Queued Next
-
-### [8f4402cd-beff-4b4d-b9f7-00efd834249b] Workflow: Launch sibling sessions from follow-up tasks and retain task state
-
-#### Outcome
-
-Launch a follow-up task into a sibling session while keeping launched and open task state stable across reopen and refresh flows.
-
-#### Promote when
-
-Promote when the next workflow slot opens and sibling-session launch behavior becomes the highest-priority follow-up slice.
-
-#### Depends on
-
-`None`
-
-### [9f115af0-a382-46f4-8bf9-25886936e252] Platform: Add the timer to the grouped session list
-
-#### Outcome
-
-Show the same cumulative active-work timer in the session list without inventing a second timing path.
-
-#### Promote when
-
-Promote when session-list density work becomes the next active platform slice.
-
-#### Depends on
-
-`None`
 
 ### [7608043e-3ae8-44b4-bcb4-341f8070d0d2] Quality: Introduce typed errors for the remaining infra boundaries
 
@@ -243,6 +273,7 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 ## Context Notes
 
 - `Workflow: Launch sibling sessions from follow-up tasks and retain task state` should reuse the same stored task content that the persistence slice lands.
+- `Platform: Add the timer to the grouped session list` should reuse `Session::in_progress_duration_seconds()` and the shared render-time wall clock instead of inventing a second timer source.
 - The local session harness should keep validating the default in-process workflow path that `Workflow` and `Platform` depend on.
 - The typed-error sequence should stay linear so each layer learns from the previous enum shape instead of reworking multiple error surfaces at once.
 - `Testty` remains strategically important, but it is independent of the active `agentty` product work and should stay parked until a human intentionally rebalances the queue.

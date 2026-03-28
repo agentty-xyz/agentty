@@ -9,7 +9,7 @@ Keep only `Ready Now` steps fully expanded; keep queued and parked work intentio
 Remove implemented `Ready Now` steps from the roadmap instead of preserving completed execution detail.
 Keep size budgeting in the skill workflow only; do not render `### Size` sections inside `docs/plan/*.md` files.
 Require every roadmap step heading title to use the exact format `[UUID] Stream: Title`.
-Require `Ready Now` steps to start with `#### Assignee` using `@assignee`, `agentty/<hash>`, or `No assignee`.
+Require `Ready Now` steps to start with `#### Assignee` using `@username` or `No assignee`.
 Claim `Ready Now` work through `skills/implementation-plan/references/claim-step.md` and land that claim in its own commit before implementation begins.
 Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work into `Ready Now`.
 
