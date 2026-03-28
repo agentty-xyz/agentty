@@ -114,6 +114,7 @@ impl AgentChannel for AppServerAgentChannel {
                                     is_delta,
                                     phase.as_deref(),
                                 ) {
+                                    // Fire-and-forget: receiver may be dropped during shutdown.
                                     let _ =
                                         events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
 
@@ -132,9 +133,11 @@ impl AgentChannel for AppServerAgentChannel {
                                     continue;
                                 }
 
+                                // Fire-and-forget: receiver may be dropped during shutdown.
                                 let _ = events.send(TurnEvent::AssistantDelta(formatted));
                             }
                             AppServerStreamEvent::ProgressUpdate(progress) => {
+                                // Fire-and-forget: receiver may be dropped during shutdown.
                                 let _ = events.send(TurnEvent::Progress(progress));
                             }
                         }
@@ -143,10 +146,12 @@ impl AgentChannel for AppServerAgentChannel {
             };
 
             let turn_result = client.run_turn(request, stream_tx).await;
+            // Task join: panic in the spawned task is not recoverable here.
             let _ = bridge_handle.await;
 
             match turn_result {
                 Ok(response) => {
+                    // Fire-and-forget: receiver may be dropped during shutdown.
                     let _ = events.send(TurnEvent::PidUpdate(response.pid));
                     let assistant_message = agent::parse_turn_response(
                         kind,

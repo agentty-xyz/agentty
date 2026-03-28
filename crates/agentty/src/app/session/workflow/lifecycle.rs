@@ -205,6 +205,7 @@ impl SessionManager {
             return Err(format!("Failed to save session metadata: {error}"));
         }
 
+        // Best-effort: activity tracking is non-critical.
         let _ = services
             .db()
             .insert_session_creation_activity_now(&session_id)
@@ -277,6 +278,7 @@ impl SessionManager {
         )
         .await;
 
+        // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
             &status,
             services.db(),
@@ -614,11 +616,14 @@ impl SessionManager {
         self.state.handles.remove(&session.id);
         self.clear_history_replay_pending(&session.id);
 
+        // Best-effort: cancellation failure is non-critical during session deletion.
         let _ = services
             .db()
             .request_cancel_for_session_operations(&session.id)
             .await;
         self.clear_session_worker(&session.id);
+        // Best-effort: session record removal failure is non-critical during session
+        // deletion.
         let _ = services.db().delete_session(&session.id).await;
         services.emit_app_event(AppEvent::RefreshSessions);
 
@@ -830,6 +835,7 @@ impl SessionManager {
             )
             .await;
 
+            // Best-effort: status transition failure is non-critical.
             let _ = SessionTaskService::update_status(
                 &status,
                 services.db(),
@@ -929,7 +935,9 @@ impl SessionManager {
         prompt: &str,
         title: &str,
     ) {
+        // Best-effort: title persistence failure is non-critical.
         let _ = services.db().update_session_title(session_id, title).await;
+        // Best-effort: prompt persistence failure is non-critical.
         let _ = services
             .db()
             .update_session_prompt(session_id, prompt)
@@ -1105,6 +1113,7 @@ impl SessionManager {
                 .await
                 .is_ok()
             {
+                // Fire-and-forget: receiver may be dropped during shutdown.
                 let _ = app_event_tx.send(AppEvent::RefreshSessions);
             }
         });
@@ -1242,6 +1251,7 @@ impl SessionManager {
         session_saved: bool,
     ) {
         if session_saved {
+            // Best-effort cleanup: session record may already be removed.
             let _ = services.db().delete_session(session_id).await;
         }
 
@@ -1250,10 +1260,13 @@ impl SessionManager {
             let folder = folder.to_path_buf();
             let repo_root = repo_root.to_path_buf();
             let worktree_branch = worktree_branch.to_string();
+            // Best-effort cleanup: worktree may already be removed.
             let _ = git_client.remove_worktree(folder).await;
+            // Best-effort cleanup: branch may already be removed.
             let _ = git_client.delete_branch(repo_root, worktree_branch).await;
         }
 
+        // Best-effort cleanup: worktree directory may already be removed.
         let _ = services
             .fs_client()
             .remove_dir_all(folder.to_path_buf())
@@ -1368,13 +1381,16 @@ impl SessionManager {
         remove_git_resources: bool,
     ) {
         if remove_git_resources {
+            // Best-effort cleanup: worktree may already be removed.
             let _ = git_client.remove_worktree(folder.clone()).await;
 
             if let Some(repo_root) = repo_root {
+                // Best-effort cleanup: branch may already be removed.
                 let _ = git_client.delete_branch(repo_root, branch_name).await;
             }
         }
 
+        // Best-effort cleanup: worktree directory may already be removed.
         let _ = fs_client.remove_dir_all(folder).await;
     }
 
@@ -1408,11 +1424,13 @@ impl SessionManager {
 
         for attachment_path in attachment_paths {
             if is_managed_prompt_attachment_path(&attachment_path, managed_tmp_root) {
+                // Best-effort cleanup: attachment file may already be removed.
                 let _ = fs_client.remove_file(attachment_path).await;
             }
         }
 
         if let Some(image_directory) = image_directory {
+            // Best-effort cleanup: image directory may already be removed.
             let _ = fs_client.remove_dir_all(image_directory).await;
         }
     }
@@ -1420,6 +1438,7 @@ impl SessionManager {
     /// Removes the session-scoped temp directory used for pasted prompt
     /// images.
     async fn cleanup_session_temp_directory(fs_client: Arc<dyn FsClient>, session_id: &str) {
+        // Best-effort cleanup: temp directory may already be removed.
         let _ = fs_client
             .remove_dir_all(session_prompt_temp_directory(session_id))
             .await;

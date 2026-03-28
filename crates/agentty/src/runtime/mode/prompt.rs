@@ -632,6 +632,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 slash_state.reset();
             }
 
+            // Best-effort: model switch failure is non-critical.
             let _ = app
                 .set_session_model(&prompt_context.session_id, selected_model)
                 .await;
@@ -1156,6 +1157,7 @@ fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
             .await
             .unwrap_or_default();
 
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
             entries,
             session_id,

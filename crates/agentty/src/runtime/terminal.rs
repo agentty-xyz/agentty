@@ -188,6 +188,7 @@ fn prepare_terminal_stdout_with_operation(
 /// Restores terminal modes and ignores failures so drop paths do not panic.
 fn restore_terminal_state(operation: &dyn TerminalOperation, keyboard_enhancement_enabled: bool) {
     let mut stdout = io::stdout();
+    // Best-effort: terminal may already be in normal state.
     let _ = operation.disable_raw_mode();
     let _ = operation.leave_alternate_screen(&mut stdout, keyboard_enhancement_enabled);
 }

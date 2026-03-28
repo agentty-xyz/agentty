@@ -122,7 +122,9 @@ pub async fn shutdown_child(child: &mut tokio::process::Child) {
         .await
         .is_err()
     {
+        // Best-effort: process may have already exited.
         let _ = child.kill().await;
+        // Best-effort: process may have already exited.
         let _ = child.wait().await;
     }
 }

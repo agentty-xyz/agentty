@@ -129,11 +129,13 @@ impl SessionWorkerService {
             .collect();
 
         for session_id in interrupted_session_ids {
+            // Best-effort: status persistence failure is non-critical.
             let _ = db
                 .update_session_status(&session_id, &Status::Review.to_string())
                 .await;
         }
 
+        // Best-effort: operation tracking metadata is non-critical.
         let _ = db
             .fail_unfinished_session_operations(RESTART_FAILURE_REASON)
             .await;
@@ -160,6 +162,7 @@ impl SessionWorkerService {
 
         let sender = self.ensure_session_worker(services, &runtime);
         if sender.send(command).is_err() {
+            // Best-effort: operation tracking metadata is non-critical.
             let _ = services
                 .db()
                 .mark_session_operation_failed(&operation_id, "Session worker is not available")
@@ -235,6 +238,7 @@ impl SessionWorkerService {
                 if Self::should_skip_worker_command(&context, &operation_id).await {
                     continue;
                 }
+                // Best-effort: operation tracking metadata is non-critical.
                 let _ = context
                     .db
                     .mark_session_operation_running(&operation_id)
@@ -247,9 +251,11 @@ impl SessionWorkerService {
 
                 match result {
                     Ok(()) => {
+                        // Best-effort: operation tracking metadata is non-critical.
                         let _ = context.db.mark_session_operation_done(&operation_id).await;
                     }
                     Err(error) => {
+                        // Best-effort: operation tracking metadata is non-critical.
                         let _ = context
                             .db
                             .mark_session_operation_failed(&operation_id, &error)
@@ -258,6 +264,7 @@ impl SessionWorkerService {
                 }
             }
 
+            // Best-effort: session transport may already be torn down.
             let _ = context
                 .channel
                 .shutdown_session(context.session_id.clone())
@@ -300,11 +307,13 @@ impl SessionWorkerService {
         session_model: AgentModel,
     ) -> Result<(), String> {
         if matches!(request_kind, AgentRequestKind::SessionResume { .. }) {
+            // Best-effort: questions persistence failure is non-critical.
             let _ = context
                 .db
                 .update_session_questions(&context.session_id, "")
                 .await;
 
+            // Best-effort: status transition failure is non-critical.
             let _ = SessionTaskService::update_status(
                 &context.status,
                 &context.db,
@@ -389,6 +398,7 @@ impl SessionWorkerService {
         )
         .await
         {
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = context.app_event_tx.send(AppEvent::SessionSizeUpdated {
                 session_id: context.session_id.clone(),
                 session_size,
@@ -400,6 +410,7 @@ impl SessionWorkerService {
             Err(_) => Status::Review,
         };
 
+        // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
             &context.status,
             &context.db,
@@ -435,6 +446,7 @@ impl SessionWorkerService {
             return false;
         }
 
+        // Best-effort: operation tracking metadata is non-critical.
         let _ = context
             .db
             .mark_session_operation_canceled(operation_id, CANCEL_BEFORE_EXECUTION_REASON)
@@ -597,6 +609,7 @@ async fn apply_successful_turn_result(
     }
 
     let summary_text = persisted_session_summary_payload(&assistant_message);
+    // Best-effort: summary persistence failure is non-critical.
     let _ = context
         .db
         .update_session_summary(&context.session_id, &summary_text)
@@ -616,10 +629,12 @@ async fn apply_successful_turn_result(
         .await;
     }
 
+    // Fire-and-forget: receiver may be dropped during shutdown.
     let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
 
     let question_items = assistant_message.question_items();
     let target_status = if question_items.is_empty() {
+        // Best-effort: questions persistence failure is non-critical.
         let _ = context
             .db
             .update_session_questions(&context.session_id, "")
@@ -628,6 +643,7 @@ async fn apply_successful_turn_result(
         Status::Review
     } else {
         if let Ok(questions_json) = serde_json::to_string(&question_items) {
+            // Best-effort: questions persistence failure is non-critical.
             let _ = context
                 .db
                 .update_session_questions(&context.session_id, &questions_json)
@@ -636,6 +652,7 @@ async fn apply_successful_turn_result(
 
         Status::Question
     };
+    // Fire-and-forget: receiver may be dropped during shutdown.
     let _ = context.app_event_tx.send(AppEvent::AgentResponseReceived {
         response: assistant_message,
         session_id: context.session_id.clone(),
@@ -645,14 +662,17 @@ async fn apply_successful_turn_result(
         input_tokens,
         output_tokens,
     };
+    // Best-effort: stats persistence failure is non-critical.
     let _ = context
         .db
         .update_session_stats(&context.session_id, &stats)
         .await;
+    // Best-effort: usage persistence failure is non-critical.
     let _ = context
         .db
         .upsert_session_usage(&context.session_id, session_model.as_str(), &stats)
         .await;
+    // Best-effort: provider ID persistence failure is non-critical.
     let _ = context
         .db
         .update_session_provider_conversation_id(

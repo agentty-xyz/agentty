@@ -553,6 +553,7 @@ fn activate_question_at_mention(app: &mut App, session_id: &str) {
             .await
             .unwrap_or_default();
 
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
             entries,
             session_id: owned_session_id,

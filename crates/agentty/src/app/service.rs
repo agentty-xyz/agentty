@@ -58,6 +58,7 @@ impl AppServices {
 
     /// Enqueues an app event onto the internal event bus.
     pub(crate) fn emit_app_event(&self, event: AppEvent) {
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = self.event_tx.send(event);
     }
 

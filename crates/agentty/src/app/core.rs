@@ -337,6 +337,7 @@ impl SyncMainRunner for TokioSyncMainRunner {
                 session_model,
             )
             .await;
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(AppEvent::SyncMainCompleted { result });
         });
     }
@@ -863,12 +864,15 @@ impl App {
             git_branch.as_deref(),
         )
         .await;
+        // Best-effort: project metadata persistence is non-critical.
         let _ = self
             .services
             .db()
             .upsert_project(&project.path.to_string_lossy(), git_branch.as_deref())
             .await;
+        // Best-effort: project metadata persistence is non-critical.
         let _ = self.services.db().set_active_project_id(project.id).await;
+        // Best-effort: project metadata persistence is non-critical.
         let _ = self
             .services
             .db()
@@ -1115,6 +1119,7 @@ impl App {
                 remote_branch_name,
             )
             .await;
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = event_sender.send(AppEvent::BranchPublishActionCompleted {
                 restore_view: background_restore_view,
                 result: Box::new(result),
@@ -1867,6 +1872,7 @@ impl App {
             return;
         };
         let app_event_tx = self.services.event_sender();
+        // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
             handles.status.as_ref(),
             self.services.db(),
@@ -1944,6 +1950,7 @@ impl App {
             previous_session_states,
         );
         if progress == MergeQueueProgress::StartNext {
+            // Best-effort: merge queue progression failure is handled by status events.
             let _ = self.start_next_merge_from_queue(false).await;
         }
     }
@@ -2399,6 +2406,7 @@ impl App {
         for project_path in discovered_project_paths {
             let git_branch = detect_git_info(project_path.clone()).await;
             let project_path = project_path.to_string_lossy().to_string();
+            // Best-effort: project metadata persistence is non-critical.
             let _ = db
                 .upsert_project(project_path.as_str(), git_branch.as_deref())
                 .await;

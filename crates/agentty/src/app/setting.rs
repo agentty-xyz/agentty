@@ -518,6 +518,7 @@ impl SettingsManager {
 
         match row.setting_name() {
             SettingName::OpenCommand => {
+                // Best-effort: settings persistence failure is non-critical.
                 let _ = services
                     .db()
                     .upsert_project_setting(
@@ -601,6 +602,7 @@ impl SettingsManager {
     async fn persist_default_smart_model_settings(&self, services: &AppServices) {
         let last_used_model_as_default_value = self.use_last_used_model_as_default.to_string();
 
+        // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .upsert_project_setting(
@@ -609,6 +611,7 @@ impl SettingsManager {
                 self.default_smart_model.as_str(),
             )
             .await;
+        // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .upsert_project_setting(
@@ -621,6 +624,7 @@ impl SettingsManager {
 
     /// Persists the reasoning-level selector value (`ReasoningLevel`).
     async fn persist_reasoning_level_setting(&self, services: &AppServices) {
+        // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .set_project_reasoning_level(self.project_id, self.reasoning_level)
@@ -629,6 +633,7 @@ impl SettingsManager {
 
     /// Persists the fast-model selector value (`DefaultFastModel`).
     async fn persist_default_fast_model_setting(&self, services: &AppServices) {
+        // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .upsert_project_setting(
@@ -641,6 +646,7 @@ impl SettingsManager {
 
     /// Persists the review-model selector value (`DefaultReviewModel`).
     async fn persist_default_review_model_setting(&self, services: &AppServices) {
+        // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .upsert_project_setting(
@@ -656,6 +662,7 @@ impl SettingsManager {
     async fn persist_include_coauthored_by_agentty_setting(&self, services: &AppServices) {
         let include_coauthored_by_agentty = self.include_coauthored_by_agentty.to_string();
 
+        // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
             .upsert_project_setting(

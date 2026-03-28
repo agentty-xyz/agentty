@@ -88,6 +88,7 @@ impl VhsTape {
         let mut last_error = String::new();
 
         for attempt in 1..=MAX_VHS_RETRIES {
+            // Best-effort cleanup: screenshot file may already be removed.
             let _ = std::fs::remove_file(&self.screenshot_path);
 
             let output = Command::new("vhs")
@@ -155,6 +156,7 @@ fn compile_tape(
         .unwrap_or(Path::new("."))
         .join(format!("{}.gif", scenario.name));
 
+    // Infallible: all `writeln!` calls below write to a String, which cannot fail.
     // Header settings.
     let _ = writeln!(tape, "Set Shell \"bash\"");
     let _ = writeln!(tape, "Set FontSize {DEFAULT_VHS_FONT_SIZE}");
@@ -208,6 +210,7 @@ fn compile_tape(
 
 /// Compile a single step into VHS tape commands.
 fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
+    // Infallible: all `writeln!` calls below write to a String, which cannot fail.
     match step {
         Step::WriteText(text) => {
             let _ = writeln!(tape, "Type \"{}\"", escape_vhs_double_quote(text));

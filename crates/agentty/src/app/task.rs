@@ -80,6 +80,7 @@ impl TaskService {
 
                 {
                     let root = repo_root.clone();
+                    // Best-effort: background fetch failure is non-critical.
                     let _ = git_client.fetch_remote(root).await;
                 }
 
@@ -101,6 +102,7 @@ impl TaskService {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
+                // Fire-and-forget: receiver may be dropped during shutdown.
                 let _ = app_event_tx.send(AppEvent::GitStatusUpdated {
                     session_statuses: session_git_statuses,
                     status,
@@ -154,6 +156,7 @@ impl TaskService {
         #[cfg(test)]
         {
             let _ = auto_update;
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(Self::version_availability_event(None));
         }
 
@@ -172,6 +175,7 @@ impl TaskService {
                 _ => None,
             };
 
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(version_event);
 
             if let Some(newer_version) = newer_version
@@ -189,6 +193,7 @@ impl TaskService {
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         newer_version: &str,
     ) {
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::UpdateStatusChanged {
             update_status: UpdateStatus::InProgress {
                 version: newer_version.to_string(),
@@ -210,6 +215,7 @@ impl TaskService {
             },
         };
 
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::UpdateStatusChanged { update_status });
     }
 
@@ -236,6 +242,7 @@ impl TaskService {
             .await;
 
             let app_event = Self::review_app_event(diff_hash, review_result, session_id);
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(app_event);
         });
     }

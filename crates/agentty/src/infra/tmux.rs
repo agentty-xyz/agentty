@@ -191,6 +191,7 @@ impl RealTmuxClient {
             return;
         }
 
+        // Best-effort: tmux window may have already been closed.
         let _ = command_runner.send_enter_key(window_id).await;
     }
 

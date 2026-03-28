@@ -427,6 +427,7 @@ impl RealGeminiAcpClient {
                 }
 
                 if let Some(progress) = extract_progress_update(&response_value, session_id) {
+                    // Fire-and-forget: receiver may be dropped during shutdown.
                     let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
                 }
 
@@ -454,6 +455,7 @@ impl RealGeminiAcpClient {
             return;
         }
 
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
             is_delta: true,
             message: chunk,

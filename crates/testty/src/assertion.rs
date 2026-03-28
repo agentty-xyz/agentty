@@ -170,6 +170,7 @@ fn format_text_not_found(frame: &TerminalFrame, needle: &str, region: Region) ->
     let region_text = frame.text_in_region(&region);
     let mut message = String::new();
 
+    // Infallible: all `writeln!` calls below write to a String, which cannot fail.
     let _ = writeln!(
         message,
         "Text '{needle}' not found in region (col:{}, row:{}, {}x{})",

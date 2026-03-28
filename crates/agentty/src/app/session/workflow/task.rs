@@ -577,7 +577,9 @@ impl SessionTaskService {
             Self::append_session_output(&output, &db, &app_event_tx, &id, &answer_text).await;
         }
 
+        // Best-effort: stats persistence failure is non-critical.
         let _ = db.update_session_stats(&id, &assist_submission.stats).await;
+        // Best-effort: usage persistence failure is non-critical.
         let _ = db
             .upsert_session_usage(&id, session_model.as_str(), &assist_submission.stats)
             .await;
@@ -643,10 +645,13 @@ impl SessionTaskService {
         if !should_update {
             return false;
         }
+        // Best-effort: status persistence failure is non-critical.
         let _ = db.update_session_status(id, &new.to_string()).await;
         let session_id = id.to_string();
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionUpdated { session_id });
         if Self::status_requires_full_refresh(new) {
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = app_event_tx.send(AppEvent::RefreshSessions);
         }
 
@@ -664,7 +669,9 @@ impl SessionTaskService {
         if let Ok(mut buf) = output.lock() {
             buf.push_str(message);
         }
+        // Best-effort: output persistence failure is non-critical.
         let _ = db.append_session_output(id, message).await;
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionUpdated {
             session_id: id.to_string(),
         });
@@ -681,6 +688,7 @@ impl SessionTaskService {
         id: &str,
         progress_message: Option<String>,
     ) {
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionProgressUpdated {
             progress_message,
             session_id: id.to_string(),

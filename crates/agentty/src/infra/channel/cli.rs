@@ -117,6 +117,7 @@ impl AgentChannel for CliAgentChannel {
 
             // Notify the consumer of the child PID so cancellation signals can
             // be sent while the process is running.
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = events.send(TurnEvent::PidUpdate(child.id()));
 
             let raw_stdout = Arc::new(Mutex::new(String::new()));
@@ -157,7 +158,9 @@ impl AgentChannel for CliAgentChannel {
                 AgentError,
             );
 
+            // Task join: panic in the spawned task is not recoverable here.
             let _ = stdout_task.await;
+            // Task join: panic in the spawned task is not recoverable here.
             let _ = stderr_task.await;
 
             let exit_status = child.wait().await.ok();
@@ -169,6 +172,7 @@ impl AgentChannel for CliAgentChannel {
             .await?;
 
             // Clear the PID slot now that the child has exited.
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = events.send(TurnEvent::PidUpdate(None));
 
             let killed_by_signal = exit_status
@@ -263,6 +267,7 @@ async fn stream_stdout(
             TurnEvent::Progress(text)
         };
 
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = events.send(event);
     }
 }

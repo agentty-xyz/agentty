@@ -277,6 +277,7 @@ fn authentication_required_message(
     );
 
     if let Some(detail) = non_empty_detail(detail) {
+        // Infallible: writing to a String cannot fail.
         let _ = write!(
             message,
             "\n\nOriginal `{}` error:\n```text\n{detail}",

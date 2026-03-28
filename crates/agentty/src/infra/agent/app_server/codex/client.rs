@@ -361,6 +361,7 @@ impl RealCodexAppServerClient {
         let auto_compact_threshold = Self::auto_compact_input_token_threshold(&session.model);
 
         if session.latest_input_tokens >= auto_compact_threshold {
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
                 "Compacting context".to_string(),
             ));
@@ -378,6 +379,7 @@ impl RealCodexAppServerClient {
                 Ok((message, input_tokens, output_tokens))
             }
             Err(ref error) if is_context_window_exceeded_error(error) => {
+                // Fire-and-forget: receiver may be dropped during shutdown.
                 let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
                     "Compacting context".to_string(),
                 ));
@@ -788,6 +790,7 @@ impl RealCodexAppServerClient {
         active_phase: &mut Option<String>,
     ) {
         if let Some(progress) = extract_item_started_progress(response_value) {
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
         }
 
@@ -796,6 +799,7 @@ impl RealCodexAppServerClient {
                 Self::emit_phase_progress_update(stream_tx, active_phase, phase);
             }
 
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
                 is_delta: true,
                 message: agent_message.message,
@@ -808,6 +812,7 @@ impl RealCodexAppServerClient {
                 Self::emit_phase_progress_update(stream_tx, active_phase, phase);
             }
 
+            // Fire-and-forget: receiver may be dropped during shutdown.
             let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
                 is_delta: false,
                 message: agent_message.message.clone(),
@@ -828,6 +833,7 @@ impl RealCodexAppServerClient {
         }
 
         *active_phase = Some(phase.to_string());
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(format!(
             "Phase: {phase}"
         )));
@@ -862,6 +868,7 @@ impl RealCodexAppServerClient {
             }
             Err(error) => {
                 let streamed_error = format!("[Codex app-server] {error}");
+                // Fire-and-forget: receiver may be dropped during shutdown.
                 let _ = stream_tx.send(AppServerStreamEvent::AssistantMessage {
                     is_delta: false,
                     message: streamed_error,

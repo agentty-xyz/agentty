@@ -421,6 +421,7 @@ async fn handle_cancel_session_confirmation(
     app.mode = AppMode::List;
 
     if let Some(session_id) = confirmation_session_id {
+        // Best-effort: cancellation failure is non-critical after user confirmation.
         let _ = app.cancel_session(&session_id).await;
     }
 

@@ -418,6 +418,7 @@ impl SessionMergeService {
         let base_branch = match db.get_session_base_branch(&id).await {
             Ok(Some(base_branch)) => base_branch,
             Ok(None) => {
+                // Best-effort: status transition failure is non-critical.
                 let _ = SessionTaskService::update_status(
                     &status,
                     &db,
@@ -430,6 +431,7 @@ impl SessionMergeService {
                 return Err("No git worktree for this session".to_string());
             }
             Err(error) => {
+                // Best-effort: status transition failure is non-critical.
                 let _ = SessionTaskService::update_status(
                     &status,
                     &db,
@@ -445,6 +447,7 @@ impl SessionMergeService {
 
         let working_dir = projects.working_dir().to_path_buf();
         let Some(repo_root) = git_client.find_git_repo_root(working_dir).await else {
+            // Best-effort: status transition failure is non-critical.
             let _ =
                 SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Review)
                     .await;
@@ -759,6 +762,7 @@ impl SessionManager {
                     &merge_error,
                 )
                 .await;
+                // Best-effort: status transition failure is non-critical.
                 let _ =
                     SessionTaskService::update_status(status, db, app_event_tx, id, Status::Review)
                         .await;
@@ -1051,6 +1055,7 @@ impl SessionManager {
     /// Aborts an in-progress sync rebase after assistance failure.
     async fn abort_sync_rebase_after_assist_failure(input: &SyncRebaseAssistInput) {
         let folder = input.folder.clone();
+        // Best-effort cleanup: rebase may have already completed or been aborted.
         let _ = input.git_client.abort_rebase(folder).await;
     }
 
@@ -1202,6 +1207,7 @@ impl SessionManager {
             }
         }
 
+        // Best-effort: status transition failure is non-critical.
         let _ =
             SessionTaskService::update_status(status, db, app_event_tx, id, Status::Review).await;
     }
@@ -1215,8 +1221,10 @@ impl SessionManager {
     ) {
         let title = Self::session_title_from_commit_message(commit_message);
 
+        // Best-effort: title persistence failure is non-critical.
         let _ = db.update_session_title(session_id, &title).await;
 
+        // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::RefreshSessions);
     }
 
@@ -1236,6 +1244,7 @@ impl SessionManager {
             commit_message,
         );
 
+        // Best-effort: summary persistence failure is non-critical.
         let _ = db.update_session_summary(session_id, &summary).await;
     }
 
@@ -1692,6 +1701,7 @@ impl SessionManager {
     /// Aborts rebase after assistance fails to keep worktree state clean.
     async fn abort_rebase_after_assist_failure(input: &RebaseAssistInput) {
         let folder = input.folder.clone();
+        // Best-effort cleanup: rebase may have already completed or been aborted.
         let _ = input.git_client.abort_rebase(folder).await;
     }
 
@@ -1726,6 +1736,7 @@ impl SessionManager {
                 .map_err(|error| error.to_string())?;
         }
 
+        // Best-effort cleanup: worktree directory may already be removed.
         let _ = fs_client.remove_dir_all(folder).await;
 
         Ok(())
