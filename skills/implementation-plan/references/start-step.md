@@ -1,22 +1,22 @@
 # Start Step
 
-Use this guide when an engineer is claiming an existing `Ready Now` roadmap step before implementation begins.
+Use this guide when implementation is about to start for an already-claimed roadmap step.
 
 ## Goal
 
-Change only the target `Ready Now` step's `#### Assignee` field so ownership becomes visible without mixing in implementation edits.
+Start the exact planned implementation for one `Ready Now` step without mixing in claim edits or reshaping the scope mid-flight.
 
 ## Workflow
 
 1. Read `docs/plan/roadmap.md` and find the target step by the UUID in its `[UUID] Stream: Title` heading.
-1. Verify the target lives in `## Ready Now`. If it lives in `## Queued Next` or `## Parked`, promote it first instead of claiming it there.
-1. Verify the claim should only change ownership. If the request also changes scope, handle that separately with `references/update-step.md`.
-1. Confirm the requested assignee uses one of the accepted formats: `@handle` for human contributors or the worktree branch name (e.g. `agentty/<hash>`) for agent sessions.
-1. Edit only the text inside that step's `#### Assignee` block so the value changes from `No assignee` to the assignee identifier.
-1. Re-read the touched step and confirm the only content change is the `#### Assignee` value.
+1. Verify the target lives in `## Ready Now` and that its `#### Assignee` already names the current user.
+1. Re-read that step's `#### Why now`, `#### Usable outcome`, `#### Substeps`, `#### Tests`, and `#### Docs` sections before editing code.
+1. Implement the step exactly as written. Treat the roadmap text as the current execution contract instead of rewriting the step while work is in progress.
+1. If implementation reveals a real scope mistake, stop the execution flow and handle that roadmap change separately with `references/update-step.md`.
+1. Keep tests and docs attached to the same implementation slice described in the step before considering the work complete.
 
 ## Guardrails
 
-- Do not use this flow to rewrite `#### Why now`, `#### Usable outcome`, `#### Substeps`, `#### Tests`, or `#### Docs`.
-- Stop and clarify if the step is already assigned to someone other than `No assignee`.
-- Keep the claim isolated from implementation changes until automated leasing exists.
+- Do not use this flow to claim ownership. Handle claiming first with `references/claim-step.md`.
+- Do not quietly expand one step into multiple sibling outcomes during implementation.
+- Do not leave roadmap-only claim edits mixed into the implementation diff.

@@ -26,6 +26,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - Keep `Parked` for strategic work that matters, but should not consume active planning attention yet.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work so the decision uses fresh repository context.
 - Until lease automation exists, only `Ready Now` items can carry an assignee and only `Ready Now` items should be claimed.
+- Claim ownership in a dedicated roadmap-only commit before starting implementation so the roadmap diff advertises who is taking the step.
 - Keep tests and documentation attached to the same `Ready Now` step that changes behavior.
 
 ## Ready Now
@@ -314,6 +315,6 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 - Keep no more than `5` items in `## Ready Now`.
 - Keep only `Ready Now` items fully expanded with `#### Assignee`, `#### Why now`, `#### Usable outcome`, `#### Substeps`, `#### Tests`, and `#### Docs`.
 - Keep `## Queued Next` and `## Parked` as compact promotion cards with `#### Outcome`, `#### Promote when`, and `#### Depends on`.
-- Claim work only from `## Ready Now` by updating that step's `#### Assignee` field.
+- Claim work only from `## Ready Now` by updating that step's `#### Assignee` field in a dedicated commit before implementation starts.
 - After a `Ready Now` step lands, remove it from `## Ready Now`, refresh any changed snapshot rows, and either promote a queued card or leave the slot open.
 - If follow-up work remains after a step lands, add or update a compact queued or parked card instead of preserving the completed step.

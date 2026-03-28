@@ -24,7 +24,8 @@ This skill is the source of truth for roadmap structure and execution-planning r
 
 1. **Choose the roadmap operation**
 
-   - For claiming an existing `Ready Now` step before implementation, read `references/start-step.md` and keep the edit isolated to that step's `#### Assignee` field.
+   - For claiming an existing `Ready Now` step before implementation, read `references/claim-step.md`, set only that step's `#### Assignee` field to the current user, and land that claim before implementation starts.
+   - For starting implementation on an already-claimed `Ready Now` step, read `references/start-step.md` and execute the step exactly as written before reshaping the roadmap.
    - For revising an existing step or promotion card, read `references/update-step.md` and update only the named roadmap sections that need to change while preserving the canonical structure for that queue.
    - For inserting a new backlog item, read `references/add-step.md` and decide first whether it belongs in `Ready Now`, `Queued Next`, or `Parked`.
 
@@ -44,7 +45,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Keep `Ready Now` detailed. Render `Assignee`, `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
    - Keep `Queued Next` and `Parked` intentionally compact. Render `Outcome`, `Promote when`, and `Depends on` as their only subtopics.
    - Render `#### Assignee` as the first subsection in every `Ready Now` step and store the owner there in `@assignee` format, `agentty/<hash>` format, or `No assignee`.
-   - Until lease automation exists, claim work only from `Ready Now` and keep claim edits scoped to the `#### Assignee` field.
+   - Until lease automation exists, claim work only from `Ready Now`, keep claim edits scoped to the `#### Assignee` field, and land the claim as a dedicated commit before implementation begins.
    - Use size budgeting during roadmap creation, not after the fact. Before finalizing the roadmap, estimate the changed-line scope for each step, split oversized work into additional steps, and keep those size estimates in planning notes or reviewer reasoning rather than rendering a `#### Size` block in `docs/plan/` files.
    - Treat each `Ready Now` step as one mergeable planned slice. Keep every ready step at `XL` or smaller, and split any step that would be `XXL` before handing off the plan.
    - Define `atomic` as one mergeable acceptance story: the step can land, be tested, documented, and reverted independently without needing a follow-up step just to become coherent or usable.
