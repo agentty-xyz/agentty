@@ -25,7 +25,10 @@ Agentty organizes its interface into four tabs, accessible with `Tab`:
 | **Settings** | Configure reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status and session title render in a dedicated
-header row above the output panel.
+header row above the output panel. Once a session has entered
+**InProgress** at least once, that same row also shows a compact cumulative
+active-work timer. The timer keeps ticking only while the session is actively
+working and freezes between turns.
 
 The footer always shows the active directory. When the current branch tracks an
 upstream, the footer branch badge renders `local -> remote`, for example
@@ -124,6 +127,10 @@ While a session is **InProgress**, Agentty keeps the `Thinking...` status badge
 and may update its transient loader text from provider thought or tool-status
 events until the turn completes. The chat transcript itself is updated only
 after the final turn result is parsed and persisted.
+
+The session-chat timer measures only cumulative **active work** across
+`InProgress` intervals. That differs from `/stats`, whose `Session Time`
+reflects the overall session lifetime between creation and the latest update.
 
 <a id="usage-title-refinement"></a>
 When the first prompt is submitted for a new session, Agentty stores that

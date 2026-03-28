@@ -147,6 +147,8 @@ pub struct SessionRow {
     pub base_branch: String,
     pub created_at: i64,
     pub id: String,
+    pub in_progress_started_at: Option<i64>,
+    pub in_progress_total_seconds: i64,
     pub input_tokens: i64,
     pub model: String,
     pub output: String,
@@ -272,6 +274,8 @@ struct SessionJoinRow {
     base_branch: String,
     created_at: i64,
     id: String,
+    in_progress_started_at: Option<i64>,
+    in_progress_total_seconds: i64,
     input_tokens: i64,
     model: String,
     output: String,
@@ -303,6 +307,8 @@ impl SessionJoinRow {
             base_branch,
             created_at,
             id,
+            in_progress_started_at,
+            in_progress_total_seconds,
             input_tokens,
             model,
             output,
@@ -344,6 +350,8 @@ impl SessionJoinRow {
             base_branch,
             created_at,
             id,
+            in_progress_started_at,
+            in_progress_total_seconds,
             input_tokens,
             model,
             output,
@@ -692,6 +700,8 @@ ON CONFLICT(session_id) DO NOTHING
 SELECT session.base_branch AS "base_branch!",
        session.created_at AS "created_at!",
        session.id AS "id!",
+       session.in_progress_started_at,
+       session.in_progress_total_seconds AS "in_progress_total_seconds!",
        session.input_tokens AS "input_tokens!",
        session.model AS "model!",
        session.output AS "output!",
@@ -742,6 +752,8 @@ ORDER BY session.updated_at DESC, session.id
 SELECT session.base_branch AS "base_branch!",
        session.created_at AS "created_at!",
        session.id AS "id!",
+       session.in_progress_started_at,
+       session.in_progress_total_seconds AS "in_progress_total_seconds!",
        session.input_tokens AS "input_tokens!",
        session.model AS "model!",
        session.output AS "output!",
@@ -878,22 +890,49 @@ WHERE id = ?
         Ok(())
     }
 
-    /// Updates the status for a session row.
+    /// Updates the status for a session row and opens or closes the persisted
+    /// cumulative active-work interval when crossing the `InProgress`
+    /// boundary.
+    ///
+    /// Entering `InProgress` records `timestamp_seconds` only when no timing
+    /// window is already open. Leaving `InProgress` adds the elapsed interval
+    /// to `in_progress_total_seconds` and clears `in_progress_started_at`.
     ///
     /// # Errors
-    /// Returns an error if the status update fails.
-    pub async fn update_session_status(&self, id: &str, status: &str) -> Result<(), DbError> {
+    /// Returns an error if the status or timing update fails.
+    pub async fn update_session_status_with_timing_at(
+        &self,
+        id: &str,
+        status: &str,
+        timestamp_seconds: i64,
+    ) -> Result<(), DbError> {
         sqlx::query(
             r"
 UPDATE session
-SET status = ?
+SET status = ?,
+    in_progress_total_seconds = CASE
+        WHEN ? = 'InProgress' OR in_progress_started_at IS NULL THEN in_progress_total_seconds
+        ELSE in_progress_total_seconds + MAX(0, ? - in_progress_started_at)
+    END,
+    in_progress_started_at = CASE
+        WHEN ? = 'InProgress' THEN COALESCE(in_progress_started_at, ?)
+        ELSE NULL
+    END
 WHERE id = ?
 ",
         )
+        // Placeholder mapping:
+        // 1 = status, 2 = status, 3 = timestamp_seconds,
+        // 4 = status, 5 = timestamp_seconds, 6 = id.
         .bind(status)
+        .bind(status)
+        .bind(timestamp_seconds)
+        .bind(status)
+        .bind(timestamp_seconds)
         .bind(id)
         .execute(&self.pool)
         .await?;
+
         Ok(())
     }
 
@@ -2216,6 +2255,8 @@ WHERE id = ?
             base_branch: "main".to_string(),
             created_at: 100,
             id: "session-a".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             input_tokens: 11,
             model: "gpt-5.3-codex".to_string(),
             output: "Saved output".to_string(),
@@ -2324,6 +2365,14 @@ WHERE id = ?
             .await
             .expect("failed to update session stats");
         database
+            .update_session_status_with_timing_at("session-a", "InProgress", 50)
+            .await
+            .expect("failed to open in-progress timing window");
+        database
+            .update_session_status_with_timing_at("session-a", "Review", 170)
+            .await
+            .expect("failed to close in-progress timing window");
+        database
             .update_session_model("session-a", "claude-opus-4.1")
             .await
             .expect("failed to update session model");
@@ -2358,6 +2407,8 @@ WHERE id = ?
         assert_eq!(session_row.updated_at, 200);
         assert_eq!(session_row.model, "claude-opus-4.1");
         assert_eq!(session_row.status, "Review");
+        assert_eq!(session_row.in_progress_started_at, None);
+        assert_eq!(session_row.in_progress_total_seconds, 120);
         assert_eq!(session_row.project_id, Some(project_id));
         assert_eq!(session_row.prompt, "Implement the feature");
         assert_eq!(session_row.output, "First line\nSecond line");
@@ -2392,6 +2443,45 @@ WHERE id = ?
                 "Add a session-view regression test.".to_string()
             ]
         );
+    }
+
+    /// Verifies timing-aware status transitions accumulate repeated
+    /// `InProgress` intervals.
+    #[tokio::test]
+    async fn test_update_session_status_with_timing_at_accumulates_repeated_intervals() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "session-a", "main", "New", project_id).await;
+
+        // Act
+        database
+            .update_session_status_with_timing_at("session-a", "InProgress", 10)
+            .await
+            .expect("failed to enter in-progress the first time");
+        database
+            .update_session_status_with_timing_at("session-a", "Review", 70)
+            .await
+            .expect("failed to leave in-progress the first time");
+        database
+            .update_session_status_with_timing_at("session-a", "InProgress", 100)
+            .await
+            .expect("failed to enter in-progress the second time");
+        database
+            .update_session_status_with_timing_at("session-a", "Question", 190)
+            .await
+            .expect("failed to leave in-progress the second time");
+        let session_row = load_session_row(&database, "session-a").await;
+
+        // Assert
+        assert_eq!(session_row.status, "Question");
+        assert_eq!(session_row.in_progress_started_at, None);
+        assert_eq!(session_row.in_progress_total_seconds, 150);
     }
 
     /// Verifies `load_sessions_for_project()` filters rows by project id.

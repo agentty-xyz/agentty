@@ -11,6 +11,7 @@ pub use core::SessionManager;
 pub(crate) use core::{
     Clock, RealClock, RunAgentAssistTaskInput, SESSION_REFRESH_INTERVAL, SessionDefaults,
     SessionTaskService, SyncMainOutcome, SyncSessionStartError, session_branch,
+    unix_timestamp_from_system_time,
 };
 
 pub use error::SessionError;

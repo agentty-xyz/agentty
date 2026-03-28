@@ -402,6 +402,8 @@ mod tests {
             folder: std::env::temp_dir(),
             follow_up_tasks: Vec::new(),
             id: session_id.clone(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentKind::Gemini.default_model(),
             output: String::new(),
             project_name: "project".to_string(),

@@ -15,7 +15,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
-use crate::app::session::SessionError;
+use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::Status;
@@ -52,6 +52,7 @@ struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
+    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -82,6 +83,7 @@ struct RebaseTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
+    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -402,6 +404,7 @@ impl SessionMergeService {
         let id = session.id.clone();
         let session_model = session.model;
         let app_event_tx = services.event_sender();
+        let clock = services.clock();
         let fs_client = services.fs_client();
         let git_client = manager.git_client();
 
@@ -412,8 +415,15 @@ impl SessionMergeService {
         let output = Arc::clone(&handles.output);
         let status = Arc::clone(&handles.status);
 
-        if !SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Merging)
-            .await
+        if !SessionTaskService::update_status(
+            &status,
+            clock.as_ref(),
+            &db,
+            &app_event_tx,
+            &id,
+            Status::Merging,
+        )
+        .await
         {
             return Err(SessionError::Workflow(
                 "Invalid status transition to Merging".to_string(),
@@ -426,6 +436,7 @@ impl SessionMergeService {
                 // Best-effort: status transition failure is non-critical.
                 let _ = SessionTaskService::update_status(
                     &status,
+                    clock.as_ref(),
                     &db,
                     &app_event_tx,
                     &id,
@@ -441,6 +452,7 @@ impl SessionMergeService {
                 // Best-effort: status transition failure is non-critical.
                 let _ = SessionTaskService::update_status(
                     &status,
+                    clock.as_ref(),
                     &db,
                     &app_event_tx,
                     &id,
@@ -455,9 +467,15 @@ impl SessionMergeService {
         let working_dir = projects.working_dir().to_path_buf();
         let Some(repo_root) = git_client.find_git_repo_root(working_dir).await else {
             // Best-effort: status transition failure is non-critical.
-            let _ =
-                SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Review)
-                    .await;
+            let _ = SessionTaskService::update_status(
+                &status,
+                clock.as_ref(),
+                &db,
+                &app_event_tx,
+                &id,
+                Status::Review,
+            )
+            .await;
 
             return Err(SessionError::Workflow(
                 "Failed to find git repository root".to_string(),
@@ -468,6 +486,7 @@ impl SessionMergeService {
             app_event_tx,
             base_branch,
             child_pid,
+            clock,
             db,
             folder,
             fs_client,
@@ -523,11 +542,13 @@ impl SessionMergeService {
         let status = Arc::clone(&handles.status);
         let db = services.db().clone();
         let app_event_tx = services.event_sender();
+        let clock = services.clock();
         let fs_client = services.fs_client();
         let git_client = manager.git_client();
 
         if !SessionTaskService::update_status(
             &status,
+            clock.as_ref(),
             &db,
             &app_event_tx,
             &session.id,
@@ -547,6 +568,7 @@ impl SessionMergeService {
             app_event_tx,
             base_branch,
             child_pid,
+            clock,
             db,
             folder: session.folder.clone(),
             fs_client,
@@ -584,6 +606,7 @@ impl SessionManager {
 
     async fn run_merge_task(input: MergeTaskInput) {
         let output = Arc::clone(&input.output);
+        let clock = Arc::clone(&input.clock);
         let db = input.db.clone();
         let app_event_tx = input.app_event_tx.clone();
         let id = input.id.clone();
@@ -591,7 +614,16 @@ impl SessionManager {
 
         let merge_result = Self::execute_merge_workflow(input).await;
 
-        Self::finalize_merge_task(merge_result, &output, &db, &app_event_tx, &id, &status).await;
+        Self::finalize_merge_task(
+            merge_result,
+            clock.as_ref(),
+            &output,
+            &db,
+            &app_event_tx,
+            &id,
+            &status,
+        )
+        .await;
     }
 
     /// Executes the merge workflow for one session branch.
@@ -605,6 +637,7 @@ impl SessionManager {
         let MergeTaskInput {
             app_event_tx,
             base_branch,
+            clock,
             db,
             folder,
             fs_client,
@@ -682,7 +715,15 @@ impl SessionManager {
             Self::update_done_session_summary_from_commit_message(&db, &id, &commit_message).await;
         }
 
-        if !SessionTaskService::update_status(&status, &db, &app_event_tx, &id, Status::Done).await
+        if !SessionTaskService::update_status(
+            &status,
+            clock.as_ref(),
+            &db,
+            &app_event_tx,
+            &id,
+            Status::Done,
+        )
+        .await
         {
             return Err(SessionError::Workflow(
                 "Invalid status transition to Done".to_string(),
@@ -758,6 +799,7 @@ impl SessionManager {
 
     async fn finalize_merge_task(
         merge_result: Result<String, SessionError>,
+        clock: &dyn Clock,
         output: &Arc<Mutex<String>>,
         db: &Database,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
@@ -787,9 +829,15 @@ impl SessionManager {
                 )
                 .await;
                 // Best-effort: status transition failure is non-critical.
-                let _ =
-                    SessionTaskService::update_status(status, db, app_event_tx, id, Status::Review)
-                        .await;
+                let _ = SessionTaskService::update_status(
+                    status,
+                    clock,
+                    db,
+                    app_event_tx,
+                    id,
+                    Status::Review,
+                )
+                .await;
             }
         }
     }
@@ -1074,6 +1122,7 @@ impl SessionManager {
             app_event_tx,
             base_branch,
             child_pid,
+            clock,
             db,
             folder,
             fs_client,
@@ -1102,7 +1151,16 @@ impl SessionManager {
         }
         .await;
 
-        Self::finalize_rebase_task(rebase_result, &output, &db, &app_event_tx, &id, &status).await;
+        Self::finalize_rebase_task(
+            rebase_result,
+            clock.as_ref(),
+            &output,
+            &db,
+            &app_event_tx,
+            &id,
+            &status,
+        )
+        .await;
     }
 
     /// Executes one assisted rebase workflow for a session worktree.
@@ -1186,6 +1244,7 @@ impl SessionManager {
 
     async fn finalize_rebase_task(
         rebase_result: Result<String, SessionError>,
+        clock: &dyn Clock,
         output: &Arc<Mutex<String>>,
         db: &Database,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
@@ -1219,7 +1278,8 @@ impl SessionManager {
 
         // Best-effort: status transition failure is non-critical.
         let _ =
-            SessionTaskService::update_status(status, db, app_event_tx, id, Status::Review).await;
+            SessionTaskService::update_status(status, clock, db, app_event_tx, id, Status::Review)
+                .await;
     }
 
     /// Updates the persisted session title from the canonical commit message.
@@ -1841,6 +1901,7 @@ mod tests {
                 app_event_tx,
                 base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
+                clock: Arc::new(crate::app::session::RealClock),
                 db,
                 folder,
                 fs_client: test_fs_client(),

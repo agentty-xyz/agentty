@@ -259,6 +259,12 @@ pub struct Session {
     pub follow_up_tasks: Vec<SessionFollowUpTask>,
     /// Stable session identifier.
     pub id: String,
+    /// Unix timestamp when the current active-work interval started, if the
+    /// session is presently accumulating `InProgress` time.
+    pub in_progress_started_at: Option<i64>,
+    /// Cumulative active-work time already completed by this session, in whole
+    /// seconds.
+    pub in_progress_total_seconds: i64,
     /// Agent model selected for this session.
     pub model: AgentModel,
     /// Captured output transcript.
@@ -296,6 +302,23 @@ impl Session {
     /// Returns the display title for this session.
     pub fn display_title(&self) -> &str {
         self.title.as_deref().unwrap_or("No title")
+    }
+
+    /// Returns whether session chat should render the cumulative active-work
+    /// timer for this session.
+    pub fn has_in_progress_timer(&self) -> bool {
+        self.in_progress_total_seconds > 0 || self.in_progress_started_at.is_some()
+    }
+
+    /// Returns cumulative active-work time including any open `InProgress`
+    /// interval measured at `wall_clock_unix_seconds`.
+    pub fn in_progress_duration_seconds(&self, wall_clock_unix_seconds: i64) -> i64 {
+        let open_interval_seconds = self.in_progress_started_at.map_or(0, |started_at| {
+            wall_clock_unix_seconds.saturating_sub(started_at).max(0)
+        });
+
+        self.in_progress_total_seconds
+            .saturating_add(open_interval_seconds)
     }
 
     /// Returns the session-branch action currently available in session view.
@@ -433,6 +456,8 @@ mod tests {
             folder: PathBuf::new(),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),
@@ -464,6 +489,8 @@ mod tests {
             folder: PathBuf::new(),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: Some(60),
+            in_progress_total_seconds: 120,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),
@@ -507,6 +534,8 @@ mod tests {
             folder: PathBuf::new(),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 180,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),
@@ -539,5 +568,71 @@ mod tests {
 
         // Assert
         assert_eq!(action, None);
+    }
+
+    #[test]
+    fn test_has_in_progress_timer_returns_true_for_open_interval() {
+        // Arrange
+        let session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            folder: PathBuf::new(),
+            id: "session-id".to_string(),
+            in_progress_started_at: Some(120),
+            in_progress_total_seconds: 0,
+            model: AgentModel::Gemini3FlashPreview,
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: String::new(),
+            published_upstream_ref: None,
+            questions: Vec::new(),
+            follow_up_tasks: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::InProgress,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+
+        // Act
+        let shows_timer = session.has_in_progress_timer();
+
+        // Assert
+        assert!(shows_timer);
+    }
+
+    #[test]
+    fn test_in_progress_duration_seconds_accumulates_closed_and_open_intervals() {
+        // Arrange
+        let session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            folder: PathBuf::new(),
+            id: "session-id".to_string(),
+            in_progress_started_at: Some(200),
+            in_progress_total_seconds: 90,
+            model: AgentModel::Gemini3FlashPreview,
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: String::new(),
+            published_upstream_ref: None,
+            questions: Vec::new(),
+            follow_up_tasks: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::InProgress,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+
+        // Act
+        let duration_seconds = session.in_progress_duration_seconds(260);
+
+        // Assert
+        assert_eq!(duration_seconds, 150);
     }
 }

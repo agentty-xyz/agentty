@@ -566,12 +566,19 @@ impl App {
         )
         .await?;
 
-        SessionManager::fail_unfinished_operations_from_previous_run(&db).await;
+        let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
+
+        SessionManager::fail_unfinished_operations_from_previous_run(
+            db.clone(),
+            Arc::clone(&clock),
+        )
+        .await;
 
         let git_status_cancel = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(
             base_path.clone(),
+            Arc::clone(&clock),
             db.clone(),
             event_tx.clone(),
             Arc::clone(&clients.fs_client),
@@ -602,6 +609,7 @@ impl App {
             startup_working_dir.as_path(),
             clients.fs_client.as_ref(),
             services.git_client(),
+            clock,
             default_session_model,
         )
         .await;
@@ -668,6 +676,7 @@ impl App {
         startup_working_dir: &Path,
         fs_client: &dyn FsClient,
         git_client: Arc<dyn GitClient>,
+        clock: Arc<dyn session::Clock>,
         default_session_model: AgentModel,
     ) -> SessionManager {
         let mut table_state = TableState::default();
@@ -684,8 +693,6 @@ impl App {
         let (sessions_row_count, sessions_updated_at_max) =
             db.load_sessions_metadata().await.unwrap_or((0, 0));
         table_state.select(preferred_initial_session_index(&sessions));
-
-        let clock: Arc<dyn session::Clock> = Arc::new(session::RealClock);
 
         SessionManager::new(
             session::SessionDefaults {
@@ -777,6 +784,8 @@ impl App {
         let session_git_statuses = self.sessions.session_git_statuses().clone();
         let session_progress_messages = self.session_progress_messages.clone();
         let update_status = self.update_status().cloned();
+        let wall_clock_unix_seconds =
+            session::unix_timestamp_from_system_time(self.sessions.state().clock.now_system_time());
         let projects = self.projects.project_items().to_vec();
         let mode = &self.mode;
         let project_table_state = self.projects.project_table_state_mut();
@@ -803,6 +812,7 @@ impl App {
                 sessions,
                 table_state,
                 working_dir: &working_dir,
+                wall_clock_unix_seconds,
             },
         );
     }
@@ -1859,6 +1869,7 @@ impl App {
         let app_event_tx = self.services.event_sender();
         let status_updated = SessionTaskService::update_status(
             handles.status.as_ref(),
+            self.services.clock().as_ref(),
             self.services.db(),
             &app_event_tx,
             session_id,
@@ -1892,6 +1903,7 @@ impl App {
         // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
             handles.status.as_ref(),
+            self.services.clock().as_ref(),
             self.services.db(),
             &app_event_tx,
             session_id,
@@ -2934,6 +2946,8 @@ mod tests {
             folder: session_folder,
             follow_up_tasks: Vec::new(),
             id: "session-1".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "test-project".to_string(),
@@ -4552,7 +4566,7 @@ mod tests {
 
         app.services
             .db()
-            .update_session_status("session-active", &Status::Done.to_string())
+            .update_session_status_with_timing_at("session-active", &Status::Done.to_string(), 0)
             .await
             .expect("failed to update session status");
 
@@ -4672,6 +4686,7 @@ mod tests {
 
         app.services = AppServices::new(
             base_path,
+            app.services.clock(),
             db,
             event_sender,
             fs_client,

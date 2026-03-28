@@ -63,6 +63,7 @@ struct SessionChatRenderContext<'a> {
     session_progress_messages: &'a HashMap<String, String>,
     sessions: &'a [Session],
     scroll_offset: Option<u16>,
+    wall_clock_unix_seconds: i64,
 }
 
 /// Borrowed inputs for rendering the publish-branch overlay and its
@@ -81,6 +82,7 @@ struct PublishBranchOverlayContext<'a> {
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
     session_progress_messages: &'a HashMap<String, String>,
+    wall_clock_unix_seconds: i64,
 }
 
 /// Routes the content-area render path by active `AppMode`.
@@ -96,6 +98,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         stats_activity,
         sessions,
         table_state,
+        wall_clock_unix_seconds,
         ..
     } = context;
 
@@ -112,6 +115,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let aux = RouteAuxContext {
         session_progress_messages,
+        wall_clock_unix_seconds,
     };
 
     if render_list_or_overlay_mode(f, area, mode, &mut shared, aux) {
@@ -155,6 +159,7 @@ fn render_list_or_overlay_mode(
                     view_mode,
                     shared.sessions,
                     aux.session_progress_messages,
+                    aux.wall_clock_unix_seconds,
                 );
             } else {
                 overlay::render_confirmation_overlay(f, area, mode, shared.list_background());
@@ -191,6 +196,7 @@ fn render_list_or_overlay_mode(
             restore_view,
             shared.sessions,
             aux.session_progress_messages,
+            aux.wall_clock_unix_seconds,
             ViewInfoPopupRenderContext {
                 is_loading: *is_loading,
                 loading_label,
@@ -208,6 +214,7 @@ fn render_list_or_overlay_mode(
             *scroll_offset,
             shared.list_background(),
             aux.session_progress_messages,
+            aux.wall_clock_unix_seconds,
         ),
         AppMode::View { .. }
         | AppMode::Prompt { .. }
@@ -242,6 +249,7 @@ fn render_session_confirmation_overlay(
     view_mode: &ConfirmationViewMode,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
+    wall_clock_unix_seconds: i64,
 ) {
     let background_mode = view_mode.clone().into_view_mode();
 
@@ -254,6 +262,7 @@ fn render_session_confirmation_overlay(
             session_progress_messages,
             sessions,
             scroll_offset: view_mode.scroll_offset,
+            wall_clock_unix_seconds,
         },
     );
     overlay::render_overlay_backdrop(f, area);
@@ -298,6 +307,7 @@ fn render_session_or_diff_mode(
                 session_progress_messages: aux.session_progress_messages,
                 sessions,
                 scroll_offset: *scroll_offset,
+                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
             },
         ),
         AppMode::OpenCommandSelector {
@@ -309,6 +319,7 @@ fn render_session_or_diff_mode(
             area,
             sessions,
             aux.session_progress_messages,
+            aux.wall_clock_unix_seconds,
             restore_view,
             commands,
             *selected_command_index,
@@ -330,6 +341,7 @@ fn render_session_or_diff_mode(
                 session_progress_messages: aux.session_progress_messages,
                 sessions,
             },
+            aux.wall_clock_unix_seconds,
         ),
         AppMode::Diff {
             diff,
@@ -360,6 +372,7 @@ fn render_open_command_selector_overlay(
     area: Rect,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
+    wall_clock_unix_seconds: i64,
     restore_view: &ConfirmationViewMode,
     commands: &[String],
     selected_command_index: usize,
@@ -375,6 +388,7 @@ fn render_open_command_selector_overlay(
             session_progress_messages,
             sessions,
             scroll_offset: restore_view.scroll_offset,
+            wall_clock_unix_seconds,
         },
     );
     overlay::render_overlay_backdrop(f, area);
@@ -390,6 +404,7 @@ fn render_publish_branch_overlay(
     f: &mut Frame,
     area: Rect,
     context: &PublishBranchOverlayContext<'_>,
+    wall_clock_unix_seconds: i64,
 ) {
     let PublishBranchOverlayContext {
         default_branch_name,
@@ -410,6 +425,7 @@ fn render_publish_branch_overlay(
             session_progress_messages,
             sessions,
             scroll_offset: restore_view.scroll_offset,
+            wall_clock_unix_seconds,
         },
     );
     overlay::render_overlay_backdrop(f, area);
@@ -430,6 +446,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_progress_messages,
         sessions,
         scroll_offset,
+        wall_clock_unix_seconds,
     } = context;
 
     let Some(session_index) = sessions.iter().position(|session| session.id == session_id) else {
@@ -446,6 +463,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         scroll_offset,
         mode,
         active_progress,
+        wall_clock_unix_seconds,
     )
     .render(f, area);
 }
@@ -534,6 +552,8 @@ mod tests {
             folder: PathBuf::from(format!("/tmp/{session_id}")),
             follow_up_tasks: Vec::new(),
             id: session_id.to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: "Captured output".to_string(),
             project_name: "project".to_string(),
@@ -584,6 +604,7 @@ mod tests {
                     &sessions,
                     RouteAuxContext {
                         session_progress_messages: &progress_messages,
+                        wall_clock_unix_seconds: 0,
                     },
                 );
             })
@@ -622,6 +643,7 @@ mod tests {
                     &sessions,
                     RouteAuxContext {
                         session_progress_messages: &progress_messages,
+                        wall_clock_unix_seconds: 0,
                     },
                 );
             })
@@ -659,6 +681,7 @@ mod tests {
                     &sessions,
                     RouteAuxContext {
                         session_progress_messages: &progress_messages,
+                        wall_clock_unix_seconds: 0,
                     },
                 );
             })
@@ -701,6 +724,7 @@ mod tests {
                     &view_mode,
                     &sessions,
                     &progress_messages,
+                    0,
                 );
             })
             .expect("failed to draw");

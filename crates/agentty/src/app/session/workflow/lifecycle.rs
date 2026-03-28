@@ -291,6 +291,7 @@ impl SessionManager {
         // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
             &status,
+            services.clock().as_ref(),
             services.db(),
             &app_event_tx,
             &persisted_session_id,
@@ -843,6 +844,7 @@ impl SessionManager {
             // Best-effort: status transition failure is non-critical.
             let _ = SessionTaskService::update_status(
                 &status,
+                services.clock().as_ref(),
                 services.db(),
                 &app_event_tx,
                 &persisted_session_id,
@@ -1344,6 +1346,7 @@ impl SessionManager {
 
         let status_updated = SessionTaskService::update_status(
             &status,
+            services.clock().as_ref(),
             services.db(),
             &app_event_tx,
             session_id,
@@ -1550,6 +1553,8 @@ mod tests {
             folder: PathBuf::from("/tmp/session"),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::ClaudeSonnet46,
             output: output.to_string(),
             project_name: "project".to_string(),
@@ -1650,6 +1655,7 @@ mod tests {
 
         AppServices::new(
             PathBuf::from("/tmp/agentty-tests"),
+            Arc::new(crate::app::session::RealClock),
             database,
             event_tx,
             Arc::new(create_passthrough_mock_fs_client()),

@@ -1,7 +1,7 @@
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
-use crate::app::App;
+use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
 use crate::infra::agent::protocol::QuestionItem;
@@ -635,25 +635,41 @@ async fn submit_response(app: &mut App, response: String) {
 /// If the database write fails the mode stays on `Question` so the user
 /// can retry, avoiding a split between persisted and in-memory state.
 ///
-/// Updates the shared runtime handle status alongside the snapshot so
-/// the periodic `sync_from_handles` cycle does not revert the status
-/// back to `Question`.
+/// The persisted transition uses the timing-aware status update so any
+/// lingering active-work interval is closed before the session returns to
+/// `Review`. After the write succeeds it emits both
+/// [`AppEvent::SessionUpdated`] and [`AppEvent::RefreshSessions`] so the UI
+/// refreshes the focused session snapshot and any list-derived state. It also
+/// updates the shared runtime handle status alongside the snapshot so the
+/// periodic `sync_from_handles` cycle does not revert the status back to
+/// `Question`.
 async fn end_turn_no_answer(app: &mut App) {
     let AppMode::Question { session_id, .. } = &app.mode else {
         return;
     };
 
     let session_id = session_id.clone();
+    let timestamp_seconds =
+        app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
 
     if app
         .services
         .db()
-        .update_session_status(&session_id, &Status::Review.to_string())
+        .update_session_status_with_timing_at(
+            &session_id,
+            &Status::Review.to_string(),
+            timestamp_seconds,
+        )
         .await
         .is_err()
     {
         return;
     }
+
+    app.services.emit_app_event(AppEvent::SessionUpdated {
+        session_id: session_id.clone(),
+    });
+    app.services.emit_app_event(AppEvent::RefreshSessions);
 
     if let Some(session) = app
         .sessions
@@ -875,6 +891,8 @@ mod tests {
             folder: PathBuf::from("/tmp/test"),
             follow_up_tasks: Vec::new(),
             id: session_id.to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: String::new(),
@@ -940,6 +958,8 @@ mod tests {
             folder: PathBuf::from("/tmp/test"),
             follow_up_tasks: Vec::new(),
             id: session_id.to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: String::new(),
@@ -989,6 +1009,73 @@ mod tests {
             .expect("handle should exist");
         let handle_status = handles.status.lock().expect("lock should succeed");
         assert_eq!(*handle_status, Status::Review);
+    }
+
+    #[tokio::test]
+    async fn test_handle_escape_closes_open_in_progress_timer_before_review() {
+        // Arrange — persisted state still has an open active-work interval
+        // when question mode exits.
+        let mut app = new_test_app().await;
+        let session_id = "session-timer-close";
+        let project_id = app
+            .services
+            .db()
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        app.services
+            .db()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        app.services
+            .db()
+            .update_session_status_with_timing_at(session_id, "InProgress", 0)
+            .await
+            .expect("failed to open timing window");
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            session_id: session_id.to_string(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Q?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+        let sessions = app
+            .services
+            .db()
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("failed to load sessions");
+
+        // Assert
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing session row");
+        assert_eq!(session.status, "Review");
+        assert_eq!(session.in_progress_started_at, None);
+        assert!(session.in_progress_total_seconds > 0);
     }
 
     #[tokio::test]

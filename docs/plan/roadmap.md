@@ -7,7 +7,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI; sibling-session launch behavior remains queued. | Partial |
-| Session activity timing | `session` has no cumulative `InProgress` timing fields, chat shows no timer, and the session list has no time column. | Not Started |
+| Session activity timing | `session` persists cumulative `InProgress` timing fields, chat shows the timer, and the session list still has no time column. | Partial |
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
 | Typed errors and hygiene | `DbError` is landed, but git, app-server, remaining infra surfaces, and the app layer still expose string errors; discard comments, missing module tests, and convention cleanup remain open. | Partial |
 | Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, and recipe layer exist. Proof reports, native frame rendering, and scale tooling remain backlog work. | Partial |
@@ -30,35 +30,6 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - Keep tests and documentation attached to the same `Ready Now` step that changes behavior.
 
 ## Ready Now
-
-### [f9270ba2-0905-4871-9cc9-9f02e041c88d] Platform: Persist cumulative `InProgress` time and render it in session chat
-
-#### Assignee
-
-`No assignee`
-
-#### Why now
-
-The timer stream needs a persistence baseline before the session list can add another column. Chat is the smallest end-to-end surface that proves the timing model.
-
-#### Usable outcome
-
-Session chat shows a compact cumulative active-work timer once a session has entered `InProgress`, the value ticks while work is active, and it freezes when the session leaves `InProgress`.
-
-#### Substeps
-
-- [ ] **Persist session timing fields.** Add `in_progress_total_seconds` and `in_progress_started_at` to `session` via a new migration and thread the fields through the DB and domain models.
-- [ ] **Make status transitions timing-aware.** Update production status transitions and interrupted-work cleanup so entering and leaving `InProgress` opens and closes the persisted timing window consistently.
-- [ ] **Render the timer in session chat.** Thread a deterministic wall-clock value into session chat rendering and reuse `format_duration_compact()` instead of inventing a second formatting path.
-- [ ] **Document timing semantics in code.** Refresh or add `///` doc comments around the timing fields and helper behavior in the touched Rust files.
-
-#### Tests
-
-- [ ] Add DB tests for timing accumulation, workflow tests for repeated `InProgress` intervals, and session-chat tests for live ticking and truncation.
-
-#### Docs
-
-- [ ] Update `docs/site/content/docs/usage/workflow.md` to distinguish cumulative active-work timing from `/stats` lifetime duration.
 
 ### [1c7b7080-deaf-4e2c-8e3c-df24e01d9251] Quality: Ship one deterministic local session workflow slice
 
@@ -121,10 +92,8 @@ The git modules and `GitClient` return typed `GitError` variants instead of stri
 
 ```mermaid
 flowchart TD
-    R2["[f9270ba2] Platform: session chat timer"]
     R3["[1c7b7080] Quality: deterministic local session harness"]
     R4["[7b743a5a] Quality: GitError migration"]
-    R2 --> R3
 ```
 
 ## Queued Next
@@ -151,11 +120,11 @@ Show the same cumulative active-work timer in the session list without inventing
 
 #### Promote when
 
-Promote after the chat timer lands and the shared timing helper proves stable.
+Promote when session-list density work becomes the next active platform slice.
 
 #### Depends on
 
-`[f9270ba2] Platform: Persist cumulative InProgress time and render it in session chat`
+`None`
 
 ### [7608043e-3ae8-44b4-bcb4-341f8070d0d2] Quality: Introduce typed errors for the remaining infra boundaries
 
@@ -197,7 +166,7 @@ Promote after the current `Ready Now` behavioral steps settle enough that the ne
 
 #### Depends on
 
-`[cbf025d6] Workflow: Persist and render emitted follow-up tasks`, `[f9270ba2] Platform: Persist cumulative InProgress time and render it in session chat`, `[ed9de74b] Quality: Propagate typed errors through the app layer`
+`[cbf025d6] Workflow: Persist and render emitted follow-up tasks`, `[ed9de74b] Quality: Propagate typed errors through the app layer`
 
 ## Parked
 

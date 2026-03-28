@@ -356,6 +356,7 @@ mod tests {
 
         AppServices::new(
             PathBuf::from("/tmp/agentty-tests"),
+            Arc::new(crate::app::session::RealClock),
             database,
             event_tx,
             Arc::new(create_passthrough_mock_fs_client()),
@@ -395,6 +396,8 @@ mod tests {
             folder,
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),

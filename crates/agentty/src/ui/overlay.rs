@@ -97,6 +97,7 @@ pub(crate) fn render_view_info_popup(
     restore_view: &ConfirmationViewMode,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
+    wall_clock_unix_seconds: i64,
     context: ViewInfoPopupRenderContext<'_>,
 ) {
     let ViewInfoPopupRenderContext {
@@ -120,6 +121,7 @@ pub(crate) fn render_view_info_popup(
             restore_view.scroll_offset,
             &background_mode,
             active_progress,
+            wall_clock_unix_seconds,
         )
         .render(f, area);
     }
@@ -158,6 +160,7 @@ pub(crate) fn render_help(
     scroll_offset: u16,
     list_background: ListBackgroundRenderContext<'_>,
     session_progress_messages: &HashMap<String, String>,
+    wall_clock_unix_seconds: i64,
 ) {
     render_help_background(
         f,
@@ -165,6 +168,7 @@ pub(crate) fn render_help(
         help_context,
         list_background,
         session_progress_messages,
+        wall_clock_unix_seconds,
     );
     render_overlay_backdrop(f, area);
 
@@ -318,6 +322,7 @@ fn render_help_background(
     help_context: &HelpContext,
     list_background: ListBackgroundRenderContext<'_>,
     session_progress_messages: &HashMap<String, String>,
+    wall_clock_unix_seconds: i64,
 ) {
     let sessions = list_background.sessions;
 
@@ -349,6 +354,7 @@ fn render_help_background(
                 scroll_offset,
                 &bg_mode,
                 active_progress,
+                wall_clock_unix_seconds,
             )
             .render(f, area);
         }

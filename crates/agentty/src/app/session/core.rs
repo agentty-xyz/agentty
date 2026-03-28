@@ -599,6 +599,7 @@ mod tests {
 
         app.services = AppServices::new(
             base_path,
+            app.services.clock(),
             db,
             event_sender,
             fs_client,
@@ -696,6 +697,8 @@ mod tests {
             folder,
             follow_up_tasks: Vec::new(),
             id: id.to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: String::new(),
@@ -1912,7 +1915,7 @@ mod tests {
         // Act
         app.services
             .db()
-            .update_session_status("alpha000", "Done")
+            .update_session_status_with_timing_at("alpha000", "Done", 0)
             .await
             .expect("failed to update session status");
         app.refresh_sessions_now().await;
@@ -1980,7 +1983,7 @@ mod tests {
         // Act
         app.services
             .db()
-            .update_session_status("alpha000", "Done")
+            .update_session_status_with_timing_at("alpha000", "Done", 0)
             .await
             .expect("failed to update session status");
         app.refresh_sessions_now().await;
@@ -2200,7 +2203,7 @@ mod tests {
             .expect("failed to update size");
         app.services
             .db()
-            .update_session_status(&session_id, "Done")
+            .update_session_status_with_timing_at(&session_id, "Done", 0)
             .await
             .expect("failed to update status");
         let session_index = app
@@ -3693,6 +3696,7 @@ mod tests {
         let app_event_tx = app.services.event_sender();
         let transitioned_to_merging = SessionTaskService::update_status(
             &session_status,
+            app.services.clock().as_ref(),
             app.services.db(),
             &app_event_tx,
             &session_id,
@@ -3705,6 +3709,7 @@ mod tests {
         );
         let transitioned_to_done = SessionTaskService::update_status(
             &session_status,
+            app.services.clock().as_ref(),
             app.services.db(),
             &app_event_tx,
             &session_id,

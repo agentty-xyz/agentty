@@ -287,6 +287,8 @@ mod tests {
             folder: PathBuf::new(),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),

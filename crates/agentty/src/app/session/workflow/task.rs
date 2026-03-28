@@ -11,7 +11,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
-use crate::app::session::SessionError;
+use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionSize, Status};
@@ -616,6 +616,7 @@ impl SessionTaskService {
     /// list reload.
     pub(crate) async fn update_status(
         status: &Mutex<Status>,
+        clock: &dyn Clock,
         db: &Database,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         id: &str,
@@ -634,8 +635,13 @@ impl SessionTaskService {
         if !should_update {
             return false;
         }
+
+        let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
+
         // Best-effort: status persistence failure is non-critical.
-        let _ = db.update_session_status(id, &new.to_string()).await;
+        let _ = db
+            .update_session_status_with_timing_at(id, &new.to_string(), timestamp_seconds)
+            .await;
         let session_id = id.to_string();
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionUpdated { session_id });
@@ -738,12 +744,50 @@ fn append_agentty_coauthor_trailer(
 mod tests {
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::Mutex as StdMutex;
+    use std::time::{Duration, Instant, SystemTime};
 
     use super::*;
     use crate::db::Database;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::AgentRequestKind;
     use crate::infra::git::{GitError, MockGitClient};
+
+    /// Mutable test clock used to drive deterministic status-transition timing
+    /// assertions.
+    struct StaticClock {
+        now_system_time: StdMutex<SystemTime>,
+    }
+
+    impl StaticClock {
+        /// Creates a test clock seeded with one wall-clock timestamp.
+        fn new(now_system_time: SystemTime) -> Self {
+            Self {
+                now_system_time: StdMutex::new(now_system_time),
+            }
+        }
+
+        /// Replaces the current wall-clock timestamp returned by the clock.
+        fn set_now_system_time(&self, now_system_time: SystemTime) {
+            *self
+                .now_system_time
+                .lock()
+                .expect("static clock lock should not be poisoned") = now_system_time;
+        }
+    }
+
+    impl Clock for StaticClock {
+        fn now_instant(&self) -> Instant {
+            Instant::now()
+        }
+
+        fn now_system_time(&self) -> SystemTime {
+            *self
+                .now_system_time
+                .lock()
+                .expect("static clock lock should not be poisoned")
+        }
+    }
 
     /// Builds one deterministic shell command used by mocked backends.
     fn mock_shell_command(stdout: &str, stderr: &str, exit_code: i32) -> Command {
@@ -793,6 +837,88 @@ mod tests {
         assert!(!SessionTaskService::status_requires_full_refresh(
             Status::New
         ));
+    }
+
+    #[tokio::test]
+    async fn test_update_status_accumulates_repeated_in_progress_intervals() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session(
+                "session-id",
+                "gpt-5.3-codex",
+                "main",
+                &Status::New.to_string(),
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        let status = Mutex::new(Status::New);
+        let clock = StaticClock::new(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
+        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let entered_first_interval = SessionTaskService::update_status(
+            &status,
+            &clock,
+            &database,
+            &app_event_tx,
+            "session-id",
+            Status::InProgress,
+        )
+        .await;
+        clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(70));
+        let left_first_interval = SessionTaskService::update_status(
+            &status,
+            &clock,
+            &database,
+            &app_event_tx,
+            "session-id",
+            Status::Review,
+        )
+        .await;
+        clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(100));
+        let entered_second_interval = SessionTaskService::update_status(
+            &status,
+            &clock,
+            &database,
+            &app_event_tx,
+            "session-id",
+            Status::InProgress,
+        )
+        .await;
+        clock.set_now_system_time(SystemTime::UNIX_EPOCH + Duration::from_secs(190));
+        let left_second_interval = SessionTaskService::update_status(
+            &status,
+            &clock,
+            &database,
+            &app_event_tx,
+            "session-id",
+            Status::Question,
+        )
+        .await;
+        let session_row = database
+            .load_sessions()
+            .await
+            .expect("failed to load sessions")
+            .into_iter()
+            .find(|row| row.id == "session-id")
+            .expect("missing session row");
+
+        // Assert
+        assert!(entered_first_interval);
+        assert!(left_first_interval);
+        assert!(entered_second_interval);
+        assert!(left_second_interval);
+        assert_eq!(session_row.status, "Question");
+        assert_eq!(session_row.in_progress_started_at, None);
+        assert_eq!(session_row.in_progress_total_seconds, 150);
     }
 
     #[test]

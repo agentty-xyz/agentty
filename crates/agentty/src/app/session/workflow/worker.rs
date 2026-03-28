@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use super::SessionTaskService;
 use crate::app::assist::AssistContext;
-use crate::app::session::SessionError;
+use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{SessionStats, Status};
@@ -79,6 +79,7 @@ struct SessionWorkerContext {
     /// Provider-agnostic agent channel for this session's worker.
     channel: Arc<dyn AgentChannel>,
     child_pid: Arc<Mutex<Option<u32>>>,
+    clock: Arc<dyn Clock>,
     db: Database,
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
@@ -119,8 +120,12 @@ impl SessionWorkerService {
         }
     }
 
-    /// Marks unfinished operations from previous process runs as failed.
-    pub(super) async fn fail_unfinished_operations_from_previous_run(db: &Database) {
+    /// Marks unfinished operations from previous process runs as failed and
+    /// closes any open active-work timing window at `timestamp_seconds`.
+    pub(super) async fn fail_unfinished_operations_from_previous_run_at(
+        db: &Database,
+        timestamp_seconds: i64,
+    ) {
         let interrupted_session_ids: HashSet<String> = db
             .load_unfinished_session_operations()
             .await
@@ -132,7 +137,11 @@ impl SessionWorkerService {
         for session_id in interrupted_session_ids {
             // Best-effort: status persistence failure is non-critical.
             let _ = db
-                .update_session_status(&session_id, &Status::Review.to_string())
+                .update_session_status_with_timing_at(
+                    &session_id,
+                    &Status::Review.to_string(),
+                    timestamp_seconds,
+                )
                 .await;
         }
 
@@ -213,6 +222,7 @@ impl SessionWorkerService {
             app_event_tx: services.event_sender(),
             channel,
             child_pid: Arc::clone(&runtime.child_pid),
+            clock: services.clock(),
             db: services.db().clone(),
             folder: runtime.folder.clone(),
             fs_client: services.fs_client(),
@@ -318,6 +328,7 @@ impl SessionWorkerService {
             // Best-effort: status transition failure is non-critical.
             let _ = SessionTaskService::update_status(
                 &context.status,
+                context.clock.as_ref(),
                 &context.db,
                 &context.app_event_tx,
                 &context.session_id,
@@ -400,6 +411,7 @@ impl SessionWorkerService {
         // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
             &context.status,
+            context.clock.as_ref(),
             &context.db,
             &context.app_event_tx,
             &context.session_id,
@@ -445,8 +457,17 @@ impl SessionWorkerService {
 
 impl SessionManager {
     /// Marks unfinished operations from previous process runs as failed.
-    pub(crate) async fn fail_unfinished_operations_from_previous_run(db: &Database) {
-        SessionWorkerService::fail_unfinished_operations_from_previous_run(db).await;
+    pub(crate) async fn fail_unfinished_operations_from_previous_run(
+        db: Database,
+        clock: Arc<dyn Clock>,
+    ) {
+        let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
+
+        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(
+            &db,
+            timestamp_seconds,
+        )
+        .await;
     }
 
     /// Persists and enqueues a command on the per-session worker queue.
@@ -1163,6 +1184,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
@@ -1264,6 +1286,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
             db,
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
@@ -1482,12 +1505,15 @@ mod tests {
         )
         .await
         .expect("failed to insert session");
+        db.update_session_status_with_timing_at("sess1", "InProgress", 0)
+            .await
+            .expect("failed to open in-progress timing window");
         db.insert_session_operation("op-1", "sess1", "reply")
             .await
             .expect("failed to insert session operation");
 
         // Act
-        SessionManager::fail_unfinished_operations_from_previous_run(&db).await;
+        SessionWorkerService::fail_unfinished_operations_from_previous_run_at(&db, 300).await;
         let sessions = db.load_sessions().await.expect("failed to load sessions");
         let operation_is_unfinished = db
             .is_session_operation_unfinished("op-1")
@@ -1497,6 +1523,8 @@ mod tests {
         // Assert
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].status, "Review");
+        assert_eq!(sessions[0].in_progress_started_at, None);
+        assert_eq!(sessions[0].in_progress_total_seconds, 300);
         assert!(!operation_is_unfinished);
     }
 
@@ -1533,6 +1561,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
@@ -1590,6 +1619,7 @@ mod tests {
             app_event_tx: mpsc::unbounded_channel().0,
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
             db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),

@@ -15,8 +15,8 @@ use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::{
-    calculate_input_height, question_panel_layout, suggestion_dropdown_height,
-    truncate_with_ellipsis, wrap_lines,
+    calculate_input_height, format_duration_compact, question_panel_layout,
+    suggestion_dropdown_height, truncate_with_ellipsis, wrap_lines,
 };
 use crate::ui::{Component, Page, style};
 
@@ -46,6 +46,7 @@ pub struct SessionChatPage<'a> {
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
     pub sessions: &'a [Session],
+    pub wall_clock_unix_seconds: i64,
 }
 
 impl<'a> SessionChatPage<'a> {
@@ -64,6 +65,7 @@ impl<'a> SessionChatPage<'a> {
         scroll_offset: Option<u16>,
         mode: &'a AppMode,
         active_progress: Option<&'a str>,
+        wall_clock_unix_seconds: i64,
     ) -> Self {
         Self {
             active_progress,
@@ -71,6 +73,7 @@ impl<'a> SessionChatPage<'a> {
             scroll_offset,
             session_index,
             sessions,
+            wall_clock_unix_seconds,
         }
     }
 
@@ -346,27 +349,47 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        Self::render_session_header(f, output_chunks[0], session);
+        Self::render_session_header(f, output_chunks[0], session, self.wall_clock_unix_seconds);
         output.render(f, output_chunks[1]);
         self.render_bottom_panel(f, chunks[1], session, prepared_prompt_panel.as_ref());
     }
 
     /// Renders a standalone status/title row above the output panel border.
-    fn render_session_header(f: &mut Frame, header_area: Rect, session: &Session) {
-        let header_text = Self::session_header_text(session, header_area.width);
+    fn render_session_header(
+        f: &mut Frame,
+        header_area: Rect,
+        session: &Session,
+        wall_clock_unix_seconds: i64,
+    ) {
+        let header_text =
+            Self::session_header_text(session, header_area.width, wall_clock_unix_seconds);
         let header = Paragraph::new(header_text).style(Style::default().fg(session.status.color()));
 
         f.render_widget(header, header_area);
     }
 
     /// Formats the left-aligned session header text for the available width.
-    fn session_header_text(session: &Session, header_width: u16) -> String {
+    fn session_header_text(
+        session: &Session,
+        header_width: u16,
+        wall_clock_unix_seconds: i64,
+    ) -> String {
         let status_label = session.status.to_string();
-        let status_width = u16::try_from(status_label.len()).unwrap_or(u16::MAX);
-        let reserved_width = status_width.saturating_add(5);
+        let timer_label = session.has_in_progress_timer().then(|| {
+            format!(
+                " ({})",
+                format_duration_compact(
+                    session.in_progress_duration_seconds(wall_clock_unix_seconds)
+                )
+            )
+        });
+        let status_prefix = format!("{status_label}{}", timer_label.as_deref().unwrap_or(""));
+        let reserved_width = u16::try_from(status_prefix.chars().count())
+            .unwrap_or(u16::MAX)
+            .saturating_add(5);
         let max_title_width = usize::from(header_width.saturating_sub(reserved_width));
         let header_title = truncate_with_ellipsis(session.display_title(), max_title_width);
-        format!(" {status_label} - {header_title} ")
+        format!(" {status_prefix} - {header_title} ")
     }
 
     fn bottom_height(&self, area: Rect) -> u16 {
@@ -887,6 +910,8 @@ mod tests {
             folder: PathBuf::new(),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),
@@ -1467,7 +1492,7 @@ mod tests {
             input: InputState::with_text("line\n".repeat(80)),
             scroll_offset: None,
         };
-        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let area = Rect::new(0, 0, 120, 30);
 
         // Act
@@ -1490,7 +1515,7 @@ mod tests {
             input: InputState::with_text("line\n".repeat(80)),
             scroll_offset: None,
         };
-        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let area = Rect::new(0, 0, 120, 8);
 
         // Act
@@ -1567,7 +1592,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let area = Rect::new(0, 0, 120, 30);
         let options_height = question_options_height(&[], area.height.saturating_sub(1));
         let layout_available = area.height.saturating_sub(1).saturating_sub(options_height);
@@ -1610,7 +1635,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let area = Rect::new(0, 0, 120, 8);
 
         // Act
@@ -1638,7 +1663,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let area = Rect::new(0, 0, 80, 20);
 
         // Act
@@ -1673,7 +1698,8 @@ mod tests {
         let mut session = session_fixture();
         session.title = Some("Header Session".to_string());
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let width = 80;
         let backend = ratatui::backend::TestBackend::new(width, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1700,7 +1726,8 @@ mod tests {
         let long_title = "This is a very long session title for truncation behavior validation";
         session.title = Some(long_title.to_string());
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let backend = ratatui::backend::TestBackend::new(28, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1724,7 +1751,8 @@ mod tests {
         let mut session = session_fixture();
         session.title = Some("Header Session".to_string());
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let width = 90;
         let backend = ratatui::backend::TestBackend::new(width, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1741,6 +1769,67 @@ mod tests {
         let header_row = buffer_row_text(terminal.backend().buffer(), 1, width);
         assert!(header_row.contains("Header Session"));
         assert!(!header_row.contains("GitHub"));
+    }
+
+    #[test]
+    fn test_session_header_text_ticks_live_in_progress_timer() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        session.title = Some("Timer Session".to_string());
+        session.in_progress_started_at = Some(60);
+
+        // Act
+        let early_header = SessionChatPage::session_header_text(&session, 80, 90);
+        let later_header = SessionChatPage::session_header_text(&session, 80, 3_720);
+
+        // Assert
+        assert!(early_header.contains("InProgress (<1m) - Timer Session"));
+        assert!(later_header.contains("InProgress (1h 1m) - Timer Session"));
+    }
+
+    #[test]
+    fn test_session_header_text_freezes_timer_after_in_progress_ends() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.title = Some("Frozen Timer".to_string());
+        session.in_progress_total_seconds = 3_660;
+
+        // Act
+        let earlier_header = SessionChatPage::session_header_text(&session, 80, 4_000);
+        let later_header = SessionChatPage::session_header_text(&session, 80, 40_000);
+
+        // Assert
+        assert_eq!(earlier_header, later_header);
+        assert!(earlier_header.contains("Review (1h 1m) - Frozen Timer"));
+    }
+
+    #[test]
+    fn test_render_truncates_long_session_header_title_and_keeps_timer_visible() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        session.title = Some("This is a very long timer-aware session header title".to_string());
+        session.in_progress_started_at = Some(0);
+        let mode = AppMode::List;
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 3_660);
+        let backend = ratatui::backend::TestBackend::new(34, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw session chat page");
+
+        // Assert
+        let header_row = buffer_row_text(terminal.backend().buffer(), 1, 34);
+        assert!(header_row.contains("InProgress (1h 1m)"));
+        assert!(header_row.contains("..."));
     }
 
     #[test]
@@ -1761,7 +1850,8 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let backend = ratatui::backend::TestBackend::new(32, 8);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -1797,7 +1887,8 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let width = 40;
         let height = 12;
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -1846,7 +1937,8 @@ mod tests {
             scroll_offset: None,
             selected_option_index: Some(0),
         };
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let width = 50;
         let height = 14;
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -1891,7 +1983,8 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let mut page = SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None);
+        let mut page =
+            SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
         let backend = ratatui::backend::TestBackend::new(30, 6);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 

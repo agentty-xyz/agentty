@@ -7,6 +7,7 @@ use ag_forge::ReviewRequestClient;
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
+use crate::app::session::Clock;
 use crate::db::Database;
 use crate::infra::app_server::AppServerClient;
 use crate::infra::fs::FsClient;
@@ -16,6 +17,7 @@ use crate::infra::git::GitClient;
 pub struct AppServices {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     base_path: PathBuf,
+    clock: Arc<dyn Clock>,
     db: Database,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
@@ -28,6 +30,7 @@ impl AppServices {
     /// dependencies.
     pub(crate) fn new(
         base_path: PathBuf,
+        clock: Arc<dyn Clock>,
         db: Database,
         event_tx: mpsc::UnboundedSender<AppEvent>,
         fs_client: Arc<dyn FsClient>,
@@ -38,6 +41,7 @@ impl AppServices {
         Self {
             app_server_client_override,
             base_path,
+            clock,
             db,
             event_tx,
             fs_client,
@@ -54,6 +58,11 @@ impl AppServices {
     /// Returns the application database handle.
     pub(crate) fn db(&self) -> &Database {
         &self.db
+    }
+
+    /// Returns the shared wall-clock used by session workflows.
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
     }
 
     /// Enqueues an app event onto the internal event bus.

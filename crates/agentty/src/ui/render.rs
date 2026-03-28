@@ -58,6 +58,9 @@ pub struct RenderContext<'a> {
     pub table_state: &'a mut TableState,
     /// Background auto-update progress state for the status bar.
     pub update_status: Option<&'a UpdateStatus>,
+    /// Current wall-clock time expressed as Unix seconds for deterministic
+    /// render-time timers.
+    pub wall_clock_unix_seconds: i64,
     /// Working directory for the active project.
     pub working_dir: &'a Path,
 }
@@ -190,6 +193,8 @@ mod tests {
             folder: PathBuf::from(folder),
             follow_up_tasks: Vec::new(),
             id: session_id.to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
             model: AgentModel::Gemini3FlashPreview,
             output: String::new(),
             project_name: "project".to_string(),

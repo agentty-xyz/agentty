@@ -836,6 +836,7 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(
             PathBuf::from("/tmp/agentty-settings-tests"),
+            Arc::new(crate::app::session::RealClock),
             database,
             event_tx,
             Arc::new(fs::MockFsClient::new()),
