@@ -4,11 +4,13 @@ Internal planning documents and UI design notes.
 
 Use `skills/implementation-plan/SKILL.md` for roadmap structure and implementation-planning requirements.
 Keep active planning consolidated in `docs/plan/roadmap.md`.
-Keep `docs/plan/roadmap.md` to one shared execution diagram and one shared `## Implementation Steps` section.
-Remove implemented steps from the roadmap instead of preserving completed execution detail.
+Keep `docs/plan/roadmap.md` split into `## Ready Now`, `## Queued Next`, and `## Parked`.
+Keep only `Ready Now` steps fully expanded; keep queued and parked work intentionally compact.
+Remove implemented `Ready Now` steps from the roadmap instead of preserving completed execution detail.
 Keep size budgeting in the skill workflow only; do not render `### Size` sections inside `docs/plan/*.md` files.
-Require every roadmap step heading title to use the exact format `[UUID] Stream: Title`, then start the body with `#### Assignee` using a GitHub handle in `@assignee` format or `No assignee` before `#### Why now`.
-For the current direct-to-`main` workflow, an engineer claims a step by landing and pushing a dedicated commit that changes only that step's exact `#### Assignee` field, then starts implementation in later commits.
+Require every roadmap step heading title to use the exact format `[UUID] Stream: Title`.
+Require `Ready Now` steps to start with `#### Assignee` using `@assignee`, `agentty/<hash>`, or `No assignee`.
+Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work into `Ready Now`.
 
 ## Planning Surface
 

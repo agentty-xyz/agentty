@@ -59,6 +59,22 @@ cargo test -q
 `pre-commit run --all-files` now includes the workspace coverage ratchet via
 `cargo llvm-cov --workspace --summary-only --fail-under-lines 89 --fail-under-functions 86`.
 
+## Roadmap Maintenance
+
+Use the `ag-xtask` roadmap commands to keep planning current before revising
+`docs/plan/roadmap.md`.
+
+```sh
+# Validate roadmap structure and queue rules
+cargo run -q -p ag-xtask -- roadmap lint
+
+# Print a read-only planning digest from git state and the roadmap
+cargo run -q -p ag-xtask -- roadmap context-digest
+```
+
+Run `roadmap context-digest` before promoting work into `Ready Now`, and keep
+only `Ready Now` items fully expanded in `docs/plan/roadmap.md`.
+
 ### SQLx Offline Query Metadata
 
 When changing SQL in `crates/agentty/src/infra/db.rs`, regenerate offline metadata

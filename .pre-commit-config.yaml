@@ -91,3 +91,9 @@ repos:
         language: system
         types: [sql]
         pass_filenames: false
+      - id: check-roadmap
+        name: check roadmap
+        description: Verifies that the planning roadmap matches the active workflow rules.
+        entry: cargo run -q -p ag-xtask -- roadmap lint
+        language: system
+        pass_filenames: false
