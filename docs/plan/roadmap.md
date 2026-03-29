@@ -13,7 +13,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
 | Typed errors and hygiene | `DbError`, `GitError`, `AppServerTransportError`, `AppServerError`, and `AgentError` enums are landed across all infra boundaries; the app layer still uses `Result<T, String>` in review-assist, sync-assist, and session-lifecycle helpers; discard comments, missing module tests, and convention cleanup remain open. | Partial |
-| Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, and recipe layer exist. Proof reports, native frame rendering, and scale tooling remain backlog work. | Partial |
+| Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, recipe layer, proof reports (labeled captures, four backends: frame-text, PNG strip, GIF, HTML), native bitmap renderer, frame diffing, journey composition, and scale tooling are all landed. | Landed |
 
 ## Active Streams
 
@@ -21,7 +21,6 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - `Forge`: GitHub review-request creation/update from session view while preserving GitLab branch publishing.
 - `Workflow`: draft-session staging before the first agent turn.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
-- `Testty`: proof-driven TUI testing framework and scale tooling for `crates/testty/`.
 
 ## Planning Model
 
@@ -233,48 +232,6 @@ Promote when a `Ready Now` slot opens and the active workflow and model-availabi
 
 `None`
 
-### [3e7f1a92-4b8d-4c6e-9a15-d2f8e0b71c34] Testty: Land proof report fundamentals
-
-#### Outcome
-
-Add labeled captures and the proof report core so the proof pipeline can generate reviewable artifacts.
-
-#### Promote when
-
-Promote when the active product-facing streams no longer dominate planning attention or when `Testty` becomes the primary investment stream.
-
-#### Depends on
-
-`None`
-
-### [b8e4a6d2-1f3c-4d7e-a952-c6b0d8e3f419] Testty: Add native rendering and visual proof backends
-
-#### Outcome
-
-Render terminal frames natively and use that renderer to unlock screenshot, GIF, and HTML proof outputs.
-
-#### Promote when
-
-Promote after `Testty: Land proof report fundamentals` lands and the proof object model is stable.
-
-#### Depends on
-
-`[3e7f1a92] Testty: Land proof report fundamentals`
-
-### [4c9f2e68-d1a5-4b7c-8e34-a6b0c3d9e271] Testty: Add scale tooling for high-volume scenarios
-
-#### Outcome
-
-Add scenario tiering and reusable journey helpers so the proof pipeline scales without manual test choreography.
-
-#### Promote when
-
-Promote after the proof fundamentals land and there is enough scenario volume to justify scale tooling.
-
-#### Depends on
-
-`[3e7f1a92] Testty: Land proof report fundamentals`
-
 ## Context Notes
 
 - `Forge: Replace GitHub branch publish with create or update pull request` should reuse the existing `ag-forge` review-request create/refresh flow and keep GitLab on the current push-only branch-publish path.
@@ -282,7 +239,7 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 - `Workflow: Stage draft session messages and start them explicitly` should treat `Status::New` as the persisted draft container instead of introducing a second pre-start lifecycle status.
 - The parked local session harness slice should come back only when the active workflow and model-availability changes stop churning the same lifecycle seams.
 - The typed-error sequence stays linear: infra enums are now stable, so the app-layer propagation step can rely on their shapes without rework risk.
-- `Testty` remains strategically important, but it is independent of the active `agentty` product work and should stay parked until a human intentionally rebalances the queue.
+- Testty proof pipeline is fully landed in `crates/testty/`. Future enhancements (e.g., additional proof backends, CI integration, or new recipe types) should be queued as new parked cards referencing that crate.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.
 
 ## Status Maintenance Rule
