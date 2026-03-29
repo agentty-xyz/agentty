@@ -14,6 +14,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
 | Typed errors and hygiene | `DbError`, `GitError`, `AppServerTransportError`, `AppServerError`, and `AgentError` enums are landed across all infra boundaries; the app layer still uses `Result<T, String>` in review-assist, sync-assist, and session-lifecycle helpers; discard comments, missing module tests, and convention cleanup remain open. | Partial |
 | Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, recipe layer, proof reports (labeled captures, four backends: frame-text, PNG strip, GIF, HTML), native bitmap renderer, frame diffing, journey composition, and scale tooling are all landed. | Landed |
+| Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 
 ## Active Streams
 
@@ -21,6 +22,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - `Forge`: GitHub review-request creation/update from session view while preserving GitLab branch publishing.
 - `Workflow`: draft-session staging before the first agent turn.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
+- `Delivery`: project-level landing strategy for review-ready sessions, including direct-merge vs. pull-request expectations.
 
 ## Planning Model
 
@@ -188,6 +190,20 @@ Promote after `Workflow: Stage draft session messages and start them explicitly`
 
 `[64c9bb7f] Workflow: Stage draft session messages and start them explicitly`
 
+### [17a9e2ba-0b7d-407d-9cd4-72807ef7bc1f] Delivery: Add project commit strategy selection
+
+#### Outcome
+
+Let each project stored in Agentty choose its expected landing path so review-ready sessions can steer users toward either direct merge to `main` or a pull-request workflow instead of treating both paths as an undifferentiated default.
+
+#### Promote when
+
+Promote when maintainers want review and publish actions to respect the target project's expected delivery flow rather than leaving that decision entirely manual.
+
+#### Depends on
+
+`[ca014af3] Forge: Replace GitHub branch publish with create or update pull request`
+
 ## Parked
 
 ### [282012e4-d4c0-4a83-8d24-a5d137f40111] Quality: Refresh discard-path documentation
@@ -239,6 +255,7 @@ Promote when a `Ready Now` slot opens and the active workflow and model-availabi
 - `Workflow: Stage draft session messages and start them explicitly` should treat `Status::New` as the persisted draft container instead of introducing a second pre-start lifecycle status.
 - The parked local session harness slice should come back only when the active workflow and model-availability changes stop churning the same lifecycle seams.
 - The typed-error sequence stays linear: infra enums are now stable, so the app-layer propagation step can rely on their shapes without rework risk.
+- `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
 - Testty proof pipeline is fully landed in `crates/testty/`. Future enhancements (e.g., additional proof backends, CI integration, or new recipe types) should be queued as new parked cards referencing that crate.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.
 
