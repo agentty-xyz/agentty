@@ -836,13 +836,15 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(
             PathBuf::from("/tmp/agentty-settings-tests"),
-            Arc::new(crate::app::session::RealClock),
             database,
             event_tx,
-            Arc::new(fs::MockFsClient::new()),
-            Arc::new(git::MockGitClient::new()),
-            Arc::new(forge::MockReviewRequestClient::new()),
-            Some(Arc::new(app_server::MockAppServerClient::new())),
+            crate::app::service::AppServiceClients {
+                app_server_client_override: Some(Arc::new(app_server::MockAppServerClient::new())),
+                clock: Arc::new(crate::app::session::RealClock),
+                fs_client: Arc::new(fs::MockFsClient::new()),
+                git_client: Arc::new(git::MockGitClient::new()),
+                review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+            },
         );
 
         (services, project_id)

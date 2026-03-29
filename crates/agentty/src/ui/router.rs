@@ -161,16 +161,18 @@ fn render_list_or_overlay_mode(
                 render_session_confirmation_overlay(
                     f,
                     area,
+                    SessionOverlayRenderContext {
+                        follow_up_task_positions: aux.follow_up_task_positions,
+                        restore_view: view_mode,
+                        session_progress_messages: aux.session_progress_messages,
+                        sessions: shared.sessions,
+                        wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+                    },
                     &SessionConfirmationContext {
                         confirmation_message,
                         confirmation_title,
                         selected_confirmation_index: *selected_confirmation_index,
                     },
-                    aux.follow_up_task_positions,
-                    view_mode,
-                    shared.sessions,
-                    aux.session_progress_messages,
-                    aux.wall_clock_unix_seconds,
                 );
             } else {
                 overlay::render_confirmation_overlay(
@@ -258,40 +260,62 @@ struct SessionConfirmationContext<'a> {
     selected_confirmation_index: usize,
 }
 
-/// Renders a session-scoped confirmation above the originating session chat
-/// page.
-fn render_session_confirmation_overlay(
+/// Borrowed data shared by session-scoped overlays that render above the
+/// session chat page.
+#[derive(Clone, Copy)]
+struct SessionOverlayRenderContext<'a> {
+    /// Follow-up-task selection state keyed by session id.
+    follow_up_task_positions: &'a HashMap<String, usize>,
+    /// Session view restored after the overlay closes.
+    restore_view: &'a ConfirmationViewMode,
+    /// Active progress messages keyed by session id.
+    session_progress_messages: &'a HashMap<String, String>,
+    /// Session rows available for background rendering.
+    sessions: &'a [Session],
+    /// Render-time clock used for deterministic timers.
+    wall_clock_unix_seconds: i64,
+}
+
+/// Renders the shared session-chat background for session-scoped overlays and
+/// dims it with the generic overlay backdrop.
+fn render_session_overlay_background(
     f: &mut Frame,
     area: Rect,
-    context: &SessionConfirmationContext<'_>,
-    follow_up_task_positions: &HashMap<String, usize>,
-    view_mode: &ConfirmationViewMode,
-    sessions: &[Session],
-    session_progress_messages: &HashMap<String, String>,
-    wall_clock_unix_seconds: i64,
+    context: SessionOverlayRenderContext<'_>,
 ) {
-    let background_mode = view_mode.clone().into_view_mode();
+    let background_mode = context.restore_view.clone().into_view_mode();
 
     render_session_chat(
         f,
         area,
         SessionChatRenderContext {
-            follow_up_task_positions,
+            follow_up_task_positions: context.follow_up_task_positions,
             mode: &background_mode,
-            session_id: &view_mode.session_id,
-            session_progress_messages,
-            sessions,
-            scroll_offset: view_mode.scroll_offset,
-            wall_clock_unix_seconds,
+            session_id: &context.restore_view.session_id,
+            session_progress_messages: context.session_progress_messages,
+            sessions: context.sessions,
+            scroll_offset: context.restore_view.scroll_offset,
+            wall_clock_unix_seconds: context.wall_clock_unix_seconds,
         },
     );
     overlay::render_overlay_backdrop(f, area);
+}
+
+/// Renders a session-scoped confirmation above the originating session chat
+/// page.
+fn render_session_confirmation_overlay(
+    f: &mut Frame,
+    area: Rect,
+    overlay_context: SessionOverlayRenderContext<'_>,
+    confirmation_context: &SessionConfirmationContext<'_>,
+) {
+    render_session_overlay_background(f, area, overlay_context);
 
     component::confirmation_overlay::ConfirmationOverlay::new(
-        context.confirmation_title,
-        context.confirmation_message,
+        confirmation_context.confirmation_title,
+        confirmation_context.confirmation_message,
     )
-    .selected_yes(context.selected_confirmation_index == 0)
+    .selected_yes(confirmation_context.selected_confirmation_index == 0)
     .render(f, area);
 }
 
@@ -338,11 +362,13 @@ fn render_session_or_diff_mode(
         } => render_open_command_selector_overlay(
             f,
             area,
-            aux.follow_up_task_positions,
-            sessions,
-            aux.session_progress_messages,
-            aux.wall_clock_unix_seconds,
-            restore_view,
+            SessionOverlayRenderContext {
+                follow_up_task_positions: aux.follow_up_task_positions,
+                restore_view,
+                session_progress_messages: aux.session_progress_messages,
+                sessions,
+                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+            },
             commands,
             *selected_command_index,
         ),
@@ -393,30 +419,11 @@ fn render_session_or_diff_mode(
 fn render_open_command_selector_overlay(
     f: &mut Frame,
     area: Rect,
-    follow_up_task_positions: &HashMap<String, usize>,
-    sessions: &[Session],
-    session_progress_messages: &HashMap<String, String>,
-    wall_clock_unix_seconds: i64,
-    restore_view: &ConfirmationViewMode,
+    overlay_context: SessionOverlayRenderContext<'_>,
     commands: &[String],
     selected_command_index: usize,
 ) {
-    let background_mode = restore_view.clone().into_view_mode();
-
-    render_session_chat(
-        f,
-        area,
-        SessionChatRenderContext {
-            follow_up_task_positions,
-            mode: &background_mode,
-            session_id: &restore_view.session_id,
-            session_progress_messages,
-            sessions,
-            scroll_offset: restore_view.scroll_offset,
-            wall_clock_unix_seconds,
-        },
-    );
-    overlay::render_overlay_backdrop(f, area);
+    render_session_overlay_background(f, area, overlay_context);
 
     component::open_command_overlay::OpenCommandOverlay::new(commands)
         .selected_command_index(selected_command_index)
@@ -440,22 +447,17 @@ fn render_publish_branch_overlay(
         session_progress_messages,
         sessions,
     } = *context;
-    let background_mode = restore_view.clone().into_view_mode();
-
-    render_session_chat(
+    render_session_overlay_background(
         f,
         area,
-        SessionChatRenderContext {
+        SessionOverlayRenderContext {
             follow_up_task_positions,
-            mode: &background_mode,
-            session_id: &restore_view.session_id,
+            restore_view,
             session_progress_messages,
             sessions,
-            scroll_offset: restore_view.scroll_offset,
             wall_clock_unix_seconds,
         },
     );
-    overlay::render_overlay_backdrop(f, area);
 
     component::publish_branch_overlay::PublishBranchOverlay::new(
         input,
@@ -758,12 +760,14 @@ mod tests {
                 render_session_confirmation_overlay(
                     frame,
                     frame.area(),
+                    SessionOverlayRenderContext {
+                        follow_up_task_positions: &HashMap::new(),
+                        restore_view: &view_mode,
+                        session_progress_messages: &progress_messages,
+                        sessions: &sessions,
+                        wall_clock_unix_seconds: 0,
+                    },
                     &confirmation_context,
-                    &HashMap::new(),
-                    &view_mode,
-                    &sessions,
-                    &progress_messages,
-                    0,
                 );
             })
             .expect("failed to draw");

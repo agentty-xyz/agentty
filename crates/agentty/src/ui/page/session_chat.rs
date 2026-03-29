@@ -10,7 +10,7 @@ use crate::domain::session::{Session, Status};
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::file_index;
 use crate::ui::component::chat_input::{ChatInput, SuggestionItem, SuggestionList};
-use crate::ui::component::session_output::SessionOutput;
+use crate::ui::component::session_output::{SessionOutput, SessionOutputLineContext};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
@@ -106,12 +106,14 @@ impl<'a> SessionChatPage<'a> {
     ) -> u16 {
         SessionOutput::rendered_line_count(
             session,
-            selected_follow_up_task_position,
             output_width,
-            done_session_output_mode,
-            review_status_message,
-            review_text,
-            active_progress,
+            SessionOutputLineContext {
+                active_progress,
+                done_session_output_mode,
+                review_status_message,
+                review_text,
+                selected_follow_up_task_position,
+            },
         )
     }
 

@@ -658,13 +658,15 @@ mod tests {
 
         app.services = AppServices::new(
             base_path,
-            app.services.clock(),
             db,
             event_sender,
-            fs_client,
-            Arc::clone(&mock_git_client),
-            review_request_client,
-            app_server_client_override,
+            crate::app::service::AppServiceClients {
+                app_server_client_override,
+                clock: app.services.clock(),
+                fs_client,
+                git_client: Arc::clone(&mock_git_client),
+                review_request_client,
+            },
         );
         app.sessions.git_client = mock_git_client;
     }

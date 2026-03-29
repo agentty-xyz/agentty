@@ -70,6 +70,33 @@ pub struct RenderContext<'a> {
     pub working_dir: &'a Path,
 }
 
+/// Project-scoped footer inputs used when no session-specific footer override
+/// is active.
+#[derive(Clone, Copy)]
+struct ProjectFooterContext<'a> {
+    /// Current local branch name for the active project.
+    git_branch: Option<&'a str>,
+    /// Latest ahead/behind counts for the active project branch.
+    git_status: Option<(u32, u32)>,
+    /// Current upstream reference tracked by the active project branch.
+    git_upstream_ref: Option<&'a str>,
+    /// Working directory displayed in the footer.
+    working_dir: &'a Path,
+}
+
+/// Borrowed data required to render the footer bar for one frame.
+#[derive(Clone, Copy)]
+struct FooterBarRenderContext<'a> {
+    /// Active app mode used to resolve session-scoped footer overrides.
+    mode: &'a AppMode,
+    /// Project footer values used when the active mode is not session-scoped.
+    project: ProjectFooterContext<'a>,
+    /// Latest session-branch ahead/behind snapshots keyed by session id.
+    session_git_statuses: &'a HashMap<String, SessionGitStatus>,
+    /// Session rows available for resolving the active footer session.
+    sessions: &'a [Session],
+}
+
 /// Renders a complete frame including status bar, content area, and footer.
 pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     let area = f.area();
@@ -96,13 +123,17 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
     render_footer_bar(
         f,
         footer_bar_area,
-        context.mode,
-        context.sessions,
-        context.working_dir,
-        context.git_branch,
-        context.git_upstream_ref,
-        context.git_status,
-        context.session_git_statuses,
+        FooterBarRenderContext {
+            mode: context.mode,
+            project: ProjectFooterContext {
+                git_branch: context.git_branch,
+                git_status: context.git_status,
+                git_upstream_ref: context.git_upstream_ref,
+                working_dir: context.working_dir,
+            },
+            session_git_statuses: context.session_git_statuses,
+            sessions: context.sessions,
+        },
     );
 
     router::route_frame(f, content_area, context);
@@ -119,17 +150,13 @@ fn current_version_display_text() -> String {
 /// Project branches show upstream-tracking counts. Session branches reuse the
 /// same footer widget but inject counts relative to each session's base
 /// branch and, when available, its tracked remote branch.
-fn render_footer_bar(
-    f: &mut Frame,
-    footer_bar_area: Rect,
-    mode: &AppMode,
-    sessions: &[Session],
-    working_dir: &Path,
-    git_branch: Option<&str>,
-    git_upstream_ref: Option<&str>,
-    git_status: Option<(u32, u32)>,
-    session_git_statuses: &HashMap<String, SessionGitStatus>,
-) {
+fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRenderContext<'_>) {
+    let FooterBarRenderContext {
+        mode,
+        project,
+        session_git_statuses,
+        sessions,
+    } = context;
     let session_id = match mode {
         AppMode::Confirmation {
             session_id: Some(session_id),
@@ -187,12 +214,14 @@ fn render_footer_bar(
             )
         }
         None => (
-            working_dir.to_string_lossy().to_string(),
-            git_branch.map(std::string::ToString::to_string),
+            project.working_dir.to_string_lossy().to_string(),
+            project.git_branch.map(std::string::ToString::to_string),
             None,
-            git_upstream_ref.map(std::string::ToString::to_string),
+            project
+                .git_upstream_ref
+                .map(std::string::ToString::to_string),
             None,
-            git_status,
+            project.git_status,
         ),
     };
 
@@ -271,13 +300,17 @@ mod tests {
                 render_footer_bar(
                     frame,
                     frame.area(),
-                    &mode,
-                    &sessions,
-                    Path::new("/tmp/workspace-root"),
-                    Some("main"),
-                    Some("origin/main"),
-                    Some((2, 1)),
-                    &HashMap::new(),
+                    FooterBarRenderContext {
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch: Some("main"),
+                            git_status: Some((2, 1)),
+                            git_upstream_ref: Some("origin/main"),
+                            working_dir: Path::new("/tmp/workspace-root"),
+                        },
+                        session_git_statuses: &HashMap::new(),
+                        sessions: &sessions,
+                    },
                 );
             })
             .expect("failed to draw");
@@ -311,13 +344,17 @@ mod tests {
                 render_footer_bar(
                     frame,
                     frame.area(),
-                    &mode,
-                    &sessions,
-                    Path::new("/tmp/workspace-root"),
-                    Some("main"),
-                    Some("origin/main"),
-                    Some((2, 1)),
-                    &HashMap::new(),
+                    FooterBarRenderContext {
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch: Some("main"),
+                            git_status: Some((2, 1)),
+                            git_upstream_ref: Some("origin/main"),
+                            working_dir: Path::new("/tmp/workspace-root"),
+                        },
+                        session_git_statuses: &HashMap::new(),
+                        sessions: &sessions,
+                    },
                 );
             })
             .expect("failed to draw");
@@ -356,13 +393,17 @@ mod tests {
                 render_footer_bar(
                     frame,
                     frame.area(),
-                    &mode,
-                    &sessions,
-                    Path::new("/tmp/workspace-root"),
-                    Some("main"),
-                    Some("origin/main"),
-                    Some((2, 1)),
-                    &HashMap::new(),
+                    FooterBarRenderContext {
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch: Some("main"),
+                            git_status: Some((2, 1)),
+                            git_upstream_ref: Some("origin/main"),
+                            working_dir: Path::new("/tmp/workspace-root"),
+                        },
+                        session_git_statuses: &HashMap::new(),
+                        sessions: &sessions,
+                    },
                 );
             })
             .expect("failed to draw");
@@ -390,13 +431,17 @@ mod tests {
                 render_footer_bar(
                     frame,
                     frame.area(),
-                    &mode,
-                    &sessions,
-                    working_dir,
-                    git_branch,
-                    Some("origin/feature/test-render"),
-                    git_status,
-                    &HashMap::new(),
+                    FooterBarRenderContext {
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch,
+                            git_status,
+                            git_upstream_ref: Some("origin/feature/test-render"),
+                            working_dir,
+                        },
+                        session_git_statuses: &HashMap::new(),
+                        sessions: &sessions,
+                    },
                 );
             })
             .expect("failed to draw");
@@ -437,13 +482,17 @@ mod tests {
                 render_footer_bar(
                     frame,
                     frame.area(),
-                    &mode,
-                    &sessions,
-                    Path::new("/tmp/workspace-root"),
-                    Some("main"),
-                    Some("origin/main"),
-                    Some((0, 0)),
-                    &session_git_statuses,
+                    FooterBarRenderContext {
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch: Some("main"),
+                            git_status: Some((0, 0)),
+                            git_upstream_ref: Some("origin/main"),
+                            working_dir: Path::new("/tmp/workspace-root"),
+                        },
+                        session_git_statuses: &session_git_statuses,
+                        sessions: &sessions,
+                    },
                 );
             })
             .expect("failed to draw");
@@ -484,13 +533,17 @@ mod tests {
                 render_footer_bar(
                     frame,
                     frame.area(),
-                    &mode,
-                    &sessions,
-                    Path::new("/tmp/workspace-root"),
-                    Some("main"),
-                    Some("origin/main"),
-                    Some((0, 0)),
-                    &session_git_statuses,
+                    FooterBarRenderContext {
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch: Some("main"),
+                            git_status: Some((0, 0)),
+                            git_upstream_ref: Some("origin/main"),
+                            working_dir: Path::new("/tmp/workspace-root"),
+                        },
+                        session_git_statuses: &session_git_statuses,
+                        sessions: &sessions,
+                    },
                 );
             })
             .expect("failed to draw");

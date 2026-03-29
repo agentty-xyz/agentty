@@ -13,6 +13,21 @@ use crate::infra::app_server::AppServerClient;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
+/// External clients and optional overrides bundled into `AppServices`.
+pub(crate) struct AppServiceClients {
+    /// Shared provider-owned app-server client override used by tests and
+    /// injected environments.
+    pub(crate) app_server_client_override: Option<Arc<dyn AppServerClient>>,
+    /// Shared wall-clock boundary used by session workflows.
+    pub(crate) clock: Arc<dyn Clock>,
+    /// Shared filesystem client for async filesystem operations.
+    pub(crate) fs_client: Arc<dyn FsClient>,
+    /// Shared git client for async git operations.
+    pub(crate) git_client: Arc<dyn GitClient>,
+    /// Shared forge review-request client.
+    pub(crate) review_request_client: Arc<dyn ReviewRequestClient>,
+}
+
 /// Shared app dependencies used by managers and background workflows.
 pub struct AppServices {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
@@ -30,14 +45,18 @@ impl AppServices {
     /// dependencies.
     pub(crate) fn new(
         base_path: PathBuf,
-        clock: Arc<dyn Clock>,
         db: Database,
         event_tx: mpsc::UnboundedSender<AppEvent>,
-        fs_client: Arc<dyn FsClient>,
-        git_client: Arc<dyn GitClient>,
-        review_request_client: Arc<dyn ReviewRequestClient>,
-        app_server_client_override: Option<Arc<dyn AppServerClient>>,
+        clients: AppServiceClients,
     ) -> Self {
+        let AppServiceClients {
+            app_server_client_override,
+            clock,
+            fs_client,
+            git_client,
+            review_request_client,
+        } = clients;
+
         Self {
             app_server_client_override,
             base_path,

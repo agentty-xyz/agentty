@@ -1666,13 +1666,15 @@ mod tests {
 
         AppServices::new(
             PathBuf::from("/tmp/agentty-tests"),
-            Arc::new(crate::app::session::RealClock),
             database,
             event_tx,
-            Arc::new(create_passthrough_mock_fs_client()),
-            git_client,
-            review_request_client,
-            Some(mock_app_server()),
+            crate::app::service::AppServiceClients {
+                app_server_client_override: Some(mock_app_server()),
+                clock: Arc::new(crate::app::session::RealClock),
+                fs_client: Arc::new(create_passthrough_mock_fs_client()),
+                git_client,
+                review_request_client,
+            },
         )
     }
 

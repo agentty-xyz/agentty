@@ -15,7 +15,7 @@ use ag_forge as forge;
 use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
-use app::service::AppServices;
+use app::service::{AppServiceClients, AppServices};
 use app::session::SessionManager;
 use app::session_state::{SessionGitStatus, SessionState};
 use app::setting::SettingsManager;
@@ -398,6 +398,16 @@ impl AppClients {
     }
 }
 
+/// Startup-only inputs needed to hydrate the initial `SessionManager`.
+struct StartupSessionLoadContext<'a> {
+    /// Identifier for the project whose sessions should be loaded.
+    active_project_id: i64,
+    /// Default model applied when persisted session rows omit one.
+    default_session_model: AgentModel,
+    /// Working directory used to resolve session metadata at startup.
+    startup_working_dir: &'a Path,
+}
+
 // SessionState definition moved to session_state.rs
 
 /// Stores application state and coordinates session/project workflows.
@@ -585,13 +595,18 @@ impl App {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let services = AppServices::new(
             base_path.clone(),
-            Arc::clone(&clock),
             db.clone(),
             event_tx.clone(),
-            Arc::clone(&clients.fs_client),
-            Arc::clone(&clients.git_client),
-            Arc::clone(&clients.review_request_client),
-            clients.app_server_client_override.as_ref().map(Arc::clone),
+            AppServiceClients {
+                app_server_client_override: clients
+                    .app_server_client_override
+                    .as_ref()
+                    .map(Arc::clone),
+                clock: Arc::clone(&clock),
+                fs_client: Arc::clone(&clients.fs_client),
+                git_client: Arc::clone(&clients.git_client),
+                review_request_client: Arc::clone(&clients.review_request_client),
+            },
         );
         let projects = ProjectManager::new(
             active_project_id,
@@ -610,14 +625,12 @@ impl App {
         )
         .await;
         let sessions = Self::load_startup_sessions(
-            &base_path,
-            &db,
-            active_project_id,
-            startup_working_dir.as_path(),
-            clients.fs_client.as_ref(),
-            services.git_client(),
-            clock,
-            default_session_model,
+            &services,
+            StartupSessionLoadContext {
+                active_project_id,
+                default_session_model,
+                startup_working_dir: startup_working_dir.as_path(),
+            },
         )
         .await;
 
@@ -677,35 +690,39 @@ impl App {
     /// Loads startup session rows, metadata, and runtime handles into one
     /// session manager instance.
     async fn load_startup_sessions(
-        base_path: &Path,
-        db: &Database,
-        active_project_id: i64,
-        startup_working_dir: &Path,
-        fs_client: &dyn FsClient,
-        git_client: Arc<dyn GitClient>,
-        clock: Arc<dyn session::Clock>,
-        default_session_model: AgentModel,
+        services: &AppServices,
+        context: StartupSessionLoadContext<'_>,
     ) -> SessionManager {
+        let StartupSessionLoadContext {
+            active_project_id,
+            default_session_model,
+            startup_working_dir,
+        } = context;
         let mut table_state = TableState::default();
         let mut handles = HashMap::new();
+        let fs_client = services.fs_client();
         let (sessions, stats_activity) = SessionManager::load_sessions_with_fs_client(
-            base_path,
-            db,
+            services.base_path(),
+            services.db(),
             active_project_id,
             startup_working_dir,
             &mut handles,
-            fs_client,
+            fs_client.as_ref(),
         )
         .await;
-        let (sessions_row_count, sessions_updated_at_max) =
-            db.load_sessions_metadata().await.unwrap_or((0, 0));
+        let clock = services.clock();
+        let (sessions_row_count, sessions_updated_at_max) = services
+            .db()
+            .load_sessions_metadata()
+            .await
+            .unwrap_or((0, 0));
         table_state.select(preferred_initial_session_index(&sessions));
 
         SessionManager::new(
             session::SessionDefaults {
                 model: default_session_model,
             },
-            git_client,
+            services.git_client(),
             SessionState::new(
                 handles,
                 sessions,
@@ -4893,13 +4910,15 @@ mod tests {
 
         app.services = AppServices::new(
             base_path,
-            app.services.clock(),
             db,
             event_sender,
-            fs_client,
-            Arc::clone(&mock_git_client),
-            review_request_client,
-            app_server_client_override,
+            AppServiceClients {
+                app_server_client_override,
+                clock: app.services.clock(),
+                fs_client,
+                git_client: Arc::clone(&mock_git_client),
+                review_request_client,
+            },
         );
     }
     #[tokio::test]
