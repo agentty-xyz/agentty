@@ -138,12 +138,19 @@ pub struct AgentResponse {
     )]
     pub questions: Vec<QuestionItem>,
     /// Ordered low-severity follow-up tasks emitted for this turn.
+    ///
+    /// Each task is later reused as the user prompt for a new session, so it
+    /// must stand alone as a direct implementation task statement instead of a
+    /// hedged offer.
     #[serde(default)]
     #[schemars(
         title = "follow_up_tasks",
         description = "Ordered low-severity follow-up tasks emitted for this turn. Use this field \
                        for optional next-step suggestions that should be shown in the session UI \
-                       without blocking the current turn. Defaults to an empty array when omitted."
+                       without blocking the current turn. Formulate each item as a direct \
+                       standalone task statement because it may be reused as the prompt for a new \
+                       session (for example, `Create ...`), not as a conditional offer such as \
+                       `If you'd like, I can ...`. Defaults to an empty array when omitted."
     )]
     pub follow_up_tasks: Vec<String>,
     /// Structured summary for session-discussion turns, or `None` for legacy
