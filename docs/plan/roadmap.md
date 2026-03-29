@@ -68,7 +68,7 @@ Selecting a persisted follow-up task can launch it into a sibling session, and t
 
 #### Assignee
 
-`No assignee`
+`@minev-dev`
 
 #### Why now
 
