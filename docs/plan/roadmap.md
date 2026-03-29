@@ -11,7 +11,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Draft session workflow | `New` sessions are still blank placeholders whose first submitted prompt starts the agent immediately, so users cannot stage multiple draft messages and explicitly launch the session later. | Missing |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, chat shows the timer, and the session list still has no time column. | Partial |
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
-| Typed errors and hygiene | `DbError` is landed, but git, app-server, remaining infra surfaces, and the app layer still expose string errors; discard comments, missing module tests, and convention cleanup remain open. | Partial |
+| Typed errors and hygiene | `DbError` and `GitError` are landed; app-server, remaining infra surfaces, and the app layer still expose string errors; discard comments, missing module tests, and convention cleanup remain open. | Partial |
 | Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, and recipe layer exist. Proof reports, native frame rendering, and scale tooling remain backlog work. | Partial |
 
 ## Active Streams
@@ -118,35 +118,6 @@ A deterministic scenario test can create a disposable repo, run one scripted loc
 
 - [ ] Update `CONTRIBUTING.md` with the deterministic local-session scenario command and the expectation that fake CLIs cover the default workflow path.
 
-### [7b743a5a-ee48-48ed-a9d6-689a50440a87] Quality: Introduce `GitError` for `infra/git/` and `GitClient`
-
-#### Assignee
-
-`@andagaev`
-
-#### Why now
-
-The git boundary is the largest remaining source of `Result<..., String>` signatures and should set the typed-error pattern for the rest of the pending infra work.
-
-#### Usable outcome
-
-The git modules and `GitClient` return typed `GitError` variants instead of strings, while app-layer bridges remain only where later steps still need them.
-
-#### Substeps
-
-- [ ] **Define and re-export `GitError`.** Add `crates/agentty/src/infra/git/error.rs` and re-export the enum from `crates/agentty/src/infra/git.rs`.
-- [ ] **Migrate the git modules.** Convert `sync.rs`, `rebase.rs`, `repo.rs`, `merge.rs`, and `worktree.rs` to return `GitError`.
-- [ ] **Update `GitClient` and `RealGitClient`.** Move the trait and production implementation to typed git errors and keep temporary app bridges only where still required.
-- [ ] **Maintain touched docs and semantic guides.** Add `///` doc comments for the new error type and refresh the nearest semantic `AGENTS.md` guidance when the module boundary changes.
-
-#### Tests
-
-- [ ] Run the existing git tests with `GitError` return types and add at least one assertion for a simulated `GitError::CommandFailed` path.
-
-#### Docs
-
-- [ ] Keep the new error type documented in code and the touched semantic guidance aligned with the new file layout.
-
 ### [28de2b07-70a0-442a-821b-8b1946a1cea4] Agents: Scope model lists to locally available backends
 
 #### Assignee
@@ -182,8 +153,7 @@ flowchart TD
     R1["[8f4402cd] Workflow: sibling-session launch"]
     R2["[9f115af0] Platform: session-list timer"]
     R3["[1c7b7080] Quality: deterministic local session harness"]
-    R4["[7b743a5a] Quality: GitError migration"]
-    R5["[28de2b07] Agents: local model availability"]
+    R4["[28de2b07] Agents: local model availability"]
 ```
 
 ## Queued Next
@@ -210,11 +180,11 @@ Replace stringly typed errors in the remaining infra boundaries so the app layer
 
 #### Promote when
 
-Promote after `Quality: Introduce GitError for infra/git/ and GitClient` lands and the git boundary pattern is reusable.
+Promote after `Quality: Introduce GitError for infra/git/ and GitClient` lands and the git boundary pattern is reusable. `GitError` has landed.
 
 #### Depends on
 
-`[7b743a5a] Quality: Introduce GitError for infra/git/ and GitClient`
+`None` (predecessor `[7b743a5a] Quality: GitError` has landed)
 
 ### [ed9de74b-64c0-4ca6-86b5-d29c8bc26591] Quality: Propagate typed errors through the app layer
 
