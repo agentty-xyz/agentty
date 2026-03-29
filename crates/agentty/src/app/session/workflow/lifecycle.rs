@@ -809,8 +809,8 @@ impl SessionManager {
         {
             Ok(Some(reply_context)) => reply_context,
             Ok(None) => return,
-            Err(blocked_session_id) => {
-                self.append_reply_status_error(services, &blocked_session_id)
+            Err(error) => {
+                self.append_reply_status_error(services, session_id, &error)
                     .await;
 
                 return;
@@ -883,7 +883,7 @@ impl SessionManager {
     /// queueing a reply command.
     ///
     /// # Errors
-    /// Returns the blocked session id when session status does not allow
+    /// Returns a [`SessionError::Workflow`] when session status does not allow
     /// replying.
     fn prepare_reply_context(
         &mut self,
@@ -891,7 +891,7 @@ impl SessionManager {
         prompt: &TurnPrompt,
         session_model: AgentModel,
         should_replay_history: bool,
-    ) -> Result<Option<ReplyContext>, String> {
+    ) -> Result<Option<ReplyContext>, SessionError> {
         let Some(session) = self.state.sessions.get_mut(session_index) else {
             return Ok(None);
         };
@@ -901,7 +901,9 @@ impl SessionManager {
             || session.status == Status::Question
             || (is_first_message && session.status == Status::New);
         if !allowed {
-            return Err(session.id.clone());
+            return Err(SessionError::Workflow(
+                "Session must be in review status".to_string(),
+            ));
         }
 
         let mut title_to_save = None;
@@ -1027,8 +1029,15 @@ impl SessionManager {
         }
     }
 
-    async fn append_reply_status_error(&self, services: &AppServices, session_id: &str) {
-        let status_error = "\n[Reply Error] Session must be in review status\n".to_string();
+    /// Appends a reply-error notice to the session output so the user sees
+    /// why the reply was rejected.
+    async fn append_reply_status_error(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+        error: &SessionError,
+    ) {
+        let status_error = format!("\n[Reply Error] {error}\n");
         let Ok(handles) = self.session_handles_or_err(session_id) else {
             return;
         };
@@ -1151,11 +1160,13 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if Askama template rendering fails.
-    fn session_title_generation_prompt(prompt: &str) -> Result<String, String> {
+    fn session_title_generation_prompt(prompt: &str) -> Result<String, SessionError> {
         let template = SessionTitleGenerationPromptTemplate { prompt };
 
         template.render().map_err(|error| {
-            format!("Failed to render `session_title_generation_prompt.md`: {error}")
+            SessionError::Workflow(format!(
+                "Failed to render `session_title_generation_prompt.md`: {error}"
+            ))
         })
     }
 
@@ -2120,6 +2131,27 @@ mod tests {
         assert_eq!(
             session_manager.sessions[0].title,
             Some("Initial prompt".to_string())
+        );
+    }
+
+    #[test]
+    /// Ensures replying to an in-progress session returns a typed
+    /// [`SessionError::Workflow`] instead of a raw string.
+    fn test_prepare_reply_context_returns_workflow_error_when_status_blocks_reply() {
+        // Arrange
+        let session = test_session("Initial prompt", Status::InProgress, Some("Title"), "");
+        let mut session_manager = session_manager_with_one_session(session);
+        let prompt = TurnPrompt::from_text("Another prompt".to_string());
+
+        // Act
+        let result =
+            session_manager.prepare_reply_context(0, &prompt, AgentModel::ClaudeSonnet46, false);
+
+        // Assert
+        let error = result.expect_err("in-progress session should block reply");
+        assert!(
+            matches!(error, SessionError::Workflow(_)),
+            "expected SessionError::Workflow, got: {error:?}"
         );
     }
 

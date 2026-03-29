@@ -282,7 +282,7 @@ impl SessionTaskService {
 
         run_agent_assist(&assist_context, &prompt)
             .await
-            .map_err(|error| SessionError::Workflow(format!("Commit assistance failed: {error}")))
+            .map_err(|error| error.with_context("Commit assistance failed"))
     }
 
     /// Renders the commit-assistance prompt from the markdown template.

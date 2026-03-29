@@ -12,6 +12,7 @@ use std::time::Duration;
 use askama::Template;
 use tokio::sync::mpsc;
 
+use crate::app::error::AppError;
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::infra::agent;
@@ -255,7 +256,7 @@ impl TaskService {
         review_model: AgentModel,
         review_diff: &str,
         session_summary: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<String, AppError> {
         Self::review_assist_text_with_submitter(
             session_folder,
             review_model,
@@ -298,7 +299,7 @@ impl TaskService {
         review_diff: &str,
         session_summary: Option<&str>,
         submitter: Submitter,
-    ) -> Result<String, String>
+    ) -> Result<String, AppError>
     where
         Submitter: for<'submit> FnOnce(
             &'submit Path,
@@ -309,15 +310,21 @@ impl TaskService {
         >,
     {
         let review_prompt = Self::review_assist_prompt(review_diff, session_summary)?;
-        let agent_response = submitter(session_folder, review_model, &review_prompt).await?;
+        let agent_response = submitter(session_folder, review_model, &review_prompt)
+            .await
+            .map_err(AppError::Workflow)?;
 
         Self::review_output_text(&agent_response)
     }
 
     /// Builds the final reducer event for one review-assist task outcome.
+    ///
+    /// Converts the typed [`AppError`] to a display string at the event
+    /// boundary because [`AppEvent`] requires `Clone` + `Eq`, which
+    /// [`AppError`] cannot satisfy due to non-cloneable inner IO errors.
     fn review_app_event(
         diff_hash: u64,
-        review_result: Result<String, String>,
+        review_result: Result<String, AppError>,
         session_id: String,
     ) -> AppEvent {
         match review_result {
@@ -328,18 +335,20 @@ impl TaskService {
             },
             Err(error) => AppEvent::ReviewPreparationFailed {
                 diff_hash,
-                error,
+                error: error.to_string(),
                 session_id,
             },
         }
     }
 
     /// Extracts one non-empty review string from the agent response payload.
-    fn review_output_text(agent_response: &agent::AgentResponse) -> Result<String, String> {
+    fn review_output_text(agent_response: &agent::AgentResponse) -> Result<String, AppError> {
         let review_text = agent_response.to_display_text();
         let review_text = review_text.trim();
         if review_text.is_empty() {
-            return Err("Review assist returned empty output".to_string());
+            return Err(AppError::Workflow(
+                "Review assist returned empty output".to_string(),
+            ));
         }
 
         Ok(review_text.to_string())
@@ -352,15 +361,17 @@ impl TaskService {
     fn review_assist_prompt(
         review_diff: &str,
         session_summary: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<String, AppError> {
         let template = ReviewAssistPromptTemplate {
             review_diff: review_diff.trim(),
             session_summary: session_summary.map_or("", str::trim),
         };
 
-        template
-            .render()
-            .map_err(|error| format!("Failed to render `review_assist_prompt.md`: {error}"))
+        template.render().map_err(|error| {
+            AppError::Workflow(format!(
+                "Failed to render `review_assist_prompt.md`: {error}"
+            ))
+        })
     }
 }
 
@@ -454,9 +465,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Ensures review assist surfaces one-shot submission failures without
-    /// invoking a real subprocess.
-    async fn review_assist_text_with_submitter_returns_submit_error() {
+    /// Ensures review assist surfaces one-shot submission failures as
+    /// [`AppError::Workflow`] without invoking a real subprocess.
+    async fn review_assist_text_with_submitter_returns_workflow_error_on_submit_failure() {
         // Arrange
         let session_folder = Path::new("/tmp/review-assist-submit-error");
         let review_model = AgentModel::ClaudeSonnet46;
@@ -474,7 +485,11 @@ mod tests {
 
         // Assert
         let error = result.expect_err("submit failure should be returned");
-        assert_eq!(error, "submit failed");
+        assert!(
+            matches!(error, AppError::Workflow(_)),
+            "expected AppError::Workflow, got: {error:?}"
+        );
+        assert_eq!(error.to_string(), "submit failed");
     }
 
     #[test]
@@ -557,7 +572,7 @@ mod tests {
     fn review_app_event_maps_failure_output() {
         // Arrange
         let diff_hash = 9;
-        let review_result = Err("empty response".to_string());
+        let review_result = Err(AppError::Workflow("empty response".to_string()));
         let session_id = "session-9".to_string();
 
         // Act
@@ -590,8 +605,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies whitespace-only review output is rejected so users see a clear
-    /// error instead of a blank review pane.
+    /// Verifies whitespace-only review output is rejected as
+    /// [`AppError::Workflow`] so users see a clear error instead of a blank
+    /// review pane.
     fn review_output_text_rejects_blank_agent_response_text() {
         // Arrange
         let agent_response = AgentResponse::plain(" \n\t ");
@@ -601,7 +617,11 @@ mod tests {
 
         // Assert
         let error = result.expect_err("blank output should be rejected");
-        assert_eq!(error, "Review assist returned empty output");
+        assert!(
+            matches!(error, AppError::Workflow(_)),
+            "expected AppError::Workflow, got: {error:?}"
+        );
+        assert_eq!(error.to_string(), "Review assist returned empty output");
     }
 
     #[test]

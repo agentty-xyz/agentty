@@ -269,7 +269,7 @@ trait SyncAssistClient: Send + Sync {
         folder: PathBuf,
         prompt: String,
         session_model: AgentModel,
-    ) -> SyncAssistFuture<Result<(), String>>;
+    ) -> SyncAssistFuture<Result<(), SessionError>>;
 }
 
 /// Production sync-assistance executor backed by real agent commands.
@@ -285,7 +285,7 @@ impl RealSyncAssistClient {
         folder: PathBuf,
         prompt: String,
         session_model: AgentModel,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         // Success payload unused; run for side effects only.
         let _ = agent::submit_one_shot(agent::OneShotRequest {
             child_pid: None,
@@ -295,7 +295,8 @@ impl RealSyncAssistClient {
             request_kind: crate::infra::channel::AgentRequestKind::UtilityPrompt,
             reasoning_level: ReasoningLevel::default(),
         })
-        .await?;
+        .await
+        .map_err(SessionError::Workflow)?;
 
         Ok(())
     }
@@ -307,7 +308,7 @@ impl SyncAssistClient for RealSyncAssistClient {
         folder: PathBuf,
         prompt: String,
         session_model: AgentModel,
-    ) -> SyncAssistFuture<Result<(), String>> {
+    ) -> SyncAssistFuture<Result<(), SessionError>> {
         Box::pin(async move { Self::run_assist_command(folder, prompt, session_model).await })
     }
 }
@@ -1066,9 +1067,7 @@ impl SessionManager {
             .sync_assist_client
             .resolve_rebase_conflicts(input.folder.clone(), prompt, input.session_model)
             .await
-            .map_err(|error| {
-                SessionError::Workflow(format!("Sync rebase assistance failed: {error}"))
-            })
+            .map_err(|error| error.with_context("Sync rebase assistance failed"))
     }
 
     /// Stages sync edits and checks whether rebase conflicts remain.
@@ -1646,7 +1645,7 @@ impl SessionManager {
 
         run_agent_assist(&assist_context, &prompt)
             .await
-            .map_err(|error| SessionError::Workflow(format!("Rebase assistance failed: {error}")))
+            .map_err(|error| error.with_context("Rebase assistance failed"))
     }
 
     /// Stages all worktree edits and checks whether any conflicts remain.
@@ -1931,6 +1930,46 @@ mod tests {
             session_model: AgentModel::Gemini3FlashPreview,
             sync_assist_client,
         }
+    }
+
+    #[tokio::test]
+    /// Ensures [`SessionError`] from the sync assist client propagates through
+    /// `run_sync_rebase_assist_agent` with an operation-specific context
+    /// prefix.
+    async fn test_sync_rebase_assist_agent_adds_context_to_workflow_error() {
+        // Arrange
+        let mut mock_sync_assist_client = MockSyncAssistClient::new();
+        mock_sync_assist_client
+            .expect_resolve_rebase_conflicts()
+            .times(1)
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(SessionError::Workflow(
+                        "agent backend unavailable".to_string(),
+                    ))
+                })
+            });
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let input = build_sync_rebase_input_for_test(
+            temp_dir.path().to_path_buf(),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(mock_sync_assist_client),
+        );
+
+        // Act
+        let result =
+            SessionManager::run_sync_rebase_assist_agent(&input, &["src/lib.rs".to_string()]).await;
+
+        // Assert
+        let error = result.expect_err("assist failure should propagate");
+        assert!(
+            matches!(error, SessionError::Workflow(_)),
+            "expected SessionError::Workflow, got: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "Sync rebase assistance failed: agent backend unavailable"
+        );
     }
 
     #[test]

@@ -35,6 +35,29 @@ pub enum SessionError {
     Workflow(String),
 }
 
+impl SessionError {
+    /// Prefixes the display message of `Workflow` variants with the given
+    /// context string so callers can distinguish which assist operation
+    /// produced the failure.
+    ///
+    /// Typed infrastructure variants (`Git`, `Db`, `AppServer`) pass through
+    /// unchanged because their type already identifies the failure origin
+    /// and callers can still discriminate them by pattern matching.  In
+    /// practice every current call site (`run_rebase_assist_agent`,
+    /// `run_sync_rebase_assist_agent`, commit-assist in `task.rs`) only
+    /// receives `Workflow` variants because the upstream assist functions
+    /// convert all errors via `SessionError::Workflow(String)`.  The
+    /// pass-through arm is a safety net so future callers that propagate
+    /// typed infra errors do not silently lose their structured variant.
+    #[must_use]
+    pub fn with_context(self, context: &str) -> Self {
+        match self {
+            Self::Workflow(message) => Self::Workflow(format!("{context}: {message}")),
+            other => other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +116,40 @@ mod tests {
         // Assert
         assert!(matches!(error, SessionError::Db(_)));
         assert!(error.to_string().contains("db file missing"));
+    }
+
+    #[test]
+    /// Ensures `with_context` prefixes the message of `Workflow` variants so
+    /// callers can distinguish which assist operation produced the failure.
+    fn with_context_prefixes_workflow_message() {
+        // Arrange
+        let error = SessionError::Workflow("agent backend unavailable".to_string());
+
+        // Act
+        let contextual = error.with_context("Commit assistance failed");
+
+        // Assert
+        assert_eq!(
+            contextual.to_string(),
+            "Commit assistance failed: agent backend unavailable"
+        );
+    }
+
+    #[test]
+    /// Ensures `with_context` passes typed infrastructure variants through
+    /// unchanged because their type already identifies the failure origin.
+    fn with_context_preserves_typed_infrastructure_variants() {
+        // Arrange
+        let error = SessionError::Git(crate::infra::git::GitError::OutputParse("bad".to_string()));
+
+        // Act
+        let contextual = error.with_context("Rebase assistance failed");
+
+        // Assert
+        assert!(
+            matches!(contextual, SessionError::Git(_)),
+            "expected Git variant, got: {contextual:?}"
+        );
+        assert_eq!(contextual.to_string(), "bad");
     }
 }
