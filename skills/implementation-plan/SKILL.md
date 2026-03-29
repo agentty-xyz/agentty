@@ -19,7 +19,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
 1. **Collect planning context**
 
    - Read `docs/plan/AGENTS.md`, `docs/plan/roadmap.md`, and the related source files before writing.
-   - Run or inspect `cargo run -q -p ag-xtask -- roadmap context-digest` when the request involves promotion, reprioritization, or queue balancing so the roadmap work uses fresh repository context.
+   - Run or inspect `cargo run -q -p ag-xtask -- roadmap context-digest` when the request involves promotion, reprioritization, queue balancing, or replacing a completed `Ready Now` step so the roadmap work uses fresh repository context.
    - Capture only the constraints that materially affect scope, sequencing, validation, or exclusions.
 
 1. **Choose the roadmap operation**
@@ -74,6 +74,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Make `Ready Now` the smallest credible execution window for the next planning cycle, not a dump of every open outcome.
    - Make the first `Ready Now` step in each stream the smallest usable iteration instead of standalone groundwork.
    - Ensure later promotions extend that working baseline and keep tests/docs in the same ready step as the behavior change.
+   - When a `Ready Now` step is completed and `Queued Next` is not empty, promote the highest-priority queued card into `Ready Now` instead of leaving the execution window short.
    - Do not reserve testing or documentation for a final catch-all step; if a ready step changes behavior, it owns the validation and docs updates for that change.
    - Keep the single roadmap diagram aligned with `Ready Now` and use it to show which active streams can run in parallel.
 
@@ -95,6 +96,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Reject plans that save most tests/docs for the last step instead of keeping them attached to the relevant behavior changes.
    - Verify the roadmap uses one shared diagram for `Ready Now`.
    - Verify no implemented step remains in `Ready Now`; completed work belongs in snapshot context or should disappear entirely.
+   - Verify that completing a `Ready Now` step would trigger promotion of another queued card whenever `Queued Next` still has work.
    - When this skill changed, verify the roadmap and active planning inventory in `docs/plan/` were reviewed and updated to match the new rules unless the user explicitly excluded them.
    - Verify cross-stream dependencies are aligned or clearly marked for user resolution.
    - Verify the final roadmap reflects the clarified requirements the user provided.
@@ -102,6 +104,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
 1. **Maintain roadmap hygiene**
 
    - When a `Ready Now` step is fully implemented and no further tracked work remains for it, remove that step from `docs/plan/roadmap.md` instead of keeping completed work as permanent active inventory.
+   - After removing a completed `Ready Now` step, promote the next queued card into `Ready Now` whenever `Queued Next` still contains work.
    - If follow-up work is still needed after a step is otherwise complete, add or update a compact queued or parked card with its own outcome and promotion trigger instead of extending the completed step indefinitely.
    - Keep the roadmap concise by collapsing shipped context into snapshot rows rather than preserving completed implementation detail.
 
@@ -205,6 +208,6 @@ flowchart TD
 - Keep only `Ready Now` items fully expanded.
 - Keep `## Queued Next` and `## Parked` intentionally compact.
 - Claim work only from `## Ready Now`.
-- After implementing a `Ready Now` step, remove it from the roadmap and refresh the snapshot rows that changed.
+- After implementing a `Ready Now` step, remove it from the roadmap, refresh the snapshot rows that changed, and promote the next queued card into `## Ready Now` when one is available.
 - If more work remains after a completed step, add or update a queued or parked card instead of preserving completed detail.
 ````

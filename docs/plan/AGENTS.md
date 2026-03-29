@@ -12,6 +12,7 @@ Require every roadmap step heading title to use the exact format `[UUID] Stream:
 Require `Ready Now` steps to start with `#### Assignee` using `@username` or `No assignee`.
 Claim `Ready Now` work through `skills/implementation-plan/references/claim-step.md` and land that claim in its own commit before implementation begins.
 Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work into `Ready Now`.
+When a `Ready Now` step is completed and `Queued Next` still has items, promote the next queued card into `Ready Now` instead of leaving the slot open.
 
 ## Planning Surface
 
