@@ -7,6 +7,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI, but they still cannot launch sibling sessions or retain launched/open state. | Partial |
+| Review request publish flow | Review sessions still expose one generic `p` branch-publish action; GitHub only gets a post-push pull-request creation link, while GitLab uses the same publish flow. | Partial |
 | Model availability scoping | `/model` and settings still cycle through the full static backend catalog even when one or more agent CLIs are not installed on the current machine. | Missing |
 | Draft session workflow | `New` sessions are still blank placeholders whose first submitted prompt starts the agent immediately, so users cannot stage multiple draft messages and explicitly launch the session later. | Missing |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
@@ -17,6 +18,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 ## Active Streams
 
 - `Agents`: machine-scoped model availability for settings and slash-model selection.
+- `Forge`: GitHub review-request creation/update from session view while preserving GitLab branch publishing.
 - `Workflow`: follow-up task launch behavior and draft-session staging before the first agent turn.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
 - `Testty`: proof-driven TUI testing framework and scale tooling for `crates/testty/`.
@@ -99,6 +101,20 @@ flowchart TD
 ```
 
 ## Queued Next
+
+### [ca014af3-5cd0-4567-bf11-3495765dcf6f] Forge: Replace GitHub branch publish with create or update pull request
+
+#### Outcome
+
+Use `p` in `Review` to create or refresh the session pull request for GitHub remotes, while GitLab sessions keep the existing branch-publish flow.
+
+#### Promote when
+
+Promote after a `Ready Now` slot opens and the active workflow slices stop competing for the same session-view action routing and popup behavior.
+
+#### Depends on
+
+`None`
 
 ### [64c9bb7f-4d11-4c3c-b2ad-4a86db9bd6c9] Workflow: Stage draft session messages and start them explicitly
 
@@ -259,6 +275,7 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 ## Context Notes
 
 - `Workflow: Launch sibling sessions from follow-up tasks and retain task state` should reuse the same stored task content that the persistence slice lands.
+- `Forge: Replace GitHub branch publish with create or update pull request` should reuse the existing `ag-forge` review-request create/refresh flow and keep GitLab on the current push-only branch-publish path.
 - `Agents: Scope model lists to locally available backends` should reuse one shared availability snapshot across Settings and `/model` instead of probing CLIs separately in render paths.
 - `Workflow: Stage draft session messages and start them explicitly` should treat `Status::New` as the persisted draft container instead of introducing a second pre-start lifecycle status.
 - The parked local session harness slice should come back only when the active workflow and model-availability changes stop churning the same lifecycle seams.
