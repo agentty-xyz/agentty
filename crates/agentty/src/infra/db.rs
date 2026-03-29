@@ -169,6 +169,7 @@ pub struct SessionRow {
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub struct SessionFollowUpTaskRow {
     pub id: i64,
+    pub launched_session_id: Option<String>,
     pub position: i64,
     pub session_id: String,
     pub text: String,
@@ -180,6 +181,8 @@ impl SessionFollowUpTaskRow {
     pub fn into_session_follow_up_task(self) -> SessionFollowUpTask {
         SessionFollowUpTask {
             id: self.id,
+            launched_session_id: self.launched_session_id,
+            position: usize::try_from(self.position).unwrap_or(usize::MAX),
             text: self.text,
         }
     }
@@ -1109,6 +1112,34 @@ VALUES (?, ?, ?)
         Ok(())
     }
 
+    /// Updates the launched sibling-session link for one persisted follow-up
+    /// task.
+    ///
+    /// # Errors
+    /// Returns an error if the follow-up-task row cannot be updated.
+    pub async fn update_session_follow_up_task_launched_session_id(
+        &self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session_follow_up_task
+SET launched_session_id = ?
+WHERE session_id = ?
+  AND position = ?
+",
+        )
+        .bind(launched_session_id)
+        .bind(session_id)
+        .bind(i64::try_from(position).unwrap_or(i64::MAX))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// Updates the saved prompt for a session row.
     ///
     /// # Errors
@@ -1944,6 +1975,7 @@ WHERE id = ?
         let rows = sqlx::query_as::<_, SessionFollowUpTaskRow>(
             r"
 SELECT id,
+       launched_session_id,
        position,
        session_id,
        text
@@ -3805,6 +3837,53 @@ WHERE model = ?
                 "Add integration coverage.".to_string()
             ]
         );
+    }
+
+    #[tokio::test]
+    /// Verifies launched sibling-session links round-trip through persisted
+    /// follow-up-task rows.
+    async fn test_update_session_follow_up_task_launched_session_id_round_trips() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-a", "gpt-5.3-codex", "main", "Done", project_id)
+            .await
+            .expect("failed to insert source session");
+        database
+            .insert_session("session-b", "gpt-5.3-codex", "main", "New", project_id)
+            .await
+            .expect("failed to insert sibling session");
+        database
+            .replace_session_follow_up_tasks("session-a", &["Launch the sibling task.".to_string()])
+            .await
+            .expect("failed to insert follow-up task");
+
+        // Act
+        database
+            .update_session_follow_up_task_launched_session_id("session-a", 0, Some("session-b"))
+            .await
+            .expect("failed to persist launched sibling-session id");
+        let follow_up_tasks = database
+            .load_session_follow_up_tasks()
+            .await
+            .expect("failed to load follow-up tasks");
+
+        // Assert
+        let follow_up_task = follow_up_tasks
+            .into_iter()
+            .find(|task| task.session_id == "session-a")
+            .expect("expected persisted follow-up task");
+        assert_eq!(
+            follow_up_task.launched_session_id.as_deref(),
+            Some("session-b")
+        );
+        assert_eq!(follow_up_task.position, 0);
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ use super::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
 use crate::domain::input::InputState;
-use crate::domain::session::PublishBranchAction;
+use crate::domain::session::{FollowUpTaskAction, PublishBranchAction};
 use crate::infra::agent::protocol::QuestionItem;
 
 /// Selects the visible panel content for session view output.
@@ -237,6 +237,8 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         done_session_output_mode: DoneSessionOutputMode,
+        follow_up_task_action: Option<FollowUpTaskAction>,
+        has_multiple_follow_up_tasks: bool,
         review_status_message: Option<String>,
         review_text: Option<String>,
         publish_branch_action: Option<PublishBranchAction>,
@@ -257,10 +259,14 @@ impl HelpContext {
     pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
             HelpContext::View {
+                follow_up_task_action,
+                has_multiple_follow_up_tasks,
                 publish_branch_action,
                 session_state,
                 ..
             } => help_action::view_actions(ViewHelpState {
+                follow_up_task_action: *follow_up_task_action,
+                has_multiple_follow_up_tasks: *has_multiple_follow_up_tasks,
                 publish_branch_action: *publish_branch_action,
                 session_state: *session_state,
             }),
@@ -275,6 +281,8 @@ impl HelpContext {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
                 done_session_output_mode,
+                follow_up_task_action: _,
+                has_multiple_follow_up_tasks: _,
                 review_status_message,
                 review_text,
                 publish_branch_action: _,
@@ -366,6 +374,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             review_status_message: None,
             review_text: None,
             publish_branch_action: None,
@@ -394,6 +404,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Ready".to_string()),
             publish_branch_action: Some(PublishBranchAction::Push),
@@ -425,6 +437,8 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             review_status_message: None,
             review_text: None,
             publish_branch_action: Some(PublishBranchAction::Push),

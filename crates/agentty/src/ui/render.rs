@@ -26,6 +26,9 @@ pub trait Component {
 
 /// Immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
+    /// Selected follow-up-task positions keyed by session id for session-view
+    /// rendering.
+    pub follow_up_task_positions: &'a HashMap<String, usize>,
     /// Identifier of the currently active project.
     pub active_project_id: i64,
     /// Active top-level tab selection.

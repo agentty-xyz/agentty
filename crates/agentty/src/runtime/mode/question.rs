@@ -154,6 +154,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
 
             SessionChatPage::rendered_output_line_count(
                 session,
+                None,
                 output_width,
                 DoneSessionOutputMode::Summary,
                 None,

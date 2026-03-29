@@ -15,7 +15,7 @@ pub(crate) use super::workflow::task::{RunAgentAssistTaskInput, SessionTaskServi
 use super::workflow::worker::SessionWorkerService;
 use crate::app::{AppServices, SessionState, setting};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{DailyActivity, Session};
+use crate::domain::session::{DailyActivity, FollowUpTaskAction, Session};
 use crate::infra::git;
 
 /// Render payload tuple returned by [`SessionManager::render_parts`].
@@ -191,6 +191,62 @@ impl SessionManager {
     /// Returns cached session git-status snapshots keyed by session id.
     pub(crate) fn session_git_statuses(&self) -> &HashMap<String, Option<(u32, u32)>> {
         &self.state.session_git_statuses
+    }
+
+    /// Returns the selected follow-up task position for one session.
+    pub(crate) fn selected_follow_up_task_position(&self, session_id: &str) -> Option<usize> {
+        self.state.selected_follow_up_task_position(session_id)
+    }
+
+    /// Returns the action currently available for the selected follow-up task
+    /// in one session.
+    pub(crate) fn selected_follow_up_task_action(
+        &self,
+        session_id: &str,
+    ) -> Option<FollowUpTaskAction> {
+        let position = self.selected_follow_up_task_position(session_id)?;
+        let session = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)?;
+
+        session.follow_up_task(position).map(|task| task.action())
+    }
+
+    /// Returns whether one session has more than one follow-up task.
+    pub(crate) fn has_multiple_follow_up_tasks(&self, session_id: &str) -> bool {
+        self.state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.follow_up_tasks.len() > 1)
+    }
+
+    /// Advances the selected follow-up task to the next item for one session.
+    pub(crate) fn select_next_follow_up_task(&mut self, session_id: &str) {
+        self.state.select_next_follow_up_task(session_id);
+    }
+
+    /// Moves the selected follow-up task to the previous item for one
+    /// session.
+    pub(crate) fn select_previous_follow_up_task(&mut self, session_id: &str) {
+        self.state.select_previous_follow_up_task(session_id);
+    }
+
+    /// Sets the launched sibling-session link for the matching cached
+    /// follow-up task.
+    pub(crate) fn set_follow_up_task_launched_session_id(
+        &mut self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<String>,
+    ) {
+        self.state.set_follow_up_task_launched_session_id(
+            session_id,
+            position,
+            launched_session_id,
+        );
     }
 }
 

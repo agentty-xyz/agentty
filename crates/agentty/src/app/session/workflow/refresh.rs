@@ -123,6 +123,8 @@ impl SessionManager {
             .iter()
             .map(|session| session.id.clone())
             .collect();
+        self.state
+            .retain_follow_up_task_positions(&active_session_ids);
         self.state.retain_session_git_statuses(&active_session_ids);
         self.worker_service_mut()
             .retain_active_workers(&active_session_ids);

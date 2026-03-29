@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::domain::session::PublishBranchAction;
+use crate::domain::session::{FollowUpTaskAction, PublishBranchAction};
 
 /// One user-visible shortcut entry that can be rendered in the footer and
 /// in the help popup.
@@ -56,7 +56,15 @@ pub enum ViewSessionState {
 /// Action availability snapshot for view-mode help projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ViewHelpState {
+    /// Launch/open action available for the selected follow-up task, when the
+    /// current session exposes one.
+    pub(crate) follow_up_task_action: Option<FollowUpTaskAction>,
+    /// Whether the current session exposes more than one follow-up task to
+    /// cycle through.
+    pub(crate) has_multiple_follow_up_tasks: bool,
+    /// Branch-publish action available for the current session, when any.
     pub(crate) publish_branch_action: Option<PublishBranchAction>,
+    /// High-level view-mode state that gates the rest of the shortcut set.
     pub(crate) session_state: ViewSessionState,
 }
 
@@ -232,6 +240,23 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
     }
 
+    if let Some(follow_up_task_action) = state.follow_up_task_action {
+        actions.push(follow_up_task_help_action(follow_up_task_action));
+    }
+
+    if state.has_multiple_follow_up_tasks {
+        actions.push(HelpAction::new(
+            "prev task",
+            "[",
+            "Select previous follow-up task",
+        ));
+        actions.push(HelpAction::new(
+            "next task",
+            "]",
+            "Select next follow-up task",
+        ));
+    }
+
     actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
     actions.push(HelpAction::new("top", "g", "Scroll to top"));
     actions.push(HelpAction::new("bottom", "G", "Scroll to bottom"));
@@ -286,6 +311,23 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if state.session_state == ViewSessionState::Done {
         actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
+    }
+
+    if let Some(follow_up_task_action) = state.follow_up_task_action {
+        actions.push(follow_up_task_help_action(follow_up_task_action));
+    }
+
+    if state.has_multiple_follow_up_tasks {
+        actions.push(HelpAction::new(
+            "prev task",
+            "[",
+            "Select previous follow-up task",
+        ));
+        actions.push(HelpAction::new(
+            "next task",
+            "]",
+            "Select next follow-up task",
+        ));
     }
 
     actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
@@ -371,6 +413,16 @@ fn publish_branch_help_action(action: PublishBranchAction) -> HelpAction {
     }
 }
 
+/// Returns the view-mode shortcut entry for the selected follow-up task.
+fn follow_up_task_help_action(action: FollowUpTaskAction) -> HelpAction {
+    match action {
+        FollowUpTaskAction::Launch => HelpAction::new("launch task", "l", "Launch sibling session"),
+        FollowUpTaskAction::Open => {
+            HelpAction::new("open task", "l", "Open launched sibling session")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +497,8 @@ mod tests {
     fn test_view_actions_in_progress_shows_open_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: None,
             session_state: ViewSessionState::InProgress,
         };
@@ -463,6 +517,8 @@ mod tests {
     fn test_view_actions_rebasing_shows_open_without_stop() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: None,
             session_state: ViewSessionState::Rebasing,
         };
@@ -481,6 +537,8 @@ mod tests {
     fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: None,
             session_state: ViewSessionState::MergeQueue,
         };
@@ -499,6 +557,8 @@ mod tests {
     fn test_view_actions_review_shows_diff() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Review,
         };
@@ -528,6 +588,8 @@ mod tests {
     fn test_view_actions_interactive_hides_diff() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: None,
             session_state: ViewSessionState::Interactive,
         };
@@ -545,6 +607,8 @@ mod tests {
     fn test_view_actions_done_shows_toggle_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Done,
         };
@@ -566,6 +630,8 @@ mod tests {
     fn test_view_footer_actions_review_shows_advanced_actions() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Review,
         };
@@ -586,6 +652,8 @@ mod tests {
     fn test_view_footer_actions_rebasing_shows_open_without_stop() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: Some(PublishBranchAction::Push),
             session_state: ViewSessionState::Rebasing,
         };
@@ -604,6 +672,8 @@ mod tests {
     fn test_view_footer_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: None,
             session_state: ViewSessionState::MergeQueue,
         };
@@ -623,6 +693,8 @@ mod tests {
     fn test_view_actions_canceled_without_branch_publish_action() {
         // Arrange
         let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             publish_branch_action: None,
             session_state: ViewSessionState::Canceled,
         };

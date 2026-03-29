@@ -67,6 +67,12 @@ When a session enters **Review**, Agentty starts generating the focused review
 in the background. Pressing `f` opens the cached review immediately when it is
 ready, or shows a loading message while generation is still running.
 
+When a completed turn emits `follow_up_tasks`, the session view renders them as
+a separate follow-up section. The selected task shows `[Launch]` until it has
+started a sibling session, then switches to `[Open]` so you can jump back to
+that linked sibling later. Use `l` to launch or open the selected task, and
+use `[` / `]` to move between tasks when multiple follow-up tasks are present.
+
 After each successful turn with file changes, Agentty keeps the session branch
 at one evolving commit. It regenerates that commit message from the cumulative
 session diff, applies the active project's `Coauthored by Agentty` setting to

@@ -6,7 +6,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
-| Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI, but they still cannot launch sibling sessions or retain launched/open state. | Partial |
+| Follow-up task workflow | Persisted follow-up tasks now launch sibling sessions from session view, and launched/open state survives refresh, reopen, and restart flows. | Landed |
 | Review request publish flow | Review sessions still expose one generic `p` branch-publish action; GitHub only gets a post-push pull-request creation link, while GitLab uses the same publish flow. | Partial |
 | Model availability scoping | `/model` and settings still cycle through the full static backend catalog even when one or more agent CLIs are not installed on the current machine. | Missing |
 | Draft session workflow | `New` sessions are still blank placeholders whose first submitted prompt starts the agent immediately, so users cannot stage multiple draft messages and explicitly launch the session later. | Missing |
@@ -19,7 +19,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 - `Agents`: machine-scoped model availability for settings and slash-model selection.
 - `Forge`: GitHub review-request creation/update from session view while preserving GitLab branch publishing.
-- `Workflow`: follow-up task launch behavior and draft-session staging before the first agent turn.
+- `Workflow`: draft-session staging before the first agent turn.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
 - `Testty`: proof-driven TUI testing framework and scale tooling for `crates/testty/`.
 
@@ -35,34 +35,6 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - Keep tests and documentation attached to the same `Ready Now` step that changes behavior.
 
 ## Ready Now
-
-### [8f4402cd-beff-4b4d-b9f7-00efd834249b] Workflow: Launch sibling sessions from follow-up tasks and retain task state
-
-#### Assignee
-
-`@minev-dev`
-
-#### Why now
-
-The follow-up task persistence slice is already landed, so the next workflow step should deliver the remaining user-visible action instead of leaving stored tasks as read-only output.
-
-#### Usable outcome
-
-Selecting a persisted follow-up task can launch it into a sibling session, and the original session keeps the launched and open task state stable across reopen and refresh flows.
-
-#### Substeps
-
-- [ ] **Add the sibling-session launch path.** Wire one persisted follow-up task through `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session_state.rs`, and `crates/agentty/src/app/session/workflow/load.rs` so the app can create a sibling session from stored task content without inventing a parallel session-creation path.
-- [ ] **Expose the launch action in session view.** Update `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and `crates/agentty/src/ui/state/help_action.rs` so the selected follow-up task can be launched from the existing session UI with a clear launched/open affordance.
-- [ ] **Persist launched-task state through reloads.** Extend `crates/agentty/src/infra/db.rs`, `crates/agentty/src/domain/session.rs`, and any required migration under `crates/agentty/migrations/` so launched and open task state survives refresh, app restart, and session reopen.
-
-#### Tests
-
-- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/load.rs`, `crates/agentty/src/infra/db.rs`, and `crates/agentty/src/runtime/mode/session_view.rs` for sibling-session launch, persisted task-state reload, and the session-view action path.
-
-#### Docs
-
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for launching follow-up tasks into sibling sessions and the resulting task-state behavior.
 
 ### [28de2b07-70a0-442a-821b-8b1946a1cea4] Agents: Scope model lists to locally available backends
 
@@ -181,11 +153,10 @@ Every infra boundary that crosses into the app layer exposes a typed error enum 
 
 ```mermaid
 flowchart TD
-    R1["[8f4402cd] Workflow: sibling-session launch"]
-    R2["[28de2b07] Agents: local model availability"]
-    R3["[ca014af3] Forge: GitHub review request publish"]
-    R4["[64c9bb7f] Workflow: staged draft-session launch"]
-    R5["[7608043e] Quality: typed infra errors"]
+    R1["[28de2b07] Agents: local model availability"]
+    R2["[ca014af3] Forge: GitHub review request publish"]
+    R3["[64c9bb7f] Workflow: staged draft-session launch"]
+    R4["[7608043e] Quality: typed infra errors"]
 ```
 
 ## Queued Next
@@ -216,7 +187,7 @@ Promote after the current `Ready Now` behavioral steps settle enough that the ne
 
 #### Depends on
 
-`[cbf025d6] Workflow: Persist and render emitted follow-up tasks`, `[ed9de74b] Quality: Propagate typed errors through the app layer`
+`[ed9de74b] Quality: Propagate typed errors through the app layer`
 
 ### [4f491812-f373-4ac5-bd57-b46c4f9d91e3] Workflow: Polish draft-session editing after baseline staging lands
 
@@ -320,7 +291,6 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 
 ## Context Notes
 
-- `Workflow: Launch sibling sessions from follow-up tasks and retain task state` should reuse the same stored task content that the persistence slice lands.
 - `Forge: Replace GitHub branch publish with create or update pull request` should reuse the existing `ag-forge` review-request create/refresh flow and keep GitLab on the current push-only branch-publish path.
 - `Agents: Scope model lists to locally available backends` should reuse one shared availability snapshot across Settings and `/model` instead of probing CLIs separately in render paths.
 - `Workflow: Stage draft session messages and start them explicitly` should treat `Status::New` as the persisted draft container instead of introducing a second pre-start lifecycle status.

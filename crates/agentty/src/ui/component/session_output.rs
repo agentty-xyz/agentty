@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use serde_json;
 
-use crate::domain::session::{Session, SessionFollowUpTask, Status};
+use crate::domain::session::{FollowUpTaskAction, Session, SessionFollowUpTask, Status};
 use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::markdown::render_markdown;
@@ -27,6 +27,7 @@ pub struct SessionOutput<'a> {
     review_status_message: Option<&'a str>,
     review_text: Option<&'a str>,
     scroll_offset: Option<u16>,
+    selected_follow_up_task_position: Option<usize>,
     session: &'a Session,
 }
 
@@ -41,6 +42,7 @@ impl<'a> SessionOutput<'a> {
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
+            selected_follow_up_task_position: None,
             session,
         }
     }
@@ -81,6 +83,14 @@ impl<'a> SessionOutput<'a> {
         self
     }
 
+    /// Sets the selected follow-up task position used for launch/open
+    /// affordances.
+    #[must_use]
+    pub fn selected_follow_up_task_position(mut self, position: Option<usize>) -> Self {
+        self.selected_follow_up_task_position = position;
+        self
+    }
+
     /// Returns the rendered output line count for chat content at a given
     /// width.
     ///
@@ -88,6 +98,7 @@ impl<'a> SessionOutput<'a> {
     /// rendering so scroll math can stay in sync with what users see.
     pub(crate) fn rendered_line_count(
         session: &Session,
+        selected_follow_up_task_position: Option<usize>,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
         review_status_message: Option<&str>,
@@ -98,6 +109,7 @@ impl<'a> SessionOutput<'a> {
         let lines = Self::output_lines(
             session,
             output_area,
+            selected_follow_up_task_position,
             session.status,
             done_session_output_mode,
             review_status_message,
@@ -123,6 +135,7 @@ impl<'a> SessionOutput<'a> {
     fn output_lines(
         session: &Session,
         output_area: Rect,
+        selected_follow_up_task_position: Option<usize>,
         status: Status,
         done_session_output_mode: DoneSessionOutputMode,
         review_status_message: Option<&str>,
@@ -145,7 +158,12 @@ impl<'a> SessionOutput<'a> {
             as usize;
         let mut lines = render_markdown(&output_text, inner_width);
         if Self::shows_follow_up_tasks(done_session_output_mode) {
-            Self::append_follow_up_task_lines(&mut lines, &session.follow_up_tasks, inner_width);
+            Self::append_follow_up_task_lines(
+                &mut lines,
+                &session.follow_up_tasks,
+                selected_follow_up_task_position,
+                inner_width,
+            );
         }
         Self::append_transcript_footer_lines(&mut lines, trailing_footer_text, inner_width);
 
@@ -312,21 +330,19 @@ impl<'a> SessionOutput<'a> {
     fn append_follow_up_task_lines(
         lines: &mut Vec<Line<'static>>,
         follow_up_tasks: &[SessionFollowUpTask],
+        selected_follow_up_task_position: Option<usize>,
         inner_width: usize,
     ) {
         if follow_up_tasks.is_empty() {
             return;
         }
 
-        let follow_up_task_markdown = format!(
-            "## {FOLLOW_UP_TASK_HEADER}\n{}",
-            follow_up_tasks
-                .iter()
-                .map(|follow_up_task| format!("- {}", follow_up_task.text))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        Self::append_markdown_lines(lines, &follow_up_task_markdown, inner_width);
+        Self::append_markdown_lines(lines, &format!("## {FOLLOW_UP_TASK_HEADER}"), inner_width);
+
+        for follow_up_task in follow_up_tasks {
+            let is_selected = selected_follow_up_task_position == Some(follow_up_task.position);
+            Self::append_follow_up_task_item_line(lines, follow_up_task, is_selected, inner_width);
+        }
     }
 
     /// Appends one trailing transcript footer after synthetic follow-up-task
@@ -360,6 +376,28 @@ impl<'a> SessionOutput<'a> {
         }
 
         lines.append(&mut rendered_lines);
+    }
+
+    /// Appends one wrapped follow-up-task row with a selected launch/open
+    /// affordance.
+    fn append_follow_up_task_item_line(
+        lines: &mut Vec<Line<'static>>,
+        follow_up_task: &SessionFollowUpTask,
+        is_selected: bool,
+        inner_width: usize,
+    ) {
+        let action_label = match (is_selected, follow_up_task.action()) {
+            (true, FollowUpTaskAction::Launch) => "[Launch] ",
+            (true, FollowUpTaskAction::Open) => "[Open] ",
+            (false, FollowUpTaskAction::Open) => "[Launched] ",
+            (false, FollowUpTaskAction::Launch) => "",
+        };
+        let bullet_prefix = if is_selected { "> " } else { "- " };
+        let line_text = format!("{bullet_prefix}{action_label}{}", follow_up_task.text);
+
+        for wrapped_line in text_util::wrap_lines(&line_text, inner_width.max(1)) {
+            lines.push(Line::from(wrapped_line.to_string()));
+        }
     }
 
     /// Adds visual spacing around user prompt blocks while preserving pasted
@@ -532,6 +570,7 @@ impl Component for SessionOutput<'_> {
         let lines = Self::output_lines(
             self.session,
             output_area,
+            self.selected_follow_up_task_position,
             status,
             self.done_session_output_mode,
             self.review_status_message,
@@ -615,6 +654,7 @@ mod tests {
         // Act
         let rendered_line_count = SessionOutput::rendered_line_count(
             &session,
+            None,
             20,
             DoneSessionOutputMode::Summary,
             None,
@@ -638,6 +678,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -666,10 +707,14 @@ mod tests {
         session.follow_up_tasks = vec![
             SessionFollowUpTask {
                 id: 1,
+                launched_session_id: None,
+                position: 0,
                 text: "Document the new shortcut.".to_string(),
             },
             SessionFollowUpTask {
                 id: 2,
+                launched_session_id: None,
+                position: 1,
                 text: "Add a regression test.".to_string(),
             },
         ];
@@ -678,6 +723,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -699,6 +745,38 @@ mod tests {
     }
 
     #[test]
+    fn test_output_lines_marks_selected_follow_up_task_with_launch_affordance() {
+        // Arrange
+        let mut session = session_fixture();
+        session.follow_up_tasks = vec![SessionFollowUpTask {
+            id: 1,
+            launched_session_id: None,
+            position: 0,
+            text: "Launch the sibling session.".to_string(),
+        }];
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            Some(0),
+            session.status,
+            DoneSessionOutputMode::Summary,
+            None,
+            None,
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("[Launch] Launch the sibling session."));
+    }
+
+    #[test]
     fn test_output_lines_renders_trailing_commit_footer_after_follow_up_tasks() {
         // Arrange
         let mut session = session_fixture();
@@ -706,6 +784,8 @@ mod tests {
             "Implemented the change.\n\n[Commit] committed with hash `abc1234`\n".to_string();
         session.follow_up_tasks = vec![SessionFollowUpTask {
             id: 1,
+            launched_session_id: None,
+            position: 0,
             text: "Run a broader regression pass.".to_string(),
         }];
 
@@ -713,6 +793,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -749,6 +830,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Output,
             None,
@@ -778,6 +860,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -807,6 +890,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -847,6 +931,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -875,6 +960,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Output,
             None,
@@ -901,6 +987,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Review,
             None,
@@ -927,6 +1014,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Review,
             None,
@@ -954,6 +1042,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Review,
             Some("Preparing review with agent help..."),
@@ -981,6 +1070,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Review,
             Some("Preparing review with agent help..."),
@@ -1005,6 +1095,8 @@ mod tests {
         session.status = Status::Review;
         session.follow_up_tasks = vec![SessionFollowUpTask {
             id: 1,
+            launched_session_id: None,
+            position: 0,
             text: "Run cargo test -q.".to_string(),
         }];
 
@@ -1012,6 +1104,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Review,
             Some("Preparing review with agent help..."),
@@ -1042,6 +1135,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -1069,6 +1163,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -1105,6 +1200,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 6, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -1142,6 +1238,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -1165,6 +1262,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,
@@ -1267,6 +1365,7 @@ mod tests {
         let lines = SessionOutput::output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
+            None,
             session.status,
             DoneSessionOutputMode::Summary,
             None,

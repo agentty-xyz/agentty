@@ -43,6 +43,7 @@ impl PreparedPromptPanel {
 pub struct SessionChatPage<'a> {
     pub active_progress: Option<&'a str>,
     pub mode: &'a AppMode,
+    pub selected_follow_up_task_position: Option<usize>,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
     pub sessions: &'a [Session],
@@ -70,11 +71,20 @@ impl<'a> SessionChatPage<'a> {
         Self {
             active_progress,
             mode,
+            selected_follow_up_task_position: None,
             scroll_offset,
             session_index,
             sessions,
             wall_clock_unix_seconds,
         }
+    }
+
+    /// Sets the selected follow-up task position used for task affordances in
+    /// session view.
+    #[must_use]
+    pub fn selected_follow_up_task_position(mut self, position: Option<usize>) -> Self {
+        self.selected_follow_up_task_position = position;
+        self
     }
 
     /// Returns the rendered output line count for chat content at a given
@@ -85,6 +95,7 @@ impl<'a> SessionChatPage<'a> {
     /// scroll math can stay in sync with what users see.
     pub(crate) fn rendered_output_line_count(
         session: &Session,
+        selected_follow_up_task_position: Option<usize>,
         output_width: u16,
         done_session_output_mode: DoneSessionOutputMode,
         review_status_message: Option<&str>,
@@ -93,6 +104,7 @@ impl<'a> SessionChatPage<'a> {
     ) -> u16 {
         SessionOutput::rendered_line_count(
             session,
+            selected_follow_up_task_position,
             output_width,
             done_session_output_mode,
             review_status_message,
@@ -343,6 +355,7 @@ impl<'a> SessionChatPage<'a> {
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
         output = output.review_status_message(self.review_status_message());
         output = output.review_text(self.review_text());
+        output = output.selected_follow_up_task_position(self.selected_follow_up_task_position);
         if let Some(scroll_offset) = self.scroll_offset {
             output = output.scroll_offset(scroll_offset);
         }
@@ -515,7 +528,11 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_actions = Self::view_footer_actions(session, self.done_session_output_mode());
+        let help_actions = Self::view_footer_actions(
+            session,
+            self.done_session_output_mode(),
+            self.selected_follow_up_task_position,
+        );
         let help_message = Paragraph::new(help_action::footer_line(&help_actions));
         f.render_widget(help_message, bottom_area);
     }
@@ -533,6 +550,7 @@ impl<'a> SessionChatPage<'a> {
     fn view_footer_actions(
         session: &Session,
         done_session_output_mode: DoneSessionOutputMode,
+        selected_follow_up_task_position: Option<usize>,
     ) -> Vec<help_action::HelpAction> {
         let session_state = match session.status {
             Status::Done => ViewSessionState::Done,
@@ -544,7 +562,12 @@ impl<'a> SessionChatPage<'a> {
             _ => ViewSessionState::Interactive,
         };
 
+        let selected_follow_up_task_action = selected_follow_up_task_position
+            .and_then(|position| session.follow_up_task(position))
+            .map(|task| task.action());
         let mut actions = help_action::view_footer_actions(ViewHelpState {
+            follow_up_task_action: selected_follow_up_task_action,
+            has_multiple_follow_up_tasks: session.follow_up_tasks.len() > 1,
             publish_branch_action: session.publish_branch_action(),
             session_state,
         });
@@ -971,6 +994,7 @@ mod tests {
         help_action::footer_line(&SessionChatPage::view_footer_actions(
             session,
             done_session_output_mode,
+            None,
         ))
         .to_string()
     }
@@ -1303,6 +1327,7 @@ mod tests {
         // Act
         let rendered_line_count = SessionChatPage::rendered_output_line_count(
             &session,
+            None,
             20,
             DoneSessionOutputMode::Summary,
             None,
@@ -1321,12 +1346,15 @@ mod tests {
         session.status = Status::Review;
         session.follow_up_tasks = vec![crate::domain::session::SessionFollowUpTask {
             id: 1,
+            launched_session_id: None,
+            position: 0,
             text: "Run cargo test -q.".to_string(),
         }];
 
         // Act
         let rendered_line_count = SessionChatPage::rendered_output_line_count(
             &session,
+            None,
             80,
             DoneSessionOutputMode::Review,
             Some("Preparing review with agent help..."),

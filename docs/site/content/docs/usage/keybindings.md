@@ -74,8 +74,10 @@ state:
 | `p` | Publish session branch |
 | `d` | Show diff |
 | `f` | Focused review (regenerate if already viewing) |
+| `l` | Launch or open the selected follow-up task |
 | `m` | Add to merge queue (confirmation popup) |
 | `r` | Rebase |
+| `[` / `]` | Select previous / next follow-up task |
 | `j` / `k` | Scroll output |
 | `g` | Scroll to top |
 | `G` | Scroll to bottom |
@@ -92,6 +94,7 @@ Additional notes:
 - **Branch publish**: `p` is available in **Review** and opens a publish popup. Press `Enter` with an empty field to keep the default session branch target, or type a custom remote branch name first.
 - **Branch publish lock**: once a session branch already tracks a remote branch, Agentty locks the popup field and re-publishes to that same remote branch only.
 - **Branch publish auth**: `p` uses regular Git authentication only. HTTPS remotes need a credential helper or PAT, and SSH remotes need a working SSH key.
+- **Follow-up tasks**: `l` launches the selected follow-up task into a sibling session the first time, then reopens that linked sibling on later presses. Use `[` and `]` to move between follow-up tasks when a session has more than one.
 - **Question**: opening the session enters Question Input mode until all prompts are answered or skipped.
 - **Done**: `t` toggles between summary and full output.
 - **Review**: Runs in read-only review mode. It can use internet lookup

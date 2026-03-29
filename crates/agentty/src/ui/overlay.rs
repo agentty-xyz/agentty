@@ -555,6 +555,8 @@ mod tests {
         // Arrange
         let help_context = HelpContext::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             review_status_message: None,
             review_text: None,
             publish_branch_action: None,

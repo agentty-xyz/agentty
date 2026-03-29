@@ -58,6 +58,7 @@ impl RouteSharedContext<'_> {
 /// Borrowed inputs for rendering a session chat page.
 #[derive(Clone, Copy)]
 struct SessionChatRenderContext<'a> {
+    follow_up_task_positions: &'a HashMap<String, usize>,
     mode: &'a AppMode,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<String, String>,
@@ -71,6 +72,7 @@ struct SessionChatRenderContext<'a> {
 #[derive(Clone, Copy)]
 struct PublishBranchOverlayContext<'a> {
     default_branch_name: &'a str,
+    follow_up_task_positions: &'a HashMap<String, usize>,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
     restore_view: &'a ConfirmationViewMode,
@@ -81,6 +83,7 @@ struct PublishBranchOverlayContext<'a> {
 /// Shared immutable routing inputs that are not part of list-background state.
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
+    follow_up_task_positions: &'a HashMap<String, usize>,
     session_progress_messages: &'a HashMap<String, String>,
     wall_clock_unix_seconds: i64,
 }
@@ -88,6 +91,7 @@ struct RouteAuxContext<'a> {
 /// Routes the content-area render path by active `AppMode`.
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
+        follow_up_task_positions,
         active_project_id,
         current_tab,
         mode,
@@ -114,6 +118,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
     };
 
     let aux = RouteAuxContext {
+        follow_up_task_positions,
         session_progress_messages,
         wall_clock_unix_seconds,
     };
@@ -161,6 +166,7 @@ fn render_list_or_overlay_mode(
                         confirmation_title,
                         selected_confirmation_index: *selected_confirmation_index,
                     },
+                    aux.follow_up_task_positions,
                     view_mode,
                     shared.sessions,
                     aux.session_progress_messages,
@@ -258,6 +264,7 @@ fn render_session_confirmation_overlay(
     f: &mut Frame,
     area: Rect,
     context: &SessionConfirmationContext<'_>,
+    follow_up_task_positions: &HashMap<String, usize>,
     view_mode: &ConfirmationViewMode,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
@@ -269,6 +276,7 @@ fn render_session_confirmation_overlay(
         f,
         area,
         SessionChatRenderContext {
+            follow_up_task_positions,
             mode: &background_mode,
             session_id: &view_mode.session_id,
             session_progress_messages,
@@ -314,6 +322,7 @@ fn render_session_or_diff_mode(
             f,
             area,
             SessionChatRenderContext {
+                follow_up_task_positions: aux.follow_up_task_positions,
                 mode,
                 session_id,
                 session_progress_messages: aux.session_progress_messages,
@@ -329,6 +338,7 @@ fn render_session_or_diff_mode(
         } => render_open_command_selector_overlay(
             f,
             area,
+            aux.follow_up_task_positions,
             sessions,
             aux.session_progress_messages,
             aux.wall_clock_unix_seconds,
@@ -347,6 +357,7 @@ fn render_session_or_diff_mode(
             area,
             &PublishBranchOverlayContext {
                 default_branch_name,
+                follow_up_task_positions: aux.follow_up_task_positions,
                 input,
                 locked_upstream_ref: locked_upstream_ref.as_deref(),
                 restore_view,
@@ -382,6 +393,7 @@ fn render_session_or_diff_mode(
 fn render_open_command_selector_overlay(
     f: &mut Frame,
     area: Rect,
+    follow_up_task_positions: &HashMap<String, usize>,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
     wall_clock_unix_seconds: i64,
@@ -395,6 +407,7 @@ fn render_open_command_selector_overlay(
         f,
         area,
         SessionChatRenderContext {
+            follow_up_task_positions,
             mode: &background_mode,
             session_id: &restore_view.session_id,
             session_progress_messages,
@@ -420,6 +433,7 @@ fn render_publish_branch_overlay(
 ) {
     let PublishBranchOverlayContext {
         default_branch_name,
+        follow_up_task_positions,
         input,
         locked_upstream_ref,
         restore_view,
@@ -432,6 +446,7 @@ fn render_publish_branch_overlay(
         f,
         area,
         SessionChatRenderContext {
+            follow_up_task_positions,
             mode: &background_mode,
             session_id: &restore_view.session_id,
             session_progress_messages,
@@ -453,6 +468,7 @@ fn render_publish_branch_overlay(
 /// Renders the session chat page for all session-chat modes.
 fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
+        follow_up_task_positions,
         mode,
         session_id,
         session_progress_messages,
@@ -477,6 +493,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         active_progress,
         wall_clock_unix_seconds,
     )
+    .selected_follow_up_task_position(follow_up_task_positions.get(session_id).copied())
     .render(f, area);
 }
 
@@ -621,6 +638,7 @@ mod tests {
                     &mode,
                     &sessions,
                     RouteAuxContext {
+                        follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         wall_clock_unix_seconds: 0,
                     },
@@ -660,6 +678,7 @@ mod tests {
                     &mode,
                     &sessions,
                     RouteAuxContext {
+                        follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         wall_clock_unix_seconds: 0,
                     },
@@ -698,6 +717,7 @@ mod tests {
                     &mode,
                     &sessions,
                     RouteAuxContext {
+                        follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         wall_clock_unix_seconds: 0,
                     },
@@ -739,6 +759,7 @@ mod tests {
                     frame,
                     frame.area(),
                     &confirmation_context,
+                    &HashMap::new(),
                     &view_mode,
                     &sessions,
                     &progress_messages,

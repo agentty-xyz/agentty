@@ -7,7 +7,7 @@ use ratatui::backend::Backend;
 use crate::app::{App, ReviewCacheEntry, diff_content_hash};
 use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
-use crate::domain::session::{PublishBranchAction, Status};
+use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Status};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::ui::page::session_chat::SessionChatPage;
@@ -64,6 +64,8 @@ struct ViewKeyContext<'a> {
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
     can_open_worktree: bool,
+    follow_up_task_action: Option<FollowUpTaskAction>,
+    has_multiple_follow_up_tasks: bool,
     is_action_allowed: bool,
     publish_branch_action: Option<PublishBranchAction>,
     session_output: String,
@@ -143,6 +145,26 @@ async fn handle_view_key(
         KeyCode::Char('o') if view_session_snapshot.can_open_worktree => {
             open_worktree_for_view_session(app, view_context).await;
         }
+        KeyCode::Char('l') if view_session_snapshot.follow_up_task_action.is_some() => {
+            if let Err(error) = app
+                .launch_or_open_selected_follow_up_task(&view_context.session_id)
+                .await
+            {
+                app.append_output_for_session(
+                    &view_context.session_id,
+                    &format!("\n[Follow-Up Task Error] {error}\n"),
+                )
+                .await;
+            }
+
+            return false;
+        }
+        KeyCode::Char('[') if view_session_snapshot.has_multiple_follow_up_tasks => {
+            app.select_previous_follow_up_task(&view_context.session_id);
+        }
+        KeyCode::Char(']') if view_session_snapshot.has_multiple_follow_up_tasks => {
+            app.select_next_follow_up_task(&view_context.session_id);
+        }
         KeyCode::Enter if view_session_snapshot.is_action_allowed => {
             switch_view_to_prompt(
                 app,
@@ -215,6 +237,8 @@ async fn handle_view_key(
             open_view_help_overlay(
                 app,
                 view_context,
+                view_session_snapshot.follow_up_task_action,
+                view_session_snapshot.has_multiple_follow_up_tasks,
                 view_session_snapshot.publish_branch_action,
                 view_session_snapshot.session_state,
             );
@@ -327,6 +351,8 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
     Some(ViewSessionSnapshot {
         can_open_worktree: is_view_worktree_open_allowed(session_status)
             && can_open_session_worktree(session_status),
+        follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
+        has_multiple_follow_up_tasks: app.has_multiple_follow_up_tasks(&view_context.session_id),
         is_action_allowed: is_view_action_allowed(session_status),
         publish_branch_action: session.publish_branch_action(),
         session_output: session.output.clone(),
@@ -446,12 +472,16 @@ fn view_session_state(status: Status) -> ViewSessionState {
 fn open_view_help_overlay(
     app: &mut App,
     view_context: &ViewContext,
+    follow_up_task_action: Option<FollowUpTaskAction>,
+    has_multiple_follow_up_tasks: bool,
     publish_branch_action: Option<PublishBranchAction>,
     session_state: ViewSessionState,
 ) {
     app.mode = AppMode::Help {
         context: HelpContext::View {
             done_session_output_mode: view_context.done_session_output_mode,
+            follow_up_task_action,
+            has_multiple_follow_up_tasks,
             review_status_message: view_context.review_status_message.clone(),
             review_text: view_context.review_text.clone(),
             publish_branch_action,
@@ -575,6 +605,7 @@ fn view_total_lines(
         .map_or(0, |session| {
             SessionChatPage::rendered_output_line_count(
                 session,
+                app.sessions.selected_follow_up_task_position(session_id),
                 output_width,
                 done_session_output_mode,
                 review_status_message,
@@ -1823,6 +1854,8 @@ mod tests {
         open_view_help_overlay(
             &mut app,
             &view_context,
+            None,
+            false,
             Some(PublishBranchAction::Push),
             ViewSessionState::Review,
         );
@@ -1833,6 +1866,8 @@ mod tests {
             AppMode::Help {
                 context: HelpContext::View {
                     done_session_output_mode: DoneSessionOutputMode::Review,
+                    follow_up_task_action: None,
+                    has_multiple_follow_up_tasks: false,
                     review_status_message: Some(ref status_message),
                     review_text: Some(ref review_text),
                     publish_branch_action: Some(PublishBranchAction::Push),
@@ -2193,6 +2228,8 @@ mod tests {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
             can_open_worktree: false,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
             is_action_allowed: false,
             publish_branch_action: None,
             session_output: String::new(),
@@ -2234,6 +2271,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_handle_launch_follow_up_task_key_opens_linked_sibling_session() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        let sibling_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create sibling session");
+        app.sessions.sessions[0].follow_up_tasks =
+            vec![crate::domain::session::SessionFollowUpTask {
+                id: 1,
+                launched_session_id: Some(sibling_session_id.clone()),
+                position: 0,
+                text: "Open the sibling session.".to_string(),
+            }];
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id,
+            scroll_offset: Some(0),
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let result = handle(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("launch/open key should be handled");
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert_eq!(app.sessions.table_state.selected(), Some(1));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                ..
+            } if session_id == &sibling_session_id
+        ));
+    }
+
     /// Verifies session-view action keys are ignored when the current session
     /// status does not allow those actions.
     #[tokio::test]
@@ -2265,6 +2348,8 @@ mod tests {
             let mut pending_update = ViewPendingUpdate::from_context(&view_context);
             let view_session_snapshot = ViewSessionSnapshot {
                 can_open_worktree: false,
+                follow_up_task_action: None,
+                has_multiple_follow_up_tasks: false,
                 is_action_allowed: false,
                 publish_branch_action: None,
                 session_output: String::new(),

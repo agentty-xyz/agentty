@@ -214,6 +214,15 @@ pub enum PublishBranchAction {
     Push,
 }
 
+/// Launch action currently available for one persisted follow-up task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FollowUpTaskAction {
+    /// Starts a new sibling session from the selected task text.
+    Launch,
+    /// Opens the already launched sibling session linked to the task.
+    Open,
+}
+
 /// Per-session token statistics.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionStats {
@@ -242,8 +251,24 @@ pub struct DailyActivity {
 pub struct SessionFollowUpTask {
     /// Stable database identifier for the persisted follow-up task row.
     pub id: i64,
+    /// Previously launched sibling session linked to this task, when one has
+    /// already been created.
+    pub launched_session_id: Option<String>,
+    /// Stable display-order position persisted for this follow-up task.
+    pub position: usize,
     /// User-visible task text emitted by the agent.
     pub text: String,
+}
+
+impl SessionFollowUpTask {
+    /// Returns the action the session view should expose for this task.
+    pub fn action(&self) -> FollowUpTaskAction {
+        if self.launched_session_id.is_some() {
+            return FollowUpTaskAction::Open;
+        }
+
+        FollowUpTaskAction::Launch
+    }
 }
 
 /// In-memory snapshot of one persisted session row used by the UI and app
@@ -324,6 +349,13 @@ impl Session {
     /// Returns the session-branch action currently available in session view.
     pub fn publish_branch_action(&self) -> Option<PublishBranchAction> {
         (self.status == Status::Review).then_some(PublishBranchAction::Push)
+    }
+
+    /// Returns the follow-up task at `position`, when present.
+    pub fn follow_up_task(&self, position: usize) -> Option<&SessionFollowUpTask> {
+        self.follow_up_tasks
+            .iter()
+            .find(|task| task.position == position)
     }
 }
 

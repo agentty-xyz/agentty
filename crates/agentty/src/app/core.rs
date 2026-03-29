@@ -33,7 +33,9 @@ use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
-use crate::domain::session::{PublishBranchAction, Session, SessionSize, Status};
+use crate::domain::session::{
+    FollowUpTaskAction, PublishBranchAction, Session, SessionSize, Status,
+};
 use crate::infra::agent::AgentResponse;
 use crate::infra::channel::TurnPrompt;
 use crate::infra::db::Database;
@@ -44,7 +46,9 @@ use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{app_server, db};
 use crate::runtime::mode::{question, sync_blocked};
 use crate::ui::page::session_list::preferred_initial_session_index;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext, QuestionFocus};
+use crate::ui::state::app_mode::{
+    AppMode, ConfirmationViewMode, DoneSessionOutputMode, HelpContext, QuestionFocus,
+};
 use crate::ui::state::prompt::PromptAtMentionState;
 use crate::{app, ui};
 
@@ -782,6 +786,7 @@ impl App {
         let git_status = self.projects.git_status();
         let latest_available_version = self.latest_available_version.as_deref().map(str::to_string);
         let session_git_statuses = self.sessions.session_git_statuses().clone();
+        let follow_up_task_positions = self.sessions.state().follow_up_task_positions.clone();
         let session_progress_messages = self.session_progress_messages.clone();
         let update_status = self.update_status().cloned();
         let wall_clock_unix_seconds =
@@ -805,6 +810,7 @@ impl App {
                 mode,
                 project_table_state,
                 projects: &projects,
+                follow_up_task_positions: &follow_up_task_positions,
                 session_git_statuses: &session_git_statuses,
                 session_progress_messages: &session_progress_messages,
                 settings,
@@ -996,6 +1002,70 @@ impl App {
         self.session_progress_messages
             .get(session_id)
             .map(std::string::String::as_str)
+    }
+
+    /// Returns the selected follow-up task action for one session, if that
+    /// session currently exposes follow-up tasks.
+    pub(crate) fn selected_follow_up_task_action(
+        &self,
+        session_id: &str,
+    ) -> Option<FollowUpTaskAction> {
+        self.sessions.selected_follow_up_task_action(session_id)
+    }
+
+    /// Returns whether one session has multiple follow-up tasks to cycle
+    /// through in session view.
+    pub(crate) fn has_multiple_follow_up_tasks(&self, session_id: &str) -> bool {
+        self.sessions.has_multiple_follow_up_tasks(session_id)
+    }
+
+    /// Moves the selected follow-up task forward within one session.
+    pub(crate) fn select_next_follow_up_task(&mut self, session_id: &str) {
+        self.sessions.select_next_follow_up_task(session_id);
+    }
+
+    /// Moves the selected follow-up task backward within one session.
+    pub(crate) fn select_previous_follow_up_task(&mut self, session_id: &str) {
+        self.sessions.select_previous_follow_up_task(session_id);
+    }
+
+    /// Launches the selected follow-up task into a sibling session or opens
+    /// the already launched sibling when one is linked.
+    ///
+    /// # Errors
+    /// Returns an error if creating or starting the sibling session fails, or
+    /// if persisting the launched-task link cannot be completed.
+    pub(crate) async fn launch_or_open_selected_follow_up_task(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), AppError> {
+        let Some((position, task_text, launched_session_id)) =
+            self.selected_follow_up_task_snapshot(session_id)
+        else {
+            return Ok(());
+        };
+
+        if let Some(launched_session_id) = launched_session_id {
+            if self.open_session_if_present(&launched_session_id) {
+                return Ok(());
+            }
+
+            self.set_follow_up_task_launched_session_id(session_id, position, None)
+                .await?;
+        }
+
+        let sibling_session_id = self.create_session().await?;
+        self.start_session(&sibling_session_id, TurnPrompt::from_text(task_text))
+            .await?;
+        self.set_follow_up_task_launched_session_id(
+            session_id,
+            position,
+            Some(sibling_session_id.clone()),
+        )
+        .await?;
+        self.open_session(&sibling_session_id);
+
+        Ok(())
     }
 
     /// Deletes the selected session and schedules list refresh.
@@ -1493,6 +1563,8 @@ impl App {
             .map(
                 |(index, text)| crate::domain::session::SessionFollowUpTask {
                     id: i64::try_from(index).unwrap_or(i64::MAX),
+                    launched_session_id: None,
+                    position: index,
                     text,
                 },
             )
@@ -1564,6 +1636,110 @@ impl App {
                 scroll_offset: None,
             };
         }
+    }
+
+    /// Returns the currently selected follow-up task payload for one session.
+    fn selected_follow_up_task_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Option<(usize, String, Option<String>)> {
+        let position = self.sessions.selected_follow_up_task_position(session_id)?;
+        let session = self
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)?;
+        let follow_up_task = session.follow_up_task(position)?;
+
+        Some((
+            follow_up_task.position,
+            follow_up_task.text.clone(),
+            follow_up_task.launched_session_id.clone(),
+        ))
+    }
+
+    /// Persists one launched sibling-session link and mirrors it into the
+    /// in-memory session snapshot.
+    ///
+    /// # Errors
+    /// Returns an error if the launched-session link cannot be persisted.
+    async fn set_follow_up_task_launched_session_id(
+        &mut self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<String>,
+    ) -> Result<(), AppError> {
+        self.services
+            .db()
+            .update_session_follow_up_task_launched_session_id(
+                session_id,
+                position,
+                launched_session_id.as_deref(),
+            )
+            .await?;
+        self.sessions.set_follow_up_task_launched_session_id(
+            session_id,
+            position,
+            launched_session_id,
+        );
+
+        Ok(())
+    }
+
+    /// Opens one linked sibling session when it still exists in memory.
+    ///
+    /// Returns `true` when the target session was found and opened.
+    fn open_session_if_present(&mut self, target_session_id: &str) -> bool {
+        let Some(session_index) = self.session_index_for_id(target_session_id) else {
+            return false;
+        };
+        self.open_session_by_index(target_session_id, session_index);
+
+        true
+    }
+
+    /// Opens one session by id and preserves question mode for clarification
+    /// sessions.
+    fn open_session(&mut self, target_session_id: &str) {
+        let Some(session_index) = self.session_index_for_id(target_session_id) else {
+            return;
+        };
+        self.open_session_by_index(target_session_id, session_index);
+    }
+
+    /// Opens one session by list index and preserves question mode for
+    /// clarification sessions.
+    fn open_session_by_index(&mut self, target_session_id: &str, session_index: usize) {
+        self.sessions.table_state.select(Some(session_index));
+
+        let Some(session) = self.sessions.sessions.get(session_index) else {
+            return;
+        };
+        if session.status == Status::Question {
+            let questions = session.questions.clone();
+            let selected_option_index = question::default_option_index(&questions, 0);
+            self.mode = AppMode::Question {
+                at_mention_state: None,
+                session_id: target_session_id.to_string(),
+                questions,
+                responses: Vec::new(),
+                current_index: 0,
+                focus: QuestionFocus::Answer,
+                input: InputState::default(),
+                scroll_offset: None,
+                selected_option_index,
+            };
+
+            return;
+        }
+
+        self.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id: target_session_id.to_string(),
+            scroll_offset: None,
+        };
     }
 
     /// Applies loaded at-mention entries to the currently focused prompt or
@@ -2904,7 +3080,8 @@ mod tests {
     use super::*;
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
-        SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
+        SESSION_DATA_DIR, Session, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats,
+        Status,
     };
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
@@ -4124,6 +4301,75 @@ mod tests {
                 "Document the new shortcut.".to_string(),
                 "Add a focused regression test.".to_string()
             ]
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies launching an already-linked follow-up task opens its sibling
+    /// session instead of creating another session.
+    async fn launch_or_open_selected_follow_up_task_opens_existing_sibling_session() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut source_session = test_session(PathBuf::from("/tmp/source-session"));
+        source_session.follow_up_tasks = vec![SessionFollowUpTask {
+            id: 1,
+            launched_session_id: Some("session-2".to_string()),
+            position: 0,
+            text: "Open the sibling session.".to_string(),
+        }];
+        let mut sibling_session = test_session(PathBuf::from("/tmp/sibling-session"));
+        sibling_session.id = "session-2".to_string();
+        sibling_session.title = Some("Sibling session".to_string());
+        app.sessions.sessions.push(source_session);
+        app.sessions.sessions.push(sibling_session);
+
+        // Act
+        app.launch_or_open_selected_follow_up_task("session-1")
+            .await
+            .expect("follow-up task should open the linked sibling session");
+
+        // Assert
+        assert_eq!(app.sessions.table_state.selected(), Some(1));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                ..
+            } if session_id == "session-2"
+        ));
+    }
+
+    #[tokio::test]
+    /// Verifies a stale launched-session link is cleared before replacement
+    /// session creation starts, so a failed launch does not keep retrying the
+    /// same orphaned sibling id.
+    async fn launch_or_open_selected_follow_up_task_clears_stale_sibling_link_before_launch() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut source_session = test_session(PathBuf::from("/tmp/source-session"));
+        source_session.follow_up_tasks = vec![SessionFollowUpTask {
+            id: 1,
+            launched_session_id: Some("missing-session".to_string()),
+            position: 0,
+            text: "Open the sibling session.".to_string(),
+        }];
+        app.sessions.sessions.push(source_session);
+
+        // Act
+        let result = app
+            .launch_or_open_selected_follow_up_task("session-1")
+            .await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(AppError::Session(crate::app::SessionError::Workflow(message)))
+                if message == "Git branch is required to create a session"
+        ));
+        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(
+            app.sessions.sessions[0].follow_up_tasks[0].launched_session_id,
+            None
         );
     }
 
