@@ -503,10 +503,10 @@ mod tests {
             "follow_up_tasks",
             "Ordered low-severity follow-up tasks emitted for this turn. Use this field for \
              optional next-step suggestions that should be shown in the session UI without \
-             blocking the current turn. Formulate each item as a direct standalone task \
-             statement because it may be reused as the prompt for a new session (for example, \
-             `Create ...`), not as a conditional offer such as `If you'd like, I can ...`. \
-             Defaults to an empty array when omitted.",
+             blocking the current turn. Formulate each item as a direct standalone task statement \
+             because it may be reused as the prompt for a new session (for example, `Create \
+             ...`), not as a conditional offer such as `If you'd like, I can ...`. Defaults to an \
+             empty array when omitted.",
         );
         assert_schema_property_title_and_description(
             response_properties,

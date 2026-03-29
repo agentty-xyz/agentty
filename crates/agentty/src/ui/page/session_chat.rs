@@ -15,13 +15,15 @@ use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
 use crate::ui::util::{
-    calculate_input_height, format_duration_compact, question_panel_layout,
+    calculate_input_height, format_duration_compact, format_token_count, question_panel_layout,
     suggestion_dropdown_height, truncate_with_ellipsis, wrap_lines,
 };
 use crate::ui::{Component, Page, style};
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
+/// Fixed rendered height of the session header above the output panel border.
+const SESSION_HEADER_HEIGHT: u16 = 2;
 
 /// Prompt-panel data prepared once per render pass so layout and painting use
 /// the same suggestion set.
@@ -348,7 +350,10 @@ impl<'a> SessionChatPage<'a> {
             .margin(1)
             .split(area);
         let output_chunks = Layout::default()
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(SESSION_HEADER_HEIGHT),
+                Constraint::Min(0),
+            ])
             .split(chunks[0]);
 
         let mut output =
@@ -367,42 +372,65 @@ impl<'a> SessionChatPage<'a> {
         self.render_bottom_panel(f, chunks[1], session, prepared_prompt_panel.as_ref());
     }
 
-    /// Renders a standalone status/title row above the output panel border.
+    /// Renders a standalone two-line header above the output panel border.
     fn render_session_header(
         f: &mut Frame,
         header_area: Rect,
         session: &Session,
         wall_clock_unix_seconds: i64,
     ) {
-        let header_text =
-            Self::session_header_text(session, header_area.width, wall_clock_unix_seconds);
-        let header = Paragraph::new(header_text).style(Style::default().fg(session.status.color()));
+        let header = Paragraph::new(Self::session_header_lines(
+            session,
+            header_area.width,
+            wall_clock_unix_seconds,
+        ));
 
         f.render_widget(header, header_area);
     }
 
-    /// Formats the left-aligned session header text for the available width.
-    fn session_header_text(
+    /// Formats the title and metadata lines rendered in the session header.
+    fn session_header_lines(
+        session: &Session,
+        header_width: u16,
+        wall_clock_unix_seconds: i64,
+    ) -> Vec<Line<'static>> {
+        let title_width = usize::from(header_width);
+        let title = truncate_with_ellipsis(session.display_title(), title_width);
+        let metadata_text =
+            Self::session_metadata_text(session, header_width, wall_clock_unix_seconds);
+
+        vec![
+            Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(session.status.color())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                metadata_text,
+                Style::default().fg(style::palette::TEXT_MUTED),
+            )),
+        ]
+    }
+
+    /// Formats the size, timer, and token-usage summary for the second header
+    /// row.
+    fn session_metadata_text(
         session: &Session,
         header_width: u16,
         wall_clock_unix_seconds: i64,
     ) -> String {
-        let status_label = session.status.to_string();
-        let timer_label = session.has_in_progress_timer().then(|| {
-            format!(
-                " [{}]",
-                format_duration_compact(
-                    session.in_progress_duration_seconds(wall_clock_unix_seconds)
-                )
-            )
-        });
-        let status_prefix = format!("{status_label}{}", timer_label.as_deref().unwrap_or(""));
-        let reserved_width = u16::try_from(status_prefix.chars().count())
-            .unwrap_or(u16::MAX)
-            .saturating_add(5);
-        let max_title_width = usize::from(header_width.saturating_sub(reserved_width));
-        let header_title = truncate_with_ellipsis(session.display_title(), max_title_width);
-        format!(" {status_prefix} - {header_title} ")
+        let timer =
+            format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds));
+        let input_tokens = format_token_count(session.stats.input_tokens);
+        let output_tokens = format_token_count(session.stats.output_tokens);
+        let metadata = format!(
+            "Size: {}  Timer: {timer}  Token usage: {input_tokens} in / {output_tokens} out",
+            session.size
+        );
+        let metadata_width = usize::from(header_width);
+
+        truncate_with_ellipsis(&metadata, metadata_width)
     }
 
     /// Returns the reserved bottom-panel height for the active page mode.
@@ -1743,6 +1771,8 @@ mod tests {
         // Arrange
         let mut session = session_fixture();
         session.title = Some("Header Session".to_string());
+        session.stats.input_tokens = 1_250;
+        session.stats.output_tokens = 2_500;
         let mode = AppMode::List;
         let mut page =
             SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 0);
@@ -1760,9 +1790,15 @@ mod tests {
 
         // Assert
         let header_row = buffer_row_text(terminal.backend().buffer(), 1, width);
-        let output_border_row = buffer_row_text(terminal.backend().buffer(), 2, width);
-        assert!(header_row.contains("New - Header Session"));
-        assert!(!output_border_row.contains("New - Header Session"));
+        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, width);
+        let output_border_row = buffer_row_text(terminal.backend().buffer(), 3, width);
+        assert!(header_row.trim_start().starts_with("Header Session"));
+        assert!(header_row.contains("Header Session"));
+        assert!(metadata_row.trim_start().starts_with("Size: XS"));
+        assert!(metadata_row.contains("Size: XS"));
+        assert!(metadata_row.contains("Timer: 0s"));
+        assert!(metadata_row.contains("Token usage: 1.3k in / 2.5k out"));
+        assert!(!output_border_row.contains("Header Session"));
     }
 
     #[test]
@@ -1813,12 +1849,14 @@ mod tests {
 
         // Assert
         let header_row = buffer_row_text(terminal.backend().buffer(), 1, width);
+        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, width);
         assert!(header_row.contains("Header Session"));
         assert!(!header_row.contains("GitHub"));
+        assert!(metadata_row.contains("Token usage"));
     }
 
     #[test]
-    fn test_session_header_text_ticks_live_in_progress_timer() {
+    fn test_session_metadata_text_ticks_live_in_progress_timer() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::InProgress;
@@ -1826,16 +1864,16 @@ mod tests {
         session.in_progress_started_at = Some(60);
 
         // Act
-        let early_header = SessionChatPage::session_header_text(&session, 80, 90);
-        let later_header = SessionChatPage::session_header_text(&session, 80, 3_720);
+        let early_metadata = SessionChatPage::session_metadata_text(&session, 80, 90);
+        let later_metadata = SessionChatPage::session_metadata_text(&session, 80, 3_720);
 
         // Assert
-        assert!(early_header.contains("InProgress [30s] - Timer Session"));
-        assert!(later_header.contains("InProgress [1h1m0s] - Timer Session"));
+        assert!(early_metadata.contains("Timer: 30s"));
+        assert!(later_metadata.contains("Timer: 1h1m0s"));
     }
 
     #[test]
-    fn test_session_header_text_freezes_timer_after_in_progress_ends() {
+    fn test_session_metadata_text_freezes_timer_after_in_progress_ends() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Review;
@@ -1843,12 +1881,12 @@ mod tests {
         session.in_progress_total_seconds = 3_660;
 
         // Act
-        let earlier_header = SessionChatPage::session_header_text(&session, 80, 4_000);
-        let later_header = SessionChatPage::session_header_text(&session, 80, 40_000);
+        let earlier_metadata = SessionChatPage::session_metadata_text(&session, 80, 4_000);
+        let later_metadata = SessionChatPage::session_metadata_text(&session, 80, 40_000);
 
         // Assert
-        assert_eq!(earlier_header, later_header);
-        assert!(earlier_header.contains("Review [1h1m0s] - Frozen Timer"));
+        assert_eq!(earlier_metadata, later_metadata);
+        assert!(earlier_metadata.contains("Timer: 1h1m0s"));
     }
 
     #[test]
@@ -1874,8 +1912,9 @@ mod tests {
 
         // Assert
         let header_row = buffer_row_text(terminal.backend().buffer(), 1, 34);
-        assert!(header_row.contains("InProgress [1h1m0s]"));
+        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, 34);
         assert!(header_row.contains("..."));
+        assert!(metadata_row.contains("Timer: 1h1m0s"));
     }
 
     #[test]
