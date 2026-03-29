@@ -7,6 +7,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI, but they still cannot launch sibling sessions or retain launched/open state. | Partial |
+| Model availability scoping | `/model` and settings still cycle through the full static backend catalog even when one or more agent CLIs are not installed on the current machine. | Missing |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, chat shows the timer, and the session list still has no time column. | Partial |
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
 | Typed errors and hygiene | `DbError` is landed, but git, app-server, remaining infra surfaces, and the app layer still expose string errors; discard comments, missing module tests, and convention cleanup remain open. | Partial |
@@ -15,6 +16,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 ## Active Streams
 
 - `Workflow`: follow-up task persistence and sibling-session launch behavior.
+- `Agents`: machine-scoped model availability for settings and slash-model selection.
 - `Platform`: session timing surfaces.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
 - `Testty`: proof-driven TUI testing framework and scale tooling for `crates/testty/`.
@@ -144,6 +146,34 @@ The git modules and `GitClient` return typed `GitError` variants instead of stri
 
 - [ ] Keep the new error type documented in code and the touched semantic guidance aligned with the new file layout.
 
+### [28de2b07-70a0-442a-821b-8b1946a1cea4] Agents: Scope model lists to locally available backends
+
+#### Assignee
+
+`No assignee`
+
+#### Why now
+
+Agentty already documents that each backend depends on a locally installed CLI, but the current static model lists still expose unavailable choices in `/model` and Settings, which makes first-run setup and cross-machine use noisier than the runtime actually supports.
+
+#### Usable outcome
+
+The `/model` picker and persisted default-model selectors only offer models whose backend is locally runnable on the user's machine, while stored but unavailable model values fall back predictably instead of trapping the UI on hidden choices.
+
+#### Substeps
+
+- [ ] **Add one machine-scoped agent-availability boundary.** Introduce a focused availability module under `crates/agentty/src/infra/agent/` plus the matching router exports in `crates/agentty/src/infra/agent.rs` so backend discovery lives behind a trait-based subprocess boundary instead of direct orchestration calls; wire one startup/background refresh path through `crates/agentty/src/app/task.rs` and `crates/agentty/src/app/core.rs` to cache which `AgentKind` values are locally runnable.
+- [ ] **Scope settings defaults and fallback resolution.** Update the model-selection helpers in `crates/agentty/src/app/setting.rs` and any needed domain helpers in `crates/agentty/src/domain/agent.rs` so smart, fast, and review defaults cycle only through available models, and persisted unavailable values resolve to a stable fallback path instead of remaining silently selectable-but-unrunnable.
+- [ ] **Scope prompt model switching and empty-state messaging.** Update `crates/agentty/src/runtime/mode/prompt.rs` and `crates/agentty/src/ui/page/session_chat.rs` so `/model` shows only locally available agent kinds and models, preserves the current session model when it is still valid, and surfaces explicit guidance when no supported backend CLI is installed.
+
+#### Tests
+
+- [ ] Add or extend coverage in `crates/agentty/src/infra/agent/`, `crates/agentty/src/app/setting.rs`, `crates/agentty/src/runtime/mode/prompt.rs`, and `crates/agentty/src/ui/page/session_chat.rs` for mixed installed/missing CLIs, persisted unavailable defaults, and the no-backend-installed empty state, keeping the external-command checks behind mockable trait boundaries.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/agents/backends.md` and `docs/site/content/docs/usage/workflow.md` to explain that model choices are filtered by locally available backend CLIs and to describe the fallback behavior for stored defaults that are unavailable on the current machine.
+
 ## Ready Now Execution Order
 
 ```mermaid
@@ -152,6 +182,7 @@ flowchart TD
     R2["[9f115af0] Platform: session-list timer"]
     R3["[1c7b7080] Quality: deterministic local session harness"]
     R4["[7b743a5a] Quality: GitError migration"]
+    R5["[28de2b07] Agents: local model availability"]
 ```
 
 ## Queued Next
@@ -273,6 +304,7 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 ## Context Notes
 
 - `Workflow: Launch sibling sessions from follow-up tasks and retain task state` should reuse the same stored task content that the persistence slice lands.
+- `Agents: Scope model lists to locally available backends` should reuse one shared availability snapshot across Settings and `/model` instead of probing CLIs separately in render paths.
 - `Platform: Add the timer to the grouped session list` should reuse `Session::in_progress_duration_seconds()` and the shared render-time wall clock instead of inventing a second timer source.
 - The local session harness should keep validating the default in-process workflow path that `Workflow` and `Platform` depend on.
 - The typed-error sequence should stay linear so each layer learns from the previous enum shape instead of reworking multiple error surfaces at once.
