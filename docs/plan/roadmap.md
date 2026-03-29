@@ -9,7 +9,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Follow-up task workflow | Persisted follow-up tasks now flow through the protocol, SQLite storage, and session UI, but they still cannot launch sibling sessions or retain launched/open state. | Partial |
 | Model availability scoping | `/model` and settings still cycle through the full static backend catalog even when one or more agent CLIs are not installed on the current machine. | Missing |
 | Draft session workflow | `New` sessions are still blank placeholders whose first submitted prompt starts the agent immediately, so users cannot stage multiple draft messages and explicitly launch the session later. | Missing |
-| Session activity timing | `session` persists cumulative `InProgress` timing fields, chat shows the timer, and the session list still has no time column. | Partial |
+| Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
 | Deterministic scenario coverage | Local git tests exist, but there is no shared app-level scenario harness for a full local session workflow. | Partial |
 | Typed errors and hygiene | `DbError` and `GitError` are landed; app-server, remaining infra surfaces, and the app layer still expose string errors; discard comments, missing module tests, and convention cleanup remain open. | Partial |
 | Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, and recipe layer exist. Proof reports, native frame rendering, and scale tooling remain backlog work. | Partial |
@@ -18,7 +18,6 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 - `Agents`: machine-scoped model availability for settings and slash-model selection.
 - `Workflow`: follow-up task launch behavior and draft-session staging before the first agent turn.
-- `Platform`: session timing surfaces.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
 - `Testty`: proof-driven TUI testing framework and scale tooling for `crates/testty/`.
 
@@ -61,34 +60,6 @@ Selecting a persisted follow-up task can launch it into a sibling session, and t
 #### Docs
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for launching follow-up tasks into sibling sessions and the resulting task-state behavior.
-
-### [9f115af0-a382-46f4-8bf9-25886936e252] Platform: Add the timer to the grouped session list
-
-#### Assignee
-
-`@minev-dev`
-
-#### Why now
-
-The active-work timer already persists and renders in session chat, so the next platform slice should reuse that same timing path in the list view instead of leaving the grouped list behind.
-
-#### Usable outcome
-
-The grouped session list shows the same cumulative active-work timer that session chat shows, including live updates for in-progress sessions and frozen totals for completed intervals.
-
-#### Substeps
-
-- [ ] **Add the timer column to the grouped list.** Update `crates/agentty/src/ui/page/session_list.rs` to render a timer column and reuse duration helpers from `crates/agentty/src/domain/session.rs` and `crates/agentty/src/ui/text_util.rs` instead of introducing list-specific timing math.
-- [ ] **Thread the render-time clock through list rendering.** Keep `crates/agentty/src/ui/render.rs` and `crates/agentty/src/ui/router.rs` aligned so the grouped session list reads the same `wall_clock_unix_seconds` render context already used by session chat.
-- [ ] **Preserve grouped-table behavior with the new column.** Extend the grouped-row layout logic and tests in `crates/agentty/src/ui/page/session_list.rs` so selection, placeholders, truncation, and width calculations stay stable with the timer present.
-
-#### Tests
-
-- [ ] Extend `crates/agentty/src/ui/page/session_list.rs` and `crates/agentty/src/ui/text_util.rs` tests to cover active and completed timers in grouped session rows.
-
-#### Docs
-
-- [ ] Update `docs/site/content/docs/usage/workflow.md` to note that the session list now surfaces cumulative active-work time.
 
 ### [1c7b7080-deaf-4e2c-8e3c-df24e01d9251] Quality: Ship one deterministic local session workflow slice
 
@@ -151,9 +122,8 @@ The `/model` picker and persisted default-model selectors only offer models whos
 ```mermaid
 flowchart TD
     R1["[8f4402cd] Workflow: sibling-session launch"]
-    R2["[9f115af0] Platform: session-list timer"]
-    R3["[1c7b7080] Quality: deterministic local session harness"]
-    R4["[28de2b07] Agents: local model availability"]
+    R2["[1c7b7080] Quality: deterministic local session harness"]
+    R3["[28de2b07] Agents: local model availability"]
 ```
 
 ## Queued Next
@@ -305,8 +275,7 @@ Promote after the proof fundamentals land and there is enough scenario volume to
 - `Workflow: Launch sibling sessions from follow-up tasks and retain task state` should reuse the same stored task content that the persistence slice lands.
 - `Agents: Scope model lists to locally available backends` should reuse one shared availability snapshot across Settings and `/model` instead of probing CLIs separately in render paths.
 - `Workflow: Stage draft session messages and start them explicitly` should treat `Status::New` as the persisted draft container instead of introducing a second pre-start lifecycle status.
-- `Platform: Add the timer to the grouped session list` should reuse `Session::in_progress_duration_seconds()` and the shared render-time wall clock instead of inventing a second timer source.
-- The local session harness should keep validating the default in-process workflow path that `Workflow` and `Platform` depend on.
+- The local session harness should keep validating the default in-process workflow path that the active workflow slices depend on.
 - The typed-error sequence should stay linear so each layer learns from the previous enum shape instead of reworking multiple error surfaces at once.
 - `Testty` remains strategically important, but it is independent of the active `agentty` product work and should stay parked until a human intentionally rebalances the queue.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.

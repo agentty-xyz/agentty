@@ -42,8 +42,9 @@ pub(crate) fn render_confirmation_overlay(
     area: Rect,
     mode: &AppMode,
     list_background: ListBackgroundRenderContext<'_>,
+    wall_clock_unix_seconds: i64,
 ) {
-    render_list_background(f, area, list_background);
+    render_list_background(f, area, list_background, wall_clock_unix_seconds);
     render_overlay_backdrop(f, area);
 
     let AppMode::Confirmation {
@@ -69,6 +70,7 @@ pub(crate) fn render_sync_blocked_popup(
     f: &mut Frame,
     area: Rect,
     list_background: ListBackgroundRenderContext<'_>,
+    wall_clock_unix_seconds: i64,
     context: SyncBlockedPopupRenderContext<'_>,
 ) {
     let SyncBlockedPopupRenderContext {
@@ -79,7 +81,7 @@ pub(crate) fn render_sync_blocked_popup(
         title,
     } = context;
 
-    render_list_background(f, area, list_background);
+    render_list_background(f, area, list_background, wall_clock_unix_seconds);
     render_overlay_backdrop(f, area);
 
     let popup_message = sync_popup_message(default_branch, message, project_name);
@@ -328,7 +330,7 @@ fn render_help_background(
 
     match resolve_help_background(help_context, sessions) {
         Some(ResolvedHelpBackground::List) => {
-            render_list_background(f, area, list_background);
+            render_list_background(f, area, list_background, wall_clock_unix_seconds);
         }
         Some(ResolvedHelpBackground::View {
             done_session_output_mode,

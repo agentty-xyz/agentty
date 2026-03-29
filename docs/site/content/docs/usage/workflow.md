@@ -30,6 +30,10 @@ header row above the output panel. Once a session has entered
 active-work timer. The timer keeps ticking only while the session is actively
 working and freezes between turns.
 
+The grouped **Sessions** tab also shows that same cumulative active-work timer
+in its own `Timer` column, so in-progress rows keep ticking live there while
+completed sessions retain their frozen total.
+
 The footer always shows the active directory. When the current branch tracks an
 upstream, the footer branch badge renders `local -> remote`, for example
 `main -> origin/main`. For active sessions whose published worktree branch also

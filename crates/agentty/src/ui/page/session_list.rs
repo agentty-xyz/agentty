@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::ui::state::help_action;
-use crate::ui::util::{first_table_column_width, truncate_with_ellipsis};
+use crate::ui::util::{first_table_column_width, format_duration_compact, truncate_with_ellipsis};
 use crate::ui::{Page, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
@@ -21,16 +21,25 @@ const GROUP_EMPTY_PLACEHOLDER: &str = "No sessions...";
 
 /// Session list page renderer.
 pub struct SessionListPage<'a> {
+    /// Session rows available for rendering.
     pub sessions: &'a [Session],
+    /// Table selection state tied to the raw session ordering.
     pub table_state: &'a mut TableState,
+    /// Current wall-clock time expressed as Unix seconds for live timer labels.
+    wall_clock_unix_seconds: i64,
 }
 
 impl<'a> SessionListPage<'a> {
     /// Creates a session list page renderer.
-    pub fn new(sessions: &'a [Session], table_state: &'a mut TableState) -> Self {
+    pub fn new(
+        sessions: &'a [Session],
+        table_state: &'a mut TableState,
+        wall_clock_unix_seconds: i64,
+    ) -> Self {
         Self {
             sessions,
             table_state,
+            wall_clock_unix_seconds,
         }
     }
 
@@ -55,7 +64,7 @@ impl Page for SessionListPage<'_> {
             .bg(style::palette::SURFACE)
             .fg(style::palette::TEXT_MUTED)
             .add_modifier(Modifier::BOLD);
-        let header_cells = ["Session", "Model", "Size", "Status"]
+        let header_cells = ["Session", "Model", "Size", "Status", "Timer"]
             .iter()
             .map(|h| Cell::from(*h));
         let header = Row::new(header_cells)
@@ -69,6 +78,7 @@ impl Page for SessionListPage<'_> {
             model_column_width(self.sessions),
             size_column_width(),
             status_column_width(),
+            timer_column_width(self.sessions, self.wall_clock_unix_seconds),
         ];
         let title_column_width = first_table_column_width(
             block.inner(main_area).width,
@@ -79,9 +89,9 @@ impl Page for SessionListPage<'_> {
         let table_rows = grouped_session_rows(self.sessions);
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
         let selected_row = selected_render_row(&table_rows, selected_session_id);
-        let rows = table_rows
-            .iter()
-            .map(|table_row| render_table_row(table_row, title_column_width));
+        let rows = table_rows.iter().map(|table_row| {
+            render_table_row(table_row, title_column_width, self.wall_clock_unix_seconds)
+        });
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
@@ -244,11 +254,17 @@ fn selected_render_row(
 }
 
 /// Converts one grouped row descriptor into a `ratatui` table row.
-fn render_table_row(row: &SessionTableRow<'_>, title_column_width: usize) -> Row<'static> {
+fn render_table_row(
+    row: &SessionTableRow<'_>,
+    title_column_width: usize,
+    wall_clock_unix_seconds: i64,
+) -> Row<'static> {
     match row {
         SessionTableRow::GroupLabel(group) => render_group_label_row(*group),
         SessionTableRow::EmptyGroupPlaceholder => render_empty_group_placeholder_row(),
-        SessionTableRow::Session(session) => render_session_row(session, title_column_width),
+        SessionTableRow::Session(session) => {
+            render_session_row(session, title_column_width, wall_clock_unix_seconds)
+        }
     }
 }
 
@@ -256,6 +272,7 @@ fn render_table_row(row: &SessionTableRow<'_>, title_column_width: usize) -> Row
 fn render_group_label_row(group: SessionGroup) -> Row<'static> {
     let cells = vec![
         Cell::from(group.label()).style(Style::default().fg(style::palette::ACCENT)),
+        Cell::from(""),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -271,20 +288,31 @@ fn render_empty_group_placeholder_row() -> Row<'static> {
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
+        Cell::from(""),
     ];
 
     Row::new(cells).height(1)
 }
 
 /// Renders one session row.
-fn render_session_row(session: &Session, title_column_width: usize) -> Row<'static> {
+fn render_session_row(
+    session: &Session,
+    title_column_width: usize,
+    wall_clock_unix_seconds: i64,
+) -> Row<'static> {
     let status = session.status;
     let display_title = truncate_with_ellipsis(session.display_title(), title_column_width);
+    let timer_label = if session.has_in_progress_timer() {
+        format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
+    } else {
+        String::new()
+    };
     let cells = vec![
         Cell::from(display_title),
         Cell::from(session.model.as_str()),
         Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
         Cell::from(format!("{status}")).style(Style::default().fg(style::status_color(status))),
+        Cell::from(timer_label),
     ];
 
     Row::new(cells).height(1)
@@ -332,6 +360,21 @@ fn status_column_width() -> Constraint {
     )
 }
 
+/// Calculates the width of the timer column from known session durations.
+fn timer_column_width(sessions: &[Session], wall_clock_unix_seconds: i64) -> Constraint {
+    text_column_width(
+        "Timer",
+        sessions
+            .iter()
+            .filter(|session| session.has_in_progress_timer())
+            .map(|session| {
+                format_duration_compact(
+                    session.in_progress_duration_seconds(wall_clock_unix_seconds),
+                )
+            }),
+    )
+}
+
 /// Returns the palette color representing each session size bucket.
 fn size_color(size: SessionSize) -> Color {
     match size {
@@ -360,6 +403,8 @@ where
 mod tests {
     use std::path::PathBuf;
 
+    use ratatui::widgets::TableState;
+
     use super::*;
     use crate::agent::AgentModel;
     use crate::domain::session::SessionStats;
@@ -387,6 +432,15 @@ mod tests {
             title: Some(id.to_string()),
             updated_at: 0,
         }
+    }
+
+    /// Flattens a rendered test buffer into a plain string for assertions.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
     }
 
     #[test]
@@ -662,6 +716,24 @@ mod tests {
     }
 
     #[test]
+    fn test_timer_column_width_uses_longest_rendered_timer_label() {
+        // Arrange
+        let mut active_session = test_session("active-1", Status::InProgress);
+        active_session.in_progress_started_at = Some(100);
+        active_session.in_progress_total_seconds = 60;
+        let mut archived_session = test_session("done-1", Status::Done);
+        archived_session.in_progress_total_seconds = 3_661;
+        let sessions = vec![active_session, archived_session];
+        let expected_width = u16::try_from("1h1m1s".chars().count()).unwrap_or(u16::MAX);
+
+        // Act
+        let width = timer_column_width(&sessions, 160);
+
+        // Assert
+        assert_eq!(width, Constraint::Length(expected_width));
+    }
+
+    #[test]
     fn test_size_color_uses_expected_palette() {
         // Arrange
         let test_cases = [
@@ -713,5 +785,53 @@ mod tests {
 
         // Assert
         assert!(help_text.contains("Enter: open session"));
+    }
+
+    #[test]
+    fn test_render_shows_live_active_work_timer_in_grouped_session_row() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("active-1", Status::InProgress);
+        session.in_progress_started_at = Some(100);
+        session.in_progress_total_seconds = 60;
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, 160).render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("2m0s"));
+    }
+
+    #[test]
+    fn test_render_shows_frozen_completed_timer_in_grouped_session_row() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("done-1", Status::Done);
+        session.in_progress_total_seconds = 125;
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, 9_999)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("2m5s"));
     }
 }

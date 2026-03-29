@@ -351,6 +351,7 @@ mod tests {
         let zero = format_duration_compact(0);
         let less_than_one_minute = format_duration_compact(59);
         let one_minute = format_duration_compact(60);
+        let two_minutes = format_duration_compact(120);
         let one_hour = format_duration_compact(3_600);
         let one_hour_one_minute_one_second = format_duration_compact(3_661);
         let one_day_one_hour_one_minute_one_second = format_duration_compact(90_061);
@@ -359,6 +360,7 @@ mod tests {
         assert_eq!(zero, "0s");
         assert_eq!(less_than_one_minute, "59s");
         assert_eq!(one_minute, "1m0s");
+        assert_eq!(two_minutes, "2m0s");
         assert_eq!(one_hour, "1h0s");
         assert_eq!(one_hour_one_minute_one_second, "1h1m1s");
         assert_eq!(one_day_one_hour_one_minute_one_second, "25h1m1s");

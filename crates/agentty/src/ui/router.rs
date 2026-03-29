@@ -134,7 +134,12 @@ fn render_list_or_overlay_mode(
     aux: RouteAuxContext<'_>,
 ) -> bool {
     match mode {
-        AppMode::List => render_list_background(f, area, shared.list_background()),
+        AppMode::List => render_list_background(
+            f,
+            area,
+            shared.list_background(),
+            aux.wall_clock_unix_seconds,
+        ),
         AppMode::Confirmation {
             confirmation_intent,
             confirmation_message,
@@ -162,7 +167,13 @@ fn render_list_or_overlay_mode(
                     aux.wall_clock_unix_seconds,
                 );
             } else {
-                overlay::render_confirmation_overlay(f, area, mode, shared.list_background());
+                overlay::render_confirmation_overlay(
+                    f,
+                    area,
+                    mode,
+                    shared.list_background(),
+                    aux.wall_clock_unix_seconds,
+                );
             }
         }
 
@@ -176,6 +187,7 @@ fn render_list_or_overlay_mode(
             f,
             area,
             shared.list_background(),
+            aux.wall_clock_unix_seconds,
             SyncBlockedPopupRenderContext {
                 default_branch: default_branch.as_deref(),
                 is_loading: *is_loading,
@@ -494,6 +506,7 @@ pub(crate) fn render_list_background(
     f: &mut Frame,
     content_area: Rect,
     context: ListBackgroundRenderContext<'_>,
+    wall_clock_unix_seconds: i64,
 ) {
     let ListBackgroundRenderContext {
         active_project_id,
@@ -522,7 +535,12 @@ pub(crate) fn render_list_background(
             .render(f, chunks[1]);
         }
         Tab::Sessions => {
-            page::session_list::SessionListPage::new(sessions, table_state).render(f, chunks[1]);
+            page::session_list::SessionListPage::new(
+                sessions,
+                table_state,
+                wall_clock_unix_seconds,
+            )
+            .render(f, chunks[1]);
         }
         Tab::Stats => {
             page::stat::StatsPage::new(sessions, stats_activity).render(f, chunks[1]);
