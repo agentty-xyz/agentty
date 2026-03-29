@@ -1908,7 +1908,7 @@ mod tests {
         let mode = AppMode::List;
         let mut page =
             SessionChatPage::new(std::slice::from_ref(&session), 0, None, &mode, None, 3_660);
-        let backend = ratatui::backend::TestBackend::new(34, 20);
+        let backend = ratatui::backend::TestBackend::new(50, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
         // Act
@@ -1920,8 +1920,8 @@ mod tests {
             .expect("failed to draw session chat page");
 
         // Assert
-        let header_row = buffer_row_text(terminal.backend().buffer(), 1, 34);
-        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, 34);
+        let header_row = buffer_row_text(terminal.backend().buffer(), 1, 50);
+        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, 50);
         assert!(header_row.contains("..."));
         assert!(metadata_row.contains("Timer: 1h1m0s"));
     }
