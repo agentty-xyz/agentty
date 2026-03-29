@@ -314,6 +314,40 @@ impl PtySession {
     pub fn binary_path(&self) -> &Path {
         &self.binary_path
     }
+
+    /// Wait until the child process exits, or timeout.
+    ///
+    /// Polls the child process in a loop until it exits or the timeout is
+    /// reached. Returns `true` when the process exited with a success
+    /// status (exit code 0), `false` for a non-zero exit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a timeout error if the process does not exit within the
+    /// given duration.
+    pub fn wait_for_exit(&mut self, timeout: Duration) -> Result<bool, PtySessionError> {
+        let deadline = std::time::Instant::now() + timeout;
+
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Ok(status.success()),
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(PtySessionError::Timeout(
+                            "Process did not exit within timeout".into(),
+                        ));
+                    }
+
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(err) => {
+                    return Err(PtySessionError::Timeout(format!(
+                        "Error waiting for process exit: {err}"
+                    )));
+                }
+            }
+        }
+    }
 }
 
 /// Terminates the PTY child process on drop to prevent orphan leaks.
@@ -369,6 +403,7 @@ fn key_to_bytes(key: &str) -> Vec<u8> {
     match key.to_lowercase().as_str() {
         "enter" | "return" => vec![b'\r'],
         "tab" => vec![b'\t'],
+        "backtab" | "shift+tab" => vec![0x1b, b'[', b'Z'],
         "escape" | "esc" => vec![0x1b],
         "backspace" => vec![0x7f],
         "up" => vec![0x1b, b'[', b'A'],
@@ -520,6 +555,13 @@ mod tests {
         assert_eq!(key_to_bytes("escape"), vec![0x1b]);
         assert_eq!(key_to_bytes("backspace"), vec![0x7f]);
         assert_eq!(key_to_bytes("space"), vec![b' ']);
+    }
+
+    #[test]
+    fn key_to_bytes_backtab_sends_csi_z() {
+        // Arrange / Act / Assert — BackTab is ESC [ Z.
+        assert_eq!(key_to_bytes("backtab"), vec![0x1b, b'[', b'Z']);
+        assert_eq!(key_to_bytes("shift+tab"), vec![0x1b, b'[', b'Z']);
     }
 
     #[test]
