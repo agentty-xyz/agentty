@@ -327,13 +327,20 @@ mod tests {
     use crate::infra::fs;
 
     /// Returns a filesystem mock that reports the supplied directories as
-    /// existing.
+    /// existing and treats missing staged-draft metadata files as absent.
     fn create_folder_lookup_mock(existing_folders: Vec<PathBuf>) -> fs::MockFsClient {
         let mut mock_fs_client = fs::MockFsClient::new();
         mock_fs_client
             .expect_is_dir()
             .times(0..)
             .returning(move |path| existing_folders.contains(&path));
+        mock_fs_client.expect_read_file().times(0..).returning(|_| {
+            Box::pin(async {
+                Err(fs::FsError::Io(std::io::Error::from(
+                    std::io::ErrorKind::NotFound,
+                )))
+            })
+        });
 
         mock_fs_client
     }

@@ -37,7 +37,10 @@ pub(super) async fn load_staged_draft_attachments(
 
 /// Persists the staged draft-session attachment list for one session.
 ///
-/// An empty slice removes the metadata file entirely.
+/// An empty slice removes the metadata file entirely. When attachments are
+/// present, the session metadata directory is created before the JSON payload
+/// is written so draft staging still works after external cleanup removed the
+/// folder.
 ///
 /// # Errors
 /// Returns an error if the attachment metadata cannot be serialized or
@@ -52,6 +55,13 @@ pub(super) async fn store_staged_draft_attachments(
     if attachments.is_empty() {
         return fs_client.remove_file(attachment_path).await;
     }
+
+    let Some(parent_dir) = attachment_path.parent() else {
+        return Err(FsError::Io(std::io::Error::other(
+            "staged draft attachment path is missing a parent directory",
+        )));
+    };
+    fs_client.create_dir_all(parent_dir.to_path_buf()).await?;
 
     let serialized_attachments = serde_json::to_vec(attachments)
         .map_err(|error| FsError::Io(std::io::Error::other(error)))?;
@@ -114,5 +124,30 @@ mod tests {
 
         // Assert
         assert!(!attachment_path.exists());
+    }
+
+    #[tokio::test]
+    /// Ensures attachment staging recreates the metadata directory before
+    /// writing JSON state.
+    async fn test_store_staged_draft_attachments_creates_missing_metadata_directory() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let fs_client = RealFsClient;
+        let attachments = vec![TurnPromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            local_image_path: temp_dir.path().join("image-001.png"),
+        }];
+        let attachment_path = staged_draft_attachment_path(temp_dir.path(), "session-1");
+
+        // Act
+        store_staged_draft_attachments(&fs_client, temp_dir.path(), "session-1", &attachments)
+            .await
+            .expect("failed to store attachments");
+
+        // Assert
+        assert!(attachment_path.exists());
+        let loaded_attachments =
+            load_staged_draft_attachments(&fs_client, temp_dir.path(), "session-1").await;
+        assert_eq!(loaded_attachments, attachments);
     }
 }
