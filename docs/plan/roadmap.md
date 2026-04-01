@@ -13,7 +13,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
 | Deterministic scenario coverage | E2E tests live in `crates/agentty/tests/e2e/` multi-file layout with shared `Journey` builders and tests for tab cycling, reverse tab, help overlay, quit confirmation, session empty state, and project page; session-lifecycle and prompt E2E coverage remains open. | Partial |
 | Typed errors and hygiene | `DbError`, `GitError`, `AppServerTransportError`, `AppServerError`, `AgentError`, `SessionError`, and `AppError` enums propagate typed errors through all infra and app-layer boundaries; module-level regression tests cover session access, review replay, agent backend, CLI error formatting, and stdin write helpers; convention cleanup remains open. | Partial |
-| Agent instruction delivery | Claude, Codex, and Gemini still receive the full Agentty-managed protocol wrapper on every turn; app-server sessions persist provider conversation ids, but instruction bootstrap state is not tracked separately from transcript replay. | Missing |
+| Agent instruction delivery | Codex and Gemini app-server turns now persist instruction-bootstrap state and reuse a compact reminder after the first full bootstrap for a provider context; Claude still resends the full wrapper until explicit session identity lands. | Partial |
 | Testty proof pipeline | PTY-driven sessions, VT100 frame parsing, VHS tape compilation, snapshot baselines, overlay renderer, recipe layer, proof reports (labeled captures, four backends: frame-text, PNG strip, GIF, HTML), native bitmap renderer, frame diffing, journey composition, and scale tooling are all landed. | Landed |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 
@@ -124,33 +124,33 @@ E2E tests cover session creation via `a` key, opening a session with `Enter`, se
 
 - [ ] No user-facing behavior changes — no doc updates needed.
 
-### [d9307a06-1a0f-483a-96db-04587dce6dc1] Protocol: Bootstrap direct agent instructions once per app-server session
+### [4f491812-f373-4ac5-bd57-b46c4f9d91e3] Workflow: Polish draft-session editing after baseline staging lands
 
 #### Assignee
 
-`@minev-dev`
+No assignee
 
 #### Why now
 
-Codex and Gemini already persist provider-native session identity, so Agentty can cut repeated prompt weight for the persistent transports now without relying on `AGENTS.md` or waiting for Claude-specific session tracking.
+The explicit `Shift+A` draft-session baseline is already landed, and the remaining edit/remove rough edges are still isolated to the same workflow surfaces. Promoting this polish slice now keeps draft staging coherent before more review and delivery features start depending on it.
 
 #### Usable outcome
 
-Codex and Gemini sessions send the full Agentty-managed instruction contract only on the first turn of a provider context or after a runtime reset, while later turns use a compact refresh reminder and still keep strict per-turn schema enforcement.
+Users can edit or remove staged draft messages before the first live turn starts, and draft preview/title/transcript state stays coherent after those changes.
 
 #### Substeps
 
-- [ ] **Add one provider-managed instruction delivery planner.** Introduce an instruction-profile and delivery-mode module under `crates/agentty/src/infra/agent/` and route `crates/agentty/src/infra/agent/prompt.rs`, `crates/agentty/src/infra/app_server/prompt.rs`, and `crates/agentty/src/infra/app_server/retry.rs` through explicit `BootstrapFull`, `DeltaOnly`, and `BootstrapWithReplay` decisions instead of unconditionally prepending the full protocol wrapper.
-- [ ] **Persist bootstrap state against the active app-server context.** Extend `crates/agentty/src/infra/db.rs`, `crates/agentty/src/app/session/workflow/worker.rs`, and `crates/agentty/src/infra/channel/app_server.rs` so Codex and Gemini store which instruction-profile version or hash was delivered for the current `provider_conversation_id`, invalidate that state when the runtime restarts or reports `context_reset`, and resend the full bootstrap only when the provider context is new or changed.
-- [ ] **Shrink normal follow-up prompts without weakening validation.** Keep Codex `outputSchema` enforcement in `crates/agentty/src/infra/agent/app_server/codex/client.rs` and the existing strict host-side response parsing, but change ordinary app-server follow-up turns to prepend only a compact refresh reminder instead of the full schema and policy block.
+- [ ] **Add draft edit and remove actions.** Extend `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and `crates/agentty/src/runtime/mode/session_view.rs` so `New` draft sessions can edit or remove staged prompt content without starting a live turn.
+- [ ] **Reflect staged-draft edits in the session chat surface.** Update `crates/agentty/src/ui/page/session_chat.rs`, `crates/agentty/src/ui/component/session_output.rs`, and `crates/agentty/src/ui/state/help_action.rs` so preview text, footer actions, and empty-state copy stay aligned after draft edits or removals.
+- [ ] **Keep staged metadata coherent after edits.** Extend `crates/agentty/src/app/session/workflow/draft.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, and any required persistence helpers so draft text, staged attachments, and transcript/title cleanup stay synchronized after removing or rewriting staged content.
 
 #### Tests
 
-- [ ] Add or extend coverage in `crates/agentty/src/infra/agent/prompt.rs`, `crates/agentty/src/infra/app_server/prompt.rs`, `crates/agentty/src/infra/app_server/retry.rs`, `crates/agentty/src/app/session/workflow/worker.rs`, and the app-server client tests so first-turn bootstrap, same-context follow-up turns, and restart or `context_reset` invalidation all preserve the protocol contract while removing repeated prompt duplication.
+- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/runtime/mode/prompt.rs`, and `crates/agentty/src/ui/component/session_output.rs` for draft edit/remove actions, staged-preview refresh, and attachment/title cleanup after draft changes.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/architecture/runtime-flow.md` and `docs/site/content/docs/agents/backends.md` to document that persistent app-server sessions now reuse an Agentty-managed bootstrap instruction contract while still enforcing structured output per turn.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for staged draft edit/remove behavior and any resulting session-view action changes.
 
 ## Ready Now Execution Order
 
@@ -159,24 +159,10 @@ flowchart TD
     R1["[8f4402cd] Workflow: sibling-session launch"]
     R2["[ca014af3] Forge: GitHub review request publish"]
     R3["[33150cab] Quality: session lifecycle + prompt E2E"]
-    R4["[d9307a06] Protocol: app-server instruction bootstrap"]
+    R4["[4f491812] Workflow: draft-session polish"]
 ```
 
 ## Queued Next
-
-### [4f491812-f373-4ac5-bd57-b46c4f9d91e3] Workflow: Polish draft-session editing after baseline staging lands
-
-#### Outcome
-
-Refine the draft-session UX with edit/remove affordances and any transcript/title cleanup that proves necessary once the explicit-start baseline is in place.
-
-#### Promote when
-
-Promote after the explicit `Shift+A` draft-session baseline sees enough use to clarify which edit/remove affordances are worth standardizing.
-
-#### Depends on
-
-`[64c9bb7f] Workflow: Stage draft session messages and start them explicitly`
 
 ### [5a84d7a9-3346-4e01-90be-ce5d3783b32f] Quality: Add settings, stats, and resize E2E tests
 
@@ -214,11 +200,11 @@ Give Claude-backed sessions an explicit provider session identifier so Agentty c
 
 #### Promote when
 
-Promote after `[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session` lands or sooner if Claude prompt duplication becomes the dominant context cost.
+Promote when maintainers want Claude sessions to reuse the bootstrap-once flow now that Codex and Gemini app-server contexts have the baseline delivery planner.
 
 #### Depends on
 
-`[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session`
+`[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session` (landed)
 
 ### [84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Replace reset replay with compact session memory
 
@@ -228,11 +214,11 @@ Restarted provider sessions resend a structured session-memory summary of constr
 
 #### Promote when
 
-Promote after `[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session` stabilizes the normal follow-up path so reset-specific context replay can be optimized independently.
+Promote when the compact app-server follow-up path proves stable enough that restart-specific replay size becomes the next protocol bottleneck.
 
 #### Depends on
 
-`[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session`
+`[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session` (landed)
 
 ## Parked
 

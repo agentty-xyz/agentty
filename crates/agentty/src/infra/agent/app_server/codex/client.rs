@@ -1792,6 +1792,7 @@ mod tests {
             prompt: "Implement the task".into(),
             request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: provider_conversation_id.map(ToString::to_string),
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-123".to_string(),
         }
@@ -3623,11 +3624,11 @@ sleep 5
         let session_output = Some("prior context");
 
         // Act
-        let turn_prompt = app_server::turn_prompt_for_runtime(
+        let turn_prompt = app_server::prompt::turn_prompt_for_runtime(
             prompt,
             &crate::infra::channel::AgentRequestKind::SessionStart,
             session_output,
-            false,
+            crate::infra::agent::InstructionDeliveryMode::BootstrapFull,
         )
         .expect("turn prompt should render");
 
@@ -3643,13 +3644,13 @@ sleep 5
         let session_output = Some("assistant: proposed plan");
 
         // Act
-        let turn_prompt = app_server::turn_prompt_for_runtime(
+        let turn_prompt = app_server::prompt::turn_prompt_for_runtime(
             prompt,
             &crate::infra::channel::AgentRequestKind::SessionResume {
                 session_output: session_output.map(ToString::to_string),
             },
             session_output,
-            true,
+            crate::infra::agent::InstructionDeliveryMode::BootstrapWithReplay,
         )
         .expect("turn prompt should render");
 

@@ -9,6 +9,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{DailyActivity, ReviewRequest, SessionFollowUpTask, SessionStats};
 use crate::domain::setting::SettingName;
+use crate::infra::agent;
 
 /// Typed error returned by [`Database`] operations.
 ///
@@ -251,6 +252,24 @@ struct OptionalI64ValueRow {
 /// Row returned when loading an optional string scalar value.
 struct OptionalStringValueRow {
     value: Option<String>,
+}
+
+/// Row returned when loading the persisted instruction bootstrap marker for
+/// one session.
+#[derive(sqlx::FromRow)]
+struct SessionInstructionStateRow {
+    app_server_instruction_provider_conversation_id: Option<String>,
+}
+
+impl SessionInstructionStateRow {
+    /// Converts the optional stored provider conversation id into one
+    /// normalized bootstrap conversation id when present and non-empty.
+    fn into_instruction_conversation_id(self) -> Option<String> {
+        agent::normalize_instruction_conversation_id(
+            self.app_server_instruction_provider_conversation_id
+                .as_deref(),
+        )
+    }
 }
 
 /// Row returned when loading a required string scalar value.
@@ -1358,6 +1377,34 @@ WHERE id = ?
         Ok(())
     }
 
+    /// Updates the persisted app-server instruction bootstrap marker for a
+    /// session.
+    ///
+    /// Passing `None` clears the tracked provider-conversation marker so the
+    /// next app-server turn must re-bootstrap the full instruction contract.
+    ///
+    /// # Errors
+    /// Returns an error if the session row cannot be updated.
+    pub(crate) async fn update_session_instruction_conversation_id(
+        &self,
+        id: &str,
+        provider_conversation_id: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET app_server_instruction_provider_conversation_id = ?
+WHERE id = ?
+",
+        )
+        .bind(provider_conversation_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// Updates the persisted upstream reference for a published session
     /// branch.
     ///
@@ -1554,6 +1601,29 @@ WHERE id = ?
         .await?;
 
         Ok(row.and_then(|row| row.value))
+    }
+
+    /// Returns the persisted app-server instruction bootstrap marker for a
+    /// session, when present.
+    ///
+    /// # Errors
+    /// Returns an error if the lookup query fails.
+    pub(crate) async fn get_session_instruction_conversation_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<String>, DbError> {
+        let row = sqlx::query_as::<_, SessionInstructionStateRow>(
+            r"
+SELECT app_server_instruction_provider_conversation_id
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.and_then(SessionInstructionStateRow::into_instruction_conversation_id))
     }
 
     /// Inserts a queued operation row for a session.
@@ -3369,6 +3439,45 @@ WHERE model = ?
         // Assert
         assert_eq!(stored_id, Some("thread-123".to_string()));
         assert_eq!(cleared_id, None);
+    }
+
+    #[tokio::test]
+    async fn test_session_instruction_conversation_id_round_trip_and_clear() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-a", "gpt-5.3-codex", "main", "Done", project_id)
+            .await
+            .expect("failed to insert session");
+        let instruction_conversation_id = Some("thread-123");
+
+        // Act
+        database
+            .update_session_instruction_conversation_id("session-a", instruction_conversation_id)
+            .await
+            .expect("failed to set instruction conversation id");
+        let stored_conversation_id = database
+            .get_session_instruction_conversation_id("session-a")
+            .await
+            .expect("failed to load instruction conversation id");
+        database
+            .update_session_instruction_conversation_id("session-a", None)
+            .await
+            .expect("failed to clear instruction conversation id");
+        let cleared_conversation_id = database
+            .get_session_instruction_conversation_id("session-a")
+            .await
+            .expect("failed to load cleared instruction conversation id");
+
+        // Assert
+        assert_eq!(stored_conversation_id, Some("thread-123".to_string()));
+        assert_eq!(cleared_conversation_id, None);
     }
 
     #[tokio::test]

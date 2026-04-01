@@ -125,6 +125,7 @@ pub(crate) async fn submit_one_shot_with_app_server_client(
         prompt: crate::infra::channel::TurnPrompt::from_text(request.prompt.to_string()),
         request_kind: request.request_kind,
         provider_conversation_id: None,
+        persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
         session_id: session_id.clone(),
     };

@@ -17,6 +17,5 @@ pub use contract::{
     AppServerTurnResponse,
 };
 pub use error::AppServerError;
-pub use prompt::turn_prompt_for_runtime;
 pub use registry::AppServerSessionRegistry;
 pub use retry::{RuntimeInspector, run_turn_with_restart_retry};

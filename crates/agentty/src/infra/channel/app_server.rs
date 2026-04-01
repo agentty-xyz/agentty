@@ -73,6 +73,7 @@ impl AgentChannel for AppServerAgentChannel {
                 prompt: req.prompt,
                 request_kind: req.request_kind,
                 provider_conversation_id: req.provider_conversation_id,
+                persisted_instruction_conversation_id: req.persisted_instruction_conversation_id,
                 reasoning_level: req.reasoning_level,
                 session_id,
             };
@@ -181,6 +182,7 @@ mod tests {
             request_kind: AgentRequestKind::SessionStart,
             prompt: "Do something".into(),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
         }
     }

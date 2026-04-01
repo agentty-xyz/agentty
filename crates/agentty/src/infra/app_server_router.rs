@@ -118,6 +118,7 @@ mod tests {
             prompt: "prompt".into(),
             request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -162,6 +163,7 @@ mod tests {
             prompt: "prompt".into(),
             request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -195,6 +197,7 @@ mod tests {
             prompt: "prompt".into(),
             request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };

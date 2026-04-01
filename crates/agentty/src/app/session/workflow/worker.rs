@@ -345,6 +345,12 @@ impl SessionWorkerService {
             .await
             .ok()
             .flatten();
+        let persisted_instruction_conversation_id = context
+            .db
+            .get_session_instruction_conversation_id(&context.session_id)
+            .await
+            .ok()
+            .flatten();
 
         let req = TurnRequest {
             folder: context.folder.clone(),
@@ -353,6 +359,7 @@ impl SessionWorkerService {
             request_kind: request_kind.clone(),
             prompt: prompt.clone(),
             provider_conversation_id,
+            persisted_instruction_conversation_id,
             reasoning_level,
         };
 
@@ -594,10 +601,10 @@ async fn apply_successful_turn_result(
 ) -> Result<Status, SessionError> {
     let TurnResult {
         assistant_message,
+        context_reset: _,
         input_tokens,
         output_tokens,
         provider_conversation_id,
-        ..
     } = result;
 
     if let Some(message) = build_assistant_transcript_output(&assistant_message) {
@@ -689,6 +696,20 @@ async fn apply_successful_turn_result(
         .update_session_provider_conversation_id(
             &context.session_id,
             provider_conversation_id.as_deref(),
+        )
+        .await;
+    let instruction_conversation_id =
+        if agent::transport_mode(session_model.kind()).uses_app_server() {
+            agent::normalize_instruction_conversation_id(provider_conversation_id.as_deref())
+        } else {
+            None
+        };
+    // Best-effort: instruction bootstrap persistence failure is non-critical.
+    let _ = context
+        .db
+        .update_session_instruction_conversation_id(
+            &context.session_id,
+            instruction_conversation_id.as_deref(),
         )
         .await;
 
@@ -1326,6 +1347,69 @@ mod tests {
         // Assert
         assert_eq!(status, Status::Review);
         assert!(output.contains("Hey! How can I help you today?\n\n## Change Summary"));
+    }
+
+    #[tokio::test]
+    /// Persists the current app-server instruction bootstrap marker after a
+    /// successful turn so later follow-ups can reuse the compact reminder.
+    async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_server_turns() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("sess1", "gpt-5.3-codex", "main", "InProgress", project_id)
+            .await
+            .expect("failed to insert session");
+
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::new(Mutex::new(String::new())),
+            session_id: "sess1".to_string(),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = Ok(TurnResult {
+            assistant_message: AgentResponse {
+                answer: "Implemented the change.".to_string(),
+                questions: Vec::new(),
+                follow_up_tasks: Vec::new(),
+                summary: None,
+            },
+            context_reset: true,
+            input_tokens: 0,
+            output_tokens: 0,
+            provider_conversation_id: Some("thread-123".to_string()),
+        });
+
+        // Act
+        let status = apply_turn_result(&context, AgentModel::Gpt53Codex, turn_result)
+            .await
+            .expect("turn result should succeed");
+        let instruction_conversation_id = db
+            .get_session_instruction_conversation_id("sess1")
+            .await
+            .expect("failed to load instruction conversation id");
+
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(
+            instruction_conversation_id,
+            agent::normalize_instruction_conversation_id(Some("thread-123"))
+        );
     }
 
     #[test]

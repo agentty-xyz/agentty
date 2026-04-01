@@ -1,6 +1,7 @@
 //! Shared app-server prompt shaping helpers.
 
 use crate::infra::agent;
+use crate::infra::agent::InstructionDeliveryMode;
 use crate::infra::app_server::{AppServerError, AppServerTurnRequest};
 use crate::infra::channel::{AgentRequestKind, TurnPrompt};
 
@@ -28,27 +29,27 @@ pub(crate) fn read_latest_session_output(request: &AppServerTurnRequest) -> Opti
 }
 
 /// Returns the turn prompt, applying protocol preamble and optional context
-/// replay.
+/// replay according to the selected instruction delivery mode.
 ///
 ///
-/// The returned prompt always includes the shared protocol preamble, which
-/// carries both repo-root-relative file path guidance and structured response
-/// instructions so providers see one consistent contract.
+/// `BootstrapFull` and `BootstrapWithReplay` include the full shared protocol
+/// preamble, while `DeltaOnly` emits only a compact reminder for provider
+/// contexts that already received that contract.
 ///
 /// # Errors
 /// Returns an error when Askama prompt rendering fails after a context reset.
-pub fn turn_prompt_for_runtime(
+pub(crate) fn turn_prompt_for_runtime(
     prompt: impl Into<TurnPrompt>,
     request_kind: &AgentRequestKind,
     replay_session_output: Option<&str>,
-    context_reset: bool,
+    instruction_delivery_mode: InstructionDeliveryMode,
 ) -> Result<TurnPrompt, AppServerError> {
     let prompt = prompt.into();
     let turn_prompt = agent::prepare_prompt_text(agent::PromptPreparationRequest {
+        instruction_delivery_mode,
         prompt: &prompt.text,
         protocol_profile: request_kind.protocol_profile(),
         replay_session_output,
-        should_replay_session_output: context_reset,
     })
     .map_err(|error| AppServerError::PromptRender(error.to_string()))?;
 
@@ -58,6 +59,21 @@ pub fn turn_prompt_for_runtime(
     })
 }
 
+/// Plans how one app-server turn should deliver Agentty's instruction
+/// contract for the active runtime context.
+pub(crate) fn instruction_delivery_mode_for_runtime(
+    request: &AppServerTurnRequest,
+    runtime_provider_conversation_id: Option<&str>,
+    should_replay_session_output: bool,
+) -> InstructionDeliveryMode {
+    agent::plan_app_server_instruction_delivery(
+        &request.request_kind,
+        runtime_provider_conversation_id,
+        request.persisted_instruction_conversation_id.as_deref(),
+        should_replay_session_output,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -65,6 +81,14 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+
+    /// Returns one persisted bootstrap marker that matches the active
+    /// app-server instruction contract for session turns.
+    fn persisted_instruction_conversation_id_for_session_turn(
+        provider_conversation_id: Option<&str>,
+    ) -> Option<String> {
+        agent::normalize_instruction_conversation_id(provider_conversation_id)
+    }
 
     #[test]
     fn read_latest_session_output_prefers_live_buffer() {
@@ -76,6 +100,7 @@ mod tests {
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
             session_id: "test-session".to_string(),
@@ -98,6 +123,7 @@ mod tests {
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
             session_id: "test-session".to_string(),
@@ -119,6 +145,7 @@ mod tests {
             model: "test-model".to_string(),
             prompt: TurnPrompt::from("hello"),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
             session_id: "test-session".to_string(),
@@ -138,10 +165,64 @@ mod tests {
         let request_kind = AgentRequestKind::SessionStart;
 
         // Act
-        let result = turn_prompt_for_runtime(prompt, &request_kind, None, false);
+        let result = turn_prompt_for_runtime(
+            prompt,
+            &request_kind,
+            None,
+            InstructionDeliveryMode::BootstrapFull,
+        );
 
         // Assert
         let turn_prompt = result.expect("prompt rendering should succeed");
         assert!(turn_prompt.text.contains("fix the bug"));
+        assert!(turn_prompt.text.contains("Structured response protocol:"));
+    }
+
+    #[test]
+    fn turn_prompt_for_runtime_uses_compact_refresh_reminder_for_delta_only() {
+        // Arrange
+        let prompt = TurnPrompt::from("continue the fix");
+        let request_kind = AgentRequestKind::SessionResume {
+            session_output: None,
+        };
+
+        // Act
+        let result = turn_prompt_for_runtime(
+            prompt,
+            &request_kind,
+            None,
+            InstructionDeliveryMode::DeltaOnly,
+        );
+
+        // Assert
+        let turn_prompt = result.expect("prompt rendering should succeed");
+        assert!(turn_prompt.text.contains("Protocol refresh reminder:"));
+        assert!(!turn_prompt.text.contains("Authoritative JSON Schema:"));
+    }
+
+    #[test]
+    fn instruction_delivery_mode_for_runtime_reuses_matching_bootstrap_state() {
+        // Arrange
+        let request = AppServerTurnRequest {
+            folder: PathBuf::from("/tmp/test"),
+            live_session_output: None,
+            model: "test-model".to_string(),
+            prompt: TurnPrompt::from("hello"),
+            provider_conversation_id: Some("thread-123".to_string()),
+            persisted_instruction_conversation_id:
+                persisted_instruction_conversation_id_for_session_turn(Some("thread-123")),
+            reasoning_level: ReasoningLevel::default(),
+            request_kind: AgentRequestKind::SessionResume {
+                session_output: None,
+            },
+            session_id: "test-session".to_string(),
+        };
+
+        // Act
+        let delivery_mode =
+            instruction_delivery_mode_for_runtime(&request, Some("thread-123"), false);
+
+        // Assert
+        assert_eq!(delivery_mode, InstructionDeliveryMode::DeltaOnly);
     }
 }

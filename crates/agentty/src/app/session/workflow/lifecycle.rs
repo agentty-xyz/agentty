@@ -519,35 +519,6 @@ impl SessionManager {
             .await;
     }
 
-    /// Submits a follow-up prompt using a pre-built backend for deterministic
-    /// test execution.
-    ///
-    /// Creates a [`CliAgentChannel`] backed by the given [`AgentBackend`] and
-    /// registers it in the session-local channel map so the worker uses it
-    /// instead of the default factory. This allows tests to control spawned
-    /// process commands without relying on a real provider binary.
-    #[cfg(test)]
-    pub(crate) async fn reply_with_backend(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        prompt: impl Into<TurnPrompt>,
-        backend: std::sync::Arc<dyn agent::AgentBackend>,
-        session_model: AgentModel,
-    ) {
-        let prompt = prompt.into();
-        let channel: std::sync::Arc<dyn crate::infra::channel::AgentChannel> =
-            std::sync::Arc::new(crate::infra::channel::cli::CliAgentChannel::with_backend(
-                backend,
-                session_model.kind(),
-            ));
-        self.worker_service
-            .test_agent_channels
-            .insert(session_id.to_string(), channel);
-        self.reply_impl(services, session_id, prompt, session_model)
-            .await;
-    }
-
     /// Updates and persists the model for a single session.
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
@@ -580,6 +551,10 @@ impl SessionManager {
             services
                 .db()
                 .update_session_provider_conversation_id(session_id, None)
+                .await?;
+            services
+                .db()
+                .update_session_instruction_conversation_id(session_id, None)
                 .await?;
 
             self.clear_session_worker(session_id);
@@ -1762,6 +1737,44 @@ fn is_managed_prompt_attachment_path(path: &Path, managed_tmp_root: &Path) -> bo
 /// Returns whether one directory is an Agentty-managed prompt-image directory.
 fn is_managed_prompt_attachment_directory(path: &Path, managed_tmp_root: &Path) -> bool {
     path.starts_with(managed_tmp_root) && path.ends_with("images")
+}
+
+#[cfg(test)]
+mod test_support {
+    use std::sync::Arc;
+
+    use super::*;
+
+    impl SessionManager {
+        /// Submits a follow-up prompt using a pre-built backend for
+        /// deterministic test execution.
+        ///
+        /// Creates a [`CliAgentChannel`] backed by the given
+        /// [`agent::AgentBackend`] and registers it in the session-local
+        /// channel map so the worker uses it instead of the default factory.
+        /// This allows tests to control spawned process commands without
+        /// relying on a real provider binary.
+        pub(crate) async fn reply_with_backend(
+            &mut self,
+            services: &AppServices,
+            session_id: &str,
+            prompt: impl Into<TurnPrompt>,
+            backend: Arc<dyn agent::AgentBackend>,
+            session_model: AgentModel,
+        ) {
+            let prompt = prompt.into();
+            let channel: Arc<dyn crate::infra::channel::AgentChannel> =
+                Arc::new(crate::infra::channel::cli::CliAgentChannel::with_backend(
+                    backend,
+                    session_model.kind(),
+                ));
+            self.worker_service
+                .test_agent_channels
+                .insert(session_id.to_string(), channel);
+            self.reply_impl(services, session_id, prompt, session_model)
+                .await;
+        }
+    }
 }
 
 #[cfg(test)]

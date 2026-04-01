@@ -54,10 +54,14 @@ pub(super) fn build_prompt_stdin_payload(
     request: BuildCommandRequest<'_>,
 ) -> Result<Vec<u8>, AgentBackendError> {
     let prompt = prepare_prompt_text(PromptPreparationRequest {
+        instruction_delivery_mode: if request.request_kind.is_resume() {
+            super::instruction::InstructionDeliveryMode::BootstrapWithReplay
+        } else {
+            super::instruction::InstructionDeliveryMode::BootstrapFull
+        },
         prompt: request.prompt,
         protocol_profile: request.request_kind.protocol_profile(),
         replay_session_output: request.request_kind.session_output(),
-        should_replay_session_output: request.request_kind.is_resume(),
     })?;
 
     Ok(prompt.into_bytes())

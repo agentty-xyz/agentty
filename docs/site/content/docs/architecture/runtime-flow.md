@@ -255,15 +255,33 @@ Provider conversation id flow:
 
 - App-server providers return `provider_conversation_id` in `TurnResult`.
 - Worker persists it to DB (`update_session_provider_conversation_id`).
-- Future `TurnRequest` loads and forwards it so runtime restarts can resume native provider context.
+- Worker also persists the matching instruction-bootstrap marker so app-server
+  follow-up turns know whether the active provider context already received
+  Agentty's full prompt contract.
+- Future `TurnRequest` loads and forwards both values so runtime restarts can
+  resume native provider context and decide between a full bootstrap and a
+  compact reminder.
 
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a>
 Provider output is normalized to one structured response protocol:
 
-1. Prompt builders prepend the shared protocol preamble template and the self-descriptive `schemars` document, so every provider sees the same `answer`/`questions`/`follow_up_tasks`/optional-`summary` schema and transport-enforced `outputSchema` paths can normalize that same contract separately.
-   `crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md` owns the normal request wrapper, `crates/agentty/src/infra/agent/prompt.rs` owns shared prompt preparation, and `crates/agentty/src/infra/agent/protocol.rs` routes to the authoritative protocol model/schema/parse submodules.
+1. Prompt builders choose among `BootstrapFull`, `DeltaOnly`, and
+   `BootstrapWithReplay`. CLI turns still use the full shared protocol
+   preamble each turn, while persistent app-server turns reuse a compact
+   reminder when the active provider context already matches the stored
+   instruction bootstrap marker. `crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`
+   owns the normal request wrapper, `crates/agentty/src/infra/agent/template/protocol_refresh_prompt.md`
+   owns the compact reminder wrapper, the sibling profile-specific markdown
+   templates supply the request-family instruction text, `crates/agentty/src/infra/agent/prompt.rs`
+   owns shared prompt preparation, and `crates/agentty/src/infra/agent/protocol.rs`
+   routes to the authoritative protocol model/schema/parse submodules.
+1. `BootstrapFull` and `BootstrapWithReplay` still prepend the same
+   self-descriptive `schemars` document, so every provider sees the same
+   `answer`/`questions`/`follow_up_tasks`/optional-`summary` schema and
+   transport-enforced `outputSchema` paths can normalize that same contract
+   separately.
 1. The caller selects one canonical `AgentRequestKind` before transport handoff, and the transport derives the matching `ProtocolRequestProfile` from it. Session turns use `SessionStart` or `SessionResume`, while isolated utility prompts use `UtilityPrompt`.
 1. Session discussion turns typically populate `summary.turn` and `summary.session`, while one-shot prompts may leave `summary` unused.
 1. Channels emit transient loader updates as `TurnEvent::ThoughtDelta` values when providers surface thought or tool-status text during the turn.
@@ -313,7 +331,9 @@ Final-output validation:
   any output that leaves trailing non-whitespace text after the recovered
   protocol payload. Those surfaced errors now also include the shared protocol
   parser's debug report.
-- App-server restart retries and context-reset transcript replays still preserve the original protocol profile for normal prompt rendering through the shared `infra/app_server/` prompt and retry modules.
+- App-server restart retries preserve the original protocol profile and now
+  compare the persisted instruction state against the runtime's actual
+  `provider_conversation_id` before choosing the prompt-delivery mode.
 
 ## Clarification Question Loop
 

@@ -47,7 +47,7 @@ TUI tool to manage agents.
   - Do not mix styles for the same module in one file. If a module is imported, use that module alias/path consistently instead of also using fully-qualified `crate::...` paths.
   - Use fully-qualified `crate::...` references only when needed for disambiguation, explicit UFCS trait calls, or rustdoc links.
   - In test modules, prefer `use super::*;` where practical.
-- **Test-only code placement:** Do not add `#[cfg(test)]` to top-level imports/functions in production modules. Keep test-only helpers inside `#[cfg(test)] mod tests` (duplicate code there if needed). Exception: `#[cfg_attr(test, mockall::automock)]` on traits used for mocking.
+- **Test-only code placement:** Never introduce `#[cfg(test)]` in production code outside `#[cfg(test)] mod tests`. Keep test-only helpers, imports, and support code inside test modules instead (duplicate code there if needed). The only exception is `#[cfg_attr(test, mockall::automock)]` on traits used for mocking.
 - **Struct Fields:** Order fields in structs as follows:
   - Public fields first.
   - Private fields second.

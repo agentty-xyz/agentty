@@ -64,6 +64,9 @@ pub struct AppServerTurnRequest {
     /// Provider-native thread/session id used to resume context in a newly
     /// started runtime.
     pub provider_conversation_id: Option<String>,
+    /// Persisted provider-native conversation id that already received the
+    /// full instruction bootstrap, when available.
+    pub persisted_instruction_conversation_id: Option<String>,
     /// Reasoning effort preference for this turn.
     ///
     /// Ignored by providers/models that do not support reasoning effort.

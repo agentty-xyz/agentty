@@ -4,7 +4,9 @@ use super::contract::{
     AppServerFuture, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
 };
 use super::error::AppServerError;
-use super::prompt::{read_latest_session_output, turn_prompt_for_runtime};
+use super::prompt::{
+    instruction_delivery_mode_for_runtime, read_latest_session_output, turn_prompt_for_runtime,
+};
 use super::registry::AppServerSessionRegistry;
 use crate::infra::channel::TurnPrompt;
 
@@ -76,9 +78,11 @@ where
         None => start_runtime(&request).await?,
     };
     let first_replays = needs_replay(had_existing_runtime, &request, &inspector, &session_runtime);
+    let first_provider_conversation_id = (inspector.provider_conversation_id)(&session_runtime);
     let first_prompt = match build_attempt_prompt(
         &request,
         first_replays,
+        first_provider_conversation_id.as_deref(),
         &mut shutdown_runtime,
         &mut session_runtime,
     )
@@ -115,9 +119,11 @@ where
     shutdown_runtime(&mut session_runtime).await;
     let mut restarted = start_runtime(&request).await?;
     let retry_replays = needs_replay(false, &request, &inspector, &restarted);
+    let retry_provider_conversation_id = (inspector.provider_conversation_id)(&restarted);
     let retry_prompt = match build_attempt_prompt(
         &request,
         retry_replays,
+        retry_provider_conversation_id.as_deref(),
         &mut shutdown_runtime,
         &mut restarted,
     )
@@ -179,6 +185,7 @@ fn needs_replay<Runtime>(
 async fn build_attempt_prompt<Runtime, ShutdownRuntime>(
     request: &AppServerTurnRequest,
     replays_context: bool,
+    current_provider_conversation_id: Option<&str>,
     shutdown_runtime: &mut ShutdownRuntime,
     runtime: &mut Runtime,
 ) -> Result<TurnPrompt, AppServerError>
@@ -186,12 +193,17 @@ where
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
     let session_output = read_latest_session_output(request);
+    let instruction_delivery_mode = instruction_delivery_mode_for_runtime(
+        request,
+        current_provider_conversation_id,
+        replays_context,
+    );
 
     match turn_prompt_for_runtime(
         &request.prompt,
         &request.request_kind,
         session_output.as_deref(),
-        replays_context,
+        instruction_delivery_mode,
     ) {
         Ok(prompt) => Ok(prompt),
         Err(error) => {
@@ -210,6 +222,7 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+    use crate::infra::agent::InstructionDeliveryMode;
     use crate::infra::channel::{AgentRequestKind, TurnPrompt};
 
     struct TestRuntime {
@@ -261,7 +274,7 @@ mod tests {
             prompt,
             &session_start_request_kind(),
             Some("prior context"),
-            false,
+            InstructionDeliveryMode::BootstrapFull,
         )
         .expect("turn prompt should render");
 
@@ -281,7 +294,7 @@ mod tests {
             prompt,
             &session_resume_request_kind(Some("assistant: proposed plan")),
             Some("assistant: proposed plan"),
-            true,
+            InstructionDeliveryMode::BootstrapWithReplay,
         )
         .expect("turn prompt should render");
 
@@ -298,9 +311,13 @@ mod tests {
         let prompt = "Generate title";
 
         // Act
-        let turn_prompt =
-            turn_prompt_for_runtime(prompt, &AgentRequestKind::UtilityPrompt, None, false)
-                .expect("turn prompt should render");
+        let turn_prompt = turn_prompt_for_runtime(
+            prompt,
+            &AgentRequestKind::UtilityPrompt,
+            None,
+            InstructionDeliveryMode::BootstrapFull,
+        )
+        .expect("turn prompt should render");
 
         // Assert
         assert!(turn_prompt.contains("summary"));
@@ -318,6 +335,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -340,6 +358,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -361,6 +380,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -382,6 +402,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_start_request_kind(),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -405,6 +426,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("stale snapshot")),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -479,6 +501,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("previous output")),
             provider_conversation_id: None,
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };
@@ -561,6 +584,7 @@ mod tests {
             prompt: "Do work".into(),
             request_kind: session_resume_request_kind(Some("previous output")),
             provider_conversation_id: Some("thread-123".to_string()),
+            persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "session-1".to_string(),
         };

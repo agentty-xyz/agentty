@@ -1,0 +1,2 @@
+ALTER TABLE session
+ADD COLUMN app_server_instruction_provider_conversation_id TEXT;

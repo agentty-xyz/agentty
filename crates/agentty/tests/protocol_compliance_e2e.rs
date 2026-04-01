@@ -244,6 +244,7 @@ fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
         request_kind: AgentRequestKind::SessionStart,
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),
         provider_conversation_id: None,
+        persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
     }
 }

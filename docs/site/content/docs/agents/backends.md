@@ -72,8 +72,10 @@ For SSO-backed accounts, use `claude auth login --sso`.
 <a id="backends-path-output-format"></a>
 Agentty prompts all backends to reference files using repository-root-relative
 POSIX paths. This keeps file references consistent in session output and reviews.
-The rule is carried by the shared prompt preamble in
-`crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`.
+The rule is carried by the shared Askama markdown prompt templates under
+`crates/agentty/src/infra/agent/template/`, with
+`protocol_instruction_prompt.md` owning the full bootstrap wrapper and
+`protocol_refresh_prompt.md` owning the compact app-server reminder.
 
 - Allowed forms: `path`, `path:line`, `path:line:column`
 - Example: `crates/agentty/src/infra/agent/prompt.rs:48`
@@ -83,12 +85,17 @@ The rule is carried by the shared prompt preamble in
 
 <a id="backends-structured-response-protocol"></a>
 Agentty prepends one shared protocol preamble from
-`crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`. That template
-contains the repository-root-relative file path rules, the structured response
-instructions, the explicit `---` separator that separates the task body, and
-the full self-descriptive JSON Schema generated from the protocol subsystem in
-`crates/agentty/src/infra/agent/protocol.rs`. The router delegates to
-`protocol/model.rs`, `protocol/schema.rs`, and `protocol/parse.rs`, while
+`crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`.
+That template contains the repository-root-relative file path rules, the
+structured response instructions, the explicit `---` separator that separates
+the task body, and the full self-descriptive JSON Schema generated from the
+protocol subsystem in `crates/agentty/src/infra/agent/protocol.rs`.
+Profile-specific usage guidance now lives in sibling markdown templates:
+`protocol_instruction_session_turn_usage.md` and
+`protocol_instruction_utility_prompt_usage.md`. Compact app-server refresh
+prompts are rendered from `protocol_refresh_prompt.md` plus the matching
+profile-specific reminder template. The router delegates to `protocol/model.rs`,
+`protocol/schema.rs`, and `protocol/parse.rs`, while
 `crates/agentty/src/infra/agent/prompt.rs` owns the shared prompt-preparation
 path used by CLI and app-server turns.
 
@@ -103,6 +110,19 @@ backend sees the prompt, and the backend derives the protocol-owned
   derives the `UtilityPrompt` profile.
 - Strict and permissive request paths still share the same protocol contract
   after that derivation step.
+
+Persistent app-server session turns no longer resend that full prompt wrapper
+on every follow-up. Agentty now tracks an instruction-profile bootstrap marker
+per stored `provider_conversation_id` and switches among three delivery modes:
+
+- `BootstrapFull`: first turn in a provider context sends the full preamble
+  plus schema.
+- `DeltaOnly`: later Codex/Gemini follow-up turns in the same restored
+  provider context send only a compact reminder of the existing file-path and
+  JSON contract.
+- `BootstrapWithReplay`: runtime restarts or context resets resend the full
+  contract and pair it with transcript replay when provider context was not
+  restored.
 
 The shared schema defines a top-level `answer` markdown string, a `questions`
 array, and the optional top-level `summary` object. Session turns typically
@@ -198,6 +218,9 @@ Agentty validates final agent output against the structured response protocol.
 - Codex app-server turns include `outputSchema` at transport level and still
   require the final assistant payload itself to parse as the shared protocol
   JSON object.
+- Codex keeps transport-level `outputSchema` enforcement even when a follow-up
+  turn uses the compact `DeltaOnly` reminder instead of the full prompt-side
+  schema block.
 - Partial protocol JSON fragments are suppressed during streaming so raw JSON
   wrappers do not leak into live transcript output.
 - Wrapped stream chunks that end in one valid protocol JSON object are reduced
@@ -212,11 +235,16 @@ Agentty validates final agent output against the structured response protocol.
 
 <a id="backends-session-resume"></a>
 Agentty persists provider-native conversation identifiers for app-server
-backends and uses them to restore context after runtime restarts.
+backends and uses them to restore context after runtime restarts. It also
+persists which provider conversation already received the full bootstrap so
+restored contexts can keep using the compact reminder path.
 
-- Codex app-server: resumes by stored `threadId` via `thread/resume`.
+- Codex app-server: resumes by stored `threadId` via `thread/resume`, so
+  restored threads can keep the existing bootstrap and use the compact
+  reminder on later turns.
 - Gemini ACP: currently creates a fresh ACP `session/new` on runtime restart,
-  so Agentty falls back to transcript replay when needed.
+  so Agentty treats the new `sessionId` as a fresh context, resends the full
+  bootstrap, and falls back to transcript replay when needed.
 
 ## App-Server Turn Timeout
 

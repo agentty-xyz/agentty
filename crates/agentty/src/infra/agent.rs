@@ -11,6 +11,7 @@ mod claude;
 pub(crate) mod cli;
 mod codex;
 mod gemini;
+mod instruction;
 mod prompt;
 pub(crate) mod protocol;
 mod provider;
@@ -19,6 +20,10 @@ mod submission;
 
 pub use availability::{AgentAvailabilityProbe, RealAgentAvailabilityProbe, executable_name};
 pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
+pub(crate) use instruction::{
+    InstructionDeliveryMode, normalize_instruction_conversation_id,
+    plan_app_server_instruction_delivery,
+};
 pub(crate) use prompt::{PromptPreparationRequest, prepare_prompt_text};
 pub(crate) use protocol::AgentResponse;
 pub use protocol::ProtocolRequestProfile;

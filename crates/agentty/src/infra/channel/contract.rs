@@ -285,6 +285,13 @@ pub struct TurnRequest {
     /// When present, app-server channels forward this to the provider runtime
     /// so it can attempt native context resume. CLI channels ignore this field.
     pub provider_conversation_id: Option<String>,
+    /// Persisted provider-native conversation id that already received the
+    /// full instruction bootstrap.
+    ///
+    /// App-server channels use this to choose between a full bootstrap and a
+    /// compact reminder for the active provider context. CLI channels ignore
+    /// this field.
+    pub persisted_instruction_conversation_id: Option<String>,
     /// Reasoning effort preference for the turn.
     ///
     /// Ignored by providers/models that do not support reasoning effort.
