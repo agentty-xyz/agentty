@@ -101,7 +101,7 @@ Pressing `p` in `Review` creates or refreshes the session pull request for GitHu
 
 #### Assignee
 
-No assignee
+`@andagaev`
 
 #### Why now
 
