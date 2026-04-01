@@ -250,8 +250,8 @@ mod tests {
             database,
             test_app_clients(),
         )
-            .await
-            .expect("failed to build test app");
+        .await
+        .expect("failed to build test app");
 
         (app, base_dir)
     }

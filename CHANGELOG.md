@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.12] - 2026-04-01
+
+### Added
+
+- Add draft session workflow state and staged draft metadata handling.
+- Add session diff stats plus base and remote git status tracking in the UI.
+- Add broader unit and E2E coverage, including modular `testty`-backed session, navigation, confirmation, and showcase flows.
+- Add a features page with per-feature GIF demos to the docs site.
+
+### Changed
+
+- Persist and reuse app-server instruction bootstrap state across restored sessions.
+- Scope model selection and auto-commit defaults to locally runnable backends and project setting names.
+- Propagate typed error enums through app, session, app-server transport, and CLI boundaries.
+- Restrict follow-up tasks to code changes and default new follow-up prompts to the first available task.
+- Restructure E2E coverage into multi-module tests and refresh roadmap planning guidance.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.6.11] - 2026-03-28
 
 ### Added

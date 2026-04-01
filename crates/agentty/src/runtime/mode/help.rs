@@ -64,8 +64,8 @@ mod tests {
             database,
             test_app_clients(),
         )
-            .await
-            .expect("failed to build app");
+        .await
+        .expect("failed to build app");
 
         (app, base_dir)
     }

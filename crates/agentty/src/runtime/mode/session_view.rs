@@ -2331,13 +2331,18 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create sibling session");
-        app.sessions.sessions[1].follow_up_tasks =
-            vec![crate::domain::session::SessionFollowUpTask {
-                id: 1,
-                launched_session_id: Some(sibling_session_id.clone()),
-                position: 0,
-                text: "Open the sibling session.".to_string(),
-            }];
+        let source_session = app
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("expected source session in session list");
+        source_session.follow_up_tasks = vec![crate::domain::session::SessionFollowUpTask {
+            id: 1,
+            launched_session_id: Some(sibling_session_id.clone()),
+            position: 0,
+            text: "Open the sibling session.".to_string(),
+        }];
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,

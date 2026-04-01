@@ -5,6 +5,6 @@ Protocol refresh reminder:
 - Use read-only git commands only.
 - {{ protocol_refresh_instructions }}
 
----
+______________________________________________________________________
 
 {{ prompt }}

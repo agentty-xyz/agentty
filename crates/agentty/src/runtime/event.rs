@@ -264,9 +264,15 @@ mod tests {
             .await
             .expect("failed to open in-memory db");
 
-        App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .expect("failed to build app")
+        App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .expect("failed to build app")
     }
 
     /// Verifies the event reader forwards one queued event before stopping on

@@ -379,6 +379,7 @@ impl AppClients {
 
     /// Replaces the startup agent-availability boundary while preserving the
     /// remaining clients.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_agent_availability_probe(
         mut self,
@@ -410,7 +411,6 @@ impl AppClients {
 
         self
     }
-
 }
 
 /// Startup-only inputs needed to hydrate the initial `SessionManager`.
@@ -3380,9 +3380,15 @@ mod tests {
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
-        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .expect("failed to build app");
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .expect("failed to build app");
 
         // Act
         app.switch_project(second_project_id)
@@ -3416,9 +3422,15 @@ mod tests {
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
-        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .expect("failed to build app");
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .expect("failed to build app");
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -3494,9 +3506,15 @@ mod tests {
         fs::create_dir_all(active_session_data_dir).expect("failed to create active session dir");
 
         // Act
-        let app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .expect("failed to build app");
+        let app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .expect("failed to build app");
 
         // Assert
         assert_eq!(
@@ -3519,10 +3537,16 @@ mod tests {
             .expect("failed to drop project table");
 
         // Act
-        let error = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .err()
-            .expect("expected startup project upsert failure");
+        let error = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .err()
+        .expect("expected startup project upsert failure");
 
         // Assert
         assert!(
@@ -3546,10 +3570,16 @@ mod tests {
             .expect("failed to drop setting table");
 
         // Act
-        let error = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .err()
-            .expect("expected startup active project persistence failure");
+        let error = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .err()
+        .expect("expected startup active project persistence failure");
 
         // Assert
         assert!(
@@ -4637,8 +4667,8 @@ mod tests {
             database,
             test_app_clients(),
         )
-            .await
-            .expect("failed to build app");
+        .await
+        .expect("failed to build app");
         let session_folder = base_path.join("session-1");
         let mut viewed_session = test_session(session_folder);
         viewed_session.status = Status::Merging;
@@ -4913,9 +4943,15 @@ mod tests {
         let session_data_dir = base_path.join(session_folder_name).join(SESSION_DATA_DIR);
         fs::create_dir_all(session_data_dir).expect("failed to create session dir");
 
-        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
-            .await
-            .expect("failed to build app");
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
+        .await
+        .expect("failed to build app");
 
         let initial_active_count = app
             .projects
