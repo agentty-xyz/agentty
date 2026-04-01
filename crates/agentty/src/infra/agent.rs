@@ -18,7 +18,10 @@ mod provider;
 mod response_parser;
 mod submission;
 
-pub use availability::{AgentAvailabilityProbe, RealAgentAvailabilityProbe, executable_name};
+pub use availability::{
+    AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,
+    executable_name,
+};
 pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
 pub(crate) use instruction::{
     InstructionDeliveryMode, normalize_instruction_conversation_id,

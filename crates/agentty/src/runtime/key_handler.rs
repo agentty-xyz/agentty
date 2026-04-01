@@ -587,6 +587,16 @@ mod tests {
         std::sync::Arc::new(app_server::MockAppServerClient::new())
     }
 
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> AppClients {
+        AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
+            crate::infra::agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
+            },
+        ))
+    }
+
     /// Builds one test app with an injected tmux boundary.
     async fn new_test_app_with_tmux_client(
         tmux_client: Arc<dyn TmuxClient>,
@@ -596,7 +606,7 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let clients = AppClients::new()
+        let clients = test_app_clients()
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(tmux_client);
         let app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)
@@ -621,7 +631,7 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let clients = AppClients::new()
+        let clients = test_app_clients()
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(tmux_client);
         let app = App::new_with_clients(

@@ -1271,6 +1271,16 @@ mod tests {
         PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };
 
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> crate::app::AppClients {
+        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
+            crate::infra::agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
+            },
+        ))
+    }
+
     fn setup_test_git_repo(path: &Path) {
         Command::new("git")
             .args(["init"])
@@ -1325,12 +1335,12 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let mut app = App::new(
-            true,
+        let mut app = App::new_with_clients(
             base_path.clone(),
             base_path,
             Some("main".to_string()),
             database,
+            test_app_clients(),
         )
         .await
         .expect("failed to build app");

@@ -673,6 +673,16 @@ mod tests {
         app.sessions.git_client = mock_git_client;
     }
 
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> crate::app::AppClients {
+        crate::app::AppClients::new().with_agent_availability_probe(Arc::new(
+            crate::infra::agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds: AgentKind::ALL.to_vec(),
+            },
+        ))
+    }
+
     /// Builds a test app with a caller-provided database, git context, and
     /// app-server boundary.
     async fn new_test_app_with_db_and_app_server(
@@ -682,8 +692,7 @@ mod tests {
         db: Database,
         app_server_client: Arc<dyn app_server::AppServerClient>,
     ) -> App {
-        let clients =
-            crate::app::core::AppClients::new().with_app_server_client_override(app_server_client);
+        let clients = test_app_clients().with_app_server_client_override(app_server_client);
         let mut app = App::new_with_clients(path, working_dir.clone(), git_branch, db, clients)
             .await
             .expect("failed to build app");

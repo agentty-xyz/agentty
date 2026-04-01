@@ -23,6 +23,18 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     }
 }
 
+/// Availability probe that returns one caller-provided snapshot.
+pub struct StaticAgentAvailabilityProbe {
+    /// Agent kinds reported as available by the static probe.
+    pub available_agent_kinds: Vec<AgentKind>,
+}
+
+impl AgentAvailabilityProbe for StaticAgentAvailabilityProbe {
+    fn available_agent_kinds(&self) -> Vec<AgentKind> {
+        self.available_agent_kinds.clone()
+    }
+}
+
 /// Returns the CLI executable name used by the provided agent kind.
 #[must_use]
 pub fn executable_name(agent_kind: AgentKind) -> &'static str {

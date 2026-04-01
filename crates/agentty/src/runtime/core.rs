@@ -179,6 +179,16 @@ mod tests {
         }
     }
 
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> crate::app::AppClients {
+        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
+            crate::infra::agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
+            },
+        ))
+    }
+
     #[tokio::test]
     async fn run_until_quit_stops_after_first_quit_result() {
         // Arrange
@@ -233,7 +243,13 @@ mod tests {
             .await
             .expect("failed to open in-memory db");
 
-        let app = App::new(true, base_path.clone(), base_path, None, database)
+        let app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
             .await
             .expect("failed to build test app");
 

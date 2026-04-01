@@ -377,6 +377,18 @@ impl AppClients {
         }
     }
 
+    /// Replaces the startup agent-availability boundary while preserving the
+    /// remaining clients.
+    #[must_use]
+    pub(crate) fn with_agent_availability_probe(
+        mut self,
+        agent_availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+    ) -> Self {
+        self.agent_availability_probe = agent_availability_probe;
+
+        self
+    }
+
     /// Replaces the default provider-owned app-server clients with one shared
     /// override.
     #[cfg(test)]
@@ -398,6 +410,7 @@ impl AppClients {
 
         self
     }
+
 }
 
 /// Startup-only inputs needed to hydrate the initial `SessionManager`.
@@ -3203,16 +3216,22 @@ mod tests {
         Arc::new(app_server::MockAppServerClient::new())
     }
 
-    /// Startup probe fixture that reports one fixed availability snapshot.
-    struct FixedAgentAvailabilityProbe {
+    /// Builds one client bundle with one injected availability snapshot for
+    /// test app startup.
+    fn test_app_clients_with_available_agent_kinds(
         available_agent_kinds: Vec<AgentKind>,
+    ) -> AppClients {
+        AppClients::new().with_agent_availability_probe(Arc::new(
+            agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds,
+            },
+        ))
     }
 
-    impl agent::AgentAvailabilityProbe for FixedAgentAvailabilityProbe {
-        /// Returns the fixed startup availability snapshot for the test.
-        fn available_agent_kinds(&self) -> Vec<AgentKind> {
-            self.available_agent_kinds.clone()
-        }
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> AppClients {
+        test_app_clients_with_available_agent_kinds(AgentKind::ALL.to_vec())
     }
 
     /// Builds one deterministic session snapshot rooted at `session_folder`.
@@ -3251,7 +3270,7 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let clients = AppClients::new()
+        let clients = test_app_clients()
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(tmux_client);
 
@@ -3274,12 +3293,9 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let mut clients = AppClients::new()
+        let clients = test_app_clients_with_available_agent_kinds(Vec::new())
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
-        clients.agent_availability_probe = Arc::new(FixedAgentAvailabilityProbe {
-            available_agent_kinds: Vec::new(),
-        });
 
         // Act
         let result =
@@ -3372,7 +3388,7 @@ mod tests {
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
-        let mut app = App::new(true, base_path.clone(), base_path, None, database)
+        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .expect("failed to build app");
 
@@ -3408,7 +3424,7 @@ mod tests {
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
-        let mut app = App::new(true, base_path.clone(), base_path, None, database)
+        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .expect("failed to build app");
 
@@ -3486,7 +3502,7 @@ mod tests {
         fs::create_dir_all(active_session_data_dir).expect("failed to create active session dir");
 
         // Act
-        let app = App::new(true, base_path.clone(), base_path, None, database)
+        let app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .expect("failed to build app");
 
@@ -3511,7 +3527,7 @@ mod tests {
             .expect("failed to drop project table");
 
         // Act
-        let error = App::new(true, base_path.clone(), base_path, None, database)
+        let error = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .err()
             .expect("expected startup project upsert failure");
@@ -3538,7 +3554,7 @@ mod tests {
             .expect("failed to drop setting table");
 
         // Act
-        let error = App::new(true, base_path.clone(), base_path, None, database)
+        let error = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .err()
             .expect("expected startup active project persistence failure");
@@ -4622,7 +4638,13 @@ mod tests {
             .await
             .expect("failed to insert merging session");
 
-        let mut app = App::new(true, base_path.clone(), base_path.clone(), None, database)
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path.clone(),
+            None,
+            database,
+            test_app_clients(),
+        )
             .await
             .expect("failed to build app");
         let session_folder = base_path.join("session-1");
@@ -4899,7 +4921,7 @@ mod tests {
         let session_data_dir = base_path.join(session_folder_name).join(SESSION_DATA_DIR);
         fs::create_dir_all(session_data_dir).expect("failed to create session dir");
 
-        let mut app = App::new(true, base_path.clone(), base_path, None, database)
+        let mut app = App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .expect("failed to build app");
 

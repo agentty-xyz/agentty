@@ -246,6 +246,16 @@ mod tests {
     use crate::ui::state::app_mode::{AppMode, QuestionFocus};
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> crate::app::AppClients {
+        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
+            crate::infra::agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds: AgentKind::ALL.to_vec(),
+            },
+        ))
+    }
+
     /// Builds one test app rooted at a temporary directory.
     async fn new_test_app() -> App {
         let base_dir = tempdir().expect("failed to create temp dir");
@@ -254,7 +264,7 @@ mod tests {
             .await
             .expect("failed to open in-memory db");
 
-        App::new(true, base_path.clone(), base_path, None, database)
+        App::new_with_clients(base_path.clone(), base_path, None, database, test_app_clients())
             .await
             .expect("failed to build app")
     }

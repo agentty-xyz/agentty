@@ -174,13 +174,29 @@ mod tests {
 
     const TEST_TERMINAL_SIZE: Rect = Rect::new(0, 0, 80, 12);
 
+    /// Builds one client bundle with deterministic agent availability for
+    /// test app startup.
+    fn test_app_clients() -> crate::app::AppClients {
+        crate::app::AppClients::new().with_agent_availability_probe(std::sync::Arc::new(
+            crate::infra::agent::StaticAgentAvailabilityProbe {
+                available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
+            },
+        ))
+    }
+
     async fn new_test_app() -> (App, tempfile::TempDir) {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        let app = App::new(true, base_path.clone(), base_path, None, database)
+        let app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            None,
+            database,
+            test_app_clients(),
+        )
             .await
             .expect("failed to build app");
 
