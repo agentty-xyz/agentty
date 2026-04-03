@@ -138,8 +138,12 @@ pub(crate) fn build_resume_prompt(
 /// Tells agents to emit one top-level JSON object that matches the shared
 /// schema so response parsing can deserialize directly into the internal
 /// protocol structs, and requires repository-root-relative POSIX file paths in
-/// rendered answers. If the prompt already contains the protocol marker, this
-/// function returns the prompt unchanged to avoid duplicated guidance.
+/// rendered answers. The shared prompt contract also reminds agents to run the
+/// repository-defined quality checks for touched files and the affected
+/// dependency graph, or to fall back to the full repository validation suite
+/// when targeted coverage is unclear. If the prompt already contains the
+/// protocol marker, this function returns the prompt unchanged to avoid
+/// duplicated guidance.
 ///
 /// # Errors
 /// Returns an error if Askama template rendering fails.
@@ -299,6 +303,10 @@ mod tests {
         assert!(rendered_prompt.contains("Paths must be relative to the repository root."));
         assert!(rendered_prompt.contains("If you run git commands, use read-only commands only"));
         assert!(rendered_prompt.contains("Do not run mutating git commands"));
+        assert!(rendered_prompt.contains("Quality check requirements:"));
+        assert!(rendered_prompt.contains("repository-defined quality checks"));
+        assert!(rendered_prompt.contains("affected dependencies and dependents"));
+        assert!(rendered_prompt.contains("full repository test/check suite"));
         assert!(rendered_prompt.contains("Structured response protocol:"));
         assert!(rendered_prompt.contains("Return a single JSON object"));
         assert!(rendered_prompt.contains("Do not wrap the JSON in markdown code fences."));
