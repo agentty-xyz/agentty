@@ -13,8 +13,8 @@ use crate::domain::agent::AgentKind;
 use crate::infra::agent::cli::{error, stdin};
 use crate::infra::agent::{self as agent, AgentBackend, BuildCommandRequest};
 use crate::infra::channel::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
-    TurnResult,
+    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnPrompt,
+    TurnRequest, TurnResult,
 };
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
@@ -94,6 +94,7 @@ impl AgentChannel for CliAgentChannel {
         let build_result = self.backend.build_command(build_request);
         let stdin_payload_result = agent::build_command_stdin_payload(self.kind, build_request);
         let kind = self.kind;
+        let backend = Arc::clone(&self.backend);
 
         Box::pin(async move {
             let command = build_result.map_err(|error| {
@@ -196,12 +197,9 @@ impl AgentChannel for CliAgentChannel {
             }
 
             let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
-            let assistant_message = agent::parse_turn_response(
-                kind,
-                &parsed.content,
-                req.request_kind.protocol_profile(),
-            )
-            .map_err(AgentError::Backend)?;
+            let assistant_message =
+                parse_or_repair_cli_response(kind, &parsed.content, &req, &backend, &events)
+                    .await?;
 
             Ok(TurnResult {
                 assistant_message,
@@ -217,6 +215,60 @@ impl AgentChannel for CliAgentChannel {
     fn shutdown_session(&self, _session_id: String) -> AgentFuture<Result<(), AgentError>> {
         Box::pin(async { Ok(()) })
     }
+}
+
+/// Parses one CLI turn response strictly, falling back to a single
+/// protocol-repair retry when the initial parse fails.
+///
+/// When repair is attempted, a [`TurnEvent::ThoughtDelta`] is emitted with
+/// the original parse error so the user can see what went wrong.
+async fn parse_or_repair_cli_response(
+    kind: AgentKind,
+    content: &str,
+    req: &TurnRequest,
+    backend: &Arc<dyn AgentBackend>,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+) -> Result<agent::AgentResponse, AgentError> {
+    let protocol_profile = req.request_kind.protocol_profile();
+
+    let parse_error = match agent::parse_turn_response(kind, content, protocol_profile) {
+        Ok(response) => return Ok(response),
+        Err(error) => error,
+    };
+
+    let _ = events.send(TurnEvent::ThoughtDelta(format!(
+        "Protocol parse error — retrying: {parse_error}"
+    )));
+
+    let repair_prompt = agent::repair::build_protocol_repair_prompt(&parse_error, content)
+        .map_err(|error| {
+            AgentError::Backend(format!(
+                "{parse_error}\nprotocol repair prompt build failed: {error}"
+            ))
+        })?;
+
+    let repair_content = execute_cli_repair_turn(
+        backend.as_ref(),
+        kind,
+        &req.folder,
+        &req.model,
+        &req.request_kind,
+        req.reasoning_level,
+        &repair_prompt,
+    )
+    .await
+    .map_err(|error| {
+        AgentError::Backend(format!(
+            "{parse_error}\nprotocol repair transport failed: {error}"
+        ))
+    })?;
+
+    agent::parse_turn_response(kind, &repair_content, protocol_profile).map_err(|error| {
+        AgentError::Backend(format!(
+            "{parse_error}\nprotocol repair retry also failed: \
+             {error}\nrepair_response:\n{repair_content}"
+        ))
+    })
 }
 
 /// Reads stdout line-by-line, classifying each line and forwarding loader
@@ -256,6 +308,100 @@ async fn stream_stdout(
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = events.send(TurnEvent::ThoughtDelta(trimmed_text.to_string()));
     }
+}
+
+/// Maximum wall-clock time for one protocol-repair CLI subprocess.
+///
+/// Repair turns ask the agent to re-emit a single JSON object, so they
+/// should complete quickly. The timeout prevents a hung subprocess from
+/// blocking the parent turn indefinitely. `kill_on_drop(true)` on the
+/// child ensures the process is terminated when the future is dropped.
+const REPAIR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Spawns a fresh CLI process for one protocol-repair retry and returns
+/// the parsed provider content string.
+///
+/// This helper strips down the full turn-execution pipeline to the minimum
+/// needed for repair: command build, spawn, stdout/stderr collection, and
+/// provider response parsing. No streaming, PID tracking, or signal
+/// handling is performed because the repair is a transparent one-shot
+/// correction, not a user-visible turn. A [`REPAIR_TURN_TIMEOUT`] guard
+/// ensures a stuck process does not block the parent turn indefinitely.
+async fn execute_cli_repair_turn(
+    backend: &dyn AgentBackend,
+    kind: AgentKind,
+    folder: &std::path::Path,
+    model: &str,
+    request_kind: &crate::infra::channel::AgentRequestKind,
+    reasoning_level: crate::domain::agent::ReasoningLevel,
+    repair_prompt: &str,
+) -> Result<String, String> {
+    let prompt_payload = TurnPrompt::from_text(repair_prompt.to_string());
+    let build_request = BuildCommandRequest {
+        attachments: &prompt_payload.attachments,
+        folder,
+        prompt: repair_prompt,
+        request_kind,
+        model,
+        reasoning_level,
+    };
+    let command = backend
+        .build_command(build_request)
+        .map_err(|error| format!("repair command build failed: {error}"))?;
+    let repair_stdin_payload = agent::build_command_stdin_payload(kind, build_request)
+        .map_err(|error| format!("repair stdin payload build failed: {error}"))?;
+
+    let mut tokio_command = tokio::process::Command::from(command);
+    tokio_command
+        .stdin(if repair_stdin_payload.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = tokio_command
+        .spawn()
+        .map_err(|error| format!("repair process spawn failed: {error}"))?;
+
+    let repair_stdin_write_task = stdin::spawn_optional_stdin_write(
+        child.stdin.take(),
+        repair_stdin_payload,
+        "repair stdin pipe unavailable after spawn",
+        std::convert::identity,
+    );
+
+    let output = tokio::time::timeout(REPAIR_TURN_TIMEOUT, child.wait_with_output())
+        .await
+        .map_err(|_| {
+            format!(
+                "repair process timed out after {}s",
+                REPAIR_TURN_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|error| format!("repair process execution failed: {error}"))?;
+
+    stdin::await_optional_stdin_write(
+        repair_stdin_write_task,
+        "repair stdin write task failed",
+        std::convert::identity,
+    )
+    .await?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "repair process exited with status {}",
+            output.status
+        ));
+    }
+
+    let stdout_text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
+    let parsed = agent::parse_response(kind, &stdout_text, &stderr_text);
+
+    Ok(parsed.content)
 }
 
 /// Formats one failed CLI turn into a user-facing error.
@@ -609,15 +755,15 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Claude turns surface invalid structured output instead of
-    /// starting a repair retry.
+    /// Verifies Claude turns surface invalid structured output after both the
+    /// original parse and the protocol-repair retry fail.
     async fn test_run_turn_returns_error_for_invalid_structured_output_for_claude() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut mock_backend = MockAgentBackend::new();
         mock_backend
             .expect_build_command()
-            .times(1)
+            .times(2)
             .returning(|request| {
                 assert!(matches!(
                     request.request_kind,
@@ -646,6 +792,52 @@ mod tests {
         let error_message = error.to_string();
         assert!(error_message.contains("did not match the required JSON schema"));
         assert!(error_message.contains("response:\nplain non-json response"));
+    }
+
+    #[tokio::test]
+    /// Verifies Claude turns recover valid output when the initial parse fails
+    /// but the protocol-repair retry returns valid protocol JSON.
+    async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_claude() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let call_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut mock_backend = MockAgentBackend::new();
+        mock_backend.expect_build_command().times(2).returning({
+            let counter = Arc::clone(&call_counter);
+
+            move |_| {
+                let call_number = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut command = std::process::Command::new("sh");
+
+                if call_number == 0 {
+                    command.arg("-c").arg("printf 'plain non-json response'");
+                } else {
+                    command.arg("-c").arg(
+                        r#"printf '{"answer":"Repaired response","questions":[],"summary":null}'"#,
+                    );
+                }
+
+                Ok(command)
+            }
+        });
+        let channel = CliAgentChannel {
+            backend: Arc::new(mock_backend),
+            kind: AgentKind::Claude,
+        };
+        let (events_tx, _events_rx) = mpsc::unbounded_channel();
+        let req = make_turn_request(dir.path().to_path_buf());
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), req, events_tx)
+            .await
+            .expect("repair retry should succeed");
+
+        // Assert
+        assert_eq!(
+            result.assistant_message.to_display_text(),
+            "Repaired response"
+        );
     }
 
     #[tokio::test]

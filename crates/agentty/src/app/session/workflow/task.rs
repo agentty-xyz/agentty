@@ -1050,7 +1050,8 @@ mod tests {
 
     #[tokio::test]
     /// Verifies plain-text one-shot output is rejected for session commit
-    /// message generation.
+    /// message generation after both the original parse and the
+    /// protocol-repair retry fail.
     async fn test_generate_session_commit_message_with_backend_rejects_plain_text_output() {
         // Arrange — use a CLI-backed model so the mock backend is exercised.
         // App-server-backed models (Codex, Gemini) bypass `build_command`
@@ -1059,17 +1060,12 @@ mod tests {
         let mut backend = MockAgentBackend::new();
         backend
             .expect_build_command()
-            .times(1)
+            .times(2)
             .returning(|request| {
                 assert!(matches!(
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
                 ));
-                assert!(
-                    request
-                        .prompt
-                        .contains("Generate the canonical session commit message")
-                );
 
                 Ok(mock_shell_command(
                     "Refactor agent prompt and protocol handling",
@@ -1478,8 +1474,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies assist tasks reject plain-text one-shot output that does not
-    /// satisfy the shared protocol schema.
+    /// Verifies assist tasks reject plain-text one-shot output after both the
+    /// original parse and the protocol-repair retry fail.
     async fn test_run_agent_assist_task_rejects_plain_text_output() {
         // Arrange
         let database = Database::open_in_memory()
@@ -1492,13 +1488,12 @@ mod tests {
         let mut backend = MockAgentBackend::new();
         backend
             .expect_build_command()
-            .times(1)
+            .times(2)
             .returning(|request| {
                 assert!(matches!(
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
                 ));
-                assert_eq!(request.prompt, "Resolve conflict");
 
                 Ok(mock_shell_command(
                     r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1}}"#,

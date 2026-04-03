@@ -38,7 +38,9 @@ pub(crate) fn normalize_turn_response(
 /// still recovers the trailing protocol payload as long as nothing except
 /// whitespace follows the JSON object. As a further resilience fallback,
 /// markdown code fences wrapping the JSON object are stripped before parsing
-/// when neither direct parsing nor trailing-object recovery succeeds.
+/// when neither direct parsing nor trailing-object recovery succeeds. An
+/// additional fallback extracts JSON from an embedded code fence preceded by
+/// prose text (e.g., commentary followed by a fenced JSON block).
 /// Top-level fields may rely on the wire type's defaults.
 ///
 /// # Errors
@@ -76,6 +78,12 @@ pub(crate) fn parse_agent_response_strict(
         return Err(AgentResponseParseError::InvalidFormat {
             reason: format!("markdown code fence extraction failed ({fence_parse_error})"),
         });
+    }
+
+    if let Some(inner) = find_embedded_code_fence_content(trimmed) {
+        if let Some(response) = parse_structured_json_response_with_recovery(inner) {
+            return Ok(response);
+        }
     }
 
     if let Some(response) = recover_embedded_structured_json_response(trimmed) {
@@ -218,6 +226,29 @@ fn strip_markdown_code_fence(trimmed: &str) -> Option<&str> {
     }
 
     Some(inner)
+}
+
+/// Extracts the inner content from the last markdown code fence embedded in a
+/// response that also contains surrounding prose text.
+///
+/// Handles the pattern where a provider prepends commentary before a fenced
+/// JSON payload (e.g., `"Some explanation\n` ` ```json\n{...}\n``` ` `"`).
+fn find_embedded_code_fence_content(raw: &str) -> Option<&str> {
+    let closing_fence_start = raw.rfind("```")?;
+    let before_closing = raw[..closing_fence_start].trim_end();
+
+    let opening_fence_start = before_closing.rfind("```")?;
+    let after_opening_backticks = &before_closing[opening_fence_start + 3..];
+
+    let body_start = after_opening_backticks.find('\n').map(|index| index + 1)?;
+    let inner = &after_opening_backticks[body_start..];
+    let trimmed = inner.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed)
 }
 
 /// Finds the last JSON object embedded in a response when it consumes the full
@@ -702,6 +733,28 @@ mod tests {
 
         // Assert
         assert!(response.is_err());
+    }
+
+    #[test]
+    /// Strict parsing recovers protocol JSON from an embedded code fence
+    /// preceded by prose text.
+    fn test_parse_agent_response_strict_recovers_embedded_code_fence_in_prose() {
+        // Arrange
+        let raw = concat!(
+            "The commit message looks good. Let me refine it.\n\n",
+            "```json\n",
+            r#"{"answer":"Refined commit message","questions":[],"summary":null}"#,
+            "\n```"
+        );
+
+        // Act
+        let response = parse_agent_response_strict(raw);
+
+        // Assert
+        assert_eq!(
+            response.expect("response should parse").answer,
+            "Refined commit message"
+        );
     }
 
     #[test]

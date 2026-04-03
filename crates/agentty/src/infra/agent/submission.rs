@@ -123,7 +123,7 @@ pub(crate) async fn submit_one_shot_with_app_server_client(
         live_session_output: None,
         model: request.model.as_str().to_string(),
         prompt: crate::infra::channel::TurnPrompt::from_text(request.prompt.to_string()),
-        request_kind: request.request_kind,
+        request_kind: request.request_kind.clone(),
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
         reasoning_level: request.reasoning_level,
@@ -131,20 +131,48 @@ pub(crate) async fn submit_one_shot_with_app_server_client(
     };
 
     let turn_result = app_server_client.run_turn(turn_request, stream_tx).await;
-    app_server_client.shutdown_session(session_id).await;
-    clear_child_pid_slot(request.child_pid);
 
-    let turn_result = turn_result
-        .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"))?;
-    let response = parse_one_shot_response(&turn_result.assistant_message)?;
+    let child_pid = request.child_pid;
+
+    let turn_result = match turn_result {
+        Ok(result) => result,
+        Err(error) => {
+            app_server_client.shutdown_session(session_id).await;
+            clear_child_pid_slot(child_pid);
+
+            return Err(format!(
+                "Failed to execute one-shot app-server turn: {error}"
+            ));
+        }
+    };
+
+    let parse_result = match parse_one_shot_response(&turn_result.assistant_message) {
+        Ok(response) => Ok((response, 0, 0)),
+        Err(parse_error) => {
+            attempt_one_shot_app_server_repair(
+                app_server_client,
+                &parse_error,
+                &turn_result.assistant_message,
+                request,
+                &session_id,
+                turn_result.provider_conversation_id.as_deref(),
+            )
+            .await
+        }
+    };
+
+    app_server_client.shutdown_session(session_id).await;
+    clear_child_pid_slot(child_pid);
+
+    let (response, repair_input_tokens, repair_output_tokens) = parse_result?;
 
     Ok(OneShotSubmission {
         response,
         stats: SessionStats {
             added_lines: 0,
             deleted_lines: 0,
-            input_tokens: turn_result.input_tokens,
-            output_tokens: turn_result.output_tokens,
+            input_tokens: turn_result.input_tokens + repair_input_tokens,
+            output_tokens: turn_result.output_tokens + repair_output_tokens,
         },
     })
 }
@@ -162,12 +190,40 @@ pub(crate) async fn submit_one_shot_with_backend(
     backend: &dyn AgentBackend,
     request: OneShotRequest<'_>,
 ) -> Result<OneShotSubmission, String> {
-    let parsed_response = execute_one_shot_command(backend, request.prompt, request).await?;
-    let agent_response = parse_one_shot_response(&parsed_response.content)?;
+    let parsed_response =
+        execute_one_shot_command(backend, request.prompt, request.clone()).await?;
+    let (agent_response, repair_stats) = match parse_one_shot_response(&parsed_response.content) {
+        Ok(response) => (response, None),
+        Err(parse_error) => {
+            let repair_prompt =
+                super::repair::build_protocol_repair_prompt(&parse_error, &parsed_response.content)
+                    .map_err(|error| {
+                        format!("{parse_error}\nrepair prompt build failed: {error}")
+                    })?;
+            let repair_response = execute_one_shot_command(backend, &repair_prompt, request)
+                .await
+                .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+
+            let response = parse_one_shot_response(&repair_response.content).map_err(|error| {
+                format!(
+                    "{parse_error}\nrepair retry also failed: {error}\nrepair_response:\n{}",
+                    repair_response.content
+                )
+            })?;
+
+            (response, Some(repair_response.stats))
+        }
+    };
+
+    let mut stats = parsed_response.stats;
+    if let Some(repair) = repair_stats {
+        stats.input_tokens += repair.input_tokens;
+        stats.output_tokens += repair.output_tokens;
+    }
 
     Ok(OneShotSubmission {
         response: agent_response,
-        stats: parsed_response.stats,
+        stats,
     })
 }
 
@@ -184,6 +240,62 @@ fn parse_one_shot_response(content: &str) -> Result<AgentResponse, String> {
             super::protocol::format_protocol_parse_debug_details(content)
         )
     })
+}
+
+/// Attempts one protocol-repair retry through the app-server transport for
+/// a one-shot prompt whose initial response failed schema validation.
+///
+/// The repair prompt is sent as a follow-up turn on the same session so the
+/// agent retains the original conversation context. The initial turn's
+/// `provider_conversation_id` is threaded through so providers that depend
+/// on conversation state can continue the same thread.
+///
+/// Returns the parsed response together with the repair turn's token usage
+/// so the caller can aggregate stats across both attempts.
+///
+/// # Errors
+/// Returns the combined original and repair error when the retry fails.
+async fn attempt_one_shot_app_server_repair(
+    app_server_client: &dyn AppServerClient,
+    parse_error: &str,
+    malformed_response: &str,
+    request: OneShotRequest<'_>,
+    session_id: &str,
+    provider_conversation_id: Option<&str>,
+) -> Result<(AgentResponse, u64, u64), String> {
+    let repair_prompt =
+        super::repair::build_protocol_repair_prompt(parse_error, malformed_response)
+            .map_err(|error| format!("{parse_error}\nrepair prompt build failed: {error}"))?;
+
+    let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
+    let repair_turn_request = AppServerTurnRequest {
+        folder: request.folder.to_path_buf(),
+        live_session_output: None,
+        model: request.model.as_str().to_string(),
+        prompt: crate::infra::channel::TurnPrompt::from_text(repair_prompt),
+        request_kind: request.request_kind,
+        provider_conversation_id: provider_conversation_id.map(String::from),
+        persisted_instruction_conversation_id: None,
+        reasoning_level: request.reasoning_level,
+        session_id: session_id.to_string(),
+    };
+    let repair_result = app_server_client
+        .run_turn(repair_turn_request, repair_stream_tx)
+        .await
+        .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+
+    let response = parse_one_shot_response(&repair_result.assistant_message).map_err(|error| {
+        format!(
+            "{parse_error}\nrepair retry also failed: {error}\nrepair_response:\n{}",
+            repair_result.assistant_message
+        )
+    })?;
+
+    Ok((
+        response,
+        repair_result.input_tokens,
+        repair_result.output_tokens,
+    ))
 }
 
 /// Runs one one-shot backend command and returns the parsed provider content.
@@ -414,21 +526,20 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies one-shot execution rejects plain-text utility output that
-    /// does not match the protocol schema.
+    /// Verifies one-shot execution rejects plain-text utility output after
+    /// both the original parse and the protocol-repair retry fail.
     async fn test_submit_one_shot_with_backend_rejects_plain_text_utility_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
         backend
             .expect_build_command()
-            .times(1)
+            .times(2)
             .returning(|request| {
                 assert!(matches!(
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
                 ));
-                assert_eq!(request.prompt, "Generate title");
 
                 Ok(mock_shell_command("plain text", "", 0))
             });
@@ -457,20 +568,19 @@ mod tests {
 
     #[tokio::test]
     /// Verifies one-shot execution rejects wrapped non-schema utility output
-    /// instead of extracting plain text from provider wrappers.
+    /// after both the original parse and the protocol-repair retry fail.
     async fn test_submit_one_shot_with_backend_rejects_wrapped_plain_text_utility_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let mut backend = MockAgentBackend::new();
         backend
             .expect_build_command()
-            .times(1)
+            .times(2)
             .returning(|request| {
                 assert!(matches!(
                     request.request_kind,
                     AgentRequestKind::UtilityPrompt
                 ));
-                assert_eq!(request.prompt, "Generate title");
 
                 Ok(mock_shell_command(
                     r#"{"result":"plain text","usage":{"input_tokens":2,"output_tokens":1}}"#,
@@ -551,7 +661,56 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies one-shot execution still rejects blank utility responses.
+    /// Verifies one-shot execution recovers valid output when the initial
+    /// parse fails but the protocol-repair retry returns valid protocol JSON.
+    async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let call_counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().times(2).returning({
+            let counter = std::sync::Arc::clone(&call_counter);
+
+            move |_| {
+                let call_number = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                if call_number == 0 {
+                    Ok(mock_shell_command("plain text", "", 0))
+                } else {
+                    Ok(mock_shell_command(
+                        r#"{"answer":"Repaired title","questions":[],"summary":null}"#,
+                        "",
+                        0,
+                    ))
+                }
+            }
+        });
+
+        // Act
+        let response = submit_one_shot_with_backend(
+            &backend,
+            OneShotRequest {
+                child_pid: None,
+                folder: temp_directory.path(),
+                model: AgentModel::Gpt54,
+                prompt: "Generate title",
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+            },
+        )
+        .await
+        .expect("repair retry should succeed");
+
+        // Assert
+        assert_eq!(
+            response.response.answers(),
+            vec!["Repaired title".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies one-shot execution still rejects blank utility responses
+    /// after both the original parse and the protocol-repair retry fail.
     async fn test_submit_one_shot_with_backend_rejects_blank_utility_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
@@ -561,7 +720,6 @@ mod tests {
                 request.request_kind,
                 AgentRequestKind::UtilityPrompt
             ));
-            assert_eq!(request.prompt, "Generate title");
 
             Ok(mock_shell_command("   ", "", 0))
         });
@@ -808,14 +966,15 @@ mod tests {
 
     #[tokio::test]
     /// Verifies app-server-backed one-shot execution rejects plain-text
-    /// utility output that does not match the protocol schema.
+    /// utility output after both the original parse and the protocol-repair
+    /// retry fail.
     async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let mut app_server_client = MockAppServerClient::new();
         app_server_client
             .expect_run_turn()
-            .times(1)
+            .times(2)
             .returning(|request, _| {
                 assert_eq!(request.model, AgentModel::Gpt54.as_str());
 
@@ -858,14 +1017,15 @@ mod tests {
 
     #[tokio::test]
     /// Verifies app-server-backed non-utility one-shot execution still
-    /// rejects plain-text output that does not match the protocol schema.
+    /// rejects plain-text output after both the original parse and the
+    /// protocol-repair retry fail.
     async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_utility_output() {
         // Arrange
         let temp_directory = tempdir().expect("failed to create temp dir");
         let mut app_server_client = MockAppServerClient::new();
         app_server_client
             .expect_run_turn()
-            .times(1)
+            .times(2)
             .returning(|request, _| {
                 assert!(matches!(
                     request.request_kind,

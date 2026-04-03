@@ -15,6 +15,7 @@ mod instruction;
 mod prompt;
 pub(crate) mod protocol;
 mod provider;
+pub(crate) mod repair;
 mod response_parser;
 mod submission;
 

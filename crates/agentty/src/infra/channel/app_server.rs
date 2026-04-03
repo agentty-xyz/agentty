@@ -78,6 +78,7 @@ impl AgentChannel for AppServerAgentChannel {
                 session_id,
             };
             let protocol_profile = request.request_kind.protocol_profile();
+            let repair_request = request.clone();
             let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<AppServerStreamEvent>();
 
             let bridge_handle = {
@@ -130,19 +131,22 @@ impl AgentChannel for AppServerAgentChannel {
                 Ok(response) => {
                     // Fire-and-forget: receiver may be dropped during shutdown.
                     let _ = events.send(TurnEvent::PidUpdate(response.pid));
-                    let assistant_message = agent::parse_turn_response(
+                    let parsed = parse_or_repair_app_server_response(
                         kind,
-                        &response.assistant_message,
+                        &response,
                         protocol_profile,
+                        repair_request,
+                        &client,
+                        &events,
                     )
-                    .map_err(AgentError::Backend)?;
+                    .await?;
 
                     Ok(TurnResult {
-                        assistant_message,
+                        assistant_message: parsed.assistant_message,
                         context_reset: response.context_reset,
-                        input_tokens: response.input_tokens,
-                        output_tokens: response.output_tokens,
-                        provider_conversation_id: response.provider_conversation_id,
+                        input_tokens: response.input_tokens + parsed.repair_input_tokens,
+                        output_tokens: response.output_tokens + parsed.repair_output_tokens,
+                        provider_conversation_id: parsed.provider_conversation_id,
                     })
                 }
                 Err(error) => Err(AgentError::AppServer(error)),
@@ -160,6 +164,112 @@ impl AgentChannel for AppServerAgentChannel {
             Ok(())
         })
     }
+}
+
+/// Aggregated result from parsing an app-server turn response, including
+/// metadata from a repair turn when one was needed.
+struct AppServerParsedTurnResult {
+    /// Parsed agent response from the successful attempt.
+    assistant_message: agent::AgentResponse,
+    /// Provider conversation id from the latest successful attempt,
+    /// falling back to the original response when the repair turn does
+    /// not produce one.
+    provider_conversation_id: Option<String>,
+    /// Additional input tokens consumed by a repair turn (zero when no
+    /// repair was needed).
+    repair_input_tokens: u64,
+    /// Additional output tokens consumed by a repair turn (zero when no
+    /// repair was needed).
+    repair_output_tokens: u64,
+}
+
+/// Parses one app-server turn response strictly, falling back to a single
+/// protocol-repair retry when the initial parse fails.
+///
+/// The repair prompt is sent as a follow-up turn on the same session so the
+/// agent retains the original conversation context. When repair succeeds,
+/// the returned metadata reflects the repair turn's provider conversation id
+/// and token usage so the caller can propagate them correctly.
+///
+/// When repair is attempted, a [`TurnEvent::ThoughtDelta`] is emitted with
+/// the original parse error so the user can see what went wrong.
+async fn parse_or_repair_app_server_response(
+    kind: AgentKind,
+    response: &crate::infra::app_server::AppServerTurnResponse,
+    protocol_profile: agent::ProtocolRequestProfile,
+    repair_request: AppServerTurnRequest,
+    client: &Arc<dyn AppServerClient>,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+) -> Result<AppServerParsedTurnResult, AgentError> {
+    let parse_error =
+        match agent::parse_turn_response(kind, &response.assistant_message, protocol_profile) {
+            Ok(parsed) => {
+                return Ok(AppServerParsedTurnResult {
+                    assistant_message: parsed,
+                    provider_conversation_id: response.provider_conversation_id.clone(),
+                    repair_input_tokens: 0,
+                    repair_output_tokens: 0,
+                });
+            }
+            Err(error) => error,
+        };
+
+    let _ = events.send(TurnEvent::ThoughtDelta(format!(
+        "Protocol parse error — retrying: {parse_error}"
+    )));
+
+    let repair_prompt =
+        agent::repair::build_protocol_repair_prompt(&parse_error, &response.assistant_message)
+            .map_err(|error| {
+                AgentError::Backend(format!(
+                    "{parse_error}\nprotocol repair prompt build failed: {error}"
+                ))
+            })?;
+
+    let repair_provider_conversation_id = response
+        .provider_conversation_id
+        .clone()
+        .or_else(|| repair_request.provider_conversation_id.clone());
+
+    let repair_turn_request = AppServerTurnRequest {
+        folder: repair_request.folder,
+        live_session_output: None,
+        model: repair_request.model,
+        prompt: crate::infra::channel::TurnPrompt::from_text(repair_prompt),
+        request_kind: repair_request.request_kind,
+        provider_conversation_id: repair_provider_conversation_id,
+        persisted_instruction_conversation_id: None,
+        reasoning_level: repair_request.reasoning_level,
+        session_id: repair_request.session_id,
+    };
+    let (repair_stream_tx, _repair_stream_rx) = mpsc::unbounded_channel();
+    let repair_result = client
+        .run_turn(repair_turn_request, repair_stream_tx)
+        .await
+        .map_err(|error| {
+            AgentError::Backend(format!(
+                "{parse_error}\nprotocol repair transport failed: {error}"
+            ))
+        })?;
+
+    let parsed =
+        agent::parse_turn_response(kind, &repair_result.assistant_message, protocol_profile)
+            .map_err(|error| {
+                AgentError::Backend(format!(
+                    "{parse_error}\nprotocol repair retry also failed: \
+                     {error}\nrepair_response:\n{}",
+                    repair_result.assistant_message
+                ))
+            })?;
+
+    Ok(AppServerParsedTurnResult {
+        assistant_message: parsed,
+        provider_conversation_id: repair_result
+            .provider_conversation_id
+            .or(response.provider_conversation_id.clone()),
+        repair_input_tokens: repair_result.input_tokens,
+        repair_output_tokens: repair_result.output_tokens,
+    })
 }
 
 #[cfg(test)]
@@ -588,16 +698,15 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Gemini turns surface invalid structured output instead of
-    /// starting a repair retry.
+    /// Verifies Gemini turns surface invalid structured output after both the
+    /// original parse and the protocol-repair retry fail.
     async fn test_run_turn_returns_error_for_invalid_structured_output_for_gemini() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
             .expect_run_turn()
-            .times(1)
+            .times(2)
             .returning(|request, _stream_tx| {
-                assert_eq!(request.prompt, "Do something");
                 assert_eq!(request.request_kind, AgentRequestKind::SessionStart);
 
                 Box::pin(async { Ok(make_ok_response("plain non-json response")) })
@@ -615,6 +724,46 @@ mod tests {
         let error_message = error.to_string();
         assert!(error_message.contains("did not match the required JSON schema"));
         assert!(error_message.contains("response:\nplain non-json response"));
+    }
+
+    #[tokio::test]
+    /// Verifies Gemini turns recover valid output when the initial parse fails
+    /// but the protocol-repair retry returns valid protocol JSON.
+    async fn test_run_turn_recovers_valid_output_via_protocol_repair_for_gemini() {
+        // Arrange
+        let call_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut mock_client = MockAppServerClient::new();
+        mock_client.expect_run_turn().times(2).returning({
+            let counter = Arc::clone(&call_counter);
+
+            move |_request, _stream_tx| {
+                let call_number = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                if call_number == 0 {
+                    Box::pin(async { Ok(make_ok_response("plain non-json response")) })
+                } else {
+                    Box::pin(async {
+                        Ok(make_ok_response(
+                            r#"{"answer":"Repaired response","questions":[],"summary":null}"#,
+                        ))
+                    })
+                }
+            }
+        });
+        let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Gemini);
+        let (events_tx, _events_rx) = mpsc::unbounded_channel();
+
+        // Act
+        let result = channel
+            .run_turn("sess-1".to_string(), make_turn_request(), events_tx)
+            .await
+            .expect("repair retry should succeed");
+
+        // Assert
+        assert_eq!(
+            result.assistant_message.to_display_text(),
+            "Repaired response"
+        );
     }
 
     #[tokio::test]
@@ -654,14 +803,14 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies Codex turns surface invalid plain-text output instead of
-    /// accepting it as a final response.
-    async fn test_run_turn_codex_rejects_plain_text_without_repair_retry() {
+    /// Verifies Codex turns surface invalid plain-text output after both the
+    /// original parse and the protocol-repair retry fail.
+    async fn test_run_turn_codex_rejects_plain_text_after_repair_retry() {
         // Arrange
         let mut mock_client = MockAppServerClient::new();
         mock_client
             .expect_run_turn()
-            .times(1)
+            .times(2)
             .returning(|_request, _stream_tx| Box::pin(async { Ok(make_ok_response("plain")) }));
         let channel = AppServerAgentChannel::new(Arc::new(mock_client), AgentKind::Codex);
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
