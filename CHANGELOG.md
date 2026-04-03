@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.0] - 2026-04-02
+
+### Added
+
+- Add diff preview from question mode with state snapshot restoration.
+- Add protocol-repair retry for malformed agent responses.
+- Add session lifecycle E2E tests and shared git/session helpers.
+- Add quality check guidance to protocol instructions.
+- Add VHS feature GIF generation from E2E tests with content-hash caching.
+
+### Changed
+
+- Keep completed-turn metadata above active streaming prompt.
+- Batch reducer handling of repeated `AgentResponseReceived` events.
+- Refine branch push authentication guidance and cancel summary handling.
+- Cache turn applied state in reducer batch.
+- Modularize app startup, review, and persistence helpers.
+- Refactor app-server runtimes into focused modules.
+- Apply reducer projection for completed turns.
+- Queue VHS feature GIF generation and Zola auto-discovery roadmap slices.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.6.12] - 2026-04-01
 
 ### Added
