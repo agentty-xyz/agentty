@@ -11,6 +11,8 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader, Lines};
 
+use crate::infra::app_server::AppServerError;
+
 /// Typed error returned by shared app-server transport operations.
 ///
 /// Covers the low-level stdio communication failures that can occur when
@@ -168,6 +170,50 @@ pub async fn shutdown_child(child: &mut tokio::process::Child) {
         // Best-effort: process may have already exited.
         let _ = child.wait().await;
     }
+}
+
+/// Spawns one app-server child process with piped stdin/stdout and hidden
+/// stderr, returning the child plus owned stdio handles.
+///
+/// Both Codex and Gemini runtime bootstraps require the same stdio shape:
+/// line-delimited JSON-RPC over stdin/stdout, no interactive stderr stream,
+/// and `kill_on_drop(true)` so abandoned runtimes do not leak.
+///
+/// # Errors
+///
+/// Returns a provider error when the command cannot be spawned or either
+/// required stdio pipe is unavailable.
+pub async fn spawn_runtime_command(
+    command: std::process::Command,
+    runtime_name: &str,
+) -> Result<
+    (
+        tokio::process::Child,
+        tokio::process::ChildStdin,
+        tokio::process::ChildStdout,
+    ),
+    AppServerError,
+> {
+    let mut command = tokio::process::Command::from(command);
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+
+    let mut child = command.spawn().map_err(|error| {
+        AppServerError::Provider(format!("Failed to spawn `{runtime_name}`: {error}"))
+    })?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppServerError::Provider(format!("{runtime_name} stdin is unavailable")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppServerError::Provider(format!("{runtime_name} stdout is unavailable")))?;
+
+    Ok((child, stdin, stdout))
 }
 
 #[cfg(test)]

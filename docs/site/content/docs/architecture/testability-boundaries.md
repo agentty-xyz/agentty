@@ -40,7 +40,8 @@ The traits below are mocked with `mockall`. Most use
 | `GitCommandRunner` | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
 | `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance execution boundary. |
 | `AppServerClient` retry helpers | `infra/app_server/retry.rs` | Shared restart-and-replay orchestration for provider runtimes without duplicating lifecycle policy in each provider. |
-| `GeminiRuntimeTransport` | `infra/agent/app_server/gemini/client.rs` | ACP stdio transport boundary for Gemini runtime protocol tests. |
+| `CodexRuntimeTransport` | `infra/agent/app_server/codex/transport.rs` | Codex stdio transport boundary for lifecycle, compaction, and turn-stream tests without scripted shell runtimes. |
+| `GeminiRuntimeTransport` | `infra/agent/app_server/gemini/transport.rs` | ACP stdio transport boundary for Gemini runtime protocol tests. |
 
 ### Typed Error Enums at Infra Boundaries
 

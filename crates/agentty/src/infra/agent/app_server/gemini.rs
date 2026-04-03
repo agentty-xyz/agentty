@@ -5,5 +5,12 @@
 //! `infra/agent/app_server/gemini/`.
 
 mod client;
+mod lifecycle;
+mod policy;
+mod stream_parser;
+mod transport;
+mod usage;
 
 pub(crate) use client::RealGeminiAcpClient;
+#[cfg(test)]
+pub(crate) use transport::MockGeminiRuntimeTransport;

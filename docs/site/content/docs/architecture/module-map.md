@@ -87,7 +87,7 @@ also writes a machine-readable workspace summary to
 | - `provider.rs` | Central provider registry for transport mode, parser policy, stdin strategy, app-server client factories, and shared schema-mismatch error formatting. |
 | - `cli.rs` + `infra/agent/cli/` | Router plus shared CLI subprocess stdin/error helpers reused by session turns and one-shot prompts. |
 | - `claude.rs` | Claude backend implementation. |
-| - `app_server.rs` + `infra/agent/app_server/` | Router plus provider-specific app-server client trees kept private to the agent backend module. |
+| - `app_server.rs` + `infra/agent/app_server/` | Router plus provider-specific app-server client trees kept private to the agent backend module. The Codex and Gemini trees both split `client.rs` orchestration from focused `lifecycle.rs`, `transport.rs`, `stream_parser.rs`, `policy.rs`, and `usage.rs` helpers. |
 | - `codex.rs` | Codex backend runtime command construction. |
 | - `gemini.rs` | Gemini backend runtime command construction. |
 | - `prompt.rs` | Shared prompt preparation (`prepare_prompt_text`) for transcript replay and protocol preamble injection. |
@@ -96,7 +96,7 @@ also writes a machine-readable workspace summary to
 | - `submission.rs` | Shared one-shot prompt execution and strict protocol validation for generated titles, session commit messages, assist prompts, and review text, asking each concrete backend to provide either an app-server client or direct CLI execution path. |
 | `crates/agentty/src/infra/app_server.rs` + `infra/app_server/` | Router plus shared app-server contract, prompt shaping, runtime registry, and restart/retry modules. |
 | `crates/agentty/src/infra/app_server_router.rs` | `RoutingAppServerClient` - reusable app-server router kept for tests and integration entry points that want one shared client across providers. |
-| `crates/agentty/src/infra/app_server_transport.rs` | Shared stdio JSON-RPC transport utilities for app-server processes. |
+| `crates/agentty/src/infra/app_server_transport.rs` | Shared stdio JSON-RPC transport utilities for app-server processes, including common child-process spawn wiring for piped stdin/stdout runtimes. |
 | `crates/agentty/src/infra/file_index.rs` | Gitignore-aware file indexing and fuzzy filtering for `@` mentions in prompts. |
 | `crates/agentty/src/infra/tmux.rs` | `TmuxClient` trait and tmux subprocess adapter used by `App` worktree-open orchestration. |
 | `crates/agentty/src/infra/version.rs` | Version checking infrastructure. |
