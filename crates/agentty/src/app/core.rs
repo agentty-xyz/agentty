@@ -3,6 +3,7 @@
 //! This module wires app submodules and exposes [`App`] used by runtime mode
 //! handlers.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -201,6 +202,10 @@ struct AppEventBatch {
 
 impl AppEventBatch {
     /// Collects one app event into the coalesced batch state.
+    ///
+    /// Most per-session projections use latest-wins semantics, but queued
+    /// `AgentResponseReceived` events merge token-usage deltas so one reducer
+    /// tick preserves cumulative usage from multiple completed turns.
     fn collect_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::AtMentionEntriesLoaded {
@@ -297,8 +302,26 @@ impl AppEventBatch {
             AppEvent::AgentResponseReceived {
                 session_id,
                 turn_applied_state,
-            } => {
-                self.applied_turns.insert(session_id, turn_applied_state);
+            } => self.collect_agent_response_received(session_id, turn_applied_state),
+        }
+    }
+
+    /// Merges one completed-turn projection into the per-session batch.
+    ///
+    /// Latest reducer-facing fields replace the older projection, while token
+    /// deltas accumulate to preserve usage across multiple queued completions
+    /// for the same session.
+    fn collect_agent_response_received(
+        &mut self,
+        session_id: String,
+        turn_applied_state: TurnAppliedState,
+    ) {
+        match self.applied_turns.entry(session_id) {
+            Entry::Occupied(mut occupied_entry) => {
+                occupied_entry.get_mut().merge_newer(turn_applied_state);
+            }
+            Entry::Vacant(vacant_entry) => {
+                vacant_entry.insert(turn_applied_state);
             }
         }
     }
@@ -3435,7 +3458,9 @@ mod tests {
     }
 
     #[test]
-    fn app_event_batch_collect_event_keeps_latest_agent_response_update() {
+    /// Verifies repeated `AgentResponseReceived` events keep the newest
+    /// reducer projection while accumulating token usage for the session.
+    fn app_event_batch_collect_event_merges_agent_response_token_usage() {
         // Arrange
         let mut event_batch = AppEventBatch::default();
         let latest_turn = test_turn_applied_state(
@@ -3443,9 +3468,17 @@ mod tests {
                 QuestionItem::new("Need branch?"),
                 QuestionItem::new("Need tests?"),
             ],
-            Vec::new(),
-            None,
-            SessionStats::default(),
+            vec!["Document the batched reducer path."],
+            Some(AgentResponseSummary {
+                session: "Session summary".to_string(),
+                turn: "Latest turn summary".to_string(),
+            }),
+            SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                input_tokens: 7,
+                output_tokens: 11,
+            },
         );
 
         // Act
@@ -3453,9 +3486,17 @@ mod tests {
             session_id: "session-1".to_string(),
             turn_applied_state: test_turn_applied_state(
                 vec![QuestionItem::new("Old question")],
-                Vec::new(),
-                None,
-                SessionStats::default(),
+                vec!["Old follow-up task"],
+                Some(AgentResponseSummary {
+                    session: "Old session summary".to_string(),
+                    turn: "Old turn summary".to_string(),
+                }),
+                SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    input_tokens: 3,
+                    output_tokens: 5,
+                },
             ),
         });
         event_batch.collect_event(AppEvent::AgentResponseReceived {
@@ -3464,9 +3505,31 @@ mod tests {
         });
 
         // Assert
+        let merged_turn = event_batch.applied_turns.get("session-1");
         assert_eq!(
-            event_batch.applied_turns.get("session-1").cloned(),
-            Some(latest_turn)
+            merged_turn.map(|turn| turn.questions.clone()),
+            Some(latest_turn.questions.clone())
+        );
+        assert_eq!(
+            merged_turn.map(|turn| {
+                turn.follow_up_tasks
+                    .iter()
+                    .map(|task| task.text.clone())
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["Document the batched reducer path.".to_string()])
+        );
+        assert_eq!(
+            merged_turn.and_then(|turn| turn.summary.as_deref()),
+            latest_turn.summary.as_deref()
+        );
+        assert_eq!(
+            merged_turn.map(|turn| turn.token_usage_delta.input_tokens),
+            Some(10)
+        );
+        assert_eq!(
+            merged_turn.map(|turn| turn.token_usage_delta.output_tokens),
+            Some(16)
         );
     }
 
@@ -3893,6 +3956,71 @@ mod tests {
         assert!(app.sessions.sessions[0].questions.is_empty());
         assert_eq!(app.sessions.sessions[0].stats.input_tokens, 18);
         assert_eq!(app.sessions.sessions[0].stats.output_tokens, 29);
+    }
+
+    #[tokio::test]
+    /// Verifies one reducer tick preserves the latest turn projection while
+    /// accumulating token usage from multiple queued completions.
+    async fn apply_app_events_agent_response_batches_same_session_turns() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let event_sender = app.services.event_sender();
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-batched-turns")));
+
+        let first_turn = test_turn_applied_state(
+            vec![QuestionItem::new("First question?")],
+            Vec::new(),
+            None,
+            SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                input_tokens: 2,
+                output_tokens: 3,
+            },
+        );
+        let second_turn = test_turn_applied_state(
+            vec![QuestionItem::new("Latest question?")],
+            vec!["Capture reducer batching coverage."],
+            None,
+            SessionStats {
+                added_lines: 0,
+                deleted_lines: 0,
+                input_tokens: 5,
+                output_tokens: 8,
+            },
+        );
+
+        event_sender
+            .send(AppEvent::AgentResponseReceived {
+                session_id: "session-1".to_string(),
+                turn_applied_state: second_turn,
+            })
+            .expect("queued event should send");
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id: "session-1".to_string(),
+            turn_applied_state: first_turn,
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.sessions.sessions[0].questions,
+            vec![QuestionItem::new("Latest question?")]
+        );
+        assert_eq!(app.sessions.sessions[0].stats.input_tokens, 7);
+        assert_eq!(app.sessions.sessions[0].stats.output_tokens, 11);
+        assert_eq!(
+            app.sessions.sessions[0]
+                .follow_up_tasks
+                .iter()
+                .map(|task| task.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["Capture reducer batching coverage.".to_string()]
+        );
     }
 
     #[tokio::test]

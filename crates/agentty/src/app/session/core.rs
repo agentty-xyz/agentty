@@ -52,6 +52,28 @@ pub(crate) struct TurnAppliedState {
     pub(crate) token_usage_delta: SessionStats,
 }
 
+impl TurnAppliedState {
+    /// Merges one newer reducer projection into this batched state.
+    ///
+    /// Latest-turn fields (`follow_up_tasks`, `questions`, `summary`) replace
+    /// the previous projection, while `token_usage_delta` accumulates so
+    /// multiple completed turns queued in one reducer tick do not undercount
+    /// session usage.
+    pub(crate) fn merge_newer(&mut self, newer_turn_applied_state: Self) {
+        self.follow_up_tasks = newer_turn_applied_state.follow_up_tasks;
+        self.questions = newer_turn_applied_state.questions;
+        self.summary = newer_turn_applied_state.summary;
+        self.token_usage_delta.input_tokens = self
+            .token_usage_delta
+            .input_tokens
+            .saturating_add(newer_turn_applied_state.token_usage_delta.input_tokens);
+        self.token_usage_delta.output_tokens = self
+            .token_usage_delta
+            .output_tokens
+            .saturating_add(newer_turn_applied_state.token_usage_delta.output_tokens);
+    }
+}
+
 /// Provides wall-clock values for session refresh decision logic.
 pub(crate) trait Clock: Send + Sync {
     /// Returns the current monotonic instant.
