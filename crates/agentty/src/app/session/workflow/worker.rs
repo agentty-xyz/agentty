@@ -555,7 +555,7 @@ impl SessionManager {
     }
 }
 
-impl<'a> TurnPersistence<'a> {
+impl TurnPersistence<'_> {
     /// Persists one completed turn and returns the reducer projection derived
     /// from the canonical stored values.
     async fn apply(
@@ -734,10 +734,8 @@ async fn apply_successful_turn_result(
 /// Reconciles a failed turn-metadata write by surfacing the error and forcing
 /// the next UI reload to prefer durable state.
 async fn handle_turn_persistence_failure(context: &SessionWorkerContext, error: &SessionError) {
-    let message = format!(
-        "\n[Turn Metadata Error] Failed to persist completed turn metadata: {}\n",
-        error
-    );
+    let message =
+        format!("\n[Turn Metadata Error] Failed to persist completed turn metadata: {error}\n");
     SessionTaskService::append_session_output(
         &context.output,
         &context.db,

@@ -80,10 +80,10 @@ pub(crate) fn parse_agent_response_strict(
         });
     }
 
-    if let Some(inner) = find_embedded_code_fence_content(trimmed) {
-        if let Some(response) = parse_structured_json_response_with_recovery(inner) {
-            return Ok(response);
-        }
+    if let Some(inner) = find_embedded_code_fence_content(trimmed)
+        && let Some(response) = parse_structured_json_response_with_recovery(inner)
+    {
+        return Ok(response);
     }
 
     if let Some(response) = recover_embedded_structured_json_response(trimmed) {

@@ -764,17 +764,13 @@ fn finalize_turn_completion(
 }
 
 /// Reads the next stdout line from the app-server runtime.
-fn read_required_stdout_line<'scope, Transport: CodexRuntimeTransport>(
+async fn read_required_stdout_line<'scope, Transport: CodexRuntimeTransport>(
     transport: &'scope mut Transport,
     context: &'scope str,
-) -> impl std::future::Future<Output = Result<String, AppServerError>> + Send + 'scope {
-    async move {
-        transport
-            .next_stdout()
-            .await
-            .map_err(AppServerError::from)?
-            .ok_or_else(|| {
-                AppServerError::Provider(format!("Codex app-server terminated{context}"))
-            })
-    }
+) -> Result<String, AppServerError> {
+    transport
+        .next_stdout()
+        .await
+        .map_err(AppServerError::from)?
+        .ok_or_else(|| AppServerError::Provider(format!("Codex app-server terminated{context}")))
 }

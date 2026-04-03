@@ -305,6 +305,7 @@ fn resolve_help_background<'a>(
             file_explorer_selected_index,
             scroll_offset,
             session_id,
+            ..
         } => sessions
             .iter()
             .find(|session| session.id == *session_id)
@@ -578,6 +579,7 @@ mod tests {
         let help_context = HelpContext::Diff {
             session_id: "missing-session".to_string(),
             diff: "diff --git a/file b/file".to_string(),
+            restore_question: None,
             scroll_offset: 0,
             file_explorer_selected_index: 0,
         };

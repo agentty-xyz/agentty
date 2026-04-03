@@ -17,6 +17,7 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
         if let AppMode::Diff {
             diff,
             file_explorer_selected_index,
+            restore_question,
             session_id,
             scroll_offset,
             ..
@@ -26,6 +27,7 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
                 context: HelpContext::Diff {
                     diff,
                     file_explorer_selected_index,
+                    restore_question,
                     session_id,
                     scroll_offset,
                 },
@@ -41,6 +43,7 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
     if let AppMode::Diff {
         diff,
         file_explorer_selected_index,
+        restore_question,
         scroll_cache,
         session_id,
         scroll_offset,
@@ -48,12 +51,16 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
     {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                app.mode = AppMode::View {
-                    done_session_output_mode: DoneSessionOutputMode::Summary,
-                    review_status_message: None,
-                    review_text: None,
-                    session_id: session_id.clone(),
-                    scroll_offset: None,
+                app.mode = if let Some(snapshot) = restore_question.take() {
+                    snapshot.into_question_mode()
+                } else {
+                    AppMode::View {
+                        done_session_output_mode: DoneSessionOutputMode::Summary,
+                        review_status_message: None,
+                        review_text: None,
+                        session_id: session_id.clone(),
+                        scroll_offset: None,
+                    }
                 };
             }
             KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
@@ -220,6 +227,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 7,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -251,6 +259,7 @@ mod tests {
             diff: scrollable_diff_fixture(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -281,6 +290,7 @@ mod tests {
             diff: scrollable_diff_fixture(),
             scroll_offset: 3,
             file_explorer_selected_index: 2,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -312,6 +322,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -342,6 +353,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 2,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -391,6 +403,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -421,6 +434,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 1,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -451,6 +465,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 1,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -481,6 +496,7 @@ mod tests {
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -511,6 +527,7 @@ mod tests {
             diff: "diff output".to_string(),
             scroll_offset: 5,
             file_explorer_selected_index: 3,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -531,6 +548,7 @@ mod tests {
                     ref diff,
                     scroll_offset: 5,
                     file_explorer_selected_index: 3,
+                    ..
                 },
                 scroll_offset: 0,
             } if session_id == "session-id" && diff == "diff output"
@@ -548,6 +566,7 @@ mod tests {
             diff,
             scroll_offset: max_scroll_offset,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -580,6 +599,7 @@ mod tests {
             diff,
             scroll_offset: u16::MAX,
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
         };
 
@@ -598,6 +618,144 @@ mod tests {
                 scroll_offset,
                 ..
             } if scroll_offset == max_scroll_offset.saturating_sub(1)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_with_question_snapshot_restores_question_mode() {
+        // Arrange — diff opened from question mode carries a snapshot.
+        use crate::domain::input::InputState;
+        use crate::infra::agent::protocol::QuestionItem;
+        use crate::ui::state::app_mode::QuestionModeSnapshot;
+
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-q".to_string(),
+            diff: "diff output".to_string(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 0,
+            restore_question: Some(QuestionModeSnapshot {
+                at_mention_state: None,
+                current_index: 0,
+                input: InputState::default(),
+                questions: vec![QuestionItem {
+                    options: Vec::new(),
+                    text: "Q?".to_string(),
+                }],
+                responses: Vec::new(),
+                scroll_offset: None,
+                selected_option_index: None,
+                session_id: "session-q".to_string(),
+            }),
+            scroll_cache: None,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Assert — restored to Question mode, not View.
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                ref session_id,
+                focus: crate::ui::state::app_mode::QuestionFocus::Answer,
+                ..
+            } if session_id == "session-q"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_question_then_help_then_exit_preserves_restore_question() {
+        // Arrange — diff opened from question mode, then user opens help with `?`.
+        use crate::domain::input::InputState;
+        use crate::infra::agent::protocol::QuestionItem;
+        use crate::ui::state::app_mode::QuestionModeSnapshot;
+
+        let (mut app, _base_dir) = new_test_app().await;
+        let snapshot = QuestionModeSnapshot {
+            at_mention_state: None,
+            current_index: 1,
+            input: InputState::default(),
+            questions: vec![
+                QuestionItem {
+                    options: Vec::new(),
+                    text: "Q1?".to_string(),
+                },
+                QuestionItem {
+                    options: Vec::new(),
+                    text: "Q2?".to_string(),
+                },
+            ],
+            responses: vec!["answer-1".to_string()],
+            scroll_offset: None,
+            selected_option_index: None,
+            session_id: "session-q".to_string(),
+        };
+
+        app.mode = AppMode::Diff {
+            session_id: "session-q".to_string(),
+            diff: "diff output".to_string(),
+            scroll_offset: 3,
+            file_explorer_selected_index: 1,
+            restore_question: Some(snapshot),
+            scroll_cache: None,
+        };
+
+        // Act — open help overlay.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+
+        // Intermediate assert — help carries the snapshot.
+        assert!(matches!(
+            app.mode,
+            AppMode::Help {
+                context: HelpContext::Diff {
+                    restore_question: Some(_),
+                    ..
+                },
+                ..
+            }
+        ));
+
+        // Act — close help overlay, returning to diff.
+        crate::runtime::mode::help::handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+
+        // Intermediate assert — diff still carries the snapshot.
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                restore_question: Some(_),
+                ..
+            }
+        ));
+
+        // Act — exit diff.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        // Assert — restored to Question mode, not View.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                ref session_id,
+                current_index: 1,
+                focus: crate::ui::state::app_mode::QuestionFocus::Answer,
+                ..
+            } if session_id == "session-q"
         ));
     }
 }

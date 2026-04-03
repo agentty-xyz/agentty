@@ -9,7 +9,9 @@ use crate::infra::channel::TurnPrompt;
 use crate::runtime::EventResult;
 use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::page::session_chat::SessionChatPage;
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
+use crate::ui::state::app_mode::{
+    AppMode, DoneSessionOutputMode, QuestionFocus, QuestionModeSnapshot,
+};
 use crate::ui::state::prompt::PromptAtMentionState;
 
 /// Default response stored when users skip one model question.
@@ -27,7 +29,7 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
         return EventResult::Continue;
     }
 
-    if handle_chat_scroll(app, terminal_size, key) {
+    if handle_chat_scroll(app, terminal_size, key).await {
         return EventResult::Continue;
     }
 
@@ -70,11 +72,10 @@ fn handle_focus_toggle(app: &mut App, key: KeyEvent) -> bool {
 
 /// Applies scroll keys when the chat output area is focused.
 ///
-/// Returns `true` when the key was consumed as a scroll action. `Enter`
-/// switches focus back to `Answer` so it cannot accidentally submit a
-/// response while scrolling. `Esc` is not intercepted — it always reaches
-/// the question handler so users can end the turn regardless of focus.
-fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool {
+/// Returns `true` when the key was consumed as a scroll action. `Enter` and
+/// `Esc` switch focus back to `Answer` so they cannot accidentally submit or
+/// end the turn while scrolling. `d` opens the diff preview for the session.
+async fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool {
     if !matches!(
         &app.mode,
         AppMode::Question {
@@ -97,7 +98,7 @@ fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool
     };
 
     match key.code {
-        KeyCode::Enter => {
+        KeyCode::Enter | KeyCode::Esc => {
             *focus = QuestionFocus::Answer;
         }
         KeyCode::Char('j') | KeyCode::Down => {
@@ -111,6 +112,14 @@ fn handle_chat_scroll(app: &mut App, terminal_size: Rect, key: KeyEvent) -> bool
         KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
             let step = metrics.view_height / 2;
             *scroll_offset = scroll_offset_down(*scroll_offset, metrics, step);
+        }
+        KeyCode::Char('d') if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            let session_id = extract_question_session_id(app);
+            if let Some(session_id) = session_id {
+                show_question_diff(app, &session_id).await;
+            }
+
+            return true;
         }
         KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
             let step = metrics.view_height / 2;
@@ -191,6 +200,91 @@ fn scroll_offset_up(scroll_offset: Option<u16>, metrics: QuestionViewMetrics, st
         scroll_offset.unwrap_or_else(|| metrics.total_lines.saturating_sub(metrics.view_height));
 
     current_offset.saturating_sub(step.max(1))
+}
+
+/// Extracts the `session_id` from the current question mode, if active.
+fn extract_question_session_id(app: &App) -> Option<String> {
+    if let AppMode::Question { session_id, .. } = &app.mode {
+        Some(session_id.clone())
+    } else {
+        None
+    }
+}
+
+/// Opens the diff preview from question mode.
+///
+/// Snapshots the current question state so that exiting the diff view
+/// restores back to question mode instead of session view.
+async fn show_question_diff(app: &mut App, session_id: &str) {
+    let session = app
+        .sessions
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id);
+
+    let Some(session) = session else {
+        return;
+    };
+
+    let session_folder = session.folder.clone();
+    let base_branch = session.base_branch.clone();
+
+    let diff = app
+        .services
+        .git_client()
+        .diff(session_folder, base_branch)
+        .await
+        .unwrap_or_else(|error| format!("Failed to run git diff: {error}"));
+
+    if diff.trim().is_empty() {
+        return;
+    }
+
+    let snapshot = take_question_snapshot(app);
+
+    app.mode = AppMode::Diff {
+        diff,
+        file_explorer_selected_index: 0,
+        restore_question: snapshot,
+        scroll_cache: None,
+        session_id: session_id.to_string(),
+        scroll_offset: 0,
+    };
+}
+
+/// Snapshots the current question-mode state for later restoration.
+///
+/// Returns `None` if the app is not in question mode.
+fn take_question_snapshot(app: &mut App) -> Option<QuestionModeSnapshot> {
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+
+    if let AppMode::Question {
+        at_mention_state,
+        current_index,
+        input,
+        questions,
+        responses,
+        scroll_offset,
+        selected_option_index,
+        session_id,
+        ..
+    } = mode
+    {
+        Some(QuestionModeSnapshot {
+            at_mention_state,
+            current_index,
+            input,
+            questions,
+            responses,
+            scroll_offset,
+            selected_option_index,
+            session_id,
+        })
+    } else {
+        app.mode = mode;
+
+        None
+    }
 }
 
 /// Inserts pasted text into the active question response input.
@@ -2414,6 +2508,155 @@ mod tests {
                 ref responses,
                 ..
             } if responses == &vec!["Yes".to_string()]
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_escape_in_chat_focus_returns_to_answer_focus() {
+        // Arrange — question mode with chat focused. Esc should switch
+        // focus back to Answer, not end the turn.
+        let mut app = new_test_app().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            session_id: "session-esc-chat".to_string(),
+            questions: vec![QuestionItem {
+                options: vec!["Yes".to_string()],
+                text: "Continue?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Chat,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: Some(0),
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — still in question mode with focus returned to Answer.
+        assert!(matches!(
+            app.mode,
+            AppMode::Question {
+                focus: QuestionFocus::Answer,
+                ref session_id,
+                ..
+            } if session_id == "session-esc-chat"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_escape_in_answer_focus_still_ends_turn() {
+        // Arrange — question mode with answer focused. Esc should end the
+        // turn as before.
+        let mut app = new_test_app().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            session_id: "session-esc-answer".to_string(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Q?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — transitions to View mode.
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                ..
+            } if session_id == "session-esc-answer"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
+        // Arrange — question mode with chat focused in a git worktree
+        // session that has a non-empty diff.
+        use crate::domain::agent::AgentModel;
+        use crate::domain::session::{Session, SessionSize, SessionStats};
+
+        let mut app = new_test_app().await;
+        let session_id = "session-diff-question";
+
+        // Set up a session with a real temp dir (no git repo, so diff will
+        // produce an error message — which counts as non-empty content).
+        let session_dir = tempdir().expect("failed to create session dir");
+        app.sessions.sessions.push(Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            draft_attachments: Vec::new(),
+            folder: session_dir.path().to_path_buf(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
+            is_draft: false,
+            model: AgentModel::Gemini3FlashPreview,
+            output: String::new(),
+            project_name: String::new(),
+            prompt: String::new(),
+            published_upstream_ref: None,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Question,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        });
+
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            session_id: session_id.to_string(),
+            questions: vec![QuestionItem {
+                options: vec!["A".to_string()],
+                text: "Pick one".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Chat,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: Some(0),
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — transitioned to Diff mode with a question snapshot.
+        assert!(matches!(
+            app.mode,
+            AppMode::Diff {
+                ref session_id,
+                restore_question: Some(_),
+                ..
+            } if session_id == "session-diff-question"
         ));
     }
 }

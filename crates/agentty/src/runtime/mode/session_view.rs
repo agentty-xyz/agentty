@@ -792,6 +792,7 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -
     app.mode = AppMode::Diff {
         diff,
         file_explorer_selected_index: 0,
+        restore_question: None,
         scroll_cache: None,
         session_id: view_context.session_id.clone(),
         scroll_offset: 0,

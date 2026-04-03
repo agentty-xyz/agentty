@@ -829,7 +829,12 @@ fn render_question_help_footer(f: &mut Frame, area: Rect, help_height: u16, focu
 
     if is_chat_focused {
         help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
-        help_actions.push(help_action::HelpAction::new("answer", "Enter", "Answer"));
+        help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
+        help_actions.push(help_action::HelpAction::new(
+            "answer",
+            "Esc/Enter",
+            "Answer",
+        ));
     } else {
         help_actions.push(help_action::HelpAction::new("send", "Enter", "Submit"));
     }

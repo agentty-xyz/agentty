@@ -78,6 +78,40 @@ pub struct DiffScrollCache {
     pub max_scroll_offset: u16,
 }
 
+/// Captured question-mode state for restoring after diff preview.
+///
+/// When the user opens diff preview from question mode (`d` key while chat
+/// is focused), the full question state is snapshotted here so it can be
+/// restored when leaving the diff view.
+pub struct QuestionModeSnapshot {
+    pub at_mention_state: Option<PromptAtMentionState>,
+    pub current_index: usize,
+    pub input: InputState,
+    pub questions: Vec<QuestionItem>,
+    pub responses: Vec<String>,
+    pub scroll_offset: Option<u16>,
+    pub selected_option_index: Option<usize>,
+    pub session_id: String,
+}
+
+impl QuestionModeSnapshot {
+    /// Restores this snapshot as `AppMode::Question` with `Answer` focus.
+    #[must_use]
+    pub fn into_question_mode(self) -> AppMode {
+        AppMode::Question {
+            at_mention_state: self.at_mention_state,
+            current_index: self.current_index,
+            focus: QuestionFocus::Answer,
+            input: self.input,
+            questions: self.questions,
+            responses: self.responses,
+            scroll_offset: self.scroll_offset,
+            selected_option_index: self.selected_option_index,
+            session_id: self.session_id,
+        }
+    }
+}
+
 /// Tracks which panel has input focus during question-answer mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum QuestionFocus {
@@ -195,6 +229,9 @@ pub enum AppMode {
         file_explorer_selected_index: usize,
         /// Cached max scroll bound for the current content-area and selection.
         scroll_cache: Option<DiffScrollCache>,
+        /// Captured question state restored when leaving diff, if the diff was
+        /// opened from question mode. `None` restores to `View` mode.
+        restore_question: Option<QuestionModeSnapshot>,
         /// Session whose diff is currently visible.
         session_id: String,
         /// Vertical offset inside the rendered diff panel.
@@ -249,6 +286,9 @@ pub enum HelpContext {
     Diff {
         diff: String,
         file_explorer_selected_index: usize,
+        /// Preserved question-mode snapshot so the help→diff→exit path can
+        /// still return to question mode when the diff was opened from there.
+        restore_question: Option<QuestionModeSnapshot>,
         session_id: String,
         scroll_offset: u16,
     },
@@ -299,11 +339,13 @@ impl HelpContext {
             HelpContext::Diff {
                 diff,
                 file_explorer_selected_index,
+                restore_question,
                 session_id,
                 scroll_offset,
             } => AppMode::Diff {
                 diff,
                 file_explorer_selected_index,
+                restore_question,
                 scroll_cache: None,
                 session_id,
                 scroll_offset,

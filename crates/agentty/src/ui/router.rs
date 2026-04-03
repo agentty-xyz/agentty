@@ -395,6 +395,7 @@ fn render_session_or_diff_mode(
         AppMode::Diff {
             diff,
             file_explorer_selected_index,
+            restore_question: _,
             scroll_cache: _,
             scroll_offset,
             session_id,
@@ -707,6 +708,7 @@ mod tests {
         let mode = AppMode::Diff {
             diff: String::new(),
             file_explorer_selected_index: 0,
+            restore_question: None,
             scroll_cache: None,
             session_id: session_id.to_string(),
             scroll_offset: 0,
