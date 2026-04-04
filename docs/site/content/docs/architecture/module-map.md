@@ -66,6 +66,7 @@ also writes a machine-readable workspace summary to
 | Path | What lives here |
 |------|------------------|
 | `crates/agentty/src/domain/agent.rs` | Agent kinds, models, model metadata, and agent-related enums. |
+| `crates/agentty/src/domain/composer.rs` | Shared prompt-composer logic: slash-menu derivation, attachment placeholder tracking, prompt submission draining, and image-token-aware deletion helpers. |
 | `crates/agentty/src/domain/input.rs` | Input state management. |
 | `crates/agentty/src/domain/permission.rs` | `PermissionMode` and permission logic. |
 | `crates/agentty/src/domain/project.rs` | Project entities and display helpers. |
@@ -181,4 +182,4 @@ also writes a machine-readable workspace summary to
 | `crates/agentty/src/ui/state/` | UI state types: |
 | - `app_mode.rs` | `AppMode` enum and mode transitions. |
 | - `help_action.rs` | Help content definitions. |
-| - `prompt.rs` | Prompt editor state. |
+| - `prompt.rs` | Prompt UI mention state plus re-exports of shared prompt-composer state and helpers from `domain/composer.rs`. |

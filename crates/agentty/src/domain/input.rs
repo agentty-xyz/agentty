@@ -1,4 +1,5 @@
 /// Editable text input with a character-based cursor index.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputState {
     /// Cursor position measured in Unicode scalar values from the start.
     pub cursor: usize,

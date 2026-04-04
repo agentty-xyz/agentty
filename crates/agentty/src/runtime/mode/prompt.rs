@@ -5,13 +5,19 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 
 use crate::app::{App, SessionStatsUsage};
-use crate::domain::agent::{self, AgentKind};
+use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
-use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage};
+use crate::ui::state::prompt::{
+    PromptAtMentionState, PromptSlashStage,
+    apply_prompt_delete_range as apply_prompt_delete_range_components,
+    current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
+    insert_prompt_character, insert_prompt_local_image, insert_prompt_text,
+    prompt_slash_option_count, resolve_prompt_slash_selection,
+};
 use crate::ui::util::{format_token_count, move_input_cursor_down, move_input_cursor_up};
 
 struct PromptContext {
@@ -179,9 +185,7 @@ pub(crate) fn handle_paste(app: &mut App, pasted_text: &str) {
         ..
     } = &mut app.mode
     {
-        input.insert_text(&normalized_text);
-        history_state.reset_navigation();
-        slash_state.reset();
+        insert_prompt_text(input, history_state, slash_state, &normalized_text);
     }
 
     sync_prompt_at_mention_state(app);
@@ -423,8 +427,14 @@ fn navigate_prompt_history_down(app: &mut App) {
 }
 
 fn advance_prompt_slash_selection(app: &mut App) {
-    let (available_agent_kinds, input_text, selected_agent, selected_index, stage) = match &app.mode
-    {
+    let (
+        available_agent_kinds,
+        input_text,
+        selected_agent,
+        selected_index,
+        session_agent_kind,
+        stage,
+    ) = match &app.mode {
         AppMode::Prompt {
             input, slash_state, ..
         } => (
@@ -432,13 +442,20 @@ fn advance_prompt_slash_selection(app: &mut App) {
             input.text().to_string(),
             slash_state.selected_agent,
             slash_state.selected_index,
+            app.selected_session()
+                .map_or(AgentKind::Codex, |session| session.model.kind()),
             slash_state.stage,
         ),
         _ => return,
     };
 
-    let option_count =
-        prompt_slash_option_count(&input_text, stage, selected_agent, &available_agent_kinds);
+    let option_count = prompt_slash_option_count(
+        &input_text,
+        stage,
+        selected_agent,
+        &available_agent_kinds,
+        session_agent_kind,
+    );
     if option_count == 0 {
         return;
     }
@@ -538,10 +555,13 @@ fn insert_pasted_image_placeholder(app: &mut App, local_image_path: std::path::P
         ..
     } = &mut app.mode
     {
-        let placeholder = attachment_state.register_local_image(local_image_path);
-        input.insert_text(&placeholder);
-        history_state.reset_navigation();
-        slash_state.reset();
+        insert_prompt_local_image(
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            local_image_path,
+        );
     }
 
     sync_prompt_at_mention_state(app);
@@ -560,97 +580,64 @@ fn take_submitted_turn_prompt(app: &mut App) -> TurnPrompt {
             input,
             ..
         } => {
-            let text = input.take_text();
-            let mut attachments = attachment_state
+            let submission = drain_prompt_submission(attachment_state, input);
+            let attachments = submission
                 .attachments
-                .iter()
-                .filter(|attachment| text.contains(&attachment.placeholder))
+                .into_iter()
                 .map(|attachment| TurnPromptAttachment {
-                    placeholder: attachment.placeholder.clone(),
-                    local_image_path: attachment.local_image_path.clone(),
+                    placeholder: attachment.placeholder,
+                    local_image_path: attachment.local_image_path,
                 })
-                .collect::<Vec<_>>();
-            attachments
-                .sort_by_key(|attachment| text.find(&attachment.placeholder).unwrap_or(usize::MAX));
-            attachment_state.reset();
+                .collect();
 
-            TurnPrompt { attachments, text }
+            TurnPrompt {
+                attachments,
+                text: submission.text,
+            }
         }
         _ => TurnPrompt::from_text(String::new()),
     }
 }
 
 async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
-    let (available_agent_kinds, input_text, selected_agent, selected_index, stage) = match &app.mode
-    {
+    let session_agent_kind = app
+        .sessions
+        .sessions
+        .get(prompt_context.session_index)
+        .map_or(AgentKind::Codex, |session| session.model.kind());
+    let selection = match &app.mode {
         AppMode::Prompt {
             input, slash_state, ..
-        } => (
-            slash_state.available_agent_kinds.clone(),
-            input.text().to_string(),
-            slash_state.selected_agent,
-            slash_state.selected_index,
-            slash_state.stage,
-        ),
-        _ => return,
+        } => resolve_prompt_slash_selection(input.text(), slash_state, session_agent_kind),
+        _ => None,
     };
 
-    match stage {
-        PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(&input_text);
-            if commands.is_empty() {
-                return;
+    match selection {
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/stats")) => {
+            if let AppMode::Prompt {
+                input, slash_state, ..
+            } = &mut app.mode
+            {
+                input.take_text();
+                slash_state.reset();
             }
-
-            let selected_command = commands.get(selected_index).copied().unwrap_or(commands[0]);
-
-            match selected_command {
-                "/stats" => {
-                    if let AppMode::Prompt {
-                        input, slash_state, ..
-                    } = &mut app.mode
-                    {
-                        input.take_text();
-                        slash_state.reset();
-                    }
-                    handle_stats_command(app, prompt_context).await;
-                }
-                _ => {
-                    // /model — advance to Agent stage
-                    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                        slash_state.stage = PromptSlashStage::Agent;
-                        slash_state.selected_agent = None;
-                        slash_state.selected_index = 0;
-                    }
-                }
+            handle_stats_command(app, prompt_context).await;
+        }
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command(_)) => {
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.stage = PromptSlashStage::Agent;
+                slash_state.selected_agent = None;
+                slash_state.selected_index = 0;
             }
         }
-        PromptSlashStage::Agent => {
-            let Some(selected_agent) = available_agent_kinds.get(selected_index).copied() else {
-                return;
-            };
-
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Agent(selected_agent)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
                 slash_state.selected_agent = Some(selected_agent);
                 slash_state.stage = PromptSlashStage::Model;
                 slash_state.selected_index = 0;
             }
         }
-        PromptSlashStage::Model => {
-            let fallback_agent = app
-                .sessions
-                .sessions
-                .get(prompt_context.session_index)
-                .and_then(|session| {
-                    resolve_prompt_model_agent(session.model.kind(), &available_agent_kinds)
-                });
-            let Some(selected_agent) = selected_agent.or(fallback_agent) else {
-                return;
-            };
-            let Some(selected_model) = selected_agent.models().get(selected_index).copied() else {
-                return;
-            };
-
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Model(selected_model)) => {
             if let AppMode::Prompt {
                 input, slash_state, ..
             } = &mut app.mode
@@ -664,6 +651,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 .set_session_model(&prompt_context.session_id, selected_model)
                 .await;
         }
+        None => {}
     }
 }
 
@@ -877,38 +865,6 @@ fn format_duration(total_seconds: i64) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
-fn prompt_slash_commands(input: &str) -> Vec<&'static str> {
-    let lowered = input.to_lowercase();
-    let mut commands = vec!["/model", "/stats"];
-    commands.retain(|command| command.starts_with(&lowered));
-
-    commands
-}
-
-fn prompt_slash_option_count(
-    input: &str,
-    stage: PromptSlashStage,
-    selected_agent: Option<AgentKind>,
-    available_agent_kinds: &[AgentKind],
-) -> usize {
-    match stage {
-        PromptSlashStage::Command => prompt_slash_commands(input).len(),
-        PromptSlashStage::Agent => available_agent_kinds.len(),
-        PromptSlashStage::Model => selected_agent
-            .or_else(|| available_agent_kinds.first().copied())
-            .map_or(0, |selected_agent| selected_agent.models().len()),
-    }
-}
-
-/// Resolves the agent used by `/model` model selection, preserving the
-/// current session agent when it is still locally runnable.
-fn resolve_prompt_model_agent(
-    session_agent_kind: AgentKind,
-    available_agent_kinds: &[AgentKind],
-) -> Option<AgentKind> {
-    agent::resolve_prompt_model_agent_kind(session_agent_kind, available_agent_kinds)
-}
-
 fn prompt_input_width<B: Backend>(terminal: &Terminal<B>) -> io::Result<u16>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -970,7 +926,7 @@ fn handle_prompt_right(app: &mut App, key: KeyEvent) {
 /// terminals send for `Cmd`+`Backspace`.
 fn handle_prompt_line_delete(app: &mut App) {
     if let AppMode::Prompt { input, .. } = &app.mode
-        && let Some((start, end)) = current_line_delete_range(input)
+        && let Some((start, end)) = prompt_current_line_delete_range(input)
     {
         apply_prompt_delete_range(app, start, end);
     }
@@ -1012,7 +968,7 @@ fn prompt_backspace_range(app: &App, key: KeyEvent) -> Option<(usize, usize)> {
     };
 
     if input_key::is_line_delete_backspace(key) {
-        return current_line_delete_range(input);
+        return prompt_current_line_delete_range(input);
     }
 
     if input_key::is_word_delete_backspace(key) {
@@ -1059,126 +1015,17 @@ fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
         ..
     } = &mut app.mode
     {
-        let (delete_start, delete_end) =
-            expand_delete_range_to_image_tokens(input.text(), start, end);
-        if delete_start >= delete_end {
-            return;
-        }
-
-        input.replace_range(delete_start, delete_end, "");
-        attachment_state
-            .attachments
-            .retain(|attachment| input.text().contains(&attachment.placeholder));
-        attachment_state.refresh_next_attachment_number();
-
-        history_state.reset_navigation();
-        slash_state.reset();
+        apply_prompt_delete_range_components(
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            start,
+            end,
+        );
     }
 
     sync_prompt_at_mention_state(app);
-}
-
-/// Returns the character range deleted by one current-line delete action.
-fn current_line_delete_range(input: &InputState) -> Option<(usize, usize)> {
-    let characters: Vec<char> = input.text().chars().collect();
-    if characters.is_empty() {
-        return None;
-    }
-
-    let cursor = input.cursor.min(characters.len());
-    let mut line_start = cursor;
-    while line_start > 0 && characters[line_start - 1] != '\n' {
-        line_start -= 1;
-    }
-
-    let mut line_end = cursor;
-    while line_end < characters.len() && characters[line_end] != '\n' {
-        line_end += 1;
-    }
-
-    let delete_range = if line_start > 0 {
-        (line_start - 1, line_end)
-    } else if line_end < characters.len() {
-        (line_start, line_end + 1)
-    } else {
-        (line_start, line_end)
-    };
-
-    if delete_range.0 == delete_range.1 {
-        None
-    } else {
-        Some(delete_range)
-    }
-}
-
-/// Expands one deletion range to cover any overlapping `[Image #n]`
-/// placeholders so partial token edits remove the whole placeholder.
-fn expand_delete_range_to_image_tokens(text: &str, start: usize, end: usize) -> (usize, usize) {
-    let mut expanded_start = start;
-    let mut expanded_end = end;
-
-    for (token_start, token_end, _) in image_token_ranges(text) {
-        if token_start < expanded_end && expanded_start < token_end {
-            expanded_start = expanded_start.min(token_start);
-            expanded_end = expanded_end.max(token_end);
-        }
-    }
-
-    (expanded_start, expanded_end)
-}
-
-/// Returns all valid `[Image #n]` placeholder token ranges in `text`.
-fn image_token_ranges(text: &str) -> Vec<(usize, usize, String)> {
-    let characters = text.chars().collect::<Vec<_>>();
-    let mut ranges = Vec::new();
-    let mut index = 0;
-
-    while index < characters.len() {
-        if let Some(end_index) = image_token_end_index(&characters, index) {
-            let placeholder = characters[index..end_index].iter().collect::<String>();
-            ranges.push((index, end_index, placeholder));
-            index = end_index;
-
-            continue;
-        }
-
-        index += 1;
-    }
-
-    ranges
-}
-
-/// Returns the exclusive end index for an `[Image #n]` placeholder token that
-/// starts at `start_index`.
-fn image_token_end_index(characters: &[char], start_index: usize) -> Option<usize> {
-    let token_body = characters.get(start_index..)?;
-    if token_body.len() < "[Image #1]".chars().count() || token_body.first() != Some(&'[') {
-        return None;
-    }
-
-    let image_prefix = ['[', 'I', 'm', 'a', 'g', 'e', ' ', '#'];
-    if token_body.get(..image_prefix.len())? != image_prefix {
-        return None;
-    }
-
-    let mut scan_index = start_index + image_prefix.len();
-    let mut saw_digit = false;
-    while let Some(ch) = characters.get(scan_index) {
-        if ch.is_ascii_digit() {
-            saw_digit = true;
-            scan_index += 1;
-
-            continue;
-        }
-
-        if *ch == ']' && saw_digit {
-            return Some(scan_index + 1);
-        }
-
-        return None;
-    }
-
-    None
 }
 
 /// Inserts one typed character into prompt input and keeps at-mention state
@@ -1191,9 +1038,7 @@ fn handle_prompt_char(app: &mut App, character: char) {
         ..
     } = &mut app.mode
     {
-        input.insert_char(character);
-        history_state.reset_navigation();
-        slash_state.reset();
+        insert_prompt_character(input, history_state, slash_state, character);
     }
 
     sync_prompt_at_mention_state(app);
@@ -1623,7 +1468,17 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_match_model() {
         // Arrange & Act
-        let commands = prompt_slash_commands("/m");
+        let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+            "/m",
+            &PromptSlashState::new(),
+            AgentKind::Codex,
+        )
+        .expect("expected suggestion list");
+        let commands = suggestion_list
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
 
         // Assert
         assert_eq!(commands, vec!["/model"]);
@@ -1632,7 +1487,17 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_lists_all_commands() {
         // Arrange & Act
-        let commands = prompt_slash_commands("/");
+        let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+            "/",
+            &PromptSlashState::new(),
+            AgentKind::Codex,
+        )
+        .expect("expected suggestion list");
+        let commands = suggestion_list
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
 
         // Assert
         assert_eq!(commands, vec!["/model", "/stats"]);
@@ -1641,7 +1506,17 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_match_stats() {
         // Arrange & Act
-        let commands = prompt_slash_commands("/s");
+        let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+            "/s",
+            &PromptSlashState::new(),
+            AgentKind::Codex,
+        )
+        .expect("expected suggestion list");
+        let commands = suggestion_list
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
 
         // Assert
         assert_eq!(commands, vec!["/stats"]);
@@ -1650,17 +1525,26 @@ mod tests {
     #[test]
     fn test_prompt_slash_commands_no_match() {
         // Arrange & Act
-        let commands = prompt_slash_commands("/x");
+        let commands = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
+            "/x",
+            &PromptSlashState::new(),
+            AgentKind::Codex,
+        );
 
         // Assert
-        assert!(commands.is_empty());
+        assert!(commands.is_none());
     }
 
     #[test]
     fn test_prompt_slash_option_count_for_agent_stage() {
         // Arrange & Act
-        let count =
-            prompt_slash_option_count("/model", PromptSlashStage::Agent, None, AgentKind::ALL);
+        let count = prompt_slash_option_count(
+            "/model",
+            PromptSlashStage::Agent,
+            None,
+            AgentKind::ALL,
+            AgentKind::Codex,
+        );
 
         // Assert
         assert_eq!(count, AgentKind::ALL.len());
@@ -1674,6 +1558,7 @@ mod tests {
             PromptSlashStage::Model,
             Some(AgentKind::Claude),
             AgentKind::ALL,
+            AgentKind::Codex,
         );
 
         // Assert
@@ -1691,34 +1576,11 @@ mod tests {
             PromptSlashStage::Agent,
             None,
             &available_agent_kinds,
+            AgentKind::Codex,
         );
 
         // Assert
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_resolve_prompt_model_agent_prefers_current_session_agent_when_available() {
-        // Arrange
-        let available_agent_kinds = [AgentKind::Gemini, AgentKind::Codex];
-
-        // Act
-        let resolved_agent = resolve_prompt_model_agent(AgentKind::Codex, &available_agent_kinds);
-
-        // Assert
-        assert_eq!(resolved_agent, Some(AgentKind::Codex));
-    }
-
-    #[test]
-    fn test_resolve_prompt_model_agent_falls_back_to_first_available_agent() {
-        // Arrange
-        let available_agent_kinds = [AgentKind::Gemini, AgentKind::Codex];
-
-        // Act
-        let resolved_agent = resolve_prompt_model_agent(AgentKind::Claude, &available_agent_kinds);
-
-        // Assert
-        assert_eq!(resolved_agent, Some(AgentKind::Gemini));
     }
 
     #[tokio::test]
@@ -1919,6 +1781,30 @@ mod tests {
     async fn test_handle_prompt_slash_submit_runs_stats_command_and_resets_slash_state() {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("/stats", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        app.sessions.sync_from_handles();
+        if let AppMode::Prompt {
+            input, slash_state, ..
+        } = &app.mode
+        {
+            assert_eq!(input.text(), "");
+            assert_eq!(*slash_state, PromptSlashState::new());
+        }
+        assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_clamps_stale_command_selection() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/stats", None).await;
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.selected_index = 99;
+        }
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
         // Act

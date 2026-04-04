@@ -12,8 +12,8 @@ use crate::infra::channel::TurnPromptAttachment;
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 /// High-level lifecycle state for one session.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     New,
     InProgress,
