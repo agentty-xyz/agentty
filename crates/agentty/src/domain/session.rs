@@ -32,6 +32,20 @@ pub enum Status {
 }
 
 impl Status {
+    /// Ordered list of all session statuses used for UI sizing and iteration.
+    pub const ALL: [Status; 10] = [
+        Status::New,
+        Status::InProgress,
+        Status::Review,
+        Status::AgentReview,
+        Status::Question,
+        Status::Queued,
+        Status::Rebasing,
+        Status::Merging,
+        Status::Done,
+        Status::Canceled,
+    ];
+
     /// Returns the UI color associated with this status.
     pub fn color(&self) -> Color {
         match self {
@@ -474,6 +488,29 @@ mod tests {
 
         // Assert
         assert_eq!(displayed_status, "Queued");
+    }
+
+    #[test]
+    fn test_status_all_lists_every_supported_status_in_display_order() {
+        // Arrange
+        let expected_statuses = [
+            Status::New,
+            Status::InProgress,
+            Status::Review,
+            Status::AgentReview,
+            Status::Question,
+            Status::Queued,
+            Status::Rebasing,
+            Status::Merging,
+            Status::Done,
+            Status::Canceled,
+        ];
+
+        // Act
+        let all_statuses = Status::ALL;
+
+        // Assert
+        assert_eq!(all_statuses, expected_statuses);
     }
 
     #[test]

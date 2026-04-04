@@ -343,20 +343,12 @@ fn size_column_width() -> Constraint {
     )
 }
 
+/// Calculates the width of the status column from every supported session
+/// status label.
 fn status_column_width() -> Constraint {
     text_column_width(
         "Status",
-        [
-            Status::New,
-            Status::InProgress,
-            Status::Review,
-            Status::Queued,
-            Status::Merging,
-            Status::Done,
-            Status::Canceled,
-        ]
-        .iter()
-        .map(std::string::ToString::to_string),
+        Status::ALL.iter().map(std::string::ToString::to_string),
     )
 }
 
@@ -708,7 +700,7 @@ mod tests {
     #[test]
     fn test_status_column_width_uses_longest_possible_status_label() {
         // Arrange
-        let expected_width = u16::try_from("InProgress".chars().count()).unwrap_or(u16::MAX);
+        let expected_width = u16::try_from("AgentReview".chars().count()).unwrap_or(u16::MAX);
 
         // Act
         let width = status_column_width();
@@ -835,5 +827,26 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("2m5s"));
+    }
+
+    #[test]
+    fn test_render_shows_full_agent_review_status_label() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let sessions = vec![test_session("review-1", Status::AgentReview)];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("AgentReview"));
     }
 }
