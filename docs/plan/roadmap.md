@@ -21,7 +21,6 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 - `Agents`: machine-scoped model availability for settings and slash-model selection.
 - `Forge`: GitHub review-request creation/update from session view while preserving GitLab branch publishing.
-- `Workflow`: draft-session staging before the first agent turn.
 - `Quality`: deterministic local session coverage, typed-error migration, and hygiene follow-up.
 - `Delivery`: project-level landing strategy for review-ready sessions, including direct-merge vs. pull-request expectations.
 - `Protocol`: provider-managed session bootstrap instructions and compact context replay without repo-side agent files.
@@ -123,34 +122,6 @@ E2E coverage validates settings navigation and edit overlays, stats-page empty-s
 
 - [ ] No user-facing behavior changes — no doc updates needed.
 
-### [4f491812-f373-4ac5-bd57-b46c4f9d91e3] Workflow: Polish draft-session editing after baseline staging lands
-
-#### Assignee
-
-`@minev-dev`
-
-#### Why now
-
-The explicit `Shift+A` draft-session baseline is already landed, and the remaining edit/remove rough edges are still isolated to the same workflow surfaces. Promoting this polish slice now keeps draft staging coherent before more review and delivery features start depending on it.
-
-#### Usable outcome
-
-Users can edit or remove staged draft messages before the first live turn starts, and draft preview/title/transcript state stays coherent after those changes.
-
-#### Substeps
-
-- [ ] **Add draft edit and remove actions.** Extend `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and `crates/agentty/src/runtime/mode/session_view.rs` so `New` draft sessions can edit or remove staged prompt content without starting a live turn.
-- [ ] **Reflect staged-draft edits in the session chat surface.** Update `crates/agentty/src/ui/page/session_chat.rs`, `crates/agentty/src/ui/component/session_output.rs`, and `crates/agentty/src/ui/state/help_action.rs` so preview text, footer actions, and empty-state copy stay aligned after draft edits or removals.
-- [ ] **Keep staged metadata coherent after edits.** Extend `crates/agentty/src/app/session/workflow/draft.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, and any required persistence helpers so draft text, staged attachments, and transcript/title cleanup stay synchronized after removing or rewriting staged content.
-
-#### Tests
-
-- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/runtime/mode/prompt.rs`, and `crates/agentty/src/ui/component/session_output.rs` for draft edit/remove actions, staged-preview refresh, and attachment/title cleanup after draft changes.
-
-#### Docs
-
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for staged draft edit/remove behavior and any resulting session-view action changes.
-
 ### [a7f3c1d8-9e2b-4f16-8a5c-6d3e7f2b1a09] Quality: Add VHS feature GIF generation to E2E tests
 
 #### Assignee
@@ -186,8 +157,7 @@ flowchart TD
     R1["[ca014af3] Forge: GitHub review request publish"]
     R2["[33150cab] Quality: session lifecycle + prompt E2E"]
     R3["[5a84d7a9] Quality: settings, stats, and resize E2E"]
-    R4["[4f491812] Workflow: draft-session polish"]
-    R5["[a7f3c1d8] Quality: VHS feature GIF generation"]
+    R4["[a7f3c1d8] Quality: VHS feature GIF generation"]
 ```
 
 ## Queued Next
@@ -286,7 +256,7 @@ Finish the remaining convention cleanup after active behavior work is no longer 
 
 #### Promote when
 
-Promote when the active `Workflow`, `Platform`, and `Quality` steps stop rewriting the same modules.
+Promote when the active quality slices stop rewriting the same modules.
 
 #### Depends on
 
@@ -300,7 +270,7 @@ Add one deterministic local-session scenario plus the minimal reusable harness s
 
 #### Promote when
 
-Promote when a `Ready Now` slot opens and the active workflow and model-availability slices stop competing for the same session lifecycle boundaries.
+Promote when a `Ready Now` slot opens and the active quality slices stop competing for the same session lifecycle boundaries.
 
 #### Depends on
 
@@ -325,9 +295,8 @@ Promote when maintainers want Agentty to list, claim, reorder, or transition roa
 - `Forge: Replace GitHub branch publish with create or update pull request` should reuse the existing `ag-forge` review-request create/refresh flow and keep GitLab on the current push-only branch-publish path.
 - `Agents: Scope model lists to locally available backends` should reuse one shared availability snapshot across Settings and `/model` instead of probing CLIs separately in render paths.
 - `Protocol: Bootstrap direct agent instructions once per app-server session` should keep the canonical instruction contract inside Agentty-managed prompt construction and persistence, not in user-maintained provider instruction files.
-- `Workflow: Stage draft session messages and start them explicitly` should keep using `Status::New` for draft sessions instead of introducing a second pre-start lifecycle status.
 - The parked `[6bb0cae7] Planning: Move roadmap tasks to a single canonical TOML plan` should make `docs/plan/roadmap.toml` the only roadmap source of truth for Agentty and `skills/implementation-plan`.
-- The parked local session harness slice should come back only when the active workflow and model-availability changes stop churning the same lifecycle seams.
+- The parked local session harness slice should come back only when the active quality slices stop churning the same session lifecycle seams.
 - The typed-error migration and module-test backfill are both complete. Convention cleanup remains open in the parked sweep card.
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
 - Testty proof pipeline is fully landed in `crates/testty/`. Future enhancements (e.g., additional proof backends, CI integration, or new recipe types) should be queued as new parked cards referencing that crate.
