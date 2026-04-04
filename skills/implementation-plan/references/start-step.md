@@ -1,10 +1,10 @@
 # Start Step
 
-Use this guide when implementation is about to start for an already-claimed roadmap step.
+Use this guide when implementation is about to start for an existing `Ready Now` roadmap step.
 
 ## Goal
 
-Start the exact planned implementation for one `Ready Now` step without mixing in claim edits or reshaping the scope mid-flight.
+Start the exact planned implementation for one assigned `Ready Now` step without reshaping the scope mid-flight.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Start the exact planned implementation for one `Ready Now` step without mixing i
 
 ## Guardrails
 
-- Do not use this flow to claim ownership. Handle claiming first with `references/claim-step.md`.
+- Do not use this flow to silently reassign ownership. If the step is unassigned because it predates the promotion rule, assign it in the smallest roadmap edit first; if it is assigned to someone else, stop and clarify.
 - Do not quietly expand one step into multiple sibling outcomes during implementation.
-- Do not leave roadmap-only claim edits mixed into the implementation diff.
+- Do not leave roadmap-only assignee changes mixed into unrelated implementation reshaping.
 - Do not keep completed implementation detail in `## Ready Now` after the step lands.

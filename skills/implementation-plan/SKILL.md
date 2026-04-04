@@ -24,8 +24,8 @@ This skill is the source of truth for roadmap structure and execution-planning r
 
 1. **Choose the roadmap operation**
 
-   - For claiming an existing `Ready Now` step before implementation, read `references/claim-step.md`, set only that step's `#### Assignee` field to the current user, and land that claim before implementation starts.
-   - For starting implementation on an already-claimed `Ready Now` step, read `references/start-step.md` and execute the step exactly as written before reshaping the roadmap.
+   - For promoting a compact `Queued Next` or `Parked` card into `Ready Now`, read `references/promote-step.md` and assign the work in that same roadmap edit.
+   - For starting implementation on an existing `Ready Now` step, read `references/start-step.md` and execute the step exactly as written before reshaping the roadmap.
    - For revising an existing step or promotion card, read `references/update-step.md` and update only the named roadmap sections that need to change while preserving the canonical structure for that queue.
    - For inserting a new backlog item, read `references/add-step.md` and decide first whether it belongs in `Ready Now`, `Queued Next`, or `Parked`.
 
@@ -44,9 +44,9 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Use the exact heading format `[UUID] Stream: Title` for all `Ready Now`, `Queued Next`, and `Parked` items so every outcome keeps a stable identifier.
    - Keep `Ready Now` detailed. Render `Assignee`, `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
    - Keep `Queued Next` and `Parked` intentionally compact. Render `Outcome`, `Promote when`, and `Depends on` as their only subtopics.
-   - Render `#### Assignee` as the first subsection in every `Ready Now` step and store the owner there in `@username` format or the exact text `No assignee`.
-   - When claiming a step for the current user, resolve the GitHub login with `gh api user --jq .login` first and write that value as `@<login>` instead of guessing from local git config or the OS username.
-   - Until lease automation exists, claim work only from `Ready Now`, keep claim edits scoped to the `#### Assignee` field, and land the claim as a dedicated commit before implementation begins.
+   - Render `#### Assignee` as the first subsection in every `Ready Now` step and store the owner there in `@username` format.
+   - When promoting work into `Ready Now`, resolve the GitHub login with `gh api user --jq .login` first and either write an explicit `@username` chosen during promotion or default to the current promoter's `@<login>` instead of guessing from local git config or the OS username.
+   - Until lease automation exists, only `Ready Now` items carry assignees. Keep `Queued Next` and `Parked` unassigned, and assign ownership as part of promotion instead of using a separate claim-only edit.
    - Use size budgeting during roadmap creation, not after the fact. Before finalizing the roadmap, estimate the changed-line scope for each step, split oversized work into additional steps, and keep those size estimates in planning notes or reviewer reasoning rather than rendering a `#### Size` block in `docs/plan/` files.
    - Treat `500` changed lines as the hard implementation ceiling, not the planning target. Plan each `Ready Now` step with headroom and split it before handoff when the estimate is above `350` changed lines so routine implementation drift does not push the real diff over `500`.
    - Estimate size by summing the likely changes across production code, tests, and docs instead of counting only the main behavior edit. Use the higher-risk estimate when one slice spans multiple module families or introduces a new boundary plus its first consumer.
@@ -98,8 +98,8 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Verify no `Ready Now` step has more than `3` implementation checklist items under `#### Substeps`; split crowded steps before handoff.
    - Verify every item heading uses the exact `[UUID] Stream: Title` format and that the UUID value is valid.
    - Verify every `Ready Now` step starts with explicit `#### Assignee` before `#### Why now`.
-   - Verify every `#### Assignee` value uses `@username` or the exact text `No assignee`.
-   - Verify any newly claimed assignee was derived from `gh api user --jq .login` so the roadmap matches the authenticated GitHub identity.
+   - Verify every `#### Assignee` value uses `@username`.
+   - Verify every `Ready Now` step has a concrete `@username` assignee and that any assignee defaulted during promotion was derived from `gh api user --jq .login`.
    - Verify every `Ready Now` step has explicit `#### Tests` and `#### Docs` sections.
    - Verify every `Queued Next` or `Parked` card uses only `#### Outcome`, `#### Promote when`, and `#### Depends on`.
    - Verify every `#### Substeps` checklist item starts with a human-readable title while keeping the detailed implementation guidance in the same item.
@@ -149,7 +149,7 @@ Use this skeleton when adding or revising `docs/plan/roadmap.md`:
 
 #### Assignee
 
-`No assignee`
+`@username`
 
 #### Why now
 
@@ -219,7 +219,7 @@ flowchart TD
 - Keep no more than `5` items in `## Ready Now`.
 - Keep only `Ready Now` items fully expanded.
 - Keep `## Queued Next` and `## Parked` intentionally compact.
-- Claim work only from `## Ready Now`.
+- Assign ownership when promoting work into `## Ready Now`; keep `## Queued Next` and `## Parked` unassigned.
 - After implementing a `Ready Now` step, remove it from the roadmap, refresh the snapshot rows that changed, and promote the next queued card into `## Ready Now` when one is available.
 - If more work remains after a completed step, add or update a queued or parked card instead of preserving completed detail.
 ````

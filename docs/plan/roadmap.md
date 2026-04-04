@@ -34,40 +34,12 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 - Treat `500` changed lines as the hard implementation ceiling and keep `Ready Now` slices estimated at `350` changed lines or less so normal implementation drift still stays reviewable.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work so the decision uses fresh repository context.
 - When a `Ready Now` step lands and queued work remains, promote the next queued card into `Ready Now` instead of leaving the execution window short.
-- Until lease automation exists, only `Ready Now` items can carry an assignee and only `Ready Now` items should be claimed.
-- Claim ownership in a dedicated roadmap-only commit before starting implementation so the roadmap diff advertises who is taking the step, and resolve that assignee with `gh api user --jq .login` before writing `@<login>`.
+- Until lease automation exists, only `Ready Now` items can carry an assignee, and every promoted `Ready Now` step must set that assignee in the promotion edit.
+- When promoting queued or parked work into `Ready Now`, either name an explicit `@username` or default to the current promoter resolved with `gh api user --jq .login`; do not use a separate claim-only edit.
 - Keep tests and documentation attached to the same `Ready Now` step that changes behavior.
 - Keep `Ready Now` implementation scopes to `1..=3` bullets under `#### Substeps`; when a step needs broader adoption, copy polish, or a second peer surface, queue the follow-up instead of widening the current slice.
 
 ## Ready Now
-
-### [8f4402cd-beff-4b4d-b9f7-00efd834249b] Workflow: Launch sibling sessions from follow-up tasks and retain task state
-
-#### Assignee
-
-`@minev-dev`
-
-#### Why now
-
-The follow-up task persistence slice is already landed, so the next workflow step should deliver the remaining user-visible action instead of leaving stored tasks as read-only output.
-
-#### Usable outcome
-
-Selecting a persisted follow-up task can launch it into a sibling session, and the original session keeps the launched and open task state stable across reopen and refresh flows.
-
-#### Substeps
-
-- [ ] **Add the sibling-session launch path.** Wire one persisted follow-up task through `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session_state.rs`, and `crates/agentty/src/app/session/workflow/load.rs` so the app can create a sibling session from stored task content without inventing a parallel session-creation path.
-- [ ] **Expose the launch action in session view.** Update `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and `crates/agentty/src/ui/state/help_action.rs` so the selected follow-up task can be launched from the existing session UI with a clear launched/open affordance.
-- [ ] **Persist launched-task state through reloads.** Extend `crates/agentty/src/infra/db.rs`, `crates/agentty/src/domain/session.rs`, and any required migration under `crates/agentty/migrations/` so launched and open task state survives refresh, app restart, and session reopen.
-
-#### Tests
-
-- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/load.rs`, `crates/agentty/src/infra/db.rs`, and `crates/agentty/src/runtime/mode/session_view.rs` for sibling-session launch, persisted task-state reload, and the session-view action path.
-
-#### Docs
-
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` for launching follow-up tasks into sibling sessions and the resulting task-state behavior.
 
 ### [ca014af3-5cd0-4567-bf11-3495765dcf6f] Forge: Replace GitHub branch publish with create or update pull request
 
@@ -124,11 +96,38 @@ E2E tests cover session creation via `a` key, opening a session with `Enter`, se
 
 - [ ] No user-facing behavior changes — no doc updates needed.
 
+### [5a84d7a9-3346-4e01-90be-ce5d3783b32f] Quality: Add settings, stats, and resize E2E tests
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+The session-lifecycle E2E slice is already active in `Ready Now`, and the next deterministic coverage gap is still confined to the same PTY-driven test harness. Promoting this follow-up now keeps the quality stream moving without reopening workflow or protocol planning.
+
+#### Usable outcome
+
+E2E coverage validates settings navigation and edit overlays, stats-page empty-state rendering, project selection tab switching, and both cramped and wide terminal layout behavior through full UI flows.
+
+#### Substeps
+
+- [ ] **Cover settings, stats, and project navigation flows.** Extend `crates/agentty/tests/e2e/navigation.rs`, `crates/agentty/tests/e2e/project.rs`, and shared helpers in `crates/agentty/tests/e2e/common.rs` so the E2E suite covers opening the settings overlay with `Enter`, cancelling it with `Esc`, rendering the stats page empty state, and switching from project selection back to the sessions tab.
+- [ ] **Add terminal-size layout coverage.** Add or extend scenarios in `crates/agentty/tests/e2e/navigation.rs` and `crates/agentty/tests/e2e/common.rs` so the PTY suite exercises a cramped `40x12` terminal and a wide `200x50` terminal without regressing layout stability.
+
+#### Tests
+
+- [ ] Run `cargo test -p agentty --test e2e` after adding the new scenarios so the full PTY-driven suite validates the shared helpers and terminal-size coverage together.
+
+#### Docs
+
+- [ ] No user-facing behavior changes — no doc updates needed.
+
 ### [4f491812-f373-4ac5-bd57-b46c4f9d91e3] Workflow: Polish draft-session editing after baseline staging lands
 
 #### Assignee
 
-No assignee
+`@minev-dev`
 
 #### Why now
 
@@ -184,28 +183,14 @@ Running `cargo test -p agentty --test e2e` generates high-quality VHS GIFs (3200
 
 ```mermaid
 flowchart TD
-    R1["[8f4402cd] Workflow: sibling-session launch"]
-    R2["[ca014af3] Forge: GitHub review request publish"]
-    R3["[33150cab] Quality: session lifecycle + prompt E2E"]
+    R1["[ca014af3] Forge: GitHub review request publish"]
+    R2["[33150cab] Quality: session lifecycle + prompt E2E"]
+    R3["[5a84d7a9] Quality: settings, stats, and resize E2E"]
     R4["[4f491812] Workflow: draft-session polish"]
     R5["[a7f3c1d8] Quality: VHS feature GIF generation"]
 ```
 
 ## Queued Next
-
-### [5a84d7a9-3346-4e01-90be-ce5d3783b32f] Quality: Add settings, stats, and resize E2E tests
-
-#### Outcome
-
-E2E tests cover settings page navigation and edit overlay (`Enter` opens, `Esc` cancels), stats page empty-state rendering, project selection switching to sessions tab, small terminal graceful rendering (40x12), and wide terminal layout adaptation (200x50).
-
-#### Promote when
-
-Promote when a `Ready Now` slot opens. Can promote independently of `[33150cab]`.
-
-#### Depends on
-
-`[01c37d54] Quality: Restructure E2E tests and add navigation coverage` (landed)
 
 ### [17a9e2ba-0b7d-407d-9cd4-72807ef7bc1f] Delivery: Add project commit strategy selection
 
@@ -357,7 +342,7 @@ Promote when maintainers want Agentty to list, claim, reorder, or transition roa
 - Keep no more than `5` items in `## Ready Now`.
 - Keep only `Ready Now` items fully expanded with `#### Assignee`, `#### Why now`, `#### Usable outcome`, `#### Substeps`, `#### Tests`, and `#### Docs`.
 - Keep `## Queued Next` and `## Parked` as compact promotion cards with `#### Outcome`, `#### Promote when`, and `#### Depends on`.
-- Claim work only from `## Ready Now` by updating that step's `#### Assignee` field in a dedicated commit before implementation starts, using `gh api user --jq .login` to determine the `@<login>` value.
+- Promote queued or parked work into `## Ready Now` by assigning that step in the same roadmap edit, either to an explicit `@username` or to the current promoter resolved through `gh api user --jq .login`.
 - Keep each `Ready Now` step estimated at `350` changed lines or less so implementation remains below the `500`-line hard ceiling, and split any wider follow-up into `## Queued Next`.
 - After a `Ready Now` step lands, remove it from `## Ready Now`, refresh any changed snapshot rows, and promote the next queued card whenever `## Queued Next` still has work.
 - If follow-up work remains after a step lands, add or update a compact queued or parked card instead of preserving the completed step.
