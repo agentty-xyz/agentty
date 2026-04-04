@@ -1820,7 +1820,7 @@ mod tests {
 
         SessionManager::new(
             SessionDefaults {
-                model: AgentModel::Gpt53Codex,
+                model: AgentModel::Gpt54,
             },
             Arc::new(git::MockGitClient::new()),
             state,

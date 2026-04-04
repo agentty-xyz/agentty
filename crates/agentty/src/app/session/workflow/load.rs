@@ -749,7 +749,7 @@ mod tests {
             in_progress_total_seconds: 0,
             input_tokens: 0,
             is_draft: false,
-            model: "gpt-5.3-codex".to_string(),
+            model: "gpt-5.4".to_string(),
             output: String::new(),
             output_tokens: 0,
             project_id: Some(1),

@@ -114,7 +114,7 @@ mod tests {
         let request = AppServerTurnRequest {
             folder: std::env::temp_dir(),
             live_session_output: None,
-            model: AgentModel::Gpt53Codex.as_str().to_string(),
+            model: AgentModel::Gpt54.as_str().to_string(),
             prompt: "prompt".into(),
             request_kind: crate::infra::channel::AgentRequestKind::SessionStart,
             provider_conversation_id: None,

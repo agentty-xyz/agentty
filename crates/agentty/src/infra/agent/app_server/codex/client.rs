@@ -162,7 +162,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!(
             "agentty-codex-runtime-state-{thread_id}-{latest_input_tokens}"
         ));
-        let mut state = CodexRuntimeState::new(folder, AgentModel::Gpt53Codex.as_str().to_string());
+        let mut state = CodexRuntimeState::new(folder, AgentModel::Gpt54.as_str().to_string());
         state.thread_id = thread_id.to_string();
         state.latest_input_tokens = latest_input_tokens;
 
@@ -213,11 +213,11 @@ mod tests {
     fn auto_compact_input_token_threshold_uses_400k_limit_for_codex_models() {
         // Arrange
         let gpt_54_model = AgentModel::Gpt54.as_str();
-        let gpt_53_codex_model = AgentModel::Gpt53Codex.as_str();
+        let spark_model = AgentModel::Gpt53CodexSpark.as_str();
 
         // Act
         let gpt_54_threshold = policy::auto_compact_input_token_threshold(gpt_54_model);
-        let gpt_53_threshold = policy::auto_compact_input_token_threshold(gpt_53_codex_model);
+        let spark_threshold = policy::auto_compact_input_token_threshold(spark_model);
 
         // Assert
         assert_eq!(
@@ -225,8 +225,8 @@ mod tests {
             policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
         );
         assert_eq!(
-            gpt_53_threshold,
-            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
+            spark_threshold,
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT
         );
     }
 
@@ -287,7 +287,7 @@ mod tests {
         let thread_id = lifecycle::start_thread(
             &mut transport,
             folder.path(),
-            AgentModel::Gpt53Codex.as_str(),
+            AgentModel::Gpt54.as_str(),
             ReasoningLevel::default(),
         )
         .await;
@@ -376,7 +376,7 @@ mod tests {
         let thread = lifecycle::start_or_resume_thread(
             &mut transport,
             folder.path(),
-            AgentModel::Gpt53Codex.as_str(),
+            AgentModel::Gpt54.as_str(),
             Some("thread-existing"),
             ReasoningLevel::default(),
         )
@@ -660,7 +660,7 @@ mod tests {
         // Act
         let payload = lifecycle::build_turn_start_payload(
             folder.path(),
-            AgentModel::Gpt53Codex.as_str(),
+            AgentModel::Gpt54.as_str(),
             ReasoningLevel::default(),
             "thread-123",
             "Implement the task",

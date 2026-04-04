@@ -1398,7 +1398,7 @@ mod tests {
     async fn test_apply_view_scroll_and_output_mode_updates_review_state() {
         // Arrange
         let (mut app, _base_dir, expected_session_id) = new_test_app_with_session().await;
-        let expected_status_message = review_loading_message(AgentModel::Gpt53Codex);
+        let expected_status_message = review_loading_message(AgentModel::Gpt54);
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,

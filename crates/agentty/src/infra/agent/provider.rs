@@ -305,7 +305,7 @@ mod tests {
     fn test_provider_kind_for_model_reports_owner() {
         // Arrange / Act / Assert
         assert_eq!(
-            provider_kind_for_model(AgentModel::Gpt53Codex.as_str()).expect("known model"),
+            provider_kind_for_model(AgentModel::Gpt54.as_str()).expect("known model"),
             AgentKind::Codex
         );
     }

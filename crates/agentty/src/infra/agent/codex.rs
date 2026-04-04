@@ -84,7 +84,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "Run checks",
                 request_kind: &session_start_request_kind(),
-                model: "gpt-5.3-codex",
+                model: "gpt-5.4",
                 reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
@@ -112,7 +112,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "Continue edits",
                 request_kind: &session_resume_request_kind(Some("previous assistant output")),
-                model: "gpt-5.3-codex",
+                model: "gpt-5.4",
                 reasoning_level: crate::domain::agent::ReasoningLevel::High,
             },
         )
@@ -125,13 +125,7 @@ mod tests {
         // Assert
         assert_eq!(
             arguments,
-            vec![
-                "--model",
-                "gpt-5.3-codex",
-                "app-server",
-                "--listen",
-                "stdio://"
-            ]
+            vec!["--model", "gpt-5.4", "app-server", "--listen", "stdio://"]
         );
     }
 
@@ -150,7 +144,7 @@ mod tests {
                 folder: temp_directory.path(),
                 prompt: "Generate title",
                 request_kind: &AgentRequestKind::UtilityPrompt,
-                model: "gpt-5.3-codex",
+                model: "gpt-5.4",
                 reasoning_level: crate::domain::agent::ReasoningLevel::Low,
             },
         )

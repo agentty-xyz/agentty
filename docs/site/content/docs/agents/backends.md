@@ -306,7 +306,6 @@ quality, and cost.
 | Model ID | Description | Default |
 |----------|-------------|---------|
 | `gpt-5.4` | Latest Codex model for coding quality. | Yes |
-| `gpt-5.3-codex` | Previous Codex model for coding quality. | |
 | `gpt-5.3-codex-spark` | Codex spark model for quick coding iterations. | |
 
 ## Switching Models

@@ -1433,7 +1433,7 @@ mod tests {
             .upsert_project("/tmp/project", Some("main"))
             .await
             .expect("failed to upsert project");
-        db.insert_session("sess1", "gpt-5.3-codex", "main", "InProgress", project_id)
+        db.insert_session("sess1", "gpt-5.4", "main", "InProgress", project_id)
             .await
             .expect("failed to insert session");
 
@@ -1469,7 +1469,7 @@ mod tests {
         });
 
         // Act
-        let status = apply_turn_result(&context, AgentModel::Gpt53Codex, turn_result)
+        let status = apply_turn_result(&context, AgentModel::Gpt54, turn_result)
             .await
             .expect("turn result should succeed");
         let instruction_conversation_id = db

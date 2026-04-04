@@ -2507,7 +2507,7 @@ mod tests {
             .upsert_project_setting(
                 second_project_id,
                 SettingName::DefaultSmartModel,
-                AgentModel::Gpt53Codex.as_str(),
+                AgentModel::Gpt54.as_str(),
             )
             .await
             .expect("failed to persist second project smart model");
@@ -2535,7 +2535,7 @@ mod tests {
             .expect("failed to switch project");
 
         // Assert
-        assert_eq!(app.settings.default_smart_model, AgentModel::Gpt53Codex);
+        assert_eq!(app.settings.default_smart_model, AgentModel::Gpt54);
         assert_eq!(app.settings.open_command, "cargo test");
     }
 

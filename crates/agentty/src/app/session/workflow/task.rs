@@ -907,7 +907,7 @@ mod tests {
         database
             .insert_session(
                 "session-id",
-                "gpt-5.3-codex",
+                "gpt-5.4",
                 "main",
                 &Status::New.to_string(),
                 project_id,
@@ -1179,7 +1179,7 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        insert_review_session(&database, AgentModel::Gpt53Codex.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
@@ -1190,7 +1190,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
+            session_model: AgentModel::Gpt54,
         };
 
         // Act
@@ -1217,7 +1217,7 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        insert_review_session(&database, AgentModel::Gpt53Codex.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
@@ -1228,7 +1228,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
+            session_model: AgentModel::Gpt54,
         };
 
         // Act
@@ -1277,7 +1277,7 @@ mod tests {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
-        insert_review_session(&database, AgentModel::Gpt53Codex.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
             .update_session_summary("session-id", &summary_payload)
@@ -1293,7 +1293,7 @@ mod tests {
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
             output: Arc::clone(&output),
-            session_model: AgentModel::Gpt53Codex,
+            session_model: AgentModel::Gpt54,
         };
 
         // Act

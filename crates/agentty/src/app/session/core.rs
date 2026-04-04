@@ -1488,7 +1488,7 @@ mod tests {
             .create_session()
             .await
             .expect("failed to create first session");
-        app.set_session_model(&first_session_id, AgentModel::Gpt53Codex)
+        app.set_session_model(&first_session_id, AgentModel::Gpt54)
             .await
             .expect("failed to set session model");
         let active_project_id = app.active_project_id();
@@ -1556,7 +1556,7 @@ mod tests {
             .expect("failed to create first session");
 
         // Act
-        app.set_session_model(&first_session_id, AgentModel::Gpt53Codex)
+        app.set_session_model(&first_session_id, AgentModel::Gpt54)
             .await
             .expect("failed to set session model");
         let default_smart_model_setting = app
@@ -1575,7 +1575,7 @@ mod tests {
         // Assert
         assert_eq!(
             default_smart_model_setting,
-            Some(AgentModel::Gpt53Codex.as_str().to_string())
+            Some(AgentModel::Gpt54.as_str().to_string())
         );
         let second_session = restarted_app
             .sessions
@@ -1583,7 +1583,7 @@ mod tests {
             .iter()
             .find(|session| session.id == second_session_id)
             .expect("missing second session");
-        assert_eq!(second_session.model, AgentModel::Gpt53Codex);
+        assert_eq!(second_session.model, AgentModel::Gpt54);
     }
 
     #[tokio::test]

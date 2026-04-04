@@ -23,8 +23,6 @@ pub enum AgentModel {
     Gpt54,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
     Gpt53CodexSpark,
-    /// Codex model backed by `gpt-5.3-codex`.
-    Gpt53Codex,
     /// Claude Opus model backed by `claude-opus-4-6`.
     ClaudeOpus46,
     /// Claude Sonnet model backed by `claude-sonnet-4-6`.
@@ -65,7 +63,6 @@ impl AgentModel {
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54 => "gpt-5.4",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
-            Self::Gpt53Codex => "gpt-5.3-codex",
             Self::ClaudeOpus46 => "claude-opus-4-6",
             Self::ClaudeSonnet46 => "claude-sonnet-4-6",
             Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
@@ -76,7 +73,7 @@ impl AgentModel {
     pub fn kind(self) -> AgentKind {
         match self {
             Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
-            Self::Gpt54 | Self::Gpt53CodexSpark | Self::Gpt53Codex => AgentKind::Codex,
+            Self::Gpt54 | Self::Gpt53CodexSpark => AgentKind::Codex,
             Self::ClaudeOpus46 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
             }
@@ -189,9 +186,7 @@ impl FromStr for AgentModel {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.4" => Ok(Self::Gpt54),
-            // Legacy alias retained so persisted settings migrate to Spark.
-            "gpt-5.3-codex-spark" | "gpt-5.2-codex" => Ok(Self::Gpt53CodexSpark),
-            "gpt-5.3-codex" => Ok(Self::Gpt53Codex),
+            "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-4-6" => Ok(Self::ClaudeOpus46),
             "claude-sonnet-4-6" => Ok(Self::ClaudeSonnet46),
             "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
@@ -211,7 +206,6 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gpt54 => "Latest Codex model for coding quality.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
-            Self::Gpt53Codex => "Previous Codex model for coding quality.",
             Self::ClaudeOpus46 => "Top-tier Claude model for complex tasks.",
             Self::ClaudeSonnet46 => "Balanced Claude model for quality and latency.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
@@ -252,11 +246,7 @@ impl AgentKind {
             AgentModel::ClaudeSonnet46,
             AgentModel::ClaudeHaiku4520251001,
         ];
-        const CODEX_MODELS: &[AgentModel] = &[
-            AgentModel::Gpt54,
-            AgentModel::Gpt53Codex,
-            AgentModel::Gpt53CodexSpark,
-        ];
+        const CODEX_MODELS: &[AgentModel] = &[AgentModel::Gpt54, AgentModel::Gpt53CodexSpark];
 
         match self {
             Self::Gemini => GEMINI_MODELS,
@@ -345,19 +335,6 @@ mod tests {
     }
 
     #[test]
-    /// Ensures the removed `gpt-5.2-codex` id maps to Spark for compatibility.
-    fn test_parse_model_maps_legacy_gpt_52_codex_to_codex_spark() {
-        // Arrange
-        let codex_kind = AgentKind::Codex;
-
-        // Act
-        let parsed_model = codex_kind.parse_model("gpt-5.2-codex");
-
-        // Assert
-        assert_eq!(parsed_model, Some(AgentModel::Gpt53CodexSpark));
-    }
-
-    #[test]
     /// Ensures reasoning-level parsing accepts all supported persisted values.
     fn test_reasoning_level_from_str_parses_supported_values() {
         // Arrange
@@ -438,7 +415,6 @@ mod tests {
             selectable_models,
             vec![
                 AgentModel::Gpt54,
-                AgentModel::Gpt53Codex,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31ProPreview,
                 AgentModel::Gemini3FlashPreview,
@@ -453,7 +429,7 @@ mod tests {
         // Arrange
         let unavailable_model = AgentModel::ClaudeOpus46;
         let available_agent_kinds = [AgentKind::Codex, AgentKind::Gemini];
-        let fallback_model = AgentModel::Gpt53Codex;
+        let fallback_model = AgentModel::Gpt54;
 
         // Act
         let resolved_model = resolve_model_for_available_agent_kinds(
@@ -463,7 +439,7 @@ mod tests {
         );
 
         // Assert
-        assert_eq!(resolved_model, AgentModel::Gpt53Codex);
+        assert_eq!(resolved_model, AgentModel::Gpt54);
     }
 
     #[test]

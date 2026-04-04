@@ -32,8 +32,8 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
 
 /// Proactive compaction threshold for Codex models with a 400k context window.
 ///
-/// [`AgentModel::Gpt54`] and [`AgentModel::Gpt53Codex`] use this larger
-/// threshold to keep enough room for the active turn while delaying compaction.
+/// [`AgentModel::Gpt54`] uses this larger threshold to keep enough room for
+/// the active turn while delaying compaction.
 pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT: u64 = 300_000;
 
 /// Proactive compaction threshold for Codex Spark models with a 128k context
@@ -47,10 +47,8 @@ pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT: u64 = 120_000;
 /// checks. It keeps larger-window Codex models from compacting too early
 /// while preserving the tighter threshold required by Spark models.
 pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
-    let is_400k_context_model = matches!(
-        AgentKind::Codex.parse_model(model),
-        Some(AgentModel::Gpt54 | AgentModel::Gpt53Codex)
-    );
+    let is_400k_context_model =
+        matches!(AgentKind::Codex.parse_model(model), Some(AgentModel::Gpt54));
     if is_400k_context_model {
         return AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT;
     }

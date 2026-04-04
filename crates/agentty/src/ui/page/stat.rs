@@ -352,7 +352,7 @@ mod tests {
         let sessions = vec![session_fixture_with(
             "session-1",
             "Active Session",
-            AgentModel::Gpt53Codex,
+            AgentModel::Gpt54,
             10,
             10,
             0,
@@ -401,7 +401,7 @@ mod tests {
             session_fixture_with(
                 "session-1",
                 "Longest Session",
-                AgentModel::Gpt53Codex,
+                AgentModel::Gpt54,
                 1_000,
                 500,
                 0,
@@ -410,7 +410,7 @@ mod tests {
             session_fixture_with(
                 "session-2",
                 "Second Session",
-                AgentModel::Gpt53Codex,
+                AgentModel::Gpt54,
                 2_000,
                 700,
                 10,
@@ -442,7 +442,7 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Token Stats"));
-        assert!(text.contains("gpt-5.3-codex"));
+        assert!(text.contains("gpt-5.4"));
         assert!(text.contains("claude-opus-4-6"));
     }
 
