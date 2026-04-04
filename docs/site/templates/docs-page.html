@@ -45,8 +45,211 @@
         docs-layout
     {% endblock main_extra_classes %}
     {% block extra_scripts %}
+        <script type="module">
+/**
+ * Replace Mermaid fenced code blocks in docs pages with rendered SVG diagrams.
+ *
+ * The docs content is already server-rendered by Zola, so this enhancer scans
+ * the generated HTML for `mermaid` code fences, preserves the source text in
+ * data attributes, renders diagrams with Mermaid on the client, and re-renders
+ * them whenever the site theme changes.
+ */
+(async function () {
+  var mermaidCodeBlockSelector = '.docs-content pre';
+  var mermaidModuleUrl = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  var mermaidModulePromise = null;
+  var renderCounter = 0;
+
+  /**
+   * Return `true` when a fenced code block was emitted from a `mermaid` code
+   * fence in markdown.
+   */
+  function isMermaidCodeBlock(pre) {
+    var code = pre.querySelector('code');
+    if (!code) {
+      return false;
+    }
+
+    var preLang = pre.getAttribute('data-lang');
+    var codeLang = code.getAttribute('data-lang');
+    var codeClassName = code.className || '';
+
+    return preLang === 'mermaid'
+      || codeLang === 'mermaid'
+      || codeClassName.indexOf('language-mermaid') !== -1;
+  }
+
+  /** Read the current docs theme colors from CSS custom properties. */
+  function currentMermaidThemeVariables() {
+    var rootStyles = getComputedStyle(document.documentElement);
+    var background = rootStyles.getPropertyValue('--color-bg').trim();
+    var surface = rootStyles.getPropertyValue('--color-surface').trim();
+    var accent = rootStyles.getPropertyValue('--color-accent').trim();
+    var accentDim = rootStyles.getPropertyValue('--color-accent-dim').trim();
+    var border = rootStyles.getPropertyValue('--color-border').trim();
+    var muted = rootStyles.getPropertyValue('--color-muted').trim();
+
+    return {
+      background: background,
+      clusterBkg: surface,
+      clusterBorder: border,
+      edgeLabelBackground: background,
+      fontFamily: '"Share Tech Mono", "Courier New", monospace',
+      lineColor: accentDim,
+      mainBkg: surface,
+      primaryBorderColor: border,
+      primaryColor: surface,
+      primaryTextColor: accent,
+      secondaryBorderColor: border,
+      secondaryColor: surface,
+      secondaryTextColor: accent,
+      tertiaryBorderColor: border,
+      tertiaryColor: surface,
+      tertiaryTextColor: accent,
+      textColor: muted,
+    };
+  }
+
+  /**
+   * Replace Mermaid `pre > code` blocks with diagram host elements while
+   * preserving the original source for later re-renders.
+   */
+  function upgradeMermaidCodeBlocks() {
+    document.querySelectorAll(mermaidCodeBlockSelector).forEach(function (pre) {
+      if (!isMermaidCodeBlock(pre) || pre.dataset.mermaidUpgraded === 'true') {
+        return;
+      }
+
+      var code = pre.querySelector('code');
+      var source = code ? code.textContent.trim() : '';
+      if (!source) {
+        return;
+      }
+
+      var figure = document.createElement('figure');
+      figure.className = 'docs-mermaid';
+
+      var host = document.createElement('div');
+      host.className = 'docs-mermaid__diagram';
+      host.dataset.diagramSource = source;
+      host.setAttribute('aria-label', 'Mermaid diagram');
+
+      figure.appendChild(host);
+      pre.dataset.mermaidUpgraded = 'true';
+      pre.replaceWith(figure);
+    });
+  }
+
+  /** Build one Mermaid config using the active site theme colors. */
+  function mermaidConfig() {
+    return {
+      securityLevel: 'strict',
+      startOnLoad: false,
+      theme: 'base',
+      themeVariables: currentMermaidThemeVariables(),
+    };
+  }
+
+  /** Load the Mermaid ESM bundle once and reuse it across re-renders. */
+  function loadMermaidModule() {
+    if (!mermaidModulePromise) {
+      mermaidModulePromise = import(mermaidModuleUrl);
+    }
+
+    return mermaidModulePromise;
+  }
+
+  /** Render one Mermaid host from its preserved source text. */
+  async function renderMermaidHost(mermaid, host) {
+    var source = host.dataset.diagramSource || '';
+    if (!source.trim()) {
+      return;
+    }
+
+    host.classList.remove('docs-mermaid__diagram--error');
+    host.textContent = '';
+
+    try {
+      renderCounter += 1;
+      var renderResult = await mermaid.render('docs-mermaid-' + renderCounter, source);
+      host.innerHTML = renderResult.svg;
+      if (typeof renderResult.bindFunctions === 'function') {
+        renderResult.bindFunctions(host);
+      }
+    } catch (error) {
+      host.classList.add('docs-mermaid__diagram--error');
+      host.textContent = 'Mermaid failed to render for this page.';
+      console.error('Mermaid render failed:', error);
+    }
+  }
+
+  /** Render every Mermaid diagram host currently present on the page. */
+  async function renderMermaidDiagrams() {
+    var hasRenderedHosts = document.querySelector('.docs-mermaid__diagram');
+    var hasMermaidCodeBlocks = Array.from(document.querySelectorAll(mermaidCodeBlockSelector))
+      .some(isMermaidCodeBlock);
+    if (!hasRenderedHosts && !hasMermaidCodeBlocks) {
+      return;
+    }
+
+    var mermaidModule = await loadMermaidModule();
+    var mermaid = mermaidModule.default;
+
+    upgradeMermaidCodeBlocks();
+
+    var hosts = document.querySelectorAll('.docs-mermaid__diagram');
+    if (!hosts.length) {
+      return;
+    }
+
+    mermaid.initialize(mermaidConfig());
+
+    for (var host of hosts) {
+      await renderMermaidHost(mermaid, host);
+    }
+  }
+
+  /** Keep rendered diagrams in sync with the docs theme switcher. */
+  function attachMermaidThemeSync() {
+    var rerenderTimer = null;
+
+    window.addEventListener('agentty-themechange', function () {
+      if (rerenderTimer) {
+        window.clearTimeout(rerenderTimer);
+      }
+
+      rerenderTimer = window.setTimeout(function () {
+        void renderMermaidDiagrams();
+      }, 0);
+    });
+  }
+
+  await renderMermaidDiagrams();
+  attachMermaidThemeSync();
+})();
+        </script>
         <script>
 (function () {
+  /**
+   * Return `true` when a fenced code block originated from a Mermaid code
+   * fence and should be rendered as a diagram instead of receiving a copy
+   * button.
+   */
+  function isMermaidCodeBlock(pre) {
+    var code = pre.querySelector('code');
+    if (!code) {
+      return false;
+    }
+
+    var preLang = pre.getAttribute('data-lang');
+    var codeLang = code.getAttribute('data-lang');
+    var codeClassName = code.className || '';
+
+    return preLang === 'mermaid'
+      || codeLang === 'mermaid'
+      || codeClassName.indexOf('language-mermaid') !== -1;
+  }
+
   /**
    * Copy plain text to the clipboard and report whether it succeeded.
    *
@@ -81,6 +284,10 @@
   /** Attach a copy button to every fenced code block in `.docs-content`. */
   function attachCodeCopyButtons() {
     document.querySelectorAll('.docs-content pre').forEach(function (pre) {
+      if (isMermaidCodeBlock(pre)) {
+        return;
+      }
+
       if (pre.querySelector('.docs-copy-btn')) {
         return;
       }

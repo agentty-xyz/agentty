@@ -113,7 +113,11 @@
       var githubStars = document.querySelector('[data-github-stars]');
       var githubRelease = document.querySelector('[data-github-release]');
 
-      /** Apply a theme by name ('hacker' or 'dark'), update button states, and persist. */
+      /**
+       * Apply a theme by name (`hacker` or `dark`), update button states,
+       * persist the choice, and notify any page-level renderers that depend on
+       * theme colors.
+       */
       function applyTheme(theme) {
         root.classList.toggle('theme-dark', theme === 'dark');
         themeBtns.forEach(function (btn) {
@@ -123,6 +127,9 @@
           btn.setAttribute('aria-pressed', String(active));
         });
         localStorage.setItem(STORAGE_KEY, theme);
+        window.dispatchEvent(new CustomEvent('agentty-themechange', {
+          detail: { theme: theme }
+        }));
       }
 
       /** Format large star counts into compact values suitable for nav badges. */

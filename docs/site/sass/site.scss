@@ -812,6 +812,31 @@ svg {
     border-color: var(--color-accent);
 }
 
+.docs-mermaid {
+    margin: 1rem 0;
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    background: var(--color-surface);
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+}
+
+.docs-mermaid__diagram {
+    min-width: min-content;
+}
+
+.docs-mermaid__diagram svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+}
+
+.docs-mermaid__diagram--error {
+    color: #ff8f8f;
+    white-space: pre-wrap;
+}
+
 .docs-content .giallo-l {
     display: inline-block;
     min-height: 1lh;
@@ -1053,6 +1078,10 @@ svg {
         width: fit-content;
         margin-top: 0.55rem;
         margin-left: auto;
+    }
+
+    .docs-mermaid {
+        padding: 0.8rem;
     }
 }
 

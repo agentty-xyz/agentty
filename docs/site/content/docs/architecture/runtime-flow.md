@@ -114,6 +114,13 @@ The printed session-chat data comes from these sources:
   `SessionTaskService::append_session_output()` in
   `crates/agentty/src/app/session/workflow/task.rs`, which updates both the
   in-memory handle buffer and the persisted database row.
+- `active_prompt_output`
+  Cached by `SessionManager::set_active_prompt_output()` in
+  `crates/agentty/src/app/session/core.rs` when a start or reply prompt is
+  submitted. This stores the exact prompt-shaped transcript block that was just
+  appended to `session.output` so `SessionOutput` can split the transcript into
+  completed-turn content and the currently active turn without reparsing
+  generic prompt-looking lines from assistant output.
 - `session.summary`
   Persisted by the turn worker in
   `crates/agentty/src/app/session/workflow/worker.rs` as the raw protocol
@@ -133,6 +140,12 @@ The printed session-chat data comes from these sources:
   projection in `App::apply_agent_response_received()` so the active session
   view reflects the latest persisted metadata without waiting for a full
   reload.
+- `session.questions`
+  Persisted by the worker alongside the latest turn metadata and applied
+  immediately by the reducer, but these items do not render inside
+  `SessionOutput`. Instead they drive `AppMode::Question`, where the bottom
+  question panel renders the current question and its options/input while the
+  transcript panel remains visible above it.
 - `review_status_message` and `review_text`
   Stored on `AppMode::View` and its restore-view variants. Review mode is opened
   from `crates/agentty/src/runtime/mode/session_view.rs`, which either reuses a
@@ -146,6 +159,54 @@ The printed session-chat data comes from these sources:
   `AppEvent::SessionProgressUpdated` from
   `crates/agentty/src/app/session/workflow/task.rs`, the reducer batches those
   updates, and session view mode reads the latest message before rendering.
+- `done_session_output_mode`
+  Stored on `AppMode::View` and related restore-view snapshots in
+  `crates/agentty/src/ui/state/app_mode.rs`. This mode does not change what is
+  persisted; it only changes whether the panel uses the summary as its primary
+  body (`Summary`) or uses transcript output as the primary body (`Output` and
+  `Review`).
+
+### Output Assembly Diagram
+
+`SessionOutput` does not render one flat stored message list. Instead it
+assembles the panel from the persisted transcript plus synthetic metadata and
+transient view state:
+
+```mermaid
+flowchart TD
+  render["SessionChatPage render_session()"]
+  lines["SessionOutput output_lines()"]
+  render --> lines
+
+  base["Choose base body text"]
+  lines --> base
+  base --> draft["Draft preview<br/>(draft New session)"]
+  base --> done_summary["Rendered summary markdown<br/>(Done + Summary mode)"]
+  base --> transcript["session.output<br/>(all other modes and statuses)"]
+
+  split["Split transcript with active_prompt_output"]
+  completed["Completed-turn text"]
+  active["Active-turn text"]
+  lines --> split
+  split --> completed
+  split --> active
+
+  completed --> spacing["Normalize prompt spacing"]
+  spacing --> footer_split["Peel trailing footer block"]
+  footer_split --> footer_kind["Commit footer or commit error footer"]
+  footer_split --> completed_md["Render completed-turn markdown"]
+
+  completed_md --> summary["Append synthetic session.summary block"]
+  summary --> tasks["Append synthetic follow-up-task section"]
+  tasks --> footer["Append trailing commit footer"]
+  footer --> active_prompt["Append active-turn prompt block"]
+  active_prompt --> review["Append focused review markdown<br/>(review_text)"]
+  review --> final_row["Append final status row<br/>or t toggle hint"]
+```
+
+This means `session.output` stays the durable transcript, while summary,
+follow-up tasks, and focused review are layered on during render instead of
+being appended back into that transcript string.
 
 ### Render Path
 
@@ -161,31 +222,90 @@ The exact session-chat render path is:
    header above the bordered output region.
 1. `SessionOutput::output_text()` in
    `crates/agentty/src/ui/component/session_output.rs` selects the base text:
-   review text/status while in `DoneSessionOutputMode::Review`, rendered
-   summary text for `Status::Done` summary mode, otherwise `session.output`.
+   staged draft preview for draft `New` sessions, rendered summary text for
+   `Status::Done` summary mode, otherwise `session.output`.
 1. `SessionOutput::output_lines()` converts that source text into final panel
-   lines: it normalizes prompt spacing, splits any trailing commit footer,
-   renders markdown, appends the synthetic summary block from `session.summary`
-   for transcript-oriented modes, appends follow-up tasks, reattaches the
-   trailing commit footer, and finally adds the loader row or `t` toggle hint
-   when the current status requires it.
+   lines: it optionally splits the transcript using `active_prompt_output`,
+   normalizes prompt spacing, splits any trailing commit footer, renders the
+   completed-turn markdown, appends the synthetic summary block from
+   `session.summary` when the current status/mode allows it, appends
+   follow-up tasks, reattaches the trailing commit footer, appends the active
+   prompt block, appends focused review markdown from `review_text`, and
+   finally adds the loader row or `t` toggle hint when the current status
+   requires it.
 1. `SessionOutput::render()` writes the final `Line` list into a `ratatui`
    `Paragraph`, which is the exact widget printed in the session chat output
    area.
 
-### What Actually Prints in Each Mode
+### Print Timing
 
-- Review mode prints only review-specific content (`review_text`,
-  `review_status_message`, or the `Review is not available.` fallback). It does
-  not append transcript summary or follow-up-task sections.
-- Done summary mode prints the persisted summary payload rendered as
-  `Change Summary`, plus any transcript-scoped footer content and the `t`
-  toggle hint.
-- All other session-chat modes print `session.output`, then append the
-  structured summary from `session.summary` and transcript-scoped follow-up
-  tasks during render. The persisted transcript itself remains the
-  handle-synchronized answer/question output built by worker/task append
-  operations.
+The session output panel shows different data at different lifecycle points:
+
+```mermaid
+flowchart TD
+  submit["Start or reply submitted"]
+  submit --> append_prompt["Append prompt block to session.output"]
+  submit --> cache_prompt["Cache same block as active_prompt_output"]
+  submit --> progress["Render loader row from active_progress"]
+
+  turn_done["Turn completes"]
+  append_prompt --> turn_done
+  cache_prompt --> turn_done
+  progress --> turn_done
+
+  turn_done --> answer["Append assistant transcript chunk to session.output"]
+  answer --> answer_kind["Protocol answer<br/>or joined clarification-question text"]
+  turn_done --> metadata["Persist and apply latest-turn metadata"]
+  metadata --> summary_meta["session.summary"]
+  metadata --> task_meta["session.follow_up_tasks"]
+  metadata --> question_meta["session.questions"]
+  turn_done --> clear_active["Drop active_prompt_output"]
+  turn_done --> next_status["Move session to Review or Question"]
+
+  next_status --> review_run["Focused review runs"]
+  review_run --> review_loader["Render AgentReview loader row<br/>from review_status_message"]
+  review_run --> review_text["Append review_text<br/>after transcript content"]
+
+  question_meta --> clarifications["Clarification answers submitted"]
+  clarifications --> clarification_prompt["Runtime builds one normal reply prompt<br/>starting with Clarifications:"]
+```
+
+### What Prints, When It Prints, and When It Stops Showing
+
+| Artifact | Where it comes from | When it prints | When it is hidden or removed |
+|---------|----------------------|----------------|------------------------------|
+| User prompt blocks | `session.output` and `active_prompt_output` | Immediately after start/reply submission. The same block stays in the transcript after the turn finishes. | The transcript entry is durable. Only the transient `active_prompt_output` cache is removed after turn metadata is applied or when the session is no longer active. |
+| Assistant answer | `session.output` | After a successful turn when protocol `answer` is non-empty. | Durable transcript entry; not removed by `SessionOutput`. It can be hidden from view only when `DoneSessionOutputMode::Summary` replaces the base body with rendered summary text. |
+| Clarification question text from the assistant | `session.output` fallback when no `answer` exists | After a successful turn with questions but without top-level `answer` text. | Durable transcript entry once appended. Pending structured `session.questions` continue separately in question mode until answered. |
+| Structured clarification questions | `session.questions` | In `AppMode::Question`, inside the bottom question panel, not inside `SessionOutput`. | Cleared when the resumed turn starts; the output panel never renders these as synthetic transcript rows. |
+| Clarification answers | New reply prompt built by runtime and appended into `session.output` | When the user finishes all questions and submits the generated `Clarifications:` reply turn. | Durable transcript entry. `SessionOutput` only adjusts spacing between numbered question groups for readability. |
+| Summary block | `session.summary` | Appended after transcript content for most statuses. In `Done + Summary` mode it becomes the primary body instead. | Hidden for `Canceled` sessions. Also not appended a second time when `Done + Summary` mode already uses the summary as the base body. |
+| Follow-up tasks | `session.follow_up_tasks` | Always appended synthetically after the summary block when any tasks exist. | Replaced wholesale by the next completed turn's follow-up-task set. Not stored inside `session.output`. |
+| Commit footer | Trailing lines in `session.output` that begin with `[Commit]` or `[Commit Error]` | Reattached after summary and follow-up sections so commit notes stay tied to the completed turn footer. | Durable transcript content; only moved later in render order. |
+| Focused review loader | `review_status_message` with `Status::AgentReview` | While review assist is running or when the latest review attempt failed. | Removed when a review result arrives, when session view leaves review state, or when a new reply clears the review cache. |
+| Focused review text | `review_text` from review cache / view state | Appended after transcript content once review assist succeeds. | Cleared when a new reply starts, when the session returns to `InProgress`, or when a later review result fails and replaces it with an error status message. |
+| In-progress loader | `active_progress` | While a turn is running in `InProgress`. | Removed when the turn finishes or the session leaves an active status. |
+
+### Mode Rules
+
+- `DoneSessionOutputMode::Summary`
+  Uses rendered summary text as the primary body for `Status::Done`. The panel
+  still appends the `t` toggle hint and any follow-up-task block.
+- `DoneSessionOutputMode::Output`
+  Uses `session.output` as the primary body, then appends synthetic summary and
+  follow-up-task sections.
+- `DoneSessionOutputMode::Review`
+  Still uses transcript output as the primary body. If focused review text is
+  available, it is appended after the transcript; if not, the transcript
+  remains visible. The mode mainly changes the view-state selection and the `t`
+  toggle target back to summary.
+- `Status::Question`
+  Keeps the transcript panel visible above, while the question/options/input UI
+  is rendered in the bottom panel rather than inside `SessionOutput`.
+- `Status::Canceled`
+  Uses raw transcript only. Synthetic summary rendering is intentionally
+  suppressed so interrupted sessions do not show finalized metadata they never
+  completed.
 
 ## Session Turn Data Flow
 
