@@ -1521,7 +1521,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_agent_review_matches_review_actions() {
+    fn test_view_help_text_agent_review_hides_rebase_hint() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::AgentReview;
@@ -1534,6 +1534,7 @@ mod tests {
         assert!(help_text.contains("Enter: reply"));
         assert!(help_text.contains("m: add to merge queue"));
         assert!(help_text.contains("p: publish branch"));
+        assert!(!help_text.contains("r: rebase"));
     }
 
     #[test]

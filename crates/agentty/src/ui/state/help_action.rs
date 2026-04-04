@@ -51,6 +51,10 @@ pub enum ViewSessionState {
     /// Session is ready for review; reply, worktree-open, merge, rebase,
     /// review, and diff shortcuts are available.
     Review,
+    /// Session is generating focused review output; reply, worktree-open,
+    /// merge, review, and diff stay available while rebase remains hidden
+    /// until the status returns to `Review`.
+    AgentReview,
     /// Session allows reply/merge/rebase actions but is not in review mode, so
     /// diff remains hidden.
     Interactive,
@@ -83,7 +87,8 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
         Status::Question => ViewSessionState::Interactive,
         Status::Rebasing => ViewSessionState::Rebasing,
         Status::Merging | Status::Queued => ViewSessionState::MergeQueue,
-        Status::Review | Status::AgentReview => ViewSessionState::Review,
+        Status::Review => ViewSessionState::Review,
+        Status::AgentReview => ViewSessionState::AgentReview,
     }
 }
 
@@ -226,13 +231,23 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
             | ViewSessionState::NewSession
             | ViewSessionState::Rebasing
             | ViewSessionState::Review
+            | ViewSessionState::AgentReview
     );
     let can_edit_session = matches!(
         state.session_state,
-        ViewSessionState::Interactive | ViewSessionState::NewSession | ViewSessionState::Review
+        ViewSessionState::Interactive
+            | ViewSessionState::NewSession
+            | ViewSessionState::Review
+            | ViewSessionState::AgentReview
     );
-    let can_show_diff = state.session_state == ViewSessionState::Review;
-    let can_show_review = state.session_state == ViewSessionState::Review;
+    let can_show_diff = matches!(
+        state.session_state,
+        ViewSessionState::Review | ViewSessionState::AgentReview
+    );
+    let can_show_review = matches!(
+        state.session_state,
+        ViewSessionState::Review | ViewSessionState::AgentReview
+    );
     let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -267,7 +282,10 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
             "m",
             "Add to merge queue",
         ));
-        actions.push(HelpAction::new("rebase", "r", "Rebase"));
+
+        if state.session_state != ViewSessionState::AgentReview {
+            actions.push(HelpAction::new("rebase", "r", "Rebase"));
+        }
     }
 
     if can_toggle_done_output {
@@ -303,8 +321,9 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
 /// Returns compact session-view footer actions for the page-level hint line.
 ///
-/// Interactive and review sessions include merge and rebase controls directly
-/// in the footer to keep those actions discoverable without opening help.
+/// Interactive and review-oriented sessions keep merge controls discoverable
+/// in the footer, while `AgentReview` hides the rebase shortcut until focused
+/// review generation finishes.
 pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     let can_open_worktree = matches!(
         state.session_state,
@@ -313,12 +332,19 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
             | ViewSessionState::NewSession
             | ViewSessionState::Rebasing
             | ViewSessionState::Review
+            | ViewSessionState::AgentReview
     );
     let can_edit_session = matches!(
         state.session_state,
-        ViewSessionState::Interactive | ViewSessionState::NewSession | ViewSessionState::Review
+        ViewSessionState::Interactive
+            | ViewSessionState::NewSession
+            | ViewSessionState::Review
+            | ViewSessionState::AgentReview
     );
-    let can_show_review = state.session_state == ViewSessionState::Review;
+    let can_show_review = matches!(
+        state.session_state,
+        ViewSessionState::Review | ViewSessionState::AgentReview
+    );
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
@@ -368,7 +394,9 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 ///
 /// The explicit draft-session start action stays grouped with the prompt,
 /// merge, and rebase controls so future edits do not accidentally apply a
-/// different guard to one of those related actions.
+/// different guard to one of those related actions. `AgentReview` keeps the
+/// prompt and merge actions visible while suppressing `r` until background
+/// review generation finishes.
 fn append_view_footer_edit_actions(
     actions: &mut Vec<HelpAction>,
     session_state: ViewSessionState,
@@ -389,7 +417,10 @@ fn append_view_footer_edit_actions(
         "m",
         "Add to merge queue",
     ));
-    actions.push(HelpAction::new("rebase", "r", "Rebase"));
+
+    if session_state != ViewSessionState::AgentReview {
+        actions.push(HelpAction::new("rebase", "r", "Rebase"));
+    }
 }
 
 /// Returns the prompt-entry action label appropriate for the current session
@@ -653,6 +684,26 @@ mod tests {
     }
 
     #[test]
+    fn test_view_actions_agent_review_hides_rebase() {
+        // Arrange
+        let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            publish_branch_action: Some(PublishBranchAction::Push),
+            session_state: ViewSessionState::AgentReview,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "d"));
+        assert!(actions.iter().any(|action| action.key == "f"));
+        assert!(actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
+    }
+
+    #[test]
     fn test_view_actions_interactive_hides_diff() {
         // Arrange
         let state = ViewHelpState {
@@ -736,6 +787,28 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
+    }
+
+    #[test]
+    fn test_view_footer_actions_agent_review_hides_rebase() {
+        // Arrange
+        let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            publish_branch_action: Some(PublishBranchAction::Push),
+            session_state: ViewSessionState::AgentReview,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(actions.iter().any(|action| action.key == "f"));
+        assert!(actions.iter().any(|action| action.key == "p"));
+        assert!(actions.iter().any(|action| action.key == "m"));
+        assert!(!actions.iter().any(|action| action.key == "r"));
     }
 
     #[test]

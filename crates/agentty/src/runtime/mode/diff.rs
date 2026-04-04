@@ -10,7 +10,9 @@ use crate::ui::util::{diff_view_max_scroll_offset, parse_diff_lines, selected_di
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
 /// File selection via `j`/`k` wraps around between the first and last file
-/// explorer entries.
+/// explorer entries. Leaving diff mode restores the prior question snapshot
+/// when present; otherwise it rebuilds session view with any cached focused
+/// review output for the same session.
 pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
     if key.code == KeyCode::Char('?') {
         let mode = std::mem::replace(&mut app.mode, AppMode::List);
@@ -40,29 +42,43 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
         return EventResult::Continue;
     }
 
+    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+        let mode = std::mem::replace(&mut app.mode, AppMode::List);
+        if let AppMode::Diff {
+            restore_question,
+            session_id,
+            ..
+        } = mode
+        {
+            app.mode = if let Some(snapshot) = restore_question {
+                snapshot.into_question_mode()
+            } else {
+                let (review_status_message, review_text) = app.review_view_state(&session_id);
+
+                AppMode::View {
+                    done_session_output_mode: DoneSessionOutputMode::Summary,
+                    review_status_message,
+                    review_text,
+                    session_id,
+                    scroll_offset: None,
+                }
+            };
+        } else {
+            app.mode = mode;
+        }
+
+        return EventResult::Continue;
+    }
+
     if let AppMode::Diff {
         diff,
         file_explorer_selected_index,
-        restore_question,
         scroll_cache,
-        session_id,
         scroll_offset,
+        ..
     } = &mut app.mode
     {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                app.mode = if let Some(snapshot) = restore_question.take() {
-                    snapshot.into_question_mode()
-                } else {
-                    AppMode::View {
-                        done_session_output_mode: DoneSessionOutputMode::Summary,
-                        review_status_message: None,
-                        review_text: None,
-                        session_id: session_id.clone(),
-                        scroll_offset: None,
-                    }
-                };
-            }
             KeyCode::Char('j') if is_plain_char_key(key, 'j') => {
                 let parsed = parse_diff_lines(diff);
                 let count = FileExplorer::count_items(&parsed);
@@ -247,6 +263,47 @@ mod tests {
                 scroll_offset: None,
                 ..
             } if session_id == "session-id"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_key_restores_cached_review_output() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.review_cache.insert(
+            "session-id".to_string(),
+            crate::app::ReviewCacheEntry::Ready {
+                text: "Focused review".to_string(),
+                diff_hash: 7,
+            },
+        );
+        app.mode = AppMode::Diff {
+            session_id: "session-id".to_string(),
+            diff: "diff output".to_string(),
+            scroll_offset: 7,
+            file_explorer_selected_index: 0,
+            restore_question: None,
+            scroll_cache: None,
+        };
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                review_status_message: None,
+                review_text: Some(ref review_text),
+                scroll_offset: None,
+                ..
+            } if session_id == "session-id" && review_text == "Focused review"
         ));
     }
 

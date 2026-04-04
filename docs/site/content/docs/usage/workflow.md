@@ -53,7 +53,7 @@ Session statuses and what you can do in each state:
 | **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first. | `Enter` compose first prompt or add draft, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
 | **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
 | **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
-| **AgentReview** | Agentty is generating the focused review output in the background. | same actions as **Review** |
+| **AgentReview** | Agentty is generating the focused review output in the background. | `Enter` reply, `m` add to merge queue, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Esc` skip, text editing keys) |
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
@@ -68,11 +68,14 @@ project's `Reasoning Level`, `Default Smart Model` mode (explicit model or
 
 When a session enters **Review**, Agentty starts generating the focused review
 in the background. While that review-assist job is running, the session
-temporarily shows **AgentReview** and keeps the full **Review** action set.
+temporarily shows **AgentReview** and keeps the review-oriented shortcuts
+available, except `r`, which stays hidden until the session returns to
+**Review**.
 Pressing `f` appends the cached review directly into the normal session output
 panel when it is ready, or shows a loading message there while generation is
 still running. That appended review remains visible when you leave and reopen
-the session, and it is cleared when you submit the next prompt.
+the session, including after round-tripping through `d` diff mode, and it is
+cleared when you submit the next prompt.
 
 When a completed turn emits `follow_up_tasks`, the session view renders them as
 a separate follow-up section. The selected task shows `[Launch]` until it has

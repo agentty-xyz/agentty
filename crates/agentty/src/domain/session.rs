@@ -18,8 +18,8 @@ pub enum Status {
     New,
     InProgress,
     Review,
-    /// Session is generating focused-review output while keeping review
-    /// actions available.
+    /// Session is generating focused-review output while keeping the
+    /// review-oriented shortcuts available and temporarily hiding rebase.
     AgentReview,
     /// Session is waiting for model clarification responses.
     Question,

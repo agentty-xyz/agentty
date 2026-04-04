@@ -64,8 +64,8 @@ The Settings tab includes:
 ## Session View
 
 <a id="usage-session-view-actions"></a>
-Available actions depend on the session state. The full set in **Review** and
-**AgentReview** state:
+Available actions depend on the session state. The full set in **Review**
+state:
 
 | Key | Action |
 |-----|--------|
@@ -87,6 +87,10 @@ Available actions depend on the session state. The full set in **Review** and
 | `Ctrl+u` | Half page up |
 | `?` | Help |
 
+During **AgentReview**, Agentty keeps the same review-oriented shortcuts but
+hides `r` until the background focused-review generation finishes and the
+session returns to **Review**.
+
 <a id="usage-additional-keys"></a>
 Additional notes:
 
@@ -94,6 +98,7 @@ Additional notes:
   If one `Open Commands` entry is configured for the active project, it runs immediately.
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
 - **Branch publish**: `p` is available in **Review** and **AgentReview** and opens a publish popup. Press `Enter` with an empty field to keep the default session branch target, or type a custom remote branch name first.
+- **Focused review persistence**: when a focused review has already been generated, it stays visible after opening `d` diff mode and returning to the session view.
 - **Branch publish lock**: once a session branch already tracks a remote branch, Agentty locks the popup field and re-publishes to that same remote branch only.
 - **Branch publish auth**: `p` uses regular Git authentication only. HTTPS remotes need a credential helper or PAT, and SSH remotes need a working SSH key.
 - **Follow-up tasks**: `l` launches the selected follow-up task into a sibling session the first time, then reopens that linked sibling on later presses. Use `[` and `]` to move between follow-up tasks when a session has more than one.

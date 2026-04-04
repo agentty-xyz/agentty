@@ -230,7 +230,7 @@ async fn handle_view_key(
         KeyCode::Char('m') if view_session_snapshot.is_action_allowed => {
             open_merge_confirmation(app, view_context);
         }
-        KeyCode::Char('r') if view_session_snapshot.is_action_allowed => {
+        KeyCode::Char('r') if is_view_rebase_allowed(view_session_snapshot.session_status) => {
             rebase_view_session(app, &view_context.session_id).await;
         }
         _ if is_done_output_toggle_key(view_session_snapshot.session_status, key) => {
@@ -412,7 +412,7 @@ fn is_view_worktree_open_allowed(status: Status) -> bool {
 
 /// Returns whether non-navigation view shortcuts are available.
 ///
-/// This covers `Enter`, `m`, and `r`.
+/// This covers `Enter` and `m`.
 fn is_view_action_allowed(status: Status) -> bool {
     !matches!(
         status,
@@ -433,6 +433,12 @@ fn is_view_diff_allowed(status: Status) -> bool {
 /// Returns whether the `f` shortcut can open review content.
 fn is_view_review_allowed(status: Status) -> bool {
     status.allows_review_actions()
+}
+
+/// Returns whether the `r` shortcut can start a session rebase from view
+/// mode.
+fn is_view_rebase_allowed(status: Status) -> bool {
+    is_view_action_allowed(status) && status != Status::AgentReview
 }
 
 /// Switches the TUI mode from session view to the prompt input.
@@ -1077,18 +1083,36 @@ mod tests {
     fn test_is_view_review_allowed_only_for_review_status() {
         // Arrange
         let review_status = Status::Review;
+        let agent_review_status = Status::AgentReview;
         let done_status = Status::Done;
         let in_progress_status = Status::InProgress;
 
         // Act
         let review_allowed = is_view_review_allowed(review_status);
+        let agent_review_allowed = is_view_review_allowed(agent_review_status);
         let done_allowed = is_view_review_allowed(done_status);
         let in_progress_allowed = is_view_review_allowed(in_progress_status);
 
         // Assert
         assert!(review_allowed);
+        assert!(agent_review_allowed);
         assert!(!done_allowed);
         assert!(!in_progress_allowed);
+    }
+
+    #[test]
+    fn test_is_view_rebase_allowed_blocks_agent_review() {
+        // Arrange
+        let review_status = Status::Review;
+        let agent_review_status = Status::AgentReview;
+
+        // Act
+        let review_allowed = is_view_rebase_allowed(review_status);
+        let agent_review_allowed = is_view_rebase_allowed(agent_review_status);
+
+        // Assert
+        assert!(review_allowed);
+        assert!(!agent_review_allowed);
     }
 
     #[test]
