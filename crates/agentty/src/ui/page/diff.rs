@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::domain::session::Session;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::state::help_action;
-use crate::ui::util::{DiffLine, DiffLineKind, parse_diff_lines, selected_diff_lines};
+use crate::ui::util::{DiffLine, DiffLineKind, inline_text, parse_diff_lines, selected_diff_lines};
 use crate::ui::{Component, Page, diff_util, style};
 
 const SCROLL_X_OFFSET: u16 = 0;
@@ -61,7 +61,7 @@ impl<'a> DiffPage<'a> {
                 Style::default().fg(style::palette::DANGER),
             ),
             Span::styled(
-                format!(") Diff — {} ", self.session.display_title()),
+                format!(") Diff — {} ", inline_text(self.session.display_title())),
                 Style::default().fg(style::palette::WARNING),
             ),
         ]);

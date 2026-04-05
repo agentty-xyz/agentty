@@ -17,8 +17,8 @@ use crate::ui::state::prompt::{
     PromptAtMentionState, PromptSlashState, build_prompt_slash_suggestion_list,
 };
 use crate::ui::util::{
-    calculate_input_height, format_duration_compact, format_token_count, question_panel_layout,
-    suggestion_dropdown_height, truncate_with_ellipsis, wrap_lines,
+    calculate_input_height, format_duration_compact, format_token_count, inline_text,
+    question_panel_layout, suggestion_dropdown_height, truncate_with_ellipsis, wrap_lines,
 };
 use crate::ui::{Component, Page, style};
 
@@ -372,7 +372,7 @@ impl<'a> SessionChatPage<'a> {
         wall_clock_unix_seconds: i64,
     ) -> Vec<Line<'static>> {
         let title_width = usize::from(header_width);
-        let title = truncate_with_ellipsis(session.display_title(), title_width);
+        let title = truncate_with_ellipsis(&inline_text(session.display_title()), title_width);
         let metadata_text = Self::session_metadata_text(
             session,
             header_width,

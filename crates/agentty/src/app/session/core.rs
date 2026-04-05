@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::widgets::TableState;
+use tokio::task::JoinHandle;
 
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
@@ -105,7 +106,15 @@ pub struct SessionManager {
     pub(super) pending_history_replay: HashSet<String>,
     pub(super) state: SessionState,
     pub(super) stats_activity: Vec<DailyActivity>,
+    pub(super) title_generation_tasks: HashMap<String, TitleGenerationTask>,
     pub(super) worker_service: SessionWorkerService,
+}
+
+/// Tracks one draft-title generation task plus the generation used to identify
+/// stale completion events.
+pub(crate) struct TitleGenerationTask {
+    generation: u64,
+    join_handle: JoinHandle<()>,
 }
 
 impl SessionManager {
@@ -129,7 +138,68 @@ impl SessionManager {
             pending_history_replay,
             state,
             stats_activity,
+            title_generation_tasks: HashMap::new(),
             worker_service: SessionWorkerService::new(),
+        }
+    }
+
+    /// Replaces any in-flight staged title-generation task for one session.
+    ///
+    /// The superseded task is aborted before the new task handle is stored so
+    /// rapid draft staging does not fan out redundant provider requests.
+    pub(crate) fn replace_title_generation_task(
+        &mut self,
+        session_id: &str,
+        generation: u64,
+        title_generation_task: JoinHandle<()>,
+    ) {
+        if let Some(existing_task) = self.title_generation_tasks.remove(session_id)
+            && !existing_task.join_handle.is_finished()
+        {
+            existing_task.join_handle.abort();
+        }
+
+        self.title_generation_tasks.insert(
+            session_id.to_string(),
+            TitleGenerationTask {
+                generation,
+                join_handle: title_generation_task,
+            },
+        );
+    }
+
+    /// Aborts and forgets any tracked staged title-generation task for one
+    /// session.
+    pub(crate) fn abort_title_generation_task(&mut self, session_id: &str) {
+        if let Some(existing_task) = self.title_generation_tasks.remove(session_id)
+            && !existing_task.join_handle.is_finished()
+        {
+            existing_task.join_handle.abort();
+        }
+    }
+
+    /// Returns the next tracked generation number for one session's draft
+    /// title-generation task.
+    pub(crate) fn next_title_generation_task_generation(&self, session_id: &str) -> u64 {
+        self.title_generation_tasks
+            .get(session_id)
+            .map_or(1, |tracked_task| tracked_task.generation.saturating_add(1))
+    }
+
+    /// Clears one tracked draft-title generation task when the completion event
+    /// matches the currently tracked generation.
+    pub(crate) fn clear_title_generation_task_if_matches(
+        &mut self,
+        session_id: &str,
+        generation: u64,
+    ) {
+        let should_clear = self
+            .title_generation_tasks
+            .get(session_id)
+            .is_some_and(|tracked_task| tracked_task.generation == generation);
+
+        if should_clear {
+            self.title_generation_tasks.remove(session_id);
         }
     }
 
@@ -1778,6 +1848,10 @@ mod tests {
             app.sessions.sessions[0].prompt,
             "First draft\n\nSecond draft"
         );
+        assert_eq!(
+            app.sessions.sessions[0].title,
+            Some("First draft".to_string())
+        );
         assert!(app.sessions.sessions[0].draft_attachments.is_empty());
         let db_sessions = app
             .services
@@ -1786,6 +1860,174 @@ mod tests {
             .await
             .expect("failed to load");
         assert_eq!(db_sessions[0].prompt, "First draft\n\nSecond draft");
+        assert_eq!(db_sessions[0].title, Some("First draft".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_stage_draft_message_keeps_generated_title_until_replacement_finishes() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        app.stage_draft_message(&session_id, "First draft")
+            .await
+            .expect("failed to stage first draft");
+        app.services
+            .db()
+            .update_session_title(&session_id, "Generated draft title")
+            .await
+            .expect("failed to persist generated draft title");
+        app.sessions.sessions[0].title = Some("Generated draft title".to_string());
+
+        // Act
+        app.stage_draft_message(&session_id, "Second draft")
+            .await
+            .expect("failed to stage second draft");
+
+        // Assert
+        assert_eq!(
+            app.sessions.sessions[0].prompt,
+            "First draft\n\nSecond draft"
+        );
+        assert_eq!(
+            app.sessions.sessions[0].title,
+            Some("Generated draft title".to_string())
+        );
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+        assert_eq!(
+            db_sessions[0].title,
+            Some("Generated draft title".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_title_generation_task_aborts_superseded_task() {
+        // Arrange
+        let state = SessionState::new(
+            HashMap::new(),
+            Vec::new(),
+            TableState::default(),
+            Arc::new(RealClock),
+            1,
+            0,
+        );
+        let mut session_manager = SessionManager::new(
+            SessionDefaults {
+                model: AgentModel::Gpt54,
+            },
+            Arc::new(git::MockGitClient::new()),
+            state,
+            Vec::new(),
+        );
+        let session_id = "session-id".to_string();
+        let first_task_aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let first_task_flag = Arc::clone(&first_task_aborted);
+        let first_task = tokio::spawn(async move {
+            struct AbortFlagGuard(Arc<std::sync::atomic::AtomicBool>);
+
+            impl Drop for AbortFlagGuard {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+
+            let _abort_flag_guard = AbortFlagGuard(first_task_flag);
+            std::future::pending::<()>().await;
+        });
+        let second_task = tokio::spawn(async {});
+
+        // Act
+        session_manager.replace_title_generation_task(&session_id, 1, first_task);
+        tokio::task::yield_now().await;
+        session_manager.replace_title_generation_task(&session_id, 2, second_task);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !first_task_aborted.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("superseded task should abort promptly");
+
+        // Assert
+        assert_eq!(session_manager.title_generation_tasks.len(), 1);
+        assert!(
+            session_manager
+                .title_generation_tasks
+                .contains_key(&session_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() {
+        // Arrange
+        let state = SessionState::new(
+            HashMap::new(),
+            Vec::new(),
+            TableState::default(),
+            Arc::new(RealClock),
+            1,
+            0,
+        );
+        let mut session_manager = SessionManager::new(
+            SessionDefaults {
+                model: AgentModel::Gpt54,
+            },
+            Arc::new(git::MockGitClient::new()),
+            state,
+            Vec::new(),
+        );
+        let session_id = "session-id".to_string();
+        let task = tokio::spawn(async {});
+        session_manager.replace_title_generation_task(&session_id, 2, task);
+
+        // Act
+        session_manager.clear_title_generation_task_if_matches(&session_id, 1);
+
+        // Assert
+        assert_eq!(session_manager.title_generation_tasks.len(), 1);
+        assert!(
+            session_manager
+                .title_generation_tasks
+                .contains_key(&session_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_clear_title_generation_task_if_matches_removes_matching_generation() {
+        // Arrange
+        let state = SessionState::new(
+            HashMap::new(),
+            Vec::new(),
+            TableState::default(),
+            Arc::new(RealClock),
+            1,
+            0,
+        );
+        let mut session_manager = SessionManager::new(
+            SessionDefaults {
+                model: AgentModel::Gpt54,
+            },
+            Arc::new(git::MockGitClient::new()),
+            state,
+            Vec::new(),
+        );
+        let session_id = "session-id".to_string();
+        let task = tokio::spawn(async {});
+        session_manager.replace_title_generation_task(&session_id, 2, task);
+
+        // Act
+        session_manager.clear_title_generation_task_if_matches(&session_id, 2);
+
+        // Assert
+        assert!(session_manager.title_generation_tasks.is_empty());
     }
 
     #[tokio::test]

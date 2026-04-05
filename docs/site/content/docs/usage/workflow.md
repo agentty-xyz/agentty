@@ -221,8 +221,11 @@ reflects the overall session lifetime between creation and the latest update.
 <a id="usage-title-refinement"></a>
 When the first prompt is submitted for a new session, Agentty stores that
 prompt as the initial title and starts one background title-generation task
-using the configured **Default Fast Model**. That generation runs only once
-for session initiation; Agentty does not continuously refresh titles.
+using the configured **Default Fast Model**. Draft sessions follow the same
+pattern for staged bundles: the first staged draft seeds the fallback title,
+and each later staged draft keeps the current visible title in place while
+Agentty cancels any superseded in-flight draft-title task and queues one fresh
+background title-generation pass for the full updated bundle.
 
 ## Clarification Interaction Loop
 

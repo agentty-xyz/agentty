@@ -159,6 +159,9 @@ pub(crate) enum AppEvent {
         session_id: String,
         session_size: SessionSize,
     },
+    /// Indicates one tracked draft-title generation task reached a terminal
+    /// outcome and can be pruned from in-memory task tracking.
+    SessionTitleGenerationFinished { generation: u64, session_id: String },
     /// Indicates completion of a session-view branch-publish action.
     BranchPublishActionCompleted {
         restore_view: ConfirmationViewMode,
@@ -204,6 +207,7 @@ struct AppEventBatch {
     session_reasoning_level_updates: HashMap<String, Option<ReasoningLevel>>,
     session_progress_updates: HashMap<String, Option<String>>,
     session_size_updates: HashMap<String, (u64, u64, SessionSize)>,
+    session_title_generation_finished: HashMap<String, u64>,
     should_force_reload: bool,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     update_status: Option<UpdateStatus>,
@@ -274,6 +278,13 @@ impl AppEventBatch {
             } => {
                 self.session_size_updates
                     .insert(session_id, (added_lines, deleted_lines, session_size));
+            }
+            AppEvent::SessionTitleGenerationFinished {
+                generation,
+                session_id,
+            } => {
+                self.session_title_generation_finished
+                    .insert(session_id, generation);
             }
             AppEvent::BranchPublishActionCompleted {
                 restore_view,
@@ -968,9 +979,11 @@ impl App {
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
+        let active_project_id = self.projects.active_project_id();
+
         Ok(self
             .sessions
-            .stage_draft_message(&self.services, session_id, prompt)
+            .stage_draft_message(&self.services, active_project_id, session_id, prompt)
             .await?)
     }
 
@@ -1552,6 +1565,11 @@ impl App {
                 deleted_lines,
                 session_size,
             );
+        }
+
+        for (session_id, generation) in event_batch.session_title_generation_finished {
+            self.sessions
+                .clear_title_generation_task_if_matches(&session_id, generation);
         }
 
         for (session_id, entries) in event_batch.at_mention_entries_updates {
@@ -3790,6 +3808,14 @@ mod tests {
             session_id: "session-a".to_string(),
             session_size: SessionSize::L,
         });
+        event_batch.collect_event(AppEvent::SessionTitleGenerationFinished {
+            generation: 1,
+            session_id: "session-a".to_string(),
+        });
+        event_batch.collect_event(AppEvent::SessionTitleGenerationFinished {
+            generation: 2,
+            session_id: "session-a".to_string(),
+        });
         event_batch.collect_event(AppEvent::SessionUpdated {
             session_id: "session-a".to_string(),
         });
@@ -3827,6 +3853,12 @@ mod tests {
         assert_eq!(
             event_batch.session_size_updates.get("session-a"),
             Some(&(8, 13, SessionSize::L))
+        );
+        assert_eq!(
+            event_batch
+                .session_title_generation_finished
+                .get("session-a"),
+            Some(&2)
         );
         assert_eq!(event_batch.session_ids.len(), 1);
         assert_eq!(

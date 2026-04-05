@@ -54,6 +54,12 @@ struct SessionTitleGenerationPromptTemplate<'a> {
     prompt: &'a str,
 }
 
+/// Identifies one tracked draft-title generation task completion event.
+struct TitleGenerationTaskCompletion {
+    generation: u64,
+    session_id: String,
+}
+
 impl SessionManager {
     /// Moves selection to the next selectable session in grouped list order.
     ///
@@ -291,18 +297,30 @@ impl SessionManager {
     /// Appends one staged draft message to a `New` session without launching
     /// the agent yet.
     ///
+    /// The first staged prompt seeds a fallback title, while later staged
+    /// prompts keep the current visible title in place until the refreshed
+    /// generated title arrives.
+    ///
     /// # Errors
     /// Returns an error if the session is missing, was not created as a draft
     /// session, is no longer `New`, or the staged bundle cannot be persisted.
     pub async fn stage_draft_message(
         &mut self,
         services: &AppServices,
+        project_id: i64,
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), SessionError> {
         let prompt = prompt.into();
         let session_index = self.session_index_or_err(session_id)?;
-        let (persisted_session_id, title_to_save, staged_prompt, staged_attachments) = {
+        let (
+            folder,
+            persisted_session_id,
+            session_model,
+            staged_attachments,
+            staged_prompt,
+            title_to_save,
+        ) = {
             let session = self
                 .sessions
                 .get(session_index)
@@ -318,11 +336,6 @@ impl SessionManager {
                 ));
             }
 
-            let title_to_save = if session.title.is_none() {
-                Some(prompt.transcript_text())
-            } else {
-                None
-            };
             let next_attachment_number = session.draft_attachments.len().saturating_add(1);
             let staged_prompt =
                 Self::append_staged_prompt(&session.prompt, &prompt, next_attachment_number);
@@ -331,14 +344,20 @@ impl SessionManager {
                 &prompt,
                 next_attachment_number,
             ));
+            let title_to_save = session.title.is_none().then(|| prompt.transcript_text());
 
             (
+                session.folder.clone(),
                 session.id.clone(),
-                title_to_save,
-                staged_prompt,
+                session.model,
                 staged_attachments,
+                staged_prompt,
+                title_to_save,
             )
         };
+        let title_generation_model =
+            setting::load_default_fast_model_setting(services, Some(project_id), session_model)
+                .await;
 
         draft::store_staged_draft_attachments(
             services.fs_client().as_ref(),
@@ -351,7 +370,6 @@ impl SessionManager {
             .db()
             .update_session_prompt(&persisted_session_id, &staged_prompt)
             .await?;
-
         if let Some(title_to_save) = title_to_save.as_deref() {
             services
                 .db()
@@ -359,14 +377,32 @@ impl SessionManager {
                 .await?;
         }
 
+        let title_generation_prompt = staged_prompt.clone();
+
         if let Some(session) = self.sessions.get_mut(session_index) {
+            session.prompt = staged_prompt;
+            session.draft_attachments = staged_attachments;
             if let Some(title_to_save) = title_to_save {
                 session.title = Some(title_to_save);
             }
-
-            session.prompt = staged_prompt;
-            session.draft_attachments = staged_attachments;
         }
+
+        let title_generation_task_generation =
+            self.next_title_generation_task_generation(&persisted_session_id);
+        let title_generation_task = Self::spawn_session_title_generation_task(
+            services.event_sender(),
+            services.db().clone(),
+            &persisted_session_id,
+            &folder,
+            &title_generation_prompt,
+            title_generation_model,
+            Some(title_generation_task_generation),
+        );
+        self.replace_title_generation_task(
+            &persisted_session_id,
+            title_generation_task_generation,
+            title_generation_task,
+        );
 
         Ok(())
     }
@@ -820,6 +856,7 @@ impl SessionManager {
 
         let session = self.state.sessions.remove(selected_index);
         self.state.handles.remove(&session.id);
+        self.abort_title_generation_task(&session.id);
         self.clear_history_replay_pending(&session.id);
 
         // Best-effort: cancellation failure is non-critical during session deletion.
@@ -1328,11 +1365,14 @@ impl SessionManager {
         }
     }
 
-    /// Spawns one detached model command that generates a session title once.
+    /// Spawns one detached model command that generates a session title for
+    /// one prompt snapshot.
     ///
-    /// The generated title is persisted when parsing succeeds, then a
-    /// `RefreshSessions` event is emitted so list-mode snapshots pick up the
-    /// new title.
+    /// The generated title is persisted only when the session prompt still
+    /// matches the prompt used to generate it, then a `RefreshSessions` event
+    /// is emitted so list-mode snapshots pick up the new title. Callers that
+    /// can supersede draft-title generation should retain the returned task
+    /// handle and abort any older in-flight task before replacing it.
     pub(crate) fn spawn_session_title_generation_task(
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         db: db::Database,
@@ -1340,15 +1380,25 @@ impl SessionManager {
         folder: &Path,
         prompt: &str,
         session_model: AgentModel,
-    ) {
+        tracked_generation: Option<u64>,
+    ) -> tokio::task::JoinHandle<()> {
         let folder = folder.to_path_buf();
         let prompt = prompt.to_string();
         let persisted_session_id = session_id.to_string();
+        let tracked_completion =
+            tracked_generation.map(|generation| TitleGenerationTaskCompletion {
+                generation,
+                session_id: persisted_session_id.clone(),
+            });
 
         tokio::spawn(async move {
             let Ok(title_generation_prompt) =
                 SessionManager::session_title_generation_prompt(&prompt)
             else {
+                SessionManager::emit_title_generation_finished_event(
+                    &app_event_tx,
+                    tracked_completion.as_ref(),
+                );
                 return;
             };
 
@@ -1359,27 +1409,60 @@ impl SessionManager {
             )
             .await
             else {
+                SessionManager::emit_title_generation_finished_event(
+                    &app_event_tx,
+                    tracked_completion.as_ref(),
+                );
                 return;
             };
 
             let Some(generated_title) =
                 SessionManager::parse_generated_session_title(&title_response)
             else {
+                SessionManager::emit_title_generation_finished_event(
+                    &app_event_tx,
+                    tracked_completion.as_ref(),
+                );
                 return;
             };
 
             if generated_title == prompt {
+                SessionManager::emit_title_generation_finished_event(
+                    &app_event_tx,
+                    tracked_completion.as_ref(),
+                );
                 return;
             }
 
             if db
-                .update_session_title(&persisted_session_id, &generated_title)
+                .update_session_title_for_prompt(&persisted_session_id, &prompt, &generated_title)
                 .await
-                .is_ok()
+                .unwrap_or(false)
             {
                 // Fire-and-forget: receiver may be dropped during shutdown.
                 let _ = app_event_tx.send(AppEvent::RefreshSessions);
             }
+
+            SessionManager::emit_title_generation_finished_event(
+                &app_event_tx,
+                tracked_completion.as_ref(),
+            );
+        })
+    }
+
+    /// Emits one tracked title-generation completion event when the task was
+    /// registered in the per-session task map.
+    fn emit_title_generation_finished_event(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        tracked_completion: Option<&TitleGenerationTaskCompletion>,
+    ) {
+        let Some(tracked_completion) = tracked_completion else {
+            return;
+        };
+
+        let _ = app_event_tx.send(AppEvent::SessionTitleGenerationFinished {
+            generation: tracked_completion.generation,
+            session_id: tracked_completion.session_id.clone(),
         });
     }
 
@@ -2292,7 +2375,7 @@ mod tests {
 
         // Act
         let error = session_manager
-            .stage_draft_message(&services, "session-id", prompt)
+            .stage_draft_message(&services, 1, "session-id", prompt)
             .await
             .expect_err("attachment metadata failure should abort draft staging");
         let persisted_session = load_persisted_session_row(&database).await;

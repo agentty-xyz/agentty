@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET title = ?\nWHERE id = ?\n  AND prompt = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "4a5eac93a307862fe8dfa86070e48da575e251f19184066fec027606052fddc5"
+}

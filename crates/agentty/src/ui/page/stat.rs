@@ -9,7 +9,8 @@ use crate::ui::page::session_list::{model_column_width, project_column_width};
 use crate::ui::state::help_action;
 use crate::ui::util::{
     build_activity_heatmap_grid, build_visible_heatmap_month_row, current_day_key_local,
-    format_token_count, heatmap_intensity_level, heatmap_max_count, visible_heatmap_week_count,
+    format_token_count, heatmap_intensity_level, heatmap_max_count, inline_text,
+    visible_heatmap_week_count,
 };
 use crate::ui::{Page, style};
 
@@ -89,7 +90,7 @@ impl StatsPage<'_> {
 
         let rows = self.sessions.iter().map(|session| {
             let cells = vec![
-                Cell::from(session.display_title().to_string()),
+                Cell::from(inline_text(session.display_title())),
                 Cell::from(session.project_name.clone()),
                 Cell::from(session.model.as_str()),
                 Cell::from(format_token_count(session.stats.input_tokens)),

@@ -6,7 +6,9 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::ui::state::help_action;
-use crate::ui::util::{first_table_column_width, format_duration_compact, truncate_with_ellipsis};
+use crate::ui::util::{
+    first_table_column_width, format_duration_compact, inline_text, truncate_with_ellipsis,
+};
 use crate::ui::{Page, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
@@ -301,7 +303,8 @@ fn render_session_row(
     wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
     let status = session.status;
-    let display_title = truncate_with_ellipsis(session.display_title(), title_column_width);
+    let display_title =
+        truncate_with_ellipsis(&inline_text(session.display_title()), title_column_width);
     let timer_label = if session.has_in_progress_timer() {
         format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
     } else {
@@ -878,6 +881,29 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("AgentReview"));
+    }
+
+    #[test]
+    fn test_render_flattens_multiline_session_titles_for_one_line_rows() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let mut session = test_session("draft-1", Status::New);
+        session.title = Some("First draft\n\nSecond draft".to_string());
+        let sessions = vec![session];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("First draft Second draft"));
     }
 
     #[test]

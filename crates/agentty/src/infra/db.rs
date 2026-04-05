@@ -1162,19 +1162,47 @@ WHERE id = ?
     /// # Errors
     /// Returns an error if the title update fails.
     pub async fn update_session_title(&self, id: &str, title: &str) -> Result<(), DbError> {
-        sqlx::query(
-            r"
+        sqlx::query!(
+            r#"
 UPDATE session
 SET title = ?
 WHERE id = ?
-",
+"#,
+            title,
+            id,
         )
-        .bind(title)
-        .bind(id)
         .execute(&self.pool)
         .await?;
 
         Ok(())
+    }
+
+    /// Updates the display title for a session row only when the persisted
+    /// prompt still matches the prompt snapshot used to generate that title.
+    ///
+    /// # Errors
+    /// Returns an error if the conditional title update fails.
+    pub async fn update_session_title_for_prompt(
+        &self,
+        id: &str,
+        expected_prompt: &str,
+        title: &str,
+    ) -> Result<bool, DbError> {
+        let result = sqlx::query!(
+            r#"
+UPDATE session
+SET title = ?
+WHERE id = ?
+  AND prompt = ?
+"#,
+            title,
+            id,
+            expected_prompt,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     /// Updates the persisted session summary text for a session row.
@@ -2389,6 +2417,56 @@ WHERE id = ?
                 "Document the new shortcut.".to_string(),
                 "Add a session-view regression test.".to_string()
             ]
+        );
+    }
+
+    /// Verifies generated titles only overwrite the session title when the
+    /// staged prompt has not changed since generation started.
+    #[tokio::test]
+    async fn test_update_session_title_for_prompt_requires_matching_prompt() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        insert_session_fixture(&database, "session-a", "main", "New", project_id).await;
+        database
+            .update_session_prompt("session-a", "First draft")
+            .await
+            .expect("failed to persist first staged prompt");
+        database
+            .update_session_title("session-a", "First draft")
+            .await
+            .expect("failed to persist fallback title");
+
+        // Act
+        let stale_update_applied = database
+            .update_session_title_for_prompt(
+                "session-a",
+                "Second draft",
+                "Refine draft workflow title",
+            )
+            .await
+            .expect("failed to reject stale title update");
+        let matching_update_applied = database
+            .update_session_title_for_prompt(
+                "session-a",
+                "First draft",
+                "Refine draft workflow title",
+            )
+            .await
+            .expect("failed to apply matching title update");
+
+        // Assert
+        let session_row = load_session_row(&database, "session-a").await;
+        assert!(!stale_update_applied);
+        assert!(matching_update_applied);
+        assert_eq!(
+            session_row.title.as_deref(),
+            Some("Refine draft workflow title")
         );
     }
 

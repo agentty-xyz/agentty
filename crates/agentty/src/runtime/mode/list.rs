@@ -15,6 +15,7 @@ use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, stats_actions,
 };
 use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
+use crate::ui::util::inline_text;
 
 /// Handles key input while the app is in list mode.
 ///
@@ -75,7 +76,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('d') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app
                 .selected_session()
-                .map(|session| (session.id.clone(), session.display_title().to_string()));
+                .map(|session| (session.id.clone(), inline_text(session.display_title())));
             if let Some((session_id, session_title)) = selected_session {
                 app.mode = AppMode::Confirmation {
                     confirmation_intent: ConfirmationIntent::DeleteSession,
@@ -92,7 +93,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 session
                     .status
                     .allows_review_actions()
-                    .then(|| (session.id.clone(), session.display_title().to_string()))
+                    .then(|| (session.id.clone(), inline_text(session.display_title())))
             });
             if let Some((session_id, session_title)) = selected_session {
                 app.mode = AppMode::Confirmation {

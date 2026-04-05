@@ -770,13 +770,14 @@ async fn spawn_start_turn_title_generation(
     .await
     .unwrap_or(session_model);
 
-    SessionManager::spawn_session_title_generation_task(
+    let _title_generation_task = SessionManager::spawn_session_title_generation_task(
         context.app_event_tx.clone(),
         context.db.clone(),
         &context.session_id,
         &context.folder,
         prompt,
         title_model,
+        None,
     );
 }
 

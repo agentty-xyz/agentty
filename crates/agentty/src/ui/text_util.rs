@@ -58,6 +58,12 @@ pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
     format!("{truncated}...")
 }
 
+/// Converts arbitrary text into a single inline label by collapsing all
+/// whitespace runs, including embedded newlines, into single spaces.
+pub fn inline_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Word-wraps a sequence of styled spans into multiple lines at the given
 /// width.
 ///
@@ -309,6 +315,18 @@ mod tests {
         assert_eq!(width_three, "...");
         assert_eq!(width_two, "..");
         assert_eq!(width_zero, "");
+    }
+
+    #[test]
+    fn test_inline_text_collapses_multiline_whitespace_runs() {
+        // Arrange
+        let text = "First draft\n\nSecond\t draft";
+
+        // Act
+        let inline = inline_text(text);
+
+        // Assert
+        assert_eq!(inline, "First draft Second draft");
     }
 
     #[test]
