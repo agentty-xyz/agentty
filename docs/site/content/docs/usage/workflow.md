@@ -24,13 +24,14 @@ project tab also accessible with `Tab`:
 | **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`. |
 | **Projects** | Select between projects (git repositories) in a split view: Agentty info (ASCII art, version, short description) on top, project table below. Agentty skips stale entries whose project directories no longer exist. |
 | **Stats** | View usage statistics. |
-| **Settings** | Configure reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
+| **Settings** | Configure the default reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status and session title render in a dedicated
 header row above the output panel. A second metadata row shows the persisted
 size bucket, current `+added` / `-deleted` line totals, the cumulative
-active-work timer, and token usage. The timer keeps ticking only while the
-session is actively working and freezes between turns.
+active-work timer, the effective reasoning level, and token usage. The timer
+keeps ticking only while the session is actively working and freezes between
+turns.
 
 The grouped **Sessions** tab also shows that same cumulative active-work timer
 in its own `Timer` column, so in-progress rows keep ticking live there while
@@ -64,7 +65,7 @@ Session statuses and what you can do in each state:
 | **Canceled** | Session was canceled by the user and its worktree checkout was removed. | read-only view (`q`, scroll, help) |
 
 Settings values are stored per active project. Switching projects reloads that
-project's `Reasoning Level`, `Default Smart Model` mode (explicit model or
+project's `Default Reasoning Level`, `Default Smart Model` mode (explicit model or
 `Last used model as default`), `Default Fast Model`, `Default Review Model`,
 `Coauthored by Agentty` toggle, and `Open Commands`.
 
@@ -273,6 +274,7 @@ inserted:
 | Command | Description |
 |---------|-------------|
 | `/model` | Switch the model for the current session using only locally available backend CLIs. |
+| `/reasoning` | Override the reasoning level for the current session, with the current effective level preselected from settings or any existing session override. |
 | `/stats` | Show token usage statistics for the session. |
 
 Agentty requires at least one supported backend CLI (`codex`, `claude`, or

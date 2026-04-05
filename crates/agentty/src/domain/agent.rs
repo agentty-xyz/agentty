@@ -139,6 +139,19 @@ impl ReasoningLevel {
     /// All selectable reasoning-effort levels in UI cycle order.
     pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::High, Self::XHigh];
 
+    /// Returns the stable persisted identifier for this level.
+    ///
+    /// This value is stored in the database and remains independent from any
+    /// provider-specific transport string changes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
+
     /// Returns the Codex reasoning-effort identifier for this level.
     pub fn codex(self) -> &'static str {
         match self {
@@ -160,6 +173,16 @@ impl ReasoningLevel {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "max",
+        }
+    }
+
+    /// Returns a short UI description for this reasoning level.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Low => "Fastest responses with lighter reasoning.",
+            Self::Medium => "Balanced speed and reasoning depth.",
+            Self::High => "Deeper reasoning for tougher tasks.",
+            Self::XHigh => "Maximum reasoning effort for the hardest tasks.",
         }
     }
 }
@@ -284,6 +307,16 @@ impl AgentSelectionMetadata for AgentKind {
     }
 }
 
+impl AgentSelectionMetadata for ReasoningLevel {
+    fn name(&self) -> &'static str {
+        (*self).as_str()
+    }
+
+    fn description(&self) -> &'static str {
+        (*self).description()
+    }
+}
+
 impl fmt::Display for AgentKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
@@ -399,6 +432,17 @@ mod tests {
         assert_eq!(ReasoningLevel::Medium.claude(), "medium");
         assert_eq!(ReasoningLevel::High.claude(), "high");
         assert_eq!(ReasoningLevel::XHigh.claude(), "max");
+    }
+
+    #[test]
+    /// Ensures persisted reasoning identifiers stay stable even if provider
+    /// transport names change in the future.
+    fn test_reasoning_level_as_str_returns_stable_persisted_values() {
+        // Arrange / Act / Assert
+        assert_eq!(ReasoningLevel::Low.as_str(), "low");
+        assert_eq!(ReasoningLevel::Medium.as_str(), "medium");
+        assert_eq!(ReasoningLevel::High.as_str(), "high");
+        assert_eq!(ReasoningLevel::XHigh.as_str(), "xhigh");
     }
 
     #[test]

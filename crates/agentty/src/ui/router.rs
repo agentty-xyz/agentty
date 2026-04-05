@@ -5,6 +5,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
 use crate::app::{SettingsManager, Tab};
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
@@ -62,6 +63,7 @@ impl RouteSharedContext<'_> {
 #[derive(Clone, Copy)]
 struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<String, String>,
+    default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
     mode: &'a AppMode,
     session_id: &'a str,
@@ -77,6 +79,7 @@ struct SessionChatRenderContext<'a> {
 struct PublishBranchOverlayContext<'a> {
     default_branch_name: &'a str,
     active_prompt_outputs: &'a HashMap<String, String>,
+    default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
@@ -89,6 +92,7 @@ struct PublishBranchOverlayContext<'a> {
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
     active_prompt_outputs: &'a HashMap<String, String>,
+    default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
     session_progress_messages: &'a HashMap<String, String>,
     wall_clock_unix_seconds: i64,
@@ -128,6 +132,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let aux = RouteAuxContext {
         active_prompt_outputs,
+        default_reasoning_level: shared.settings.reasoning_level,
         follow_up_task_positions,
         session_progress_messages,
         wall_clock_unix_seconds,
@@ -173,6 +178,7 @@ fn render_list_or_overlay_mode(
                     area,
                     SessionOverlayRenderContext {
                         active_prompt_outputs: aux.active_prompt_outputs,
+                        default_reasoning_level: aux.default_reasoning_level,
                         follow_up_task_positions: aux.follow_up_task_positions,
                         restore_view: view_mode,
                         session_progress_messages: aux.session_progress_messages,
@@ -227,6 +233,7 @@ fn render_list_or_overlay_mode(
             restore_view,
             shared.sessions,
             aux.session_progress_messages,
+            aux.default_reasoning_level,
             aux.wall_clock_unix_seconds,
             ViewInfoPopupRenderContext {
                 is_loading: *is_loading,
@@ -277,6 +284,8 @@ struct SessionConfirmationContext<'a> {
 struct SessionOverlayRenderContext<'a> {
     /// Exact prompt transcript blocks keyed by session id for active turns.
     active_prompt_outputs: &'a HashMap<String, String>,
+    /// Active project-scoped default reasoning level.
+    default_reasoning_level: ReasoningLevel,
     /// Follow-up-task selection state keyed by session id.
     follow_up_task_positions: &'a HashMap<String, usize>,
     /// Session view restored after the overlay closes.
@@ -303,6 +312,7 @@ fn render_session_overlay_background(
         area,
         SessionChatRenderContext {
             active_prompt_outputs: context.active_prompt_outputs,
+            default_reasoning_level: context.default_reasoning_level,
             follow_up_task_positions: context.follow_up_task_positions,
             mode: &background_mode,
             session_id: &context.restore_view.session_id,
@@ -361,6 +371,7 @@ fn render_session_or_diff_mode(
             area,
             SessionChatRenderContext {
                 active_prompt_outputs: aux.active_prompt_outputs,
+                default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
                 mode,
                 session_id,
@@ -379,6 +390,7 @@ fn render_session_or_diff_mode(
             area,
             SessionOverlayRenderContext {
                 active_prompt_outputs: aux.active_prompt_outputs,
+                default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
                 restore_view,
                 session_progress_messages: aux.session_progress_messages,
@@ -400,6 +412,7 @@ fn render_session_or_diff_mode(
             &PublishBranchOverlayContext {
                 default_branch_name,
                 active_prompt_outputs: aux.active_prompt_outputs,
+                default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
                 input,
                 locked_upstream_ref: locked_upstream_ref.as_deref(),
@@ -459,6 +472,7 @@ fn render_publish_branch_overlay(
     let PublishBranchOverlayContext {
         default_branch_name,
         active_prompt_outputs,
+        default_reasoning_level,
         follow_up_task_positions,
         input,
         locked_upstream_ref,
@@ -471,6 +485,7 @@ fn render_publish_branch_overlay(
         area,
         SessionOverlayRenderContext {
             active_prompt_outputs,
+            default_reasoning_level,
             follow_up_task_positions,
             restore_view,
             session_progress_messages,
@@ -491,6 +506,7 @@ fn render_publish_branch_overlay(
 fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
         active_prompt_outputs,
+        default_reasoning_level,
         follow_up_task_positions,
         mode,
         session_id,
@@ -516,6 +532,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         session_index,
         scroll_offset,
         mode,
+        default_reasoning_level,
         active_prompt_output,
         active_progress,
         wall_clock_unix_seconds,
@@ -608,7 +625,7 @@ mod tests {
     use ratatui::widgets::Paragraph;
 
     use super::*;
-    use crate::domain::agent::AgentModel;
+    use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::domain::session::{SessionSize, SessionStats, Status};
     use crate::ui::state::app_mode::DoneSessionOutputMode;
 
@@ -628,6 +645,7 @@ mod tests {
             output: "Captured output".to_string(),
             project_name: "project".to_string(),
             prompt: "Prompt".to_string(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -674,6 +692,7 @@ mod tests {
                     &sessions,
                     RouteAuxContext {
                         active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         wall_clock_unix_seconds: 0,
@@ -715,6 +734,7 @@ mod tests {
                     &sessions,
                     RouteAuxContext {
                         active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         wall_clock_unix_seconds: 0,
@@ -756,6 +776,7 @@ mod tests {
                     &sessions,
                     RouteAuxContext {
                         active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
                         wall_clock_unix_seconds: 0,
@@ -799,6 +820,7 @@ mod tests {
                     frame.area(),
                     SessionOverlayRenderContext {
                         active_prompt_outputs: &HashMap::new(),
+                        default_reasoning_level: ReasoningLevel::High,
                         follow_up_task_positions: &HashMap::new(),
                         restore_view: &view_mode,
                         session_progress_messages: &progress_messages,

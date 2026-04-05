@@ -406,6 +406,7 @@ mod tests {
             output: String::new(),
             project_name: "project".to_string(),
             prompt: "Implement forge review support".to_string(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request,

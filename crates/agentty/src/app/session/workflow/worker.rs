@@ -345,7 +345,9 @@ impl SessionWorkerService {
         }
 
         let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
-        let reasoning_level = load_project_reasoning_level(&context.db, session_project_id).await;
+        let reasoning_level =
+            load_session_reasoning_level(&context.db, &context.session_id, session_project_id)
+                .await;
         let provider_conversation_id = context
             .db
             .get_session_provider_conversation_id(&context.session_id)
@@ -783,8 +785,16 @@ async fn load_session_project_id(db: &Database, session_id: &str) -> Option<i64>
     db.load_session_project_id(session_id).await.ok().flatten()
 }
 
-/// Loads the project-scoped reasoning level for one session context.
-async fn load_project_reasoning_level(db: &Database, project_id: Option<i64>) -> ReasoningLevel {
+/// Loads the effective reasoning level for one session context.
+async fn load_session_reasoning_level(
+    db: &Database,
+    session_id: &str,
+    project_id: Option<i64>,
+) -> ReasoningLevel {
+    if let Ok(Some(reasoning_level)) = db.load_session_reasoning_level_override(session_id).await {
+        return reasoning_level;
+    }
+
     let Some(project_id) = project_id else {
         return ReasoningLevel::default();
     };

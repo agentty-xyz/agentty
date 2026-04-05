@@ -44,7 +44,7 @@ use tokio::sync::mpsc;
 
 use super::AppError;
 use crate::app::session;
-use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem};
@@ -135,6 +135,11 @@ pub(crate) enum AppEvent {
         session_id: String,
         session_model: AgentModel,
     },
+    /// Indicates a session reasoning override selection has been persisted.
+    SessionReasoningLevelUpdated {
+        reasoning_level_override: Option<ReasoningLevel>,
+        session_id: String,
+    },
     /// Requests a full session list refresh.
     RefreshSessions,
     /// Indicates compact live thinking text for an in-progress session.
@@ -196,6 +201,7 @@ struct AppEventBatch {
     session_git_status_updates: HashMap<String, SessionGitStatus>,
     session_ids: HashSet<String>,
     session_model_updates: HashMap<String, AgentModel>,
+    session_reasoning_level_updates: HashMap<String, Option<ReasoningLevel>>,
     session_progress_updates: HashMap<String, Option<String>>,
     session_size_updates: HashMap<String, (u64, u64, SessionSize)>,
     should_force_reload: bool,
@@ -239,6 +245,13 @@ impl AppEventBatch {
                 session_model,
             } => {
                 self.session_model_updates.insert(session_id, session_model);
+            }
+            AppEvent::SessionReasoningLevelUpdated {
+                reasoning_level_override,
+                session_id,
+            } => {
+                self.session_reasoning_level_updates
+                    .insert(session_id, reasoning_level_override);
             }
             AppEvent::RefreshSessions => {
                 self.should_force_reload = true;
@@ -1011,9 +1024,31 @@ impl App {
         Ok(())
     }
 
+    /// Persists and applies a reasoning override for a session.
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails.
+    pub async fn set_session_reasoning_level(
+        &mut self,
+        session_id: &str,
+        reasoning_level_override: Option<ReasoningLevel>,
+    ) -> Result<(), AppError> {
+        self.sessions
+            .set_session_reasoning_level(&self.services, session_id, reasoning_level_override)
+            .await?;
+        self.process_pending_app_events().await;
+
+        Ok(())
+    }
+
     /// Returns the currently selected session, if any.
     pub fn selected_session(&self) -> Option<&Session> {
         self.sessions.selected_session()
+    }
+
+    /// Returns the session snapshot for one list index, if it still exists.
+    pub fn session_at(&self, session_index: usize) -> Option<&Session> {
+        self.sessions.session_at(session_index)
     }
 
     /// Returns session id by list index.
@@ -1501,6 +1536,11 @@ impl App {
         for (session_id, session_model) in event_batch.session_model_updates {
             self.sessions
                 .apply_session_model_updated(&session_id, session_model);
+        }
+
+        for (session_id, reasoning_level_override) in event_batch.session_reasoning_level_updates {
+            self.sessions
+                .apply_session_reasoning_level_updated(&session_id, reasoning_level_override);
         }
 
         for (session_id, (added_lines, deleted_lines, session_size)) in
@@ -2400,6 +2440,7 @@ mod tests {
             output: String::new(),
             project_name: "test-project".to_string(),
             prompt: "test prompt".to_string(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,

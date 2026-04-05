@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{DailyActivity, ReviewRequest, SessionFollowUpTask, SessionStats};
 use crate::infra::agent;
 
@@ -126,6 +127,7 @@ pub struct SessionRow {
     pub output_tokens: i64,
     pub project_id: Option<i64>,
     pub prompt: String,
+    pub reasoning_level_override: Option<String>,
     pub published_upstream_ref: Option<String>,
     pub questions: Option<String>,
     pub review_request: Option<SessionReviewRequestRow>,
@@ -272,6 +274,7 @@ struct SessionJoinRow {
     output_tokens: i64,
     project_id: Option<i64>,
     prompt: String,
+    reasoning_level_override: Option<String>,
     published_upstream_ref: Option<String>,
     questions: Option<String>,
     review_request_display_id: Option<String>,
@@ -308,6 +311,7 @@ impl SessionJoinRow {
             output_tokens,
             project_id,
             prompt,
+            reasoning_level_override,
             published_upstream_ref,
             questions,
             review_request_display_id,
@@ -354,6 +358,7 @@ impl SessionJoinRow {
             output_tokens,
             project_id,
             prompt,
+            reasoning_level_override,
             published_upstream_ref,
             questions,
             review_request,
@@ -579,6 +584,7 @@ SELECT session.base_branch AS "base_branch!",
        session.output_tokens AS "output_tokens!",
        session.project_id,
        session.prompt AS "prompt!",
+       session.reasoning_level AS "reasoning_level_override?",
        session.published_upstream_ref,
        session.questions,
        session_review_request.display_id AS "review_request_display_id?",
@@ -634,6 +640,7 @@ SELECT session.base_branch AS "base_branch!",
        session.output_tokens AS "output_tokens!",
        session.project_id,
        session.prompt AS "prompt!",
+       session.reasoning_level AS "reasoning_level_override?",
        session.published_upstream_ref,
        session.questions,
        session_review_request.display_id AS "review_request_display_id?",
@@ -1249,6 +1256,33 @@ WHERE id = ?
         Ok(())
     }
 
+    /// Updates the persisted session-specific reasoning override.
+    ///
+    /// Passing `None` clears the override so future turns inherit the project
+    /// default reasoning level again.
+    ///
+    /// # Errors
+    /// Returns an error if the session row cannot be updated.
+    pub async fn update_session_reasoning_level(
+        &self,
+        id: &str,
+        reasoning_level: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query!(
+            r#"
+UPDATE session
+SET reasoning_level = ?
+WHERE id = ?
+            "#,
+            reasoning_level,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     /// Updates the persisted provider conversation identifier for a session.
     ///
     /// The identifier stores the provider-native thread/session id used to
@@ -1819,6 +1853,33 @@ WHERE id = ?
         Ok(row.and_then(|row| row.value))
     }
 
+    /// Loads the persisted session-specific reasoning override, when present.
+    ///
+    /// Invalid persisted values are treated as if no override was stored.
+    ///
+    /// # Errors
+    /// Returns an error if the session lookup query fails.
+    pub async fn load_session_reasoning_level_override(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ReasoningLevel>, DbError> {
+        let row = sqlx::query_as!(
+            OptionalStringValueRow,
+            r#"
+SELECT reasoning_level AS "value: _"
+FROM session
+WHERE id = ?
+"#,
+            session_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row
+            .and_then(|row| row.value)
+            .and_then(|value| value.parse::<ReasoningLevel>().ok()))
+    }
+
     /// Loads the persisted summary text associated with one session.
     ///
     /// # Errors
@@ -2144,6 +2205,7 @@ WHERE id = ?
             output_tokens: 29,
             project_id: Some(7),
             prompt: "Implement feature".to_string(),
+            reasoning_level_override: None,
             published_upstream_ref: Some("origin/session-a".to_string()),
             questions: Some("Question text".to_string()),
             review_request_display_id: Some("#42".to_string()),

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET reasoning_level = ?\nWHERE id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2f2a9caaa83f24c6eccb00c9d2245738ede1e923c0c2ef72fc8ce8409abd1450"
+}

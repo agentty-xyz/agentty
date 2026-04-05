@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::{draft, session_folder};
 use crate::app::SessionManager;
-use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::{
     DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionHandles, SessionSize,
     SessionStats, Status,
@@ -159,6 +159,10 @@ impl SessionManager {
                 .as_deref()
                 .and_then(parse_questions_json)
                 .unwrap_or_default();
+            let reasoning_level_override = row
+                .reasoning_level_override
+                .as_deref()
+                .and_then(|value| value.parse::<ReasoningLevel>().ok());
             let follow_up_tasks = follow_up_tasks_by_session
                 .remove(&row.id)
                 .unwrap_or_default();
@@ -177,6 +181,7 @@ impl SessionManager {
                 output: session_output,
                 project_name: project_name.clone(),
                 prompt: row.prompt,
+                reasoning_level_override,
                 published_upstream_ref: row.published_upstream_ref,
                 questions,
                 review_request,
@@ -754,6 +759,7 @@ mod tests {
             output_tokens: 0,
             project_id: Some(1),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: None,
             review_request: Some(SessionReviewRequestRow {

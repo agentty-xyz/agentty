@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
 
-use super::agent::AgentModel;
+use super::agent::{AgentModel, ReasoningLevel};
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPromptAttachment;
 
@@ -356,6 +356,9 @@ pub struct Session {
     pub project_name: String,
     /// Initial user prompt used to create the session.
     pub prompt: String,
+    /// Session-scoped reasoning override selected through prompt slash
+    /// commands.
+    pub reasoning_level_override: Option<ReasoningLevel>,
     /// Upstream reference recorded after the latest successful branch publish,
     /// for example `origin/agentty/session-id`.
     pub published_upstream_ref: Option<String>,
@@ -404,6 +407,21 @@ impl Session {
     /// timer for this session.
     pub fn has_in_progress_timer(&self) -> bool {
         self.in_progress_total_seconds > 0 || self.in_progress_started_at.is_some()
+    }
+
+    /// Returns the reasoning level that will be used for the next turn.
+    pub fn effective_reasoning_level(
+        &self,
+        default_reasoning_level: ReasoningLevel,
+    ) -> ReasoningLevel {
+        self.reasoning_level_override
+            .unwrap_or(default_reasoning_level)
+    }
+
+    /// Returns whether this session currently inherits the project default
+    /// reasoning level.
+    pub fn uses_default_reasoning_level(&self) -> bool {
+        self.reasoning_level_override.is_none()
     }
 
     /// Returns cumulative active-work time including any open `InProgress`
@@ -463,6 +481,35 @@ impl SessionHandles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds a minimal session fixture for reasoning-level tests.
+    fn test_session(reasoning_level_override: Option<ReasoningLevel>) -> Session {
+        Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            draft_attachments: Vec::new(),
+            folder: PathBuf::new(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
+            is_draft: false,
+            model: AgentModel::Gemini3FlashPreview,
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: String::new(),
+            reasoning_level_override,
+            published_upstream_ref: None,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Review,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        }
+    }
 
     #[test]
     fn test_status_from_str_queued() {
@@ -602,6 +649,55 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
+    /// Ensures sessions without an override inherit the provided default
+    /// reasoning level.
+    fn test_effective_reasoning_level_uses_default_when_override_is_missing() {
+        // Arrange
+        let session = test_session(None);
+
+        // Act
+        let effective_reasoning_level = session.effective_reasoning_level(ReasoningLevel::Medium);
+        let uses_default_reasoning_level = session.uses_default_reasoning_level();
+
+        // Assert
+        assert_eq!(effective_reasoning_level, ReasoningLevel::Medium);
+        assert!(uses_default_reasoning_level);
+    }
+
+    #[test]
+    /// Ensures sessions with an override use that override instead of the
+    /// provided default.
+    fn test_effective_reasoning_level_prefers_session_override() {
+        // Arrange
+        let session = test_session(Some(ReasoningLevel::High));
+
+        // Act
+        let effective_reasoning_level = session.effective_reasoning_level(ReasoningLevel::Low);
+        let uses_default_reasoning_level = session.uses_default_reasoning_level();
+
+        // Assert
+        assert_eq!(effective_reasoning_level, ReasoningLevel::High);
+        assert!(!uses_default_reasoning_level);
+    }
+
+    #[test]
+    /// Ensures clearing a session override restores inheritance from the
+    /// provided default reasoning level.
+    fn test_effective_reasoning_level_returns_to_default_after_override_is_cleared() {
+        // Arrange
+        let mut session = test_session(Some(ReasoningLevel::XHigh));
+        session.reasoning_level_override = None;
+
+        // Act
+        let effective_reasoning_level = session.effective_reasoning_level(ReasoningLevel::Low);
+        let uses_default_reasoning_level = session.uses_default_reasoning_level();
+
+        // Assert
+        assert_eq!(effective_reasoning_level, ReasoningLevel::Low);
+        assert!(uses_default_reasoning_level);
+    }
+
+    #[test]
     fn test_forge_kind_from_str_github() {
         // Arrange
         let raw_forge_kind = "GitHub";
@@ -644,6 +740,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -679,6 +776,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -714,6 +812,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: Some("origin/agentty/session-id".to_string()),
             questions: Vec::new(),
             review_request: Some(ReviewRequest {
@@ -761,6 +860,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: Some("origin/agentty/session-id".to_string()),
             questions: Vec::new(),
             review_request: Some(ReviewRequest {
@@ -807,6 +907,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             follow_up_tasks: Vec::new(),
@@ -842,6 +943,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             follow_up_tasks: Vec::new(),

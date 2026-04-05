@@ -277,10 +277,12 @@ backend automatically fall back to the first available backend default instead
 of leaving the selector on a hidden choice.
 
 <a id="backends-reasoning-level"></a>
-For Codex and Claude sessions, the **Settings** tab also exposes `Reasoning Level`
-(`low`, `medium`, `high`, `xhigh`). The selected level is persisted and sent
-with Codex and Claude turns. For Claude, `xhigh` maps to `--effort max`,
-which is currently only supported by `claude-opus-4-6`.
+For Codex and Claude sessions, the **Settings** tab also exposes
+`Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`). The selected
+level is persisted per project and is sent with turns unless a session-specific
+override is active.
+For Claude, `xhigh` maps to `--effort max`, which is currently only supported
+by `claude-opus-4-6`.
 
 ## Available Models
 
@@ -318,6 +320,11 @@ command in the prompt input. This opens a two-step picker: first choose the
 backend, then choose one of its models. Both steps are filtered to locally
 available backends, and the current session backend remains preselected when it
 is still runnable on the current machine.
+
+You can also switch the reasoning level for the current session with the
+`/reasoning` slash command. The picker preselects the current effective
+reasoning level, using the active project's `Default Reasoning Level` whenever
+the session does not already have its own override.
 
 <a id="backends-switching-default-model"></a>
 To change the **default model** persistently, use the **Settings** tab

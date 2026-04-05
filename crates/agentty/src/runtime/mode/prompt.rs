@@ -5,7 +5,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 
 use crate::app::{App, SessionStatsUsage};
-use crate::domain::agent::AgentKind;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
 use crate::runtime::mode::{at_mention, input_key};
@@ -607,9 +607,7 @@ fn take_submitted_turn_prompt(app: &mut App) -> TurnPrompt {
 
 async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
     let session_agent_kind = app
-        .sessions
-        .sessions
-        .get(prompt_context.session_index)
+        .session_at(prompt_context.session_index)
         .map_or(AgentKind::Codex, |session| session.model.kind());
     let selection = match &app.mode {
         AppMode::Prompt {
@@ -628,6 +626,23 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 slash_state.reset();
             }
             handle_stats_command(app, prompt_context).await;
+        }
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/reasoning")) => {
+            let selected_reasoning_level = app
+                .session_at(prompt_context.session_index)
+                .map_or(app.settings.reasoning_level, |session| {
+                    session.effective_reasoning_level(app.settings.reasoning_level)
+                });
+            let selected_index = ReasoningLevel::ALL
+                .iter()
+                .position(|level| *level == selected_reasoning_level)
+                .unwrap_or(0);
+
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.stage = PromptSlashStage::Reasoning;
+                slash_state.selected_agent = None;
+                slash_state.selected_index = selected_index;
+            }
         }
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Command(_)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
@@ -655,6 +670,20 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             // Best-effort: model switch failure is non-critical.
             let _ = app
                 .set_session_model(&prompt_context.session_id, selected_model)
+                .await;
+        }
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Reasoning(reasoning_level)) => {
+            if let AppMode::Prompt {
+                input, slash_state, ..
+            } = &mut app.mode
+            {
+                input.take_text();
+                slash_state.reset();
+            }
+
+            // Best-effort: reasoning override failure is non-critical.
+            let _ = app
+                .set_session_reasoning_level(&prompt_context.session_id, Some(reasoning_level))
                 .await;
         }
         None => {}
@@ -1506,7 +1535,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/model", "/stats"]);
+        assert_eq!(commands, vec!["/model", "/reasoning", "/stats"]);
     }
 
     #[test]
@@ -1802,6 +1831,42 @@ mod tests {
             assert_eq!(*slash_state, PromptSlashState::new());
         }
         assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_default_setting() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
+        app.settings.reasoning_level = ReasoningLevel::Medium;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_prefills_reasoning_selection_from_session_override() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/reasoning", None).await;
+        app.sessions.sessions[0].reasoning_level_override = Some(ReasoningLevel::High);
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
+            assert_eq!(slash_state.stage, PromptSlashStage::Reasoning);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 2);
+        }
     }
 
     #[tokio::test]

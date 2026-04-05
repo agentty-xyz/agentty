@@ -88,7 +88,7 @@ impl SettingRow {
     /// Returns the display label for the row.
     fn label(self) -> &'static str {
         match self {
-            Self::ReasoningLevel => "Reasoning Level",
+            Self::ReasoningLevel => "Default Reasoning Level",
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
@@ -132,7 +132,8 @@ pub struct SettingsManager {
     pub default_smart_model: AgentModel,
     /// Optional command run in tmux when opening a session worktree.
     pub open_command: String,
-    /// Reasoning effort preference for models that support this setting.
+    /// Default reasoning effort preference for models that support this
+    /// setting.
     ///
     /// Currently applied to Codex and Claude turns.
     pub reasoning_level: ReasoningLevel,
@@ -1236,7 +1237,7 @@ mod tests {
 
         // Assert
         assert_eq!(rows.len(), 6);
-        assert_eq!(rows[0].0, "Reasoning Level");
+        assert_eq!(rows[0].0, "Default Reasoning Level");
         assert_eq!(rows[1].0, "Default Smart Model");
         assert_eq!(rows[2].0, "Default Fast Model");
         assert_eq!(rows[3].0, "Default Review Model");

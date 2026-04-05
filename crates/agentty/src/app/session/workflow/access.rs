@@ -88,6 +88,7 @@ mod tests {
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,

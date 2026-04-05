@@ -15,7 +15,7 @@ pub(crate) use super::workflow::task::{RunAgentAssistTaskInput, SessionTaskServi
 use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};
-use crate::domain::agent::AgentModel;
+use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, Session, SessionFollowUpTask, SessionStats,
 };
@@ -209,6 +209,23 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.model = session_model;
+        }
+    }
+
+    /// Applies one persisted reasoning override update to the matching
+    /// in-memory session snapshot.
+    pub(crate) fn apply_session_reasoning_level_updated(
+        &mut self,
+        session_id: &str,
+        reasoning_level_override: Option<ReasoningLevel>,
+    ) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.reasoning_level_override = reasoning_level_override;
         }
     }
 
@@ -412,7 +429,7 @@ mod tests {
 
     use super::*;
     use crate::app::{App, SyncSessionStartError, Tab};
-    use crate::domain::agent::{AgentKind, AgentModel};
+    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::session::{
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
     };
@@ -887,6 +904,7 @@ mod tests {
             output: String::new(),
             project_name: String::new(),
             prompt: prompt.to_string(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -900,6 +918,86 @@ mod tests {
         if app.sessions.table_state.selected().is_none() {
             app.sessions.table_state.select(Some(0));
         }
+    }
+
+    /// Builds a minimal `SessionManager` for reducer tests that only need one
+    /// in-memory session snapshot.
+    fn test_session_manager(
+        session_id: &str,
+        reasoning_level_override: Option<ReasoningLevel>,
+    ) -> SessionManager {
+        let mut handles = HashMap::new();
+        handles.insert(
+            session_id.to_string(),
+            SessionHandles::new(String::new(), Status::Review),
+        );
+
+        let state = SessionState::new(
+            handles,
+            vec![Session {
+                base_branch: "main".to_string(),
+                created_at: 0,
+                draft_attachments: Vec::new(),
+                folder: PathBuf::from(format!("/tmp/{session_id}")),
+                follow_up_tasks: Vec::new(),
+                id: session_id.to_string(),
+                in_progress_started_at: None,
+                in_progress_total_seconds: 0,
+                is_draft: false,
+                model: AgentModel::Gpt54,
+                output: String::new(),
+                project_name: "project".to_string(),
+                prompt: String::new(),
+                reasoning_level_override,
+                published_upstream_ref: None,
+                questions: Vec::new(),
+                review_request: None,
+                size: SessionSize::Xs,
+                stats: SessionStats::default(),
+                status: Status::Review,
+                summary: None,
+                title: Some("Title".to_string()),
+                updated_at: 0,
+            }],
+            ratatui::widgets::TableState::default(),
+            Arc::new(RealClock),
+            1,
+            0,
+        );
+
+        SessionManager::new(
+            SessionDefaults {
+                model: AgentModel::Gpt54,
+            },
+            Arc::new(git::MockGitClient::new()),
+            state,
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    /// Ensures reasoning reducer updates only the matching in-memory session
+    /// snapshot and leaves unrelated sessions untouched.
+    fn test_apply_session_reasoning_level_updated_updates_only_matching_session() {
+        // Arrange
+        let mut session_manager = test_session_manager("session-id", Some(ReasoningLevel::Low));
+
+        // Act
+        session_manager
+            .apply_session_reasoning_level_updated("other-session", Some(ReasoningLevel::High));
+        let reasoning_level_after_non_matching_update =
+            session_manager.state.sessions[0].reasoning_level_override;
+        session_manager.apply_session_reasoning_level_updated("session-id", None);
+
+        // Assert
+        assert_eq!(
+            reasoning_level_after_non_matching_update,
+            Some(ReasoningLevel::Low)
+        );
+        assert_eq!(
+            session_manager.state.sessions[0].reasoning_level_override,
+            None
+        );
     }
 
     #[tokio::test]

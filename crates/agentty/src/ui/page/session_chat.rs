@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::{self, extract_at_mention_query};
 use crate::domain::session::{Session, Status};
 use crate::infra::agent::protocol::QuestionItem;
@@ -46,6 +47,7 @@ impl PreparedPromptPanel {
 pub struct SessionChatPage<'a> {
     pub active_prompt_output: Option<&'a str>,
     pub active_progress: Option<&'a str>,
+    pub default_reasoning_level: ReasoningLevel,
     pub mode: &'a AppMode,
     pub selected_follow_up_task_position: Option<usize>,
     pub scroll_offset: Option<u16>,
@@ -77,6 +79,7 @@ impl<'a> SessionChatPage<'a> {
         session_index: usize,
         scroll_offset: Option<u16>,
         mode: &'a AppMode,
+        default_reasoning_level: ReasoningLevel,
         active_prompt_output: Option<&'a str>,
         active_progress: Option<&'a str>,
         wall_clock_unix_seconds: i64,
@@ -84,6 +87,7 @@ impl<'a> SessionChatPage<'a> {
         Self {
             active_prompt_output,
             active_progress,
+            default_reasoning_level,
             mode,
             selected_follow_up_task_position: None,
             scroll_offset,
@@ -331,7 +335,13 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        Self::render_session_header(f, output_chunks[0], session, self.wall_clock_unix_seconds);
+        Self::render_session_header(
+            f,
+            output_chunks[0],
+            session,
+            self.default_reasoning_level,
+            self.wall_clock_unix_seconds,
+        );
         output.render(f, output_chunks[1]);
         self.render_bottom_panel(f, chunks[1], session, prepared_prompt_panel.as_ref());
     }
@@ -341,11 +351,13 @@ impl<'a> SessionChatPage<'a> {
         f: &mut Frame,
         header_area: Rect,
         session: &Session,
+        default_reasoning_level: ReasoningLevel,
         wall_clock_unix_seconds: i64,
     ) {
         let header = Paragraph::new(Self::session_header_lines(
             session,
             header_area.width,
+            default_reasoning_level,
             wall_clock_unix_seconds,
         ));
 
@@ -356,12 +368,17 @@ impl<'a> SessionChatPage<'a> {
     fn session_header_lines(
         session: &Session,
         header_width: u16,
+        default_reasoning_level: ReasoningLevel,
         wall_clock_unix_seconds: i64,
     ) -> Vec<Line<'static>> {
         let title_width = usize::from(header_width);
         let title = truncate_with_ellipsis(session.display_title(), title_width);
-        let metadata_text =
-            Self::session_metadata_text(session, header_width, wall_clock_unix_seconds);
+        let metadata_text = Self::session_metadata_text(
+            session,
+            header_width,
+            default_reasoning_level,
+            wall_clock_unix_seconds,
+        );
 
         vec![
             Line::from(Span::styled(
@@ -382,18 +399,21 @@ impl<'a> SessionChatPage<'a> {
     fn session_metadata_text(
         session: &Session,
         header_width: u16,
+        default_reasoning_level: ReasoningLevel,
         wall_clock_unix_seconds: i64,
     ) -> String {
         let added_lines = session.stats.added_lines;
         let deleted_lines = session.stats.deleted_lines;
         let timer =
             format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds));
+        let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
         let input_tokens = format_token_count(session.stats.input_tokens);
         let output_tokens = format_token_count(session.stats.output_tokens);
         let metadata = format!(
-            "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Token usage: \
-             {input_tokens} in / {output_tokens} out",
+            "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Tokens: \
+             {input_tokens}/{output_tokens}  Reasoning: {}",
             session.size,
+            reasoning_level.as_str(),
         );
         let metadata_width = usize::from(header_width);
 
@@ -949,7 +969,7 @@ mod tests {
 
     use super::*;
     use crate::agent::AgentModel;
-    use crate::domain::agent::AgentKind;
+    use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::domain::input::InputState;
     use crate::domain::session::{SessionSize, SessionStats};
     use crate::infra::agent::protocol::QuestionItem;
@@ -972,6 +992,7 @@ mod tests {
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -1346,6 +1367,7 @@ mod tests {
         // Assert
         let labels: Vec<&str> = menu.items.iter().map(|opt| opt.label.as_str()).collect();
         assert!(labels.contains(&"/model"));
+        assert!(labels.contains(&"/reasoning"));
         assert!(labels.contains(&"/stats"));
     }
 
@@ -1600,6 +1622,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1633,6 +1656,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1666,6 +1690,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1769,6 +1794,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1820,6 +1846,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1856,6 +1883,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1903,6 +1931,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1929,7 +1958,8 @@ mod tests {
         assert!(metadata_row.contains("Size: XS"));
         assert!(metadata_row.contains("Lines: +12 / -4"));
         assert!(metadata_row.contains("Timer: 0s"));
-        assert!(metadata_row.contains("Token usage: 1.3k in / 2.5k out"));
+        assert!(metadata_row.contains("Tokens: 1.3k/2.5k"));
+        assert!(metadata_row.contains("Reasoning: high"));
         assert!(!output_border_row.contains("Header Session"));
     }
 
@@ -1945,6 +1975,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1977,6 +2008,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -1998,7 +2030,7 @@ mod tests {
         let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, width);
         assert!(header_row.contains("Header Session"));
         assert!(!header_row.contains("GitHub"));
-        assert!(metadata_row.contains("Token usage"));
+        assert!(metadata_row.contains("Tokens:"));
     }
 
     #[test]
@@ -2012,8 +2044,10 @@ mod tests {
         session.in_progress_started_at = Some(60);
 
         // Act
-        let early_metadata = SessionChatPage::session_metadata_text(&session, 80, 90);
-        let later_metadata = SessionChatPage::session_metadata_text(&session, 80, 3_720);
+        let early_metadata =
+            SessionChatPage::session_metadata_text(&session, 80, ReasoningLevel::default(), 90);
+        let later_metadata =
+            SessionChatPage::session_metadata_text(&session, 80, ReasoningLevel::default(), 3_720);
 
         // Assert
         assert!(early_metadata.contains("Lines: +9 / -3"));
@@ -2030,8 +2064,10 @@ mod tests {
         session.in_progress_total_seconds = 3_660;
 
         // Act
-        let earlier_metadata = SessionChatPage::session_metadata_text(&session, 80, 4_000);
-        let later_metadata = SessionChatPage::session_metadata_text(&session, 80, 40_000);
+        let earlier_metadata =
+            SessionChatPage::session_metadata_text(&session, 80, ReasoningLevel::default(), 4_000);
+        let later_metadata =
+            SessionChatPage::session_metadata_text(&session, 80, ReasoningLevel::default(), 40_000);
 
         // Assert
         assert_eq!(earlier_metadata, later_metadata);
@@ -2051,6 +2087,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             3_660,
@@ -2096,6 +2133,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -2140,6 +2178,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -2197,6 +2236,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,
@@ -2250,6 +2290,7 @@ mod tests {
             0,
             None,
             &mode,
+            ReasoningLevel::default(),
             None,
             None,
             0,

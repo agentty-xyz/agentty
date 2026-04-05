@@ -590,6 +590,37 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Updates and persists the reasoning override for a single session.
+    ///
+    /// Passing `None` clears the override so future turns inherit the active
+    /// project default reasoning level.
+    ///
+    /// # Errors
+    /// Returns an error if the session is missing or persistence fails.
+    pub async fn set_session_reasoning_level(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        reasoning_level_override: Option<ReasoningLevel>,
+    ) -> Result<(), SessionError> {
+        self.session_index_or_err(session_id)?;
+
+        services
+            .db()
+            .update_session_reasoning_level(
+                session_id,
+                reasoning_level_override.map(ReasoningLevel::as_str),
+            )
+            .await?;
+
+        services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
+            reasoning_level_override,
+            session_id: session_id.to_string(),
+        });
+
+        Ok(())
+    }
+
     /// Returns whether session model switches should also persist
     /// `DefaultSmartModel`.
     async fn should_persist_last_used_model_as_default(
@@ -616,6 +647,11 @@ impl SessionManager {
             .table_state
             .selected()
             .and_then(|index| self.state.sessions.get(index))
+    }
+
+    /// Returns the session snapshot for one list index, if it still exists.
+    pub fn session_at(&self, session_index: usize) -> Option<&Session> {
+        self.state.sessions.get(session_index)
     }
 
     /// Returns the session identifier for the given list index.
@@ -1788,11 +1824,12 @@ mod tests {
 
     use ag_forge as forge;
     use ratatui::widgets::TableState;
+    use tokio::sync::mpsc;
 
     use super::*;
     use crate::app::session::{RealClock, SessionDefaults};
-    use crate::app::{AppServices, SessionState};
-    use crate::domain::agent::AgentKind;
+    use crate::app::{AppEvent, AppServices, SessionState};
+    use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::domain::session::{
         ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles, SessionSize,
         SessionStats,
@@ -1844,6 +1881,7 @@ mod tests {
             output: output.to_string(),
             project_name: "project".to_string(),
             prompt: prompt.to_string(),
+            reasoning_level_override: None,
             published_upstream_ref: None,
             questions: Vec::new(),
             review_request: None,
@@ -1982,6 +2020,31 @@ mod tests {
         )
     }
 
+    /// Builds app services plus an event receiver for reducer-event
+    /// assertions.
+    fn test_services_with_event_receiver(
+        database: Database,
+        git_client: Arc<dyn git::GitClient>,
+        review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    ) -> (AppServices, mpsc::UnboundedReceiver<AppEvent>) {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let services = AppServices::new(
+            PathBuf::from("/tmp/agentty-tests"),
+            Arc::new(crate::app::session::RealClock),
+            database,
+            event_tx,
+            crate::app::service::AppServiceDeps {
+                app_server_client_override: Some(mock_app_server()),
+                fs_client: Arc::new(create_passthrough_mock_fs_client()),
+                available_agent_kinds: AgentKind::ALL.to_vec(),
+                git_client,
+                review_request_client,
+            },
+        );
+
+        (services, event_rx)
+    }
+
     /// Builds one normalized review-request summary for workflow tests.
     fn review_request_summary(display_id: &str) -> ReviewRequestSummary {
         ReviewRequestSummary {
@@ -2041,6 +2104,45 @@ mod tests {
             .into_iter()
             .find(|row| row.id == "session-id")
             .expect("session row should exist")
+    }
+
+    #[tokio::test]
+    /// Ensures `set_session_reasoning_level()` persists the override and
+    /// emits the matching reducer event.
+    async fn test_set_session_reasoning_level_persists_override_and_emits_event() {
+        // Arrange
+        let session = test_session("Prompt", Status::Review, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            database.clone(),
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        session_manager
+            .set_session_reasoning_level(&services, "session-id", Some(ReasoningLevel::High))
+            .await
+            .expect("reasoning level update should succeed");
+        let persisted_reasoning_level = database
+            .load_session_reasoning_level_override("session-id")
+            .await
+            .expect("reasoning override should load");
+        let emitted_event = event_rx
+            .try_recv()
+            .expect("expected reasoning update event");
+
+        // Assert
+        assert_eq!(persisted_reasoning_level, Some(ReasoningLevel::High));
+        assert_eq!(
+            emitted_event,
+            AppEvent::SessionReasoningLevelUpdated {
+                reasoning_level_override: Some(ReasoningLevel::High),
+                session_id: "session-id".to_string(),
+            }
+        );
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[tokio::test]

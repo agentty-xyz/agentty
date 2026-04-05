@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::Session;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{
@@ -99,6 +100,7 @@ pub(crate) fn render_view_info_popup(
     restore_view: &ConfirmationViewMode,
     sessions: &[Session],
     session_progress_messages: &HashMap<String, String>,
+    default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
     context: ViewInfoPopupRenderContext<'_>,
 ) {
@@ -122,6 +124,7 @@ pub(crate) fn render_view_info_popup(
             session_index,
             restore_view.scroll_offset,
             &background_mode,
+            default_reasoning_level,
             None,
             active_progress,
             wall_clock_unix_seconds,
@@ -357,6 +360,7 @@ fn render_help_background(
                 session_index,
                 scroll_offset,
                 &bg_mode,
+                list_background.settings.reasoning_level,
                 None,
                 active_progress,
                 wall_clock_unix_seconds,

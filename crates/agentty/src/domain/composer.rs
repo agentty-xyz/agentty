@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use crate::domain::agent::{self, AgentKind, AgentModel, AgentSelectionMetadata};
+use crate::domain::agent::{self, AgentKind, AgentModel, AgentSelectionMetadata, ReasoningLevel};
 use crate::domain::input::{InputState, is_at_mention_boundary, is_at_mention_query_character};
 
 /// One selectable row in the prompt slash-command menu.
@@ -39,6 +39,8 @@ pub enum PromptSuggestionSelection {
     Agent(AgentKind),
     /// Model selected during `/model` model selection.
     Model(AgentModel),
+    /// Session-scoped reasoning selection chosen during `/reasoning`.
+    Reasoning(ReasoningLevel),
 }
 
 /// Inline attachment metadata for one pasted local image placeholder.
@@ -194,6 +196,8 @@ pub enum PromptSlashStage {
     Command,
     /// Selecting a model after choosing an agent.
     Model,
+    /// Selecting a session-specific reasoning level override.
+    Reasoning,
 }
 
 /// UI state for prompt-only slash command selection.
@@ -724,6 +728,10 @@ fn build_slash_suggestion_list(
 
             ("/model Model (j/k move, Enter select)", models)
         }
+        PromptSlashStage::Reasoning => (
+            "/reasoning Level (j/k move, Enter select)",
+            reasoning_suggestion_items(),
+        ),
     };
 
     if items.is_empty() {
@@ -777,6 +785,14 @@ fn selected_slash_action(
 
             Some(PromptSuggestionSelection::Model(selected_model))
         }
+        PromptSlashStage::Reasoning => {
+            let options = reasoning_options();
+            let selected_reasoning = options
+                .get(clamp_selected_index(selected_index, options.len()))
+                .copied()?;
+
+            Some(PromptSuggestionSelection::Reasoning(selected_reasoning))
+        }
     }
 }
 
@@ -805,6 +821,7 @@ fn resolve_model_stage_agent(
 fn command_description(command: &str) -> &'static str {
     match command {
         "/model" => "Choose an agent and model for this session.",
+        "/reasoning" => "Override the reasoning level for this session.",
         "/stats" => "Check session stats.",
         _ => "Prompt slash command.",
     }
@@ -813,10 +830,28 @@ fn command_description(command: &str) -> &'static str {
 /// Returns all slash commands whose prefixes match the current input.
 fn prompt_slash_commands(input: &str) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/model", "/stats"];
+    let mut commands = vec!["/model", "/reasoning", "/stats"];
     commands.retain(|command| command.starts_with(&lowered));
 
     commands
+}
+
+/// Returns the stable `/reasoning` selection options.
+fn reasoning_options() -> Vec<ReasoningLevel> {
+    ReasoningLevel::ALL.to_vec()
+}
+
+/// Returns the render-ready dropdown rows for `/reasoning`.
+fn reasoning_suggestion_items() -> Vec<PromptSuggestionItem> {
+    ReasoningLevel::ALL
+        .into_iter()
+        .map(|reasoning_level| PromptSuggestionItem {
+            badge: None,
+            detail: Some(reasoning_level.description().to_string()),
+            label: reasoning_level.name().to_string(),
+            metadata: None,
+        })
+        .collect()
 }
 
 /// Returns the exclusive end index for an `[Image #n]` placeholder token that
@@ -1007,6 +1042,27 @@ mod tests {
     }
 
     #[test]
+    fn test_selected_slash_action_returns_selected_reasoning_level() {
+        // Arrange
+        let mut composer = PromptComposerState::with_input_and_history(
+            InputState::with_text("/reasoning".to_string()),
+            AgentKind::ALL.to_vec(),
+            Vec::new(),
+        );
+        composer.slash_state.stage = PromptSlashStage::Reasoning;
+        composer.slash_state.selected_index = 2;
+
+        // Act
+        let selection = composer.selected_slash_action(AgentKind::Codex);
+
+        // Assert
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Reasoning(ReasoningLevel::High))
+        );
+    }
+
+    #[test]
     fn test_selected_slash_action_clamps_stale_command_index() {
         // Arrange
         let mut composer = PromptComposerState::with_input_and_history(
@@ -1051,6 +1107,30 @@ mod tests {
             labels,
             vec!["gpt-5.4".to_string(), "gpt-5.3-codex-spark".to_string(),]
         );
+    }
+
+    #[test]
+    fn test_reasoning_stage_suggestion_list_omits_default_option() {
+        // Arrange
+        let mut composer = PromptComposerState::with_input_and_history(
+            InputState::with_text("/reasoning".to_string()),
+            AgentKind::ALL.to_vec(),
+            Vec::new(),
+        );
+        composer.slash_state.stage = PromptSlashStage::Reasoning;
+
+        // Act
+        let suggestion_list = composer
+            .slash_suggestion_list(AgentKind::Codex)
+            .expect("expected suggestion list");
+        let labels = suggestion_list
+            .items
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(labels, vec!["low", "medium", "high", "xhigh"]);
     }
 
     #[test]
