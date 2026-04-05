@@ -71,6 +71,7 @@ state:
 |-----|--------|
 | `q` | Back to list |
 | `Enter` | Compose the first prompt or reply; in draft sessions it adds a draft |
+| `/` | Open the composer with `/` prefilled for slash commands |
 | `s` | Start a staged draft session |
 | `o` | Open worktree in tmux |
 | `p` | Publish session branch |

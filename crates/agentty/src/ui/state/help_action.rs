@@ -252,9 +252,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
-    if can_edit_session {
-        actions.push(prompt_action_help_action(state.session_state));
-    }
+    append_view_prompt_actions(&mut actions, state.session_state, can_edit_session);
 
     if state.session_state == ViewSessionState::NewSession {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
@@ -406,7 +404,7 @@ fn append_view_footer_edit_actions(
         return;
     }
 
-    actions.push(prompt_action_help_action(session_state));
+    append_view_prompt_actions(actions, session_state, can_edit_session);
 
     if session_state == ViewSessionState::NewSession {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
@@ -423,8 +421,25 @@ fn append_view_footer_edit_actions(
     }
 }
 
-/// Returns the prompt-entry action label appropriate for the current session
-/// state.
+/// Appends the session-view shortcuts that open the prompt composer.
+///
+/// Editable sessions expose both `Enter` for a blank composer and `/` for a
+/// slash-command composer with a prefilled leading slash.
+fn append_view_prompt_actions(
+    actions: &mut Vec<HelpAction>,
+    session_state: ViewSessionState,
+    can_edit_session: bool,
+) {
+    if !can_edit_session {
+        return;
+    }
+
+    actions.push(prompt_action_help_action(session_state));
+    actions.push(HelpAction::new("slash", "/", "Open slash commands"));
+}
+
+/// Returns the `Enter` prompt-entry action label appropriate for the current
+/// session state.
 fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
     if session_state == ViewSessionState::NewSession {
         return HelpAction::new("add draft", "Enter", "Add draft");
@@ -675,6 +690,11 @@ mod tests {
         );
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.key == "/" && action.popup_label == "Open slash commands")
+        );
         assert!(!actions.iter().any(|action| action.key == "S-Tab"));
         assert!(
             actions
@@ -720,6 +740,7 @@ mod tests {
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "/"));
     }
 
     #[test]
@@ -741,6 +762,7 @@ mod tests {
                 .iter()
                 .any(|action| action.key == "Enter" && action.footer_label == "add draft")
         );
+        assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "s"));
     }
 
@@ -782,6 +804,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
@@ -804,6 +827,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
+        assert!(actions.iter().any(|action| action.key == "/"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
@@ -846,7 +870,7 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..5], ["q", "Enter", "s", "m", "r"]);
+        assert_eq!(&ordered_keys[..6], ["q", "Enter", "/", "s", "m", "r"]);
     }
 
     #[test]

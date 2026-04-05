@@ -13,6 +13,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Status};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
+use crate::runtime::mode::input_key::is_insertable_char_key;
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
@@ -177,6 +178,20 @@ async fn handle_view_key(
                 PromptHistoryState::new(session_prompt_history_entries(
                     &app.sessions.sessions[view_context.session_index],
                 )),
+                InputState::new(),
+                pending_update.scroll_offset,
+            );
+        }
+        KeyCode::Char('/')
+            if view_session_snapshot.is_action_allowed && is_insertable_char_key(key) =>
+        {
+            switch_view_to_prompt(
+                app,
+                view_context,
+                PromptHistoryState::new(session_prompt_history_entries(
+                    &app.sessions.sessions[view_context.session_index],
+                )),
+                InputState::with_text("/".to_string()),
                 pending_update.scroll_offset,
             );
         }
@@ -444,11 +459,14 @@ fn is_view_rebase_allowed(status: Status) -> bool {
 /// Switches the TUI mode from session view to the prompt input.
 ///
 /// Focused-review output/status is copied into prompt mode so canceling the
-/// composer returns to the same session transcript state.
+/// composer returns to the same session transcript state. The caller supplies
+/// the initial composer buffer so session-view shortcuts like `/` can open the
+/// prompt with prefilled slash-command text.
 fn switch_view_to_prompt(
     app: &mut App,
     view_context: &ViewContext,
     history_state: PromptHistoryState,
+    input: InputState,
     scroll_offset: Option<u16>,
 ) {
     app.mode = AppMode::Prompt {
@@ -459,7 +477,7 @@ fn switch_view_to_prompt(
         review_text: view_context.review_text.clone(),
         slash_state: app.prompt_slash_state(),
         session_id: view_context.session_id.clone(),
-        input: InputState::new(),
+        input,
         scroll_offset,
     };
 }
@@ -2411,6 +2429,66 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn test_handle_view_key_slash_opens_prompt_with_prefilled_slash() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: Some("Review loading".to_string()),
+            review_text: Some("Focused review".to_string()),
+            session_id: session_id.clone(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot = ViewSessionSnapshot {
+            can_start_staged_session: false,
+            can_open_worktree: true,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            is_action_allowed: true,
+            publish_branch_action: None,
+            session_state: ViewSessionState::Review,
+            session_status: Status::Review,
+        };
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ViewMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
+        };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref review_status_message,
+                ref review_text,
+                ref session_id,
+                scroll_offset: Some(2),
+                ..
+            } if input.text() == "/"
+                && input.cursor == 1
+                && review_status_message.as_deref() == Some("Review loading")
+                && review_text.as_deref() == Some("Focused review")
+                && session_id == &view_context.session_id
+        ));
+    }
+
     /// Verifies session-view action keys are ignored when the current session
     /// status does not allow those actions.
     #[tokio::test]
@@ -2434,6 +2512,7 @@ mod tests {
         for key in [
             KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),

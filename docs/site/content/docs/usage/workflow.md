@@ -50,10 +50,10 @@ Session statuses and what you can do in each state:
 
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
-| **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first. | `Enter` compose first prompt or add draft, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
+| **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
 | **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
-| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `m` add to merge queue, `r` rebase, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
-| **AgentReview** | Agentty is generating the focused review output in the background. | `Enter` reply, `m` add to merge queue, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
+| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
+| **AgentReview** | Agentty is generating the focused review output in the background. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p` publish branch, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) |
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
@@ -76,6 +76,9 @@ panel when it is ready, or shows a loading message there while generation is
 still running. That appended review remains visible when you leave and reopen
 the session, including after round-tripping through `d` diff mode, and it is
 cleared when you submit the next prompt.
+Pressing `/` from an editable session view opens the same composer with a
+prefilled `/` so you can pick a slash command without typing the leading
+character first.
 
 When a completed turn emits `follow_up_tasks`, the session view renders them as
 a separate follow-up section. The selected task shows `[Launch]` until it has
@@ -238,7 +241,9 @@ the session record.
 ## Slash Commands
 
 <a id="usage-slash-commands"></a>
-Type these in the prompt input to access special actions:
+Type these in the prompt input to access special actions. From an editable
+session view, press `/` to open the composer with the leading slash already
+inserted:
 
 | Command | Description |
 |---------|-------------|
