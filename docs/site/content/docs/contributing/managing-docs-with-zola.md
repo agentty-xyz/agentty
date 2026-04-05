@@ -33,6 +33,7 @@ Use these conventions to keep Agentty documentation maintainable as it grows.
 
 - Use fenced `mermaid` code blocks for flow, lifecycle, and architecture diagrams instead of ASCII trees.
 - Keep node labels concise and let the docs-page template handle theme-aware Mermaid rendering.
+- Mermaid diagrams in docs pages now ship with built-in `fit`, zoom, and drag-to-pan controls automatically, so authors do not need to add extra wrapper markup.
 
 ## Authoring Workflow
 

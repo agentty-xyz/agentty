@@ -58,6 +58,10 @@
   var mermaidCodeBlockSelector = '.docs-content pre';
   var mermaidModuleUrl = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
   var mermaidModulePromise = null;
+  var mermaidPanStep = 56;
+  var mermaidZoomStep = 0.2;
+  var mermaidMinScale = 0.4;
+  var mermaidMaxScale = 2.4;
   var renderCounter = 0;
 
   /**
@@ -110,6 +114,241 @@
     };
   }
 
+  /** Clamp the requested Mermaid zoom scale into the supported range. */
+  function clampMermaidScale(scale) {
+    return Math.min(mermaidMaxScale, Math.max(mermaidMinScale, scale));
+  }
+
+  /** Build one reusable Mermaid zoom control button. */
+  function createMermaidControl(action, label, text) {
+    var button = document.createElement('button');
+    button.className = 'docs-mermaid__control';
+    button.dataset.action = action;
+    button.type = 'button';
+    button.textContent = text;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+
+    return button;
+  }
+
+  /**
+   * Capture the current scroll position as ratios so re-renders can restore the
+   * same viewport after the SVG is replaced.
+   */
+  function captureMermaidScrollState(host) {
+    var maxScrollLeft = host.scrollWidth - host.clientWidth;
+    var maxScrollTop = host.scrollHeight - host.clientHeight;
+
+    return {
+      leftRatio: maxScrollLeft > 0 ? host.scrollLeft / maxScrollLeft : 0,
+      topRatio: maxScrollTop > 0 ? host.scrollTop / maxScrollTop : 0,
+    };
+  }
+
+  /** Restore a saved Mermaid scroll ratio after resizing the rendered SVG. */
+  function restoreMermaidScrollState(host, scrollState) {
+    if (!scrollState) {
+      return;
+    }
+
+    var maxScrollLeft = host.scrollWidth - host.clientWidth;
+    var maxScrollTop = host.scrollHeight - host.clientHeight;
+
+    host.scrollLeft = maxScrollLeft > 0 ? maxScrollLeft * scrollState.leftRatio : 0;
+    host.scrollTop = maxScrollTop > 0 ? maxScrollTop * scrollState.topRatio : 0;
+  }
+
+  /** Read the base SVG width and height needed for Mermaid zoom calculations. */
+  function mermaidSvgDimensions(svg) {
+    var viewBox = svg.viewBox && svg.viewBox.baseVal;
+    if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+      return {
+        height: viewBox.height,
+        width: viewBox.width,
+      };
+    }
+
+    var bounds = svg.getBBox();
+
+    return {
+      height: bounds.height || svg.clientHeight || 0,
+      width: bounds.width || svg.clientWidth || 0,
+    };
+  }
+
+  /**
+   * Resize the rendered Mermaid SVG to the requested zoom scale and optionally
+   * preserve the current scroll viewport.
+   */
+  function applyMermaidScale(host, scale, scrollState) {
+    var svg = host.querySelector('svg');
+    if (!svg) {
+      return;
+    }
+
+    var baseWidth = Number(host.dataset.baseWidth || 0);
+    var baseHeight = Number(host.dataset.baseHeight || 0);
+    if (!baseWidth || !baseHeight) {
+      return;
+    }
+
+    var nextScale = clampMermaidScale(scale);
+    svg.style.width = (baseWidth * nextScale) + 'px';
+    svg.style.height = (baseHeight * nextScale) + 'px';
+    host.dataset.zoomScale = String(nextScale);
+
+    restoreMermaidScrollState(host, scrollState);
+  }
+
+  /** Fit the Mermaid SVG to the current viewport width without upscaling it. */
+  function fitMermaidHost(host) {
+    var baseWidth = Number(host.dataset.baseWidth || 0);
+    if (!baseWidth) {
+      return;
+    }
+
+    var availableWidth = host.clientWidth - 24;
+    var fitScale = availableWidth > 0 ? Math.min(1, availableWidth / baseWidth) : 1;
+
+    applyMermaidScale(host, fitScale || 1, { leftRatio: 0, topRatio: 0 });
+    host.dataset.zoomMode = 'fit';
+  }
+
+  /** Increase or decrease Mermaid zoom while preserving the current viewport. */
+  function nudgeMermaidScale(host, direction) {
+    var scrollState = captureMermaidScrollState(host);
+    var currentScale = Number(host.dataset.zoomScale || 1);
+    var nextScale = currentScale + (direction * mermaidZoomStep);
+
+    applyMermaidScale(host, nextScale, scrollState);
+    host.dataset.zoomMode = 'manual';
+  }
+
+  /** Bind mouse drag scrolling and keyboard shortcuts to a Mermaid viewport. */
+  function attachMermaidHostInteractions(host) {
+    if (host.dataset.interactiveBound === 'true') {
+      return;
+    }
+
+    var dragState = null;
+
+    host.addEventListener('pointerdown', function (event) {
+      if (event.pointerType === 'touch' || event.button !== 0) {
+        return;
+      }
+
+      if (host.scrollWidth <= host.clientWidth && host.scrollHeight <= host.clientHeight) {
+        return;
+      }
+
+      dragState = {
+        pointerId: event.pointerId,
+        scrollLeft: host.scrollLeft,
+        scrollTop: host.scrollTop,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+
+      host.classList.add('is-dragging');
+      host.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    host.addEventListener('pointermove', function (event) {
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+
+      host.scrollLeft = dragState.scrollLeft - (event.clientX - dragState.startX);
+      host.scrollTop = dragState.scrollTop - (event.clientY - dragState.startY);
+    });
+
+    function clearDragState(event) {
+      if (!dragState || dragState.pointerId !== event.pointerId) {
+        return;
+      }
+
+      host.classList.remove('is-dragging');
+      host.releasePointerCapture(event.pointerId);
+      dragState = null;
+    }
+
+    host.addEventListener('pointerup', clearDragState);
+    host.addEventListener('pointercancel', clearDragState);
+
+    host.addEventListener('keydown', function (event) {
+      if (event.key === '+' || event.key === '=') {
+        event.preventDefault();
+        nudgeMermaidScale(host, 1);
+        return;
+      }
+
+      if (event.key === '-') {
+        event.preventDefault();
+        nudgeMermaidScale(host, -1);
+        return;
+      }
+
+      if (event.key === '0') {
+        event.preventDefault();
+        fitMermaidHost(host);
+        return;
+      }
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        host.scrollLeft -= mermaidPanStep;
+        return;
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        host.scrollLeft += mermaidPanStep;
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        host.scrollTop -= mermaidPanStep;
+        return;
+      }
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        host.scrollTop += mermaidPanStep;
+      }
+    });
+
+    host.dataset.interactiveBound = 'true';
+  }
+
+  /** Wire the per-diagram Mermaid controls to the host viewport. */
+  function attachMermaidControls(host) {
+    var figure = host.closest('.docs-mermaid');
+    if (!figure || figure.dataset.controlsBound === 'true') {
+      return;
+    }
+
+    figure.querySelectorAll('.docs-mermaid__control').forEach(function (button) {
+      button.addEventListener('click', function () {
+        if (button.dataset.action === 'zoom-in') {
+          nudgeMermaidScale(host, 1);
+          return;
+        }
+
+        if (button.dataset.action === 'zoom-out') {
+          nudgeMermaidScale(host, -1);
+          return;
+        }
+
+        fitMermaidHost(host);
+      });
+    });
+
+    figure.dataset.controlsBound = 'true';
+  }
+
   /**
    * Replace Mermaid `pre > code` blocks with diagram host elements while
    * preserving the original source for later re-renders.
@@ -129,14 +368,38 @@
       var figure = document.createElement('figure');
       figure.className = 'docs-mermaid';
 
+      var toolbar = document.createElement('div');
+      toolbar.className = 'docs-mermaid__toolbar';
+
+      var hint = document.createElement('p');
+      hint.className = 'docs-mermaid__hint';
+      hint.textContent = 'Drag to pan. Use + and - to zoom.';
+
+      var actions = document.createElement('div');
+      actions.className = 'docs-mermaid__actions';
+      actions.appendChild(createMermaidControl('zoom-out', 'Zoom out Mermaid diagram', '-'));
+      actions.appendChild(createMermaidControl('fit', 'Fit Mermaid diagram to width', 'fit'));
+      actions.appendChild(createMermaidControl('zoom-in', 'Zoom in Mermaid diagram', '+'));
+
       var host = document.createElement('div');
       host.className = 'docs-mermaid__diagram';
       host.dataset.diagramSource = source;
-      host.setAttribute('aria-label', 'Mermaid diagram');
+      host.tabIndex = 0;
+      host.setAttribute('aria-label', 'Interactive Mermaid diagram');
+      host.setAttribute('role', 'group');
+      host.setAttribute('title', 'Drag to pan. Use + and - to zoom, or arrow keys to scroll.');
 
+      actions.setAttribute('aria-label', 'Mermaid diagram controls');
+      toolbar.appendChild(hint);
+      toolbar.appendChild(actions);
+
+      figure.appendChild(toolbar);
       figure.appendChild(host);
       pre.dataset.mermaidUpgraded = 'true';
       pre.replaceWith(figure);
+
+      attachMermaidHostInteractions(host);
+      attachMermaidControls(host);
     });
   }
 
@@ -166,6 +429,8 @@
       return;
     }
 
+    var previousScale = Number(host.dataset.zoomScale || 0);
+    var previousScrollState = captureMermaidScrollState(host);
     host.classList.remove('docs-mermaid__diagram--error');
     host.textContent = '';
 
@@ -173,8 +438,22 @@
       renderCounter += 1;
       var renderResult = await mermaid.render('docs-mermaid-' + renderCounter, source);
       host.innerHTML = renderResult.svg;
+
+      var svg = host.querySelector('svg');
+      if (svg) {
+        var dimensions = mermaidSvgDimensions(svg);
+        host.dataset.baseWidth = String(dimensions.width);
+        host.dataset.baseHeight = String(dimensions.height);
+      }
+
       if (typeof renderResult.bindFunctions === 'function') {
         renderResult.bindFunctions(host);
+      }
+
+      if (previousScale > 0 && host.dataset.zoomMode === 'manual') {
+        applyMermaidScale(host, previousScale, previousScrollState);
+      } else {
+        fitMermaidHost(host);
       }
     } catch (error) {
       host.classList.add('docs-mermaid__diagram--error');
@@ -224,8 +503,30 @@
     });
   }
 
+  /** Re-fit Mermaid diagrams on resize unless the reader has zoomed manually. */
+  function attachMermaidResizeSync() {
+    var resizeTimer = null;
+
+    window.addEventListener('resize', function () {
+      if (resizeTimer) {
+        window.clearTimeout(resizeTimer);
+      }
+
+      resizeTimer = window.setTimeout(function () {
+        document.querySelectorAll('.docs-mermaid__diagram').forEach(function (host) {
+          if (host.dataset.zoomMode === 'manual') {
+            return;
+          }
+
+          fitMermaidHost(host);
+        });
+      }, 0);
+    });
+  }
+
   await renderMermaidDiagrams();
   attachMermaidThemeSync();
+  attachMermaidResizeSync();
 })();
         </script>
         <script>

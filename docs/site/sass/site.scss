@@ -817,17 +817,77 @@ svg {
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     background: var(--color-surface);
-    padding: 0.85rem 1rem;
-    overflow-x: auto;
+    padding: 0.85rem 1rem 1rem;
+}
+
+.docs-mermaid__toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.8rem;
+}
+
+.docs-mermaid__hint {
+    margin: 0;
+    color: var(--color-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.docs-mermaid__actions {
+    display: inline-flex;
+    gap: 0.45rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.docs-mermaid__control {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    min-width: 2.4rem;
+    padding: 0.42rem 0.65rem;
+    transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.docs-mermaid__control:hover,
+.docs-mermaid__control:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: rgba(255, 255, 255, 0.02);
 }
 
 .docs-mermaid__diagram {
-    min-width: min-content;
+    overflow: auto;
+    max-height: min(42rem, 70vh);
+    padding: 0.4rem;
+    border-radius: 0.4rem;
+    background: var(--color-bg);
+    cursor: grab;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
+}
+
+.docs-mermaid__diagram:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 0.15rem;
+}
+
+.docs-mermaid__diagram.is-dragging {
+    cursor: grabbing;
 }
 
 .docs-mermaid__diagram svg {
     display: block;
-    max-width: 100%;
+    max-width: none;
     height: auto;
     margin: 0 auto;
 }
@@ -835,6 +895,7 @@ svg {
 .docs-mermaid__diagram--error {
     color: #ff8f8f;
     white-space: pre-wrap;
+    cursor: auto;
 }
 
 .docs-content .giallo-l {
@@ -1082,6 +1143,10 @@ svg {
 
     .docs-mermaid {
         padding: 0.8rem;
+    }
+
+    .docs-mermaid__diagram {
+        max-height: min(28rem, 62vh);
     }
 }
 
