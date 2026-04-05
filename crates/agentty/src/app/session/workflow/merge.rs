@@ -798,6 +798,12 @@ impl SessionManager {
         Ok(trimmed_commit_message.to_string())
     }
 
+    /// Finalizes one merge task by appending the outcome and restoring review
+    /// state only when the merge failed.
+    ///
+    /// Successful merges request an immediate git-status refresh so footer
+    /// branch stats reflect the new refs without waiting for the periodic
+    /// poller.
     async fn finalize_merge_task(
         merge_result: Result<String, SessionError>,
         clock: &dyn Clock,
@@ -818,6 +824,7 @@ impl SessionManager {
                     &merge_message,
                 )
                 .await;
+                SessionTaskService::request_git_status_refresh(app_event_tx);
             }
             Err(error) => {
                 let merge_error = format!("\n[Merge Error] {error}\n");
@@ -1174,7 +1181,8 @@ impl SessionManager {
     /// Emits user-visible commit output before rebase starts so users can see
     /// whether pending changes were committed or there was nothing to commit.
     /// The pre-rebase auto-commit reuses the active project's fast-model
-    /// default when generating or repairing the session commit message.
+    /// default when generating or repairing the session commit message, and a
+    /// successful commit requests an immediate git-status refresh.
     async fn execute_rebase_workflow(input: RebaseAssistInput) -> Result<String, SessionError> {
         // Auto-commit any pending changes before rebasing to avoid
         // "cannot rebase: You have unstaged changes".
@@ -1216,6 +1224,7 @@ impl SessionManager {
                     &commit_message,
                 )
                 .await;
+                SessionTaskService::request_git_status_refresh(&input.app_event_tx);
             }
             Err(error) if error.to_string().contains("Nothing to commit") => {
                 let commit_message = "\n[Commit] No changes to commit.\n";
@@ -1249,6 +1258,11 @@ impl SessionManager {
         ))
     }
 
+    /// Finalizes one rebase task by appending the outcome and restoring the
+    /// session lifecycle state.
+    ///
+    /// Successful rebases request an immediate git-status refresh so footer
+    /// branch stats do not wait for the periodic poller.
     async fn finalize_rebase_task(
         rebase_result: Result<String, SessionError>,
         clock: &dyn Clock,
@@ -1269,6 +1283,7 @@ impl SessionManager {
                     &rebase_message,
                 )
                 .await;
+                SessionTaskService::request_git_status_refresh(app_event_tx);
             }
             Err(error) => {
                 let rebase_error = format!("\n[Rebase Error] {error}\n");

@@ -110,7 +110,9 @@ impl SessionTaskService {
     /// Successful commit hashes, no-op commit notices, and commit errors are
     /// emitted into session output for user visibility. Commit-message
     /// generation and any auto-commit recovery prompt use the resolved
-    /// auto-commit model for the session.
+    /// auto-commit model for the session. Successful commits also request an
+    /// immediate git-status refresh so footer ahead/behind counts do not wait
+    /// for the background poller.
     pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
         match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
@@ -131,6 +133,7 @@ impl SessionTaskService {
                     &message,
                 )
                 .await;
+                Self::request_git_status_refresh(&context.app_event_tx);
             }
             Ok(None) => {
                 let message = "\n[Commit] No changes to commit.\n";
@@ -155,6 +158,12 @@ impl SessionTaskService {
                 .await;
             }
         }
+    }
+
+    /// Requests one immediate reducer-driven git-status refresh.
+    pub(super) fn request_git_status_refresh(app_event_tx: &mpsc::UnboundedSender<AppEvent>) {
+        // Fire-and-forget: receiver may be dropped during shutdown.
+        let _ = app_event_tx.send(AppEvent::RefreshGitStatus);
     }
 
     /// Loads the project-scoped toggle that controls whether generated session
@@ -1283,7 +1292,7 @@ mod tests {
             .update_session_summary("session-id", &summary_payload)
             .await
             .expect("failed to persist summary text");
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
             app_event_tx,
@@ -1314,6 +1323,8 @@ mod tests {
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
         assert!(output_text.contains("[Commit] committed with hash `abc1234`"));
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.contains(&AppEvent::RefreshGitStatus));
     }
 
     #[tokio::test]

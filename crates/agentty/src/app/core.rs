@@ -142,6 +142,9 @@ pub(crate) enum AppEvent {
     },
     /// Requests a full session list refresh.
     RefreshSessions,
+    /// Requests an immediate git-status refresh outside the periodic poll
+    /// cadence.
+    RefreshGitStatus,
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -208,6 +211,7 @@ struct AppEventBatch {
     session_progress_updates: HashMap<String, Option<String>>,
     session_size_updates: HashMap<String, (u64, u64, SessionSize)>,
     session_title_generation_finished: HashMap<String, u64>,
+    should_refresh_git_status: bool,
     should_force_reload: bool,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     update_status: Option<UpdateStatus>,
@@ -260,6 +264,9 @@ impl AppEventBatch {
             AppEvent::RefreshSessions => {
                 self.should_force_reload = true;
             }
+            AppEvent::RefreshGitStatus => {
+                self.should_refresh_git_status = true;
+            }
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -268,6 +275,9 @@ impl AppEventBatch {
                     .insert(session_id, progress_message);
             }
             AppEvent::SyncMainCompleted { result } => {
+                if result.is_ok() {
+                    self.should_refresh_git_status = true;
+                }
                 self.sync_main_result = Some(result);
             }
             AppEvent::SessionSizeUpdated {
@@ -291,6 +301,9 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => {
+                if result.is_ok() {
+                    self.should_refresh_git_status = true;
+                }
                 self.branch_publish_action_update = Some(BranchPublishActionUpdate {
                     restore_view,
                     result: *result,
@@ -1532,6 +1545,10 @@ impl App {
             self.reload_projects().await;
         }
 
+        if event_batch.should_refresh_git_status {
+            self.restart_git_status_task();
+        }
+
         if event_batch.has_git_status_update {
             self.projects.set_git_status(event_batch.git_status_update);
             self.sessions
@@ -1913,7 +1930,6 @@ impl App {
             }) => {
                 self.sessions
                     .apply_published_upstream_ref(&session_id, upstream_reference);
-                self.restart_git_status_task();
 
                 Self::view_info_popup_mode(
                     Self::branch_publish_success_title(PublishBranchAction::Push),
@@ -2397,6 +2413,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use mockall::predicate::eq;
     use serde_json;
@@ -3925,6 +3942,37 @@ mod tests {
                 session_id: "session-b".to_string(),
             })
         );
+        assert!(event_batch.should_refresh_git_status);
+    }
+
+    #[test]
+    /// Verifies successful sync completion requests an immediate git-status
+    /// refresh in the reducer batch.
+    fn app_event_batch_collect_event_marks_successful_sync_for_git_status_refresh() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+
+        // Act
+        event_batch.collect_event(AppEvent::SyncMainCompleted {
+            result: Ok(SyncMainOutcome {
+                pulled_commit_titles: vec!["Upstream fix".to_string()],
+                pulled_commits: Some(1),
+                pushed_commit_titles: vec!["Local tweak".to_string()],
+                pushed_commits: Some(2),
+                resolved_conflict_files: Vec::new(),
+            }),
+        });
+
+        // Assert
+        assert!(event_batch.should_refresh_git_status);
+        assert!(matches!(
+            event_batch.sync_main_result,
+            Some(Ok(SyncMainOutcome {
+                pulled_commits: Some(1),
+                pushed_commits: Some(2),
+                ..
+            }))
+        ));
     }
 
     #[tokio::test]
@@ -3982,6 +4030,61 @@ mod tests {
             Some(&SessionGitStatus {
                 base_status: Some((4, 2)),
                 remote_status: Some((1, 0)),
+            })
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies explicit git-status refresh events restart polling
+    /// immediately instead of waiting for the periodic cadence.
+    async fn apply_app_events_refresh_git_status_restarts_task() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let clients = test_app_clients()
+            .with_app_server_client_override(mock_app_server())
+            .with_tmux_client(Arc::new(MockTmuxClient::new()));
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path.clone(),
+            Some("main".to_string()),
+            database,
+            clients,
+        )
+        .await
+        .expect("failed to build test app");
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1)
+            .returning(|dir| Box::pin(async move { Some(dir) }));
+        mock_git_client
+            .expect_fetch_remote()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_branch_tracking_statuses()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async { Ok(HashMap::from([("main".to_string(), Some((2_u32, 1_u32)))])) })
+            });
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.apply_app_events(AppEvent::RefreshGitStatus).await;
+        let next_event = tokio::time::timeout(Duration::from_secs(1), app.next_app_event())
+            .await
+            .expect("git status refresh event should arrive");
+
+        // Assert
+        assert_eq!(
+            next_event,
+            Some(AppEvent::GitStatusUpdated {
+                session_statuses: HashMap::new(),
+                status: Some((2, 1)),
             })
         );
     }
