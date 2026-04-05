@@ -216,14 +216,12 @@ fn session_list_jk_navigation() {
     );
 
     // Assert — `j` and `k` navigate to different sessions when opening them.
-    assert_eq!(
+    assert!(
         opened_after_j_text.contains("alpha") || opened_after_j_text.contains("beta"),
-        true,
         "Expected the session opened after j to contain either alpha or beta"
     );
-    assert_eq!(
+    assert!(
         opened_after_k_text.contains("alpha") || opened_after_k_text.contains("beta"),
-        true,
         "Expected the session opened after k to contain either alpha or beta"
     );
     assert_ne!(
