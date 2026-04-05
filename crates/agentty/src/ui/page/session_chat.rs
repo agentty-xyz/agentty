@@ -18,9 +18,10 @@ use crate::ui::state::prompt::{
 };
 use crate::ui::util::{
     calculate_input_height, format_duration_compact, format_token_count, inline_text,
-    question_panel_layout, suggestion_dropdown_height, truncate_with_ellipsis, wrap_lines,
+    question_panel_layout, suggestion_dropdown_height, truncate_spans_with_ellipsis,
+    truncate_with_ellipsis, wrap_lines,
 };
-use crate::ui::{Component, Page, style};
+use crate::ui::{Component, Page, markdown, style};
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
@@ -372,7 +373,12 @@ impl<'a> SessionChatPage<'a> {
         wall_clock_unix_seconds: i64,
     ) -> Vec<Line<'static>> {
         let title_width = usize::from(header_width);
-        let title = truncate_with_ellipsis(&inline_text(session.display_title()), title_width);
+        let title_text = inline_text(session.display_title());
+        let base_style = Style::default()
+            .fg(session.status.color())
+            .add_modifier(Modifier::BOLD);
+        let title_spans = markdown::parse_inline_spans(&title_text, base_style);
+        let title_spans = truncate_spans_with_ellipsis(title_spans, title_width);
         let metadata_text = Self::session_metadata_text(
             session,
             header_width,
@@ -381,12 +387,7 @@ impl<'a> SessionChatPage<'a> {
         );
 
         vec![
-            Line::from(Span::styled(
-                title,
-                Style::default()
-                    .fg(session.status.color())
-                    .add_modifier(Modifier::BOLD),
-            )),
+            Line::from(title_spans),
             Line::from(Span::styled(
                 metadata_text,
                 Style::default().fg(style::palette::TEXT_MUTED),

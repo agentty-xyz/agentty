@@ -7,9 +7,9 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use crate::domain::session::{Session, SessionSize, Status};
 use crate::ui::state::help_action;
 use crate::ui::util::{
-    first_table_column_width, format_duration_compact, inline_text, truncate_with_ellipsis,
+    first_table_column_width, format_duration_compact, inline_text, truncate_spans_with_ellipsis,
 };
-use crate::ui::{Page, style};
+use crate::ui::{Page, markdown, style};
 
 /// Uses row-background highlighting without a textual cursor glyph.
 const ROW_HIGHLIGHT_SYMBOL: &str = "";
@@ -303,15 +303,16 @@ fn render_session_row(
     wall_clock_unix_seconds: i64,
 ) -> Row<'static> {
     let status = session.status;
-    let display_title =
-        truncate_with_ellipsis(&inline_text(session.display_title()), title_column_width);
+    let title_text = inline_text(session.display_title());
+    let title_spans = markdown::parse_inline_spans(&title_text, Style::default());
+    let title_spans = truncate_spans_with_ellipsis(title_spans, title_column_width);
     let timer_label = if session.has_in_progress_timer() {
         format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
     } else {
         String::new()
     };
     let cells = vec![
-        Cell::from(display_title),
+        Cell::from(Line::from(title_spans)),
         Cell::from(session.model.as_str()),
         Cell::from(session.size.to_string()).style(Style::default().fg(size_color(session.size))),
         Cell::from(format!("{status}")).style(Style::default().fg(style::status_color(status))),

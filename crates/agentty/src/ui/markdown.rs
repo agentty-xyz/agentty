@@ -766,7 +766,13 @@ fn character_display_width(character: char) -> usize {
     UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
-fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
+/// Parses inline markdown markers (`**bold**`, `*italic*`, `` `code` ``) into
+/// styled spans.
+///
+/// Text outside markers inherits `base_style`. Bold adds `Modifier::BOLD`,
+/// italic adds `Modifier::ITALIC`, and backtick-delimited code uses the
+/// dedicated inline-code style.
+pub fn parse_inline_spans(content: &str, base_style: Style) -> Vec<Span<'static>> {
     let characters: Vec<char> = content.chars().collect();
     let mut spans = Vec::new();
     let mut literal = String::new();

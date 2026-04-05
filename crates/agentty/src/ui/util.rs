@@ -25,5 +25,5 @@ pub use crate::ui::layout::{
 };
 pub use crate::ui::text_util::{
     format_duration_compact, format_token_count, inline_text, split_trailing_line_block,
-    truncate_with_ellipsis, wrap_lines, wrap_styled_line,
+    truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines, wrap_styled_line,
 };

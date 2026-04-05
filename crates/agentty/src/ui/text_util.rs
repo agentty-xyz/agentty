@@ -1,4 +1,6 @@
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthChar;
 
 /// Wrap plain text into terminal-width lines for output panes.
 pub fn wrap_lines(text: &str, width: usize) -> Vec<Line<'_>> {
@@ -56,6 +58,89 @@ pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
     let truncated: String = text.chars().take(visible_width).collect();
 
     format!("{truncated}...")
+}
+
+/// Truncates a sequence of styled spans to `max_width` terminal columns,
+/// appending an ellipsis (`...`) when the text overflows.
+///
+/// Width is measured using Unicode display widths so CJK characters (2
+/// columns), emoji, and combining characters (0 columns) are accounted for
+/// correctly. Span styles are preserved: if truncation falls inside a span,
+/// only the visible prefix of that span is kept with its original style. The
+/// trailing `...` inherits the style of the last emitted span.
+pub fn truncate_spans_with_ellipsis(
+    spans: Vec<Span<'static>>,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    if max_width == 0 {
+        return vec![Span::raw(String::new())];
+    }
+
+    let total_width: usize = spans
+        .iter()
+        .map(|span| span_display_width(&span.content))
+        .sum();
+
+    if total_width <= max_width {
+        return spans;
+    }
+
+    if max_width <= 3 {
+        return vec![Span::raw(".".repeat(max_width))];
+    }
+
+    let visible_width = max_width - 3;
+    let mut remaining = visible_width;
+    let mut result: Vec<Span<'static>> = Vec::new();
+    let mut last_style = Style::default();
+
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+
+        last_style = span.style;
+        let width = span_display_width(&span.content);
+
+        if width <= remaining {
+            remaining -= width;
+            result.push(span);
+        } else {
+            let truncated = take_columns(&span.content, remaining);
+            result.push(Span::styled(truncated, span.style));
+            remaining = 0;
+        }
+    }
+
+    result.push(Span::styled("...".to_string(), last_style));
+
+    result
+}
+
+/// Returns the terminal display width of a string slice.
+fn span_display_width(text: &str) -> usize {
+    text.chars()
+        .map(|character| UnicodeWidthChar::width(character).unwrap_or(0))
+        .sum()
+}
+
+/// Takes the leading prefix of `text` that fits within `columns` terminal
+/// columns without splitting a wide character.
+fn take_columns(text: &str, columns: usize) -> String {
+    let mut remaining = columns;
+    let mut result = String::new();
+
+    for character in text.chars() {
+        let width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width > remaining {
+            break;
+        }
+
+        remaining -= width;
+        result.push(character);
+    }
+
+    result
 }
 
 /// Converts arbitrary text into a single inline label by collapsing all
@@ -408,5 +493,183 @@ mod tests {
         // Assert
         assert_eq!(body, text);
         assert_eq!(footer, None);
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_keeps_spans_when_they_fit() {
+        // Arrange
+        let spans = vec![
+            Span::styled("hello".to_string(), Style::default().fg(Color::Green)),
+            Span::styled(" world".to_string(), Style::default()),
+        ];
+
+        // Act
+        let result = truncate_spans_with_ellipsis(spans.clone(), 20);
+
+        // Assert
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content.as_ref(), "hello");
+        assert_eq!(result[1].content.as_ref(), " world");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_truncates_within_span() {
+        // Arrange
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let spans = vec![
+            Span::styled("There are ".to_string(), Style::default()),
+            Span::styled("4 items".to_string(), bold),
+            Span::styled(" in Ready Now".to_string(), Style::default()),
+        ];
+
+        // Act — width 20 means 17 visible chars + "..."
+        let result = truncate_spans_with_ellipsis(spans, 20);
+
+        // Assert
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "There are 4 items...");
+        assert_eq!(result[1].style, bold);
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_returns_dots_for_tiny_widths() {
+        // Arrange
+        let spans = vec![Span::raw("overflow".to_string())];
+
+        // Act
+        let width_three = truncate_spans_with_ellipsis(spans.clone(), 3);
+        let width_two = truncate_spans_with_ellipsis(spans.clone(), 2);
+        let width_zero = truncate_spans_with_ellipsis(spans, 0);
+
+        // Assert
+        assert_eq!(width_three[0].content.as_ref(), "...");
+        assert_eq!(width_two[0].content.as_ref(), "..");
+        assert_eq!(width_zero[0].content.as_ref(), "");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_preserves_style_on_ellipsis() {
+        // Arrange
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let spans = vec![Span::styled("long bold text".to_string(), bold)];
+
+        // Act
+        let result = truncate_spans_with_ellipsis(spans, 8);
+
+        // Assert — "long ..." = 5 visible + "..."
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "long ...");
+        assert_eq!(result[result.len() - 1].style, bold);
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_cuts_at_span_boundary() {
+        // Arrange
+        let green = Style::default().fg(Color::Green);
+        let red = Style::default().fg(Color::Red);
+        let spans = vec![
+            Span::styled("abcd".to_string(), green),
+            Span::styled("efgh".to_string(), red),
+        ];
+
+        // Act — width 7 means 4 visible + "...", cutting exactly at first span boundary
+        let result = truncate_spans_with_ellipsis(spans, 7);
+
+        // Assert
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "abcd...");
+        assert_eq!(result[0].style, green);
+        assert_eq!(result[1].style, green);
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_accounts_for_cjk_double_width() {
+        // Arrange — each CJK character occupies 2 terminal columns.
+        // "表示テスト" = 10 columns total (5 chars × 2 cols each).
+        let spans = vec![Span::raw("表示テスト".to_string())];
+
+        // Act — max_width 9 means 6 visible columns + "...".
+        // "表"(2) + "示"(2) + "テ"(2) = 6, then "..."
+        let result = truncate_spans_with_ellipsis(spans, 9);
+
+        // Assert
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "表示テ...");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_does_not_split_wide_character() {
+        // Arrange — "表示" = 4 columns total.
+        let spans = vec![Span::raw("表示end".to_string())];
+
+        // Act — max_width 6 means 3 visible columns + "...".
+        // "表" takes 2 cols, "示" needs 2 more but only 1 remains → skip it.
+        let result = truncate_spans_with_ellipsis(spans, 6);
+
+        // Assert — only the first CJK char fits, leaving 1 unused column.
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "表...");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_fits_wide_chars_without_truncation() {
+        // Arrange — "表示" = 4 columns, fits within max_width 4.
+        let spans = vec![Span::raw("表示".to_string())];
+
+        // Act
+        let result = truncate_spans_with_ellipsis(spans, 4);
+
+        // Assert — no truncation needed.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content.as_ref(), "表示");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_handles_emoji() {
+        // Arrange — "🚀" is 2 columns wide.
+        // "🚀🎉hello" = 2 + 2 + 5 = 9 columns total.
+        let spans = vec![Span::raw("🚀🎉hello".to_string())];
+
+        // Act — max_width 8 means 5 visible columns + "...".
+        // "🚀"(2) + "🎉"(2) + "h"(1) = 5, then "..."
+        let result = truncate_spans_with_ellipsis(spans, 8);
+
+        // Assert
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "🚀🎉h...");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_handles_combining_characters() {
+        // Arrange — combining accent has 0 display width, so "e\u{0301}" = 1 column.
+        // "e\u{0301}abcdef" = 7 columns total.
+        let spans = vec![Span::raw("e\u{0301}abcdef".to_string())];
+
+        // Act — max_width 7 means all 7 columns fit.
+        let result = truncate_spans_with_ellipsis(spans, 7);
+
+        // Assert — no truncation needed.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content.as_ref(), "e\u{0301}abcdef");
+    }
+
+    #[test]
+    fn test_truncate_spans_with_ellipsis_cjk_across_styled_spans() {
+        // Arrange — two styled spans with CJK content.
+        // "表示" = 4 cols, "テスト" = 6 cols → total 10 cols.
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let spans = vec![
+            Span::styled("表示".to_string(), bold),
+            Span::raw("テスト".to_string()),
+        ];
+
+        // Act — max_width 9 means 6 visible columns + "...".
+        // "表示" = 4 cols (full span), "テ" = 2 cols → 6, then "..."
+        let result = truncate_spans_with_ellipsis(spans, 9);
+
+        // Assert
+        let text: String = result.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "表示テ...");
+        assert_eq!(result[0].style, bold);
     }
 }
