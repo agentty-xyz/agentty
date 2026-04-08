@@ -116,6 +116,7 @@ impl AgentChannel for CliAgentChannel {
             });
             tokio_cmd.stdout(std::process::Stdio::piped());
             tokio_cmd.stderr(std::process::Stdio::piped());
+            tokio_cmd.kill_on_drop(true);
 
             let mut child = tokio_cmd
                 .spawn()

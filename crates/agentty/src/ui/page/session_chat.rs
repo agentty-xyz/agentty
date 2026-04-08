@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_in_progress_shows_open_and_hides_diff() {
+    fn test_view_help_text_in_progress_shows_stop_and_open_and_hides_diff() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::InProgress;
@@ -1435,7 +1435,7 @@ mod tests {
 
         // Assert
         assert!(help_text.contains("q: back"));
-        assert!(!help_text.contains("Ctrl+c: stop"));
+        assert!(help_text.contains("Ctrl+c: stop"));
         assert!(help_text.contains("j/k: scroll"));
         assert!(help_text.contains("o: open"));
         assert!(!help_text.contains("d: diff"));

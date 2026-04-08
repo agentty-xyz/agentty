@@ -97,6 +97,7 @@ state:
 | `G` | Scroll to bottom |
 | `Ctrl+d` | Half page down |
 | `Ctrl+u` | Half page up |
+| `Ctrl+c` | Stop running session (InProgress only) |
 | `?` | Help |
 
 During **AgentReview**, Agentty keeps the same review-oriented shortcuts but

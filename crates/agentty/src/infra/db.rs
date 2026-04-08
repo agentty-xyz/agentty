@@ -1806,14 +1806,17 @@ WHERE session_id = ?
         Ok(())
     }
 
-    /// Returns whether cancellation is requested for unfinished session
-    /// operations.
+    /// Returns whether cancellation is requested for a specific operation.
+    ///
+    /// The check is scoped to a single operation so that stale cancel flags
+    /// from previously cancelled operations do not block newly created ones
+    /// in the same session.
     ///
     /// # Errors
     /// Returns an error if cancellation state cannot be read.
-    pub async fn is_cancel_requested_for_session_operations(
+    pub async fn is_cancel_requested_for_operation(
         &self,
-        session_id: &str,
+        operation_id: &str,
     ) -> Result<bool, DbError> {
         let row = sqlx::query_as!(
             RequiredBoolValueRow,
@@ -1821,12 +1824,12 @@ WHERE session_id = ?
 SELECT EXISTS(
     SELECT 1
     FROM session_operation
-    WHERE session_id = ?
+    WHERE id = ?
       AND cancel_requested = 1
       AND status IN ('queued', 'running')
 ) AS "value!: _"
 "#,
-            session_id
+            operation_id
         )
         .fetch_one(&self.pool)
         .await?;
@@ -2837,10 +2840,10 @@ WHERE model = ?
         assert!(!is_unfinished);
     }
 
-    /// Verifies `is_cancel_requested_for_session_operations()` reflects the
-    /// current cancel-request state for unfinished rows.
+    /// Verifies `is_cancel_requested_for_operation()` returns `true` for a
+    /// cancelled operation and `false` for an unaffected one.
     #[tokio::test]
-    async fn test_is_cancel_requested_for_session_operations_tracks_unfinished_rows() {
+    async fn test_is_cancel_requested_for_operation_scoped_to_single_operation() {
         // Arrange
         let database = Database::open_in_memory()
             .await
@@ -2852,23 +2855,42 @@ WHERE model = ?
 
         insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
         database
-            .insert_session_operation("operation-a", "session-a", "merge")
+            .insert_session_operation("operation-cancelled", "session-a", "reply")
             .await
-            .expect("failed to insert operation");
+            .expect("failed to insert cancelled operation");
+        database
+            .insert_session_operation("operation-new", "session-a", "reply")
+            .await
+            .expect("failed to insert new operation");
 
+        // Cancel only the first operation via session-level bulk update.
         database
             .request_cancel_for_session_operations("session-a")
             .await
             .expect("failed to request cancel");
 
-        // Act
-        let cancel_requested = database
-            .is_cancel_requested_for_session_operations("session-a")
+        // Simulate a new operation created after the cancel request by
+        // resetting its flag directly (mirrors real flow where new
+        // operations are inserted with cancel_requested = 0 by default).
+        sqlx::query("UPDATE session_operation SET cancel_requested = 0 WHERE id = 'operation-new'")
+            .execute(&database.pool)
             .await
-            .expect("failed to check cancel request state");
+            .expect("failed to reset new operation flag");
 
-        // Assert
-        assert!(cancel_requested);
+        // Act
+        let cancelled_flag = database
+            .is_cancel_requested_for_operation("operation-cancelled")
+            .await
+            .expect("failed to check cancelled operation");
+        let new_flag = database
+            .is_cancel_requested_for_operation("operation-new")
+            .await
+            .expect("failed to check new operation");
+
+        // Assert — only the cancelled operation is flagged; the new one
+        // proceeds normally.
+        assert!(cancelled_flag);
+        assert!(!new_flag);
     }
 
     /// Verifies `mark_session_operation_running()` sets the running state and

@@ -15,6 +15,8 @@ pub mod file_index;
 /// Filesystem trait boundary used by app orchestration.
 pub mod fs;
 pub mod git;
+/// Process-management utilities for agent subprocess lifecycle.
+pub(crate) mod process;
 mod project_repository;
 mod setting_repository;
 /// Tmux process boundary used by app orchestration.

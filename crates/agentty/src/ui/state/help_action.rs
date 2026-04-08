@@ -250,11 +250,16 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
     );
+    let can_stop_session = state.session_state == ViewSessionState::InProgress;
     let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
     append_view_prompt_actions(&mut actions, state.session_state, can_edit_session);
+
+    if can_stop_session {
+        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop running session"));
+    }
 
     if state.session_state == ViewSessionState::NewSession {
         actions.push(HelpAction::new("start", "s", "Start staged session"));
@@ -349,10 +354,15 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
     );
+    let can_stop_session = state.session_state == ViewSessionState::InProgress;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
     append_view_footer_edit_actions(&mut actions, state.session_state, can_edit_session);
+
+    if can_stop_session {
+        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop session"));
+    }
 
     if can_open_worktree {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
@@ -614,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_in_progress_shows_open_and_hides_edit_actions() {
+    fn test_view_actions_in_progress_shows_open_and_stop_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             can_sync_review_request: false,
@@ -628,7 +638,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
-        assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
+        assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "d"));
@@ -962,6 +972,60 @@ mod tests {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn test_view_footer_actions_in_progress_shows_stop_and_open() {
+        // Arrange
+        let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            publish_branch_action: None,
+            session_state: ViewSessionState::InProgress,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+
+        // Assert
+        assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
+        assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "Enter"));
+        assert!(!actions.iter().any(|action| action.key == "d"));
+    }
+
+    #[test]
+    fn test_view_actions_review_hides_stop() {
+        // Arrange
+        let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            publish_branch_action: None,
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
+    }
+
+    #[test]
+    fn test_view_footer_actions_review_hides_stop() {
+        // Arrange
+        let state = ViewHelpState {
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            publish_branch_action: None,
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
     }
 
     #[test]

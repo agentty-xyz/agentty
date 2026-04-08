@@ -4,6 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
+use tokio_util::sync::CancellationToken;
 
 use super::agent::{AgentModel, ReasoningLevel};
 use crate::infra::agent::protocol::QuestionItem;
@@ -491,6 +492,13 @@ impl Session {
 
 /// Shared runtime handles for one active session worker.
 pub struct SessionHandles {
+    /// Per-turn cancellation token shared between the UI and the worker.
+    ///
+    /// The worker swaps in a fresh [`CancellationToken`] at the start of
+    /// each turn. The UI calls `cancel()` on the current token to
+    /// interrupt the running turn. Because each turn gets its own token,
+    /// stale cancellations from previous turns cannot affect new work.
+    pub cancel_token: Arc<Mutex<CancellationToken>>,
     /// Child process identifier for the running agent command, when present.
     pub child_pid: Arc<Mutex<Option<u32>>>,
     /// Shared output buffer mirrored to persistence/UI.
@@ -503,6 +511,7 @@ impl SessionHandles {
     /// Creates handles initialized with the given values.
     pub fn new(output: String, status: Status) -> Self {
         Self {
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             output: Arc::new(Mutex::new(output)),
             status: Arc::new(Mutex::new(status)),

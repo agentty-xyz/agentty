@@ -6,7 +6,7 @@ use ratatui::backend::Backend;
 
 use crate::app::session::remote_branch_name_from_upstream_ref;
 use crate::app::{
-    App, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
+    self, App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
     review_loading_message,
 };
 use crate::domain::agent::AgentModel;
@@ -261,6 +261,14 @@ async fn handle_view_key(
                 pending_update.done_session_output_mode.toggled();
             pending_update.scroll_offset = None;
         }
+        KeyCode::Char('c')
+            if key.modifiers.contains(event::KeyModifiers::CONTROL)
+                && view_session_snapshot.session_status == Status::InProgress =>
+        {
+            end_in_progress_turn(app, &view_context.session_id).await;
+
+            return false;
+        }
         KeyCode::Char('?') => {
             open_view_help_overlay(
                 app,
@@ -464,6 +472,76 @@ fn is_view_review_allowed(status: Status) -> bool {
 /// mode.
 fn is_view_rebase_allowed(status: Status) -> bool {
     is_view_action_allowed(status) && status != Status::AgentReview
+}
+
+/// Interrupts a running `InProgress` session and transitions it to `Review`.
+///
+/// Cancels queued operations in the database, then fires the per-turn
+/// [`CancellationToken`] so the worker's `select!` branch triggers
+/// graceful channel shutdown. The worker owns process termination:
+/// CLI channels receive `SIGTERM` inside the cancellation branch
+/// (where the child is guaranteed alive because `run_turn` has not
+/// returned yet), and app-server channels shut down through
+/// `shutdown_session`. Both paths converge on the worker returning a
+/// `[Stopped]` error. After signalling, the persisted status is
+/// updated to `Review`, the in-memory snapshot and shared handle are
+/// refreshed, and UI events are emitted.
+async fn end_in_progress_turn(app: &mut App, session_id: &str) {
+    let timestamp_seconds =
+        app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
+
+    // Signal the worker to skip any remaining queued operations.
+    let _ = app
+        .services
+        .db()
+        .request_cancel_for_session_operations(session_id)
+        .await;
+
+    if let Some(handles) = app.sessions.handles.get(session_id) {
+        // Cancel the current turn's token so the worker's `select!`
+        // branch fires and triggers graceful channel shutdown. The
+        // worker sends SIGTERM to CLI child processes inside the
+        // cancellation path where the PID is guaranteed valid.
+        handles
+            .cancel_token
+            .lock()
+            .expect("cancel token lock poisoned")
+            .cancel();
+    }
+
+    if app
+        .services
+        .db()
+        .update_session_status_with_timing_at(
+            session_id,
+            &Status::Review.to_string(),
+            timestamp_seconds,
+        )
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    app.services.emit_app_event(AppEvent::SessionUpdated {
+        session_id: session_id.to_string(),
+    });
+    app.services.emit_app_event(AppEvent::RefreshSessions);
+
+    if let Some(session) = app
+        .sessions
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = Status::Review;
+    }
+
+    if let Some(handles) = app.sessions.handles.get(session_id)
+        && let Ok(mut handle_status) = handles.status.lock()
+    {
+        *handle_status = Status::Review;
+    }
 }
 
 /// Switches the TUI mode from session view to the prompt input.
@@ -2655,5 +2733,136 @@ mod tests {
             pending_update.done_session_output_mode,
             DoneSessionOutputMode::Review
         );
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_transitions_session_to_review() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        app.sessions.handles.insert(
+            session_id.clone(),
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress),
+        );
+
+        // Act
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        let handle_status = *app
+            .sessions
+            .handles
+            .get(&session_id)
+            .expect("handles missing")
+            .status
+            .lock()
+            .expect("lock failed");
+        assert_eq!(handle_status, Status::Review);
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_does_not_send_sigterm_directly() {
+        // Arrange — spawn a child and store its PID in the handles.
+        // SIGTERM is now sent by the worker's cancellation path, not
+        // `end_in_progress_turn`, so the child should remain alive.
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let child_pid = child.id().expect("child has no pid");
+
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        let handles =
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        if let Ok(mut guard) = handles.child_pid.lock() {
+            *guard = Some(child_pid);
+        }
+        app.sessions.handles.insert(session_id.clone(), handles);
+
+        // Act
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — child is still alive because the UI no longer sends
+        // SIGTERM; the worker owns process termination.
+        assert!(
+            child.try_wait().expect("try_wait failed").is_none(),
+            "child should still be running — UI must not send SIGTERM"
+        );
+
+        // Cleanup
+        child.kill().await.expect("failed to kill child");
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_cancels_token() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        let handles =
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
+        app.sessions.handles.insert(session_id.clone(), handles);
+
+        // Act
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — the token must be cancelled so the worker's `select!`
+        // branch fires.
+        let is_cancelled = cancel_token
+            .lock()
+            .expect("cancel token lock")
+            .is_cancelled();
+        assert!(
+            is_cancelled,
+            "cancel_token should be cancelled by end_in_progress_turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_does_not_affect_review_session() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::Review;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::Review.to_string(), 0)
+            .await;
+        app.sessions.handles.insert(
+            session_id.clone(),
+            crate::domain::session::SessionHandles::new(String::new(), Status::Review),
+        );
+
+        // Act
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — status stays Review (the DB call succeeds idempotently)
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        let handle_status = *app
+            .sessions
+            .handles
+            .get(&session_id)
+            .expect("handles missing")
+            .status
+            .lock()
+            .expect("lock failed");
+        assert_eq!(handle_status, Status::Review);
     }
 }
