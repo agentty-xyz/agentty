@@ -10,7 +10,7 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common;
-use crate::common::BuilderEnv;
+use crate::common::{BuilderEnv, FeatureTest};
 
 /// Verify that the Sessions tab shows an empty-state message when no
 /// sessions exist.
@@ -26,8 +26,10 @@ fn session_list_empty_state() {
 
     let scenario = Scenario::new("session_empty")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(1500)
         // Navigate to Sessions tab.
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1500)
         .capture_labeled("sessions_tab", "Sessions tab with no sessions");
 
     // Act
@@ -45,29 +47,30 @@ fn session_list_empty_state() {
 /// opens prompt mode with the submit footer.
 #[test]
 fn session_creation_opens_prompt_mode() {
-    // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
-    env.init_git().expect("failed to init git");
-
-    let scenario = Scenario::new("session_creation")
-        .compose(&common::wait_for_agentty_startup())
-        .compose(&common::switch_to_tab("Sessions"))
-        .press_key("a")
-        .wait_for_stable_frame(300, 5000)
-        .capture_labeled("prompt_mode", "Prompt mode after pressing a");
-
-    // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
-
-    // Assert — prompt-mode footer is visible with submit and cancel hints.
-    let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(&frame, "Enter: submit", &full);
-    assertion::assert_text_in_region(&frame, "Esc: cancel", &full);
-
-    common::save_feature_gif(&scenario, &report, &env, "session_creation");
+    FeatureTest::new("session_creation")
+        .with_git()
+        .zola(
+            "Session creation",
+            "Start a new agent session with a single keypress.",
+            30,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .viewing_pause_ms(1500)
+                    .press_key("a")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("prompt_mode", "Prompt mode after pressing a")
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: submit", &full);
+                assertion::assert_text_in_region(frame, "Esc: cancel", &full);
+            },
+        );
 }
 
 /// Verify that pressing `Esc` in an empty prompt for a new non-draft
@@ -82,10 +85,13 @@ fn session_prompt_cancel_returns_to_empty_list() {
     let scenario = Scenario::new("prompt_cancel")
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1500)
         .press_key("a")
         .wait_for_stable_frame(300, 5000)
+        .viewing_pause_ms(1500)
         .press_key("Esc")
         .wait_for_stable_frame(300, 5000)
+        .viewing_pause_ms(1500)
         .capture_labeled("back_to_list", "Sessions list after cancel");
 
     // Act
@@ -236,13 +242,16 @@ fn session_delete_with_confirmation() {
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::switch_to_tab("Sessions"))
         .compose(&common::create_session_and_return_to_list())
+        .viewing_pause_ms(1500)
         // Press d to open delete confirmation.
         .press_key("d")
         .wait_for_stable_frame(300, 3000)
+        .viewing_pause_ms(1500)
         .capture_labeled("confirm_dialog", "Delete confirmation dialog")
         // Press y to confirm deletion.
         .press_key("y")
         .wait_for_stable_frame(500, 10000)
+        .viewing_pause_ms(1500)
         .capture_labeled("after_delete", "Sessions list after deletion");
 
     // Act
@@ -273,10 +282,13 @@ fn prompt_typing_shows_text() {
     let scenario = Scenario::new("prompt_typing")
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1500)
         .press_key("a")
         .wait_for_stable_frame(300, 5000)
+        .viewing_pause_ms(1000)
         .write_text("hello world")
         .wait_for_text("hello world", 3000)
+        .viewing_pause_ms(1500)
         .capture_labeled("typed_text", "Prompt input with typed text");
 
     // Act
@@ -306,15 +318,19 @@ fn prompt_multiline_via_alt_enter() {
     let scenario = Scenario::new("prompt_multiline")
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1500)
         .press_key("a")
         .wait_for_stable_frame(300, 5000)
+        .viewing_pause_ms(1000)
         .write_text("first line")
         .wait_for_text("first line", 3000)
+        .viewing_pause_ms(1000)
         // Alt+Enter: ESC (0x1b) followed by CR (0x0d).
         .write_text("\x1b\r")
         .wait_for_stable_frame(300, 3000)
         .write_text("second line")
         .wait_for_text("second line", 3000)
+        .viewing_pause_ms(1500)
         .capture_labeled("multiline", "Prompt input with multiline text");
 
     // Act

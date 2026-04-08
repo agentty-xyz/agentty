@@ -1,14 +1,16 @@
 //! Shared helpers and agentty-specific `Journey` builders for E2E tests.
 //!
-//! Provides [`BuilderEnv`] for isolated test environments and
-//! [`save_feature_gif`] for generating high-quality VHS feature GIFs with
-//! frame-bytes content hashing to skip regeneration when output is unchanged.
+//! Provides [`BuilderEnv`] for isolated test environments,
+//! [`FeatureTest`] for declarative feature demo tests with optional Zola
+//! page generation, and [`save_feature_gif`] as a legacy escape hatch for
+//! tests that manage their own scenario lifecycle.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin;
+use testty::feature::{FeatureDemo, GifStatus};
 use testty::frame::TerminalFrame;
 use testty::journey::Journey;
 use testty::proof::report::{ProofCapture, ProofReport};
@@ -219,6 +221,203 @@ pub(crate) fn save_feature_gif(
 /// captures.
 pub(crate) fn frame_from_capture(capture: &ProofCapture) -> TerminalFrame {
     TerminalFrame::new(capture.cols, capture.rows, &capture.frame_bytes)
+}
+
+// ---------------------------------------------------------------------------
+// Zola feature page generation
+// ---------------------------------------------------------------------------
+
+/// Return the Zola feature content directory, creating it if needed.
+///
+/// Derives the path from `CARGO_MANIFEST_DIR` →
+/// `../../docs/site/content/features/`.
+fn feature_content_dir() -> PathBuf {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let content_dir = Path::new(manifest_dir).join("../../docs/site/content/features");
+
+    std::fs::create_dir_all(&content_dir).expect("failed to create feature content dir");
+
+    content_dir
+}
+
+/// Metadata for generating a Zola feature content page.
+///
+/// When passed to [`FeatureTest::zola`], the test runner writes a minimal
+/// `.md` frontmatter page to `docs/site/content/features/{name}.md` if the
+/// file does not already exist.
+pub(crate) struct ZolaFeaturePage {
+    /// Human-readable title shown on the features page.
+    pub(crate) title: String,
+    /// Short description shown below the title.
+    pub(crate) description: String,
+    /// Ordering weight for the Zola features section (lower = first).
+    pub(crate) weight: u32,
+}
+
+impl ZolaFeaturePage {
+    /// Write the Zola frontmatter page if it does not already exist.
+    ///
+    /// The generated page uses TOML frontmatter with `title`, `description`,
+    /// `weight`, and `[extra] gif` fields matching the Zola feature page
+    /// conventions.
+    fn ensure(&self, name: &str) {
+        let content_dir = feature_content_dir();
+        let page_path = content_dir.join(format!("{name}.md"));
+
+        if page_path.exists() {
+            return;
+        }
+
+        let content = format!(
+            "+++\ntitle = \"{title}\"\ndescription = \"{description}\"\nweight = \
+             {weight}\n\n[extra]\ngif = \"{name}.gif\"\n+++\n",
+            title = self.title,
+            description = self.description,
+            weight = self.weight,
+        );
+
+        std::fs::write(&page_path, content).expect("failed to write Zola feature page");
+
+        println!("Zola feature page created at {}", page_path.display());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FeatureTest builder
+// ---------------------------------------------------------------------------
+
+/// Declarative feature test builder for agentty E2E tests.
+///
+/// Owns the full test lifecycle: `TempDir` + [`BuilderEnv`] creation,
+/// optional git init, scenario execution via [`FeatureDemo`], assertions,
+/// GIF generation with hash caching, and optional Zola page creation.
+///
+/// # Example
+///
+/// ```ignore
+/// #[test]
+/// fn session_creation() {
+///     FeatureTest::new("session_creation")
+///         .with_git()
+///         .zola("Session creation", "Start a new agent session.", 30)
+///         .run(
+///             |scenario| {
+///                 scenario
+///                     .compose(&common::wait_for_agentty_startup())
+///                     .press_key("a")
+///                     .capture_labeled("prompt", "Prompt mode")
+///             },
+///             |frame, _report| {
+///                 let full = Region::full(frame.cols(), frame.rows());
+///                 assertion::assert_text_in_region(frame, "Enter", &full);
+///             },
+///         );
+/// }
+/// ```
+pub(crate) struct FeatureTest {
+    /// Feature name used for GIF filename and Zola page filename.
+    name: String,
+    /// Whether to initialize a git repository in the workdir.
+    with_git: bool,
+    /// Optional Zola page metadata for auto-generation.
+    zola_page: Option<ZolaFeaturePage>,
+}
+
+impl FeatureTest {
+    /// Create a new feature test builder with the given name.
+    ///
+    /// The name is used as the GIF filename stem and Zola page filename.
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            with_git: false,
+            zola_page: None,
+        }
+    }
+
+    /// Enable git initialization in the test workdir.
+    ///
+    /// Required for tests that exercise worktree-dependent features like
+    /// session creation.
+    pub(crate) fn with_git(mut self) -> Self {
+        self.with_git = true;
+
+        self
+    }
+
+    /// Configure Zola feature page auto-generation.
+    ///
+    /// When set, the test runner writes a minimal `.md` frontmatter page
+    /// to `docs/site/content/features/{name}.md` if it does not already
+    /// exist.
+    pub(crate) fn zola(mut self, title: &str, description: &str, weight: u32) -> Self {
+        self.zola_page = Some(ZolaFeaturePage {
+            title: title.to_string(),
+            description: description.to_string(),
+            weight,
+        });
+
+        self
+    }
+
+    /// Run the feature test: build scenario, execute, assert, generate GIF.
+    ///
+    /// The `build_scenario` closure receives a fresh [`Scenario`] with the
+    /// feature name and should return it after composing journeys and steps.
+    /// The `assert` closure receives the final frame and proof report for
+    /// semantic assertions.
+    pub(crate) fn run(
+        self,
+        build_scenario: impl FnOnce(Scenario) -> Scenario,
+        assert: impl FnOnce(&TerminalFrame, &ProofReport),
+    ) {
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+
+        if self.with_git {
+            env.init_git().expect("failed to init git");
+        }
+
+        let scenario = build_scenario(Scenario::new(&self.name));
+        let owned_pairs = env.as_vhs_env_pairs();
+        let env_pairs: Vec<(&str, &str)> = owned_pairs
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+
+        let result = FeatureDemo::new(&self.name)
+            .gif_output_dir(feature_output_dir())
+            .run(&scenario, env.builder(), &cargo_bin("agentty"), &env_pairs)
+            .expect("feature demo execution failed");
+
+        // Surface GIF generation diagnostics — fail on unexpected errors.
+        match &result.gif_status {
+            GifStatus::Generated(path) => {
+                println!("Feature GIF saved to {}", path.display());
+            }
+            GifStatus::CacheHit(path) => {
+                println!("Feature GIF unchanged — skipping {}", path.display());
+            }
+            GifStatus::VhsNotInstalled => {
+                println!("VHS not installed — skipping feature GIF for {}", self.name);
+            }
+            GifStatus::NoOutputDir => {
+                println!("No GIF output dir — skipping GIF for {}", self.name);
+            }
+            GifStatus::DirCreateFailed(err) => {
+                panic!("Feature GIF dir creation failed for {}: {err}", self.name);
+            }
+            GifStatus::TapeExecutionFailed(err) => {
+                panic!("VHS tape execution failed for {}: {err}", self.name);
+            }
+        }
+
+        assert(&result.frame, &result.report);
+
+        if let Some(zola_page) = self.zola_page {
+            zola_page.ensure(&self.name);
+        }
+    }
 }
 
 impl BuilderEnv {

@@ -54,17 +54,22 @@ fn quit_confirm_dismiss_returns() {
 
     let scenario = Scenario::new("quit_dismiss")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(1500)
         // First: open quit dialog and dismiss with 'n'.
         .compose(&common::open_quit_dialog())
+        .viewing_pause_ms(1500)
         .capture_labeled("dialog_n", "Quit dialog before n")
         .press_key("n")
         .wait_for_stable_frame(300, 3000)
+        .viewing_pause_ms(1000)
         .capture_labeled("after_n", "App restored after n")
         // Second: open quit dialog and dismiss with Esc.
         .compose(&common::open_quit_dialog())
+        .viewing_pause_ms(1500)
         .capture_labeled("dialog_esc", "Quit dialog before Esc")
         .press_key("Escape")
         .wait_for_stable_frame(300, 3000)
+        .viewing_pause_ms(1000)
         .capture_labeled("after_esc", "App restored after Esc");
 
     // Act

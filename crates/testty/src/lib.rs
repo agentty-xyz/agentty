@@ -8,6 +8,7 @@ pub mod artifact;
 pub mod assertion;
 pub mod calibration;
 pub mod diff;
+pub mod feature;
 pub mod frame;
 pub mod journey;
 pub mod locator;

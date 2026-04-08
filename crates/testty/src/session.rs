@@ -294,6 +294,9 @@ impl PtySession {
                 Step::Capture | Step::CaptureLabeled { .. } => {
                     last_frame = Some(self.capture_frame());
                 }
+                Step::ViewingPause(_) => {
+                    // No-op in PTY execution — only affects VHS tape output.
+                }
             }
         }
 

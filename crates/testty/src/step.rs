@@ -53,6 +53,13 @@ pub enum Step {
         /// Human-readable description of what this capture documents.
         description: String,
     },
+
+    /// Viewing pause for GIF recordings — no-op in PTY execution.
+    ///
+    /// Compiles to a `Sleep` in VHS tape output so human viewers can absorb
+    /// the current frame before the next action. The PTY executor skips
+    /// this step entirely, keeping assertion-only test runs fast.
+    ViewingPause(Duration),
 }
 
 impl Step {
@@ -106,6 +113,20 @@ impl Step {
             label: label.into(),
             description: description.into(),
         }
+    }
+
+    /// Create a viewing pause step with the given duration.
+    ///
+    /// The pause only affects VHS tape output. PTY execution skips it.
+    pub fn viewing_pause(duration: Duration) -> Self {
+        Self::ViewingPause(duration)
+    }
+
+    /// Create a viewing pause step from a millisecond count.
+    ///
+    /// The pause only affects VHS tape output. PTY execution skips it.
+    pub fn viewing_pause_ms(ms: u64) -> Self {
+        Self::ViewingPause(Duration::from_millis(ms))
     }
 }
 
@@ -161,5 +182,29 @@ mod tests {
         };
         assert_eq!(needle, "Loading");
         assert_eq!(timeout_ms, 5000);
+    }
+
+    #[test]
+    fn viewing_pause_stores_duration() {
+        // Arrange / Act
+        let step = Step::viewing_pause(Duration::from_secs(2));
+
+        // Assert
+        let Step::ViewingPause(duration) = step else {
+            unreachable!("Expected ViewingPause variant");
+        };
+        assert_eq!(duration, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn viewing_pause_ms_converts_to_duration() {
+        // Arrange / Act
+        let step = Step::viewing_pause_ms(1500);
+
+        // Assert
+        let Step::ViewingPause(duration) = step else {
+            unreachable!("Expected ViewingPause variant");
+        };
+        assert_eq!(duration, Duration::from_millis(1500));
     }
 }

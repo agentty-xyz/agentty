@@ -21,6 +21,7 @@ fn projects_page_shows_cwd() {
 
     let scenario = Scenario::new("projects_cwd")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(2000)
         .capture_labeled("projects", "Projects page with registered project");
 
     // Act

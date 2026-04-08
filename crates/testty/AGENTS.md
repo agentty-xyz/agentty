@@ -10,4 +10,5 @@ assertions and VHS screenshot capture.
 - `src/scenario.rs`, `src/step.rs`, and `src/assertion.rs` own the user-facing test API.
 - `src/journey.rs` provides composable journey building blocks for declarative test authoring.
 - `src/proof.rs` and `src/proof/` own the proof pipeline: report collection, backend trait, and output renderers.
+- `src/feature.rs` provides the `FeatureDemo` builder for scenario execution with hash-cached VHS GIF generation.
 - `README.md` is the primary usage guide and should stay aligned with the public API.

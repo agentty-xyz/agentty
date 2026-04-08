@@ -72,6 +72,19 @@ impl Scenario {
         self.step(Step::wait_for_stable_frame(stable_ms, timeout_ms))
     }
 
+    /// Insert a viewing pause that only affects VHS GIF output.
+    ///
+    /// The PTY executor skips this step, keeping assertion runs fast while
+    /// giving human viewers time to absorb the current frame in GIFs.
+    pub fn viewing_pause(self, duration: Duration) -> Self {
+        self.step(Step::viewing_pause(duration))
+    }
+
+    /// Insert a viewing pause in milliseconds (VHS-only, PTY no-op).
+    pub fn viewing_pause_ms(self, ms: u64) -> Self {
+        self.step(Step::viewing_pause_ms(ms))
+    }
+
     /// Capture the current terminal state.
     pub fn capture(self) -> Self {
         self.step(Step::capture())

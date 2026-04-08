@@ -5,7 +5,7 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common;
-use crate::common::BuilderEnv;
+use crate::common::{BuilderEnv, FeatureTest};
 
 /// Verify that agentty startup renders the Projects tab as selected.
 ///
@@ -13,25 +13,25 @@ use crate::common::BuilderEnv;
 /// tabs and labels appear in the correct regions with appropriate styling.
 #[test]
 fn startup_shows_projects_tab() {
-    // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
-
-    let scenario = Scenario::new("startup")
-        .compose(&common::wait_for_agentty_startup())
-        .capture_labeled("startup", "Initial render with Projects tab");
-
-    // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
-
-    // Assert
-    let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(&frame, "Agentty", &full);
-    assertion::assert_text_in_region(&frame, "test-project", &full);
-
-    common::save_feature_gif(&scenario, &report, &env, "startup");
+    FeatureTest::new("startup")
+        .zola(
+            "Startup",
+            "Initial render with the Projects tab selected.",
+            10,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .viewing_pause_ms(2000)
+                    .capture_labeled("startup", "Initial render with Projects tab")
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Agentty", &full);
+                assertion::assert_text_in_region(frame, "test-project", &full);
+            },
+        );
 }
 
 /// Verify that Tab key switches between tabs.
@@ -46,8 +46,10 @@ fn tab_key_switches_tabs() {
 
     let scenario = Scenario::new("tab_switch")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(1500)
         .capture_labeled("before", "Projects tab selected")
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1500)
         .capture_labeled("after", "Sessions tab selected");
 
     // Act
@@ -74,14 +76,18 @@ fn tab_cycles_through_all_tabs() {
 
     let scenario = Scenario::new("tab_full_cycle")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(1500)
         // Tab 1: Projects → Sessions
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1500)
         .capture_labeled("sessions", "Sessions tab selected")
         // Tab 2: Sessions → Stats
         .compose(&common::switch_to_tab("Stats"))
+        .viewing_pause_ms(1500)
         .capture_labeled("stats", "Stats tab selected")
         // Tab 3: Stats → Settings
         .compose(&common::switch_to_tab("Settings"))
+        .viewing_pause_ms(1500)
         .capture_labeled("settings", "Settings tab selected");
 
     // Act
@@ -124,8 +130,10 @@ fn quit_shows_confirmation_dialog() {
 
     let scenario = Scenario::new("quit_confirmation")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(1500)
         .capture_labeled("before", "App running before quit")
         .compose(&common::open_quit_dialog())
+        .viewing_pause_ms(1500)
         .capture_labeled("dialog", "Quit confirmation dialog");
 
     // Act
@@ -150,6 +158,7 @@ fn startup_shows_footer_hints() {
 
     let scenario = Scenario::new("footer_hints")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(2000)
         .capture_labeled("startup", "Footer with keybinding hints");
 
     // Act
@@ -183,17 +192,23 @@ fn backtab_cycles_tabs_reverse() {
         .compose(&common::wait_for_agentty_startup())
         // Navigate forward to Settings (Projects → Sessions → Stats → Settings).
         .compose(&common::switch_to_tab("Sessions"))
+        .viewing_pause_ms(1000)
         .compose(&common::switch_to_tab("Stats"))
+        .viewing_pause_ms(1000)
         .compose(&common::switch_to_tab("Settings"))
+        .viewing_pause_ms(1000)
         .capture_labeled("at_settings", "Settings tab selected before reverse")
         // BackTab 1: Settings → Stats
         .compose(&common::switch_to_tab_reverse("Stats"))
+        .viewing_pause_ms(1000)
         .capture_labeled("back_to_stats", "Stats tab after first BackTab")
         // BackTab 2: Stats → Sessions
         .compose(&common::switch_to_tab_reverse("Sessions"))
+        .viewing_pause_ms(1000)
         .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
         // BackTab 3: Sessions → Projects
         .compose(&common::switch_to_tab_reverse("Projects"))
+        .viewing_pause_ms(1000)
         .capture_labeled("back_to_projects", "Projects tab after third BackTab");
 
     // Act
@@ -231,13 +246,16 @@ fn help_overlay_toggle() {
 
     let scenario = Scenario::new("help_overlay")
         .compose(&common::wait_for_agentty_startup())
+        .viewing_pause_ms(1500)
         .capture_labeled("before", "Normal view before help")
         // Open help overlay.
         .compose(&common::open_help_overlay())
+        .viewing_pause_ms(1500)
         .capture_labeled("help_open", "Help overlay visible")
         // Close with Esc.
         .press_key("Escape")
         .wait_for_stable_frame(300, 3000)
+        .viewing_pause_ms(1500)
         .capture_labeled("help_closed", "Help overlay dismissed");
 
     // Act

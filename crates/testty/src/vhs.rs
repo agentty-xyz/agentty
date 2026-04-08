@@ -216,10 +216,18 @@ fn compile_tape(
     settings: &VhsTapeSettings,
 ) -> String {
     let mut tape = String::new();
+
+    // Derive the GIF filename from the screenshot path stem so the output
+    // name matches the caller's expected feature name rather than the
+    // internal scenario name.
+    let gif_stem = screenshot_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
     let gif_path = screenshot_path
         .parent()
         .unwrap_or(Path::new("."))
-        .join(format!("{}.gif", scenario.name));
+        .join(format!("{gif_stem}.gif"));
 
     // Infallible: all `writeln!` calls below write to a String, which cannot fail.
     // Header settings.
@@ -250,7 +258,8 @@ fn compile_tape(
     );
     let _ = writeln!(tape);
 
-    // Hidden setup: export environment variables.
+    // Hidden setup: export environment variables, clear terminal, and
+    // launch the binary so only the running application is recorded.
     let _ = writeln!(tape, "Hide");
     for (key, value) in env_vars {
         let escaped_value = escape_shell_single_quote(value);
@@ -260,9 +269,11 @@ fn compile_tape(
         let _ = writeln!(tape, "Sleep 200ms");
     }
 
-    // Launch the binary (shell-quoted for paths with spaces/metacharacters).
-    let _ = writeln!(tape, "Show");
-    let _ = writeln!(tape);
+    // Clear the terminal so the export commands are not visible when
+    // recording starts, then launch the binary while still hidden.
+    let _ = writeln!(tape, "Type \"clear\"");
+    let _ = writeln!(tape, "Enter");
+    let _ = writeln!(tape, "Sleep 200ms");
     let escaped_binary = escape_shell_single_quote(&binary_path.display().to_string());
     let _ = writeln!(
         tape,
@@ -270,6 +281,10 @@ fn compile_tape(
         escape_vhs_double_quote(&format!("'{escaped_binary}'"))
     );
     let _ = writeln!(tape, "Enter");
+    // Wait for the application to start and take over the terminal
+    // before beginning the visible recording.
+    let _ = writeln!(tape, "Sleep 2s");
+    let _ = writeln!(tape, "Show");
     let _ = writeln!(tape);
 
     // Compile scenario steps.
@@ -297,8 +312,9 @@ fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
             let vhs_key = key_to_vhs_command(key);
             let _ = writeln!(tape, "{vhs_key}");
         }
-        Step::Sleep(duration) => {
+        Step::Sleep(duration) | Step::ViewingPause(duration) => {
             let ms = duration.as_millis();
+
             if ms >= 1000 && ms % 1000 == 0 {
                 let _ = writeln!(tape, "Sleep {}s", ms / 1000);
             } else {
@@ -306,11 +322,11 @@ fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
             }
         }
         Step::WaitForText { needle, timeout_ms } => {
-            let timeout_secs = f64::from(*timeout_ms) / 1000.0;
+            let timeout = format_vhs_duration(*timeout_ms);
             let _ = writeln!(
                 tape,
-                "Wait+Screen \"{}\" {timeout_secs:.1}s",
-                escape_vhs_double_quote(needle)
+                "Wait+Screen@{timeout} /{needle}/",
+                needle = escape_vhs_regex(needle)
             );
         }
         Step::WaitForStableFrame {
@@ -367,6 +383,52 @@ fn escape_vhs_double_quote(value: &str) -> String {
 /// `'` → `'\''`.
 fn escape_shell_single_quote(value: &str) -> String {
     value.replace('\'', "'\\''")
+}
+
+/// Format a millisecond duration as a VHS-compatible Go duration string.
+///
+/// Produces `"{n}s"` when the value is an exact multiple of 1000,
+/// otherwise `"{n}ms"`. VHS expects Go `time.Duration` syntax
+/// (e.g. `5s`, `500ms`), not decimal seconds like `5.0s`.
+fn format_vhs_duration(milliseconds: u32) -> String {
+    if milliseconds >= 1000 && milliseconds.is_multiple_of(1000) {
+        format!("{}s", milliseconds / 1000)
+    } else {
+        format!("{milliseconds}ms")
+    }
+}
+
+/// Escape special regex metacharacters for use inside a VHS `/regex/`
+/// pattern. VHS `Wait+Screen` and `Wait+Line` use Go-style regex, so
+/// forward slashes and common metacharacters need escaping.
+fn escape_vhs_regex(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+
+    for character in value.chars() {
+        if matches!(
+            character,
+            '/' | '.'
+                | '*'
+                | '+'
+                | '?'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '|'
+                | '^'
+                | '$'
+                | '\\'
+        ) {
+            escaped.push('\\');
+        }
+
+        escaped.push(character);
+    }
+
+    escaped
 }
 
 /// Verify that VHS is installed and available on `PATH`.
@@ -456,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn compile_step_wait_for_text_uses_wait_screen() {
+    fn compile_step_wait_for_text_emits_wait_screen_with_regex() {
         // Arrange
         let step = Step::wait_for_text("Loading", 5000);
         let mut tape = String::new();
@@ -465,7 +527,59 @@ mod tests {
         compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
 
         // Assert
-        assert!(tape.contains("Wait+Screen \"Loading\" 5.0s"));
+        assert!(tape.contains("Wait+Screen@5s /Loading/"));
+    }
+
+    #[test]
+    fn compile_step_wait_for_text_formats_fractional_timeout_as_milliseconds() {
+        // Arrange
+        let step = Step::wait_for_text("Startup", 1500);
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert
+        assert!(tape.contains("Wait+Screen@1500ms /Startup/"));
+    }
+
+    #[test]
+    fn compile_step_wait_for_text_escapes_regex_metacharacters() {
+        // Arrange
+        let step = Step::wait_for_text("[test] foo.bar", 3000);
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert — brackets and dot are escaped.
+        assert!(tape.contains(r"Wait+Screen@3s /\[test\] foo\.bar/"));
+    }
+
+    #[test]
+    fn compile_step_viewing_pause_emits_sleep_seconds() {
+        // Arrange
+        let step = Step::viewing_pause_ms(2000);
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert
+        assert!(tape.contains("Sleep 2s"));
+    }
+
+    #[test]
+    fn compile_step_viewing_pause_emits_sleep_milliseconds() {
+        // Arrange
+        let step = Step::viewing_pause_ms(1500);
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert
+        assert!(tape.contains("Sleep 1500ms"));
     }
 
     #[test]
@@ -510,6 +624,33 @@ mod tests {
     }
 
     #[test]
+    fn escape_vhs_regex_escapes_metacharacters() {
+        // Arrange / Act / Assert
+        assert_eq!(escape_vhs_regex("plain"), "plain");
+        assert_eq!(escape_vhs_regex("a.b"), r"a\.b");
+        assert_eq!(escape_vhs_regex("[x]"), r"\[x\]");
+        assert_eq!(escape_vhs_regex("a/b"), r"a\/b");
+        assert_eq!(escape_vhs_regex("a+b*c?"), r"a\+b\*c\?");
+        assert_eq!(escape_vhs_regex(r"back\slash"), r"back\\slash");
+    }
+
+    #[test]
+    fn format_vhs_duration_uses_seconds_for_even_multiples() {
+        // Arrange / Act / Assert
+        assert_eq!(format_vhs_duration(1000), "1s");
+        assert_eq!(format_vhs_duration(5000), "5s");
+        assert_eq!(format_vhs_duration(30000), "30s");
+    }
+
+    #[test]
+    fn format_vhs_duration_uses_milliseconds_for_fractional() {
+        // Arrange / Act / Assert
+        assert_eq!(format_vhs_duration(500), "500ms");
+        assert_eq!(format_vhs_duration(1500), "1500ms");
+        assert_eq!(format_vhs_duration(100), "100ms");
+    }
+
+    #[test]
     fn compile_tape_escapes_env_value_with_single_quote() {
         // Arrange
         let scenario = Scenario::new("test").capture();
@@ -545,6 +686,36 @@ mod tests {
 
         // Assert — binary path is wrapped in single quotes for the shell.
         assert!(tape.contains("Type \"'/usr/bin/echo'\""));
+    }
+
+    #[test]
+    fn compile_tape_clears_terminal_and_launches_binary_before_show() {
+        // Arrange
+        let scenario = Scenario::new("test").capture();
+
+        // Act
+        let tape = compile_tape(
+            &scenario,
+            Path::new("/usr/bin/echo"),
+            Path::new("/tmp/shot.png"),
+            &[("KEY", "val")],
+            &VhsTapeSettings::default(),
+        );
+
+        // Assert — clear and binary launch happen inside the Hide section,
+        // and Show comes after all of them.
+        let hide_pos = tape.find("Hide").expect("tape must contain Hide");
+        let clear_pos = tape
+            .find("Type \"clear\"")
+            .expect("tape must contain clear");
+        let binary_pos = tape
+            .find("Type \"'/usr/bin/echo'\"")
+            .expect("tape must contain binary launch");
+        let show_pos = tape.find("Show").expect("tape must contain Show");
+
+        assert!(hide_pos < clear_pos, "Hide must precede clear");
+        assert!(clear_pos < binary_pos, "clear must precede binary launch");
+        assert!(binary_pos < show_pos, "binary launch must precede Show");
     }
 
     #[test]
