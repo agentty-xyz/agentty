@@ -7,7 +7,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now launch sibling sessions from session view, and launched/open state survives refresh, reopen, and restart flows. | Landed |
-| Review request publish flow | Review sessions still expose one generic `p` branch-publish action; GitHub only gets a post-push pull-request creation link, while GitLab uses the same publish flow. | Partial |
+| Review request publish flow | Session chat still exposes `p` as the generic branch-publish action, but GitHub lacks a dedicated `Shift+P` shortcut that creates or refreshes the session pull request from the chat page while leaving the existing branch publish flow intact. | Partial |
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
@@ -20,7 +20,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 ## Active Streams
 
 - `Agents`: machine-scoped model availability for settings and slash-model selection.
-- `Forge`: GitHub review-request creation/update from session view while preserving GitLab branch publishing.
+- `Forge`: GitHub review-request creation/update from session chat while preserving the existing branch-publish path.
 - `Quality`: E2E expansion for settings/stats/resize, feature-test skill for agent-driven E2E creation, and convention hygiene follow-up.
 - `Delivery`: project-level landing strategy for review-ready sessions, including direct-merge vs. pull-request expectations.
 - `Protocol`: provider-managed session bootstrap instructions and compact context replay without repo-side agent files.
@@ -40,7 +40,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 ## Ready Now
 
-### [ca014af3-5cd0-4567-bf11-3495765dcf6f] Forge: Replace GitHub branch publish with create or update pull request
+### [ca014af3-5cd0-4567-bf11-3495765dcf6f] Forge: Add GitHub pull-request publish shortcut in session chat
 
 #### Assignee
 
@@ -48,25 +48,25 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 
 #### Why now
 
-The current `p` flow already has the git push path, the `ag-forge` review-request client, and session-side review-request persistence; promoting this slice now closes the remaining GitHub-specific review gap without waiting on unrelated workflow work.
+The current branch-publish flow, `ag-forge` review-request client, and session-side review-request persistence already exist. Promoting this slice now adds the missing GitHub-specific shortcut without disrupting the established `p` publish path that GitLab and other remotes still rely on.
 
 #### Usable outcome
 
-Pressing `p` in `Review` creates or refreshes the session pull request for GitHub remotes, while GitLab and other non-GitHub remotes keep the existing branch-publish behavior.
+Pressing `Shift+P` in the session chat page creates or refreshes the session pull request for GitHub remotes, while `p` keeps the existing branch-publish behavior for GitHub, GitLab, and other remotes.
 
 #### Substeps
 
-- [ ] **Route `p` through a forge-aware publish action.** Update `crates/agentty/src/domain/session.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/runtime/key_handler.rs`, and `crates/agentty/src/app/core.rs` so review sessions choose between the existing push-only path and one GitHub review-request action without splitting the current session-view popup flow into parallel entry points.
-- [ ] **Reuse the existing review-request workflow for GitHub sessions.** Wire `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, and the `ag-forge` client boundary so GitHub publication pushes the branch, finds any existing pull request for the session branch, refreshes it when present, and creates it when absent while persisting the normalized review-request summary back onto the session.
-- [ ] **Align publish UI copy with the new GitHub outcome.** Update `crates/agentty/src/ui/component/publish_branch_overlay.rs`, `crates/agentty/src/ui/component/info_overlay.rs`, `crates/agentty/src/ui/state/help_action.rs`, and `crates/agentty/src/ui/page/session_chat.rs` so the popup title, help text, and success messaging describe create-or-update pull-request behavior for GitHub while preserving the current branch-publish copy for GitLab and other remotes.
+- [ ] **Add a dedicated `Shift+P` session-chat action for GitHub review requests.** Update `crates/agentty/src/domain/session.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/runtime/key_handler.rs`, and `crates/agentty/src/app/core.rs` so session chat keeps `p` on the existing branch-publish path and adds a separate `Shift+P` shortcut that invokes one GitHub review-request publish action without regressing the current publish overlay flow.
+- [ ] **Reuse the existing review-request workflow for GitHub sessions.** Wire `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, and the `ag-forge` client boundary so the new GitHub `Shift+P` action pushes the branch, finds any existing pull request for the session branch, refreshes it when present, and creates it when absent while persisting the normalized review-request summary back onto the session.
+- [ ] **Align session chat UI copy with the new shortcut.** Update `crates/agentty/src/ui/component/publish_branch_overlay.rs`, `crates/agentty/src/ui/component/info_overlay.rs`, `crates/agentty/src/ui/state/help_action.rs`, and `crates/agentty/src/ui/page/session_chat.rs` so help text, popup copy, and success messaging describe `Shift+P` as the GitHub pull-request publish shortcut while preserving the existing branch-publish copy for `p`.
 
 #### Tests
 
-- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, and `crates/agentty/src/ui/component/publish_branch_overlay.rs` for GitHub vs. GitLab action selection, existing-pull-request refresh, first-time pull-request creation, and the resulting popup copy/state.
+- [ ] Add or extend coverage in `crates/agentty/src/app/core.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, and `crates/agentty/src/ui/component/publish_branch_overlay.rs` for `p` versus `Shift+P` selection, GitHub-only review-request publishing, existing-pull-request refresh, first-time pull-request creation, and the resulting popup copy/state.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, and `docs/site/content/docs/architecture/runtime-flow.md` to explain that `p` creates or refreshes GitHub pull requests while non-GitHub remotes continue to use the branch-publish flow.
+- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, and `docs/site/content/docs/architecture/runtime-flow.md` to explain that session chat keeps `p` for branch publishing and adds `Shift+P` for GitHub pull-request create-or-refresh behavior.
 
 ### [5a84d7a9-3346-4e01-90be-ce5d3783b32f] Quality: Add settings, stats, and resize E2E tests
 
@@ -126,7 +126,7 @@ A `feature-test` skill in `skills/feature-test/SKILL.md` guides agents through c
 
 ```mermaid
 flowchart TD
-    R1["[ca014af3] Forge: GitHub review request publish"]
+    R1["[ca014af3] Forge: GitHub `Shift+P` publish shortcut"]
     R2["[5a84d7a9] Quality: settings, stats, and resize E2E"]
     R3["[c3f5a7d9] Quality: feature-test skill"]
 ```
@@ -145,7 +145,7 @@ Promote when maintainers want review and publish actions to respect the target p
 
 #### Depends on
 
-`[ca014af3] Forge: Replace GitHub branch publish with create or update pull request`
+`[ca014af3] Forge: Add GitHub pull-request publish shortcut in session chat`
 
 ### [8d03ed45-0f91-4d1d-b761-2d74f7027ef7] Protocol: Track explicit Claude session identity for one-time bootstrap reuse
 
@@ -235,7 +235,7 @@ Promote when maintainers want Agentty to list, claim, reorder, or transition roa
 
 ## Context Notes
 
-- `Forge: Replace GitHub branch publish with create or update pull request` should reuse the existing `ag-forge` review-request create/refresh flow and keep GitLab on the current push-only branch-publish path.
+- `Forge: Add GitHub pull-request publish shortcut in session chat` should reuse the existing `ag-forge` review-request create/refresh flow, keep `p` on the current push-only branch-publish path, and add `Shift+P` only for the GitHub pull-request action.
 - `Agents: Scope model lists to locally available backends` should reuse one shared availability snapshot across Settings and `/model` instead of probing CLIs separately in render paths.
 - `Protocol: Bootstrap direct agent instructions once per app-server session` should keep the canonical instruction contract inside Agentty-managed prompt construction and persistence, not in user-maintained provider instruction files.
 - The parked `[6bb0cae7] Planning: Move roadmap tasks to a single canonical TOML plan` should make `docs/plan/roadmap.toml` the only roadmap source of truth for Agentty and `skills/implementation-plan`.
