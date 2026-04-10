@@ -20,7 +20,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 ## Active Streams
 
 - `Agents`: machine-scoped model availability for settings and slash-model selection.
-- `Quality`: E2E expansion for settings/stats/resize, feature-test skill for agent-driven E2E creation, and convention hygiene follow-up.
+- `Quality`: E2E expansion for settings/stats/resize, feature-test skill for agent-driven E2E creation, feature test backlog for shipped features, and convention hygiene follow-up.
 - `Delivery`: project-level landing strategy for review-ready sessions, including direct-merge vs. pull-request expectations.
 - `Protocol`: provider-managed session bootstrap instructions and compact context replay without repo-side agent files.
 
@@ -74,16 +74,16 @@ E2E coverage validates settings navigation and edit overlays, stats-page empty-s
 
 #### Why now
 
-Zola auto-discovery just landed, proving the full workflow from E2E test to VHS GIF to feature `.md` page to auto-rendered features page. Codifying this pattern into a reusable skill now ensures agents create feature tests consistently before the pattern diverges across contributors.
+Zola auto-discovery just landed, proving the full workflow from E2E test to VHS GIF to feature `.md` page to auto-rendered features page. Codifying this pattern into a reusable skill now ensures agents create feature tests consistently using the `FeatureTest` builder before the pattern diverges across contributors.
 
 #### Usable outcome
 
-A `feature-test` skill in `skills/feature-test/SKILL.md` guides agents through creating E2E tests with VHS GIF generation for new visible UI features, including criteria for when a feature test is warranted (visible UI behavior change, user-facing, demonstrable in a scenario), naming conventions (test name = GIF filename = content page `extra.gif` reference), the `Scenario` + `save_feature_gif()` pattern, and Zola content page creation in `docs/site/content/features/`.
+A `feature-test` skill in `skills/feature-test/SKILL.md` guides agents through creating E2E tests with VHS GIF generation for new visible UI features, including criteria for when a feature test is warranted (visible UI behavior change, user-facing, demonstrable in a scenario), naming conventions (test name = GIF filename = content page `extra.gif` reference), the `FeatureTest` builder pattern from `crates/agentty/tests/e2e/common.rs`, and Zola content page creation in `docs/site/content/features/`.
 
 #### Substeps
 
-- [ ] **Create `skills/feature-test/SKILL.md` with the feature-test workflow.** Define when a feature test is warranted, the naming convention (`test_name` → `name.gif` → `content/features/name.md`), the `Scenario` + `BuilderEnv` + `save_feature_gif()` pattern from `crates/agentty/tests/e2e/common.rs`, and the Zola content page creation step with frontmatter fields (`title`, `description`, `weight`, `[extra]` with `gif`). Add `CLAUDE.md` and `GEMINI.md` symlinks.
-- [ ] **Register the skill in `skills/AGENTS.md` and update the root `CLAUDE.md` meta-agent inventory.** Add a `feature-test` entry to both the skill catalog and the Interactive Skills table.
+- [ ] **Create `skills/feature-test/SKILL.md` with the feature-test workflow.** Define when a feature test is warranted, the naming convention (`test_name` → `name.gif` → `content/features/name.md`), the `FeatureTest` builder pattern from `crates/agentty/tests/e2e/common.rs`, and the Zola content page creation step with frontmatter fields (`title`, `description`, `weight`, `[extra]` with `gif`).
+- [ ] **Register the skill in `skills/AGENTS.md` and update the root `AGENTS.md` meta-agent inventory.** Add a `feature-test` entry to both the skill catalog and the Interactive Skills table.
 
 #### Tests
 
@@ -131,6 +131,34 @@ flowchart TD
 ```
 
 ## Queued Next
+
+### [a7e41b3c-9d28-4f56-8c1a-6b5e2d4f8a91] Quality: Add draft session and prompt input feature tests
+
+#### Outcome
+
+Ship `FeatureTest`-based E2E coverage for draft session creation via `Shift+A` (verify draft state, staged message persistence, draft title sync) and prompt input features (file `@` mention completion, slash command input) so the feature test gate is satisfied for these already-landed features.
+
+#### Promote when
+
+Promote when a `Ready Now` quality slot opens and the feature-test skill `[c3f5a7d9]` has landed to guide the test creation pattern.
+
+#### Depends on
+
+`[c3f5a7d9] Quality: Add feature-test skill for agent-driven E2E test creation` (in Ready Now)
+
+### [b2f83d5e-1a64-47c9-9e3b-8c7d6f2a4e10] Quality: Migrate legacy E2E tests to `FeatureTest` builder
+
+#### Outcome
+
+Migrate the 15 E2E tests that currently use the legacy `save_feature_gif` or direct `Scenario` patterns to the declarative `FeatureTest` builder, ensuring consistent lifecycle management, GIF generation, and Zola page creation across all feature tests.
+
+#### Promote when
+
+Promote when the feature-test skill has landed and the draft/prompt feature tests validate the `FeatureTest` pattern at scale.
+
+#### Depends on
+
+`[c3f5a7d9] Quality: Add feature-test skill for agent-driven E2E test creation` (in Ready Now)
 
 ### [8d03ed45-0f91-4d1d-b761-2d74f7027ef7] Protocol: Track explicit Claude session identity for one-time bootstrap reuse
 
@@ -204,6 +232,20 @@ Promote when a `Ready Now` slot opens and the active quality slices stop competi
 
 `None`
 
+### [c4d92f8a-3e71-4b05-a8f6-9d1e5c7b2a63] Quality: Add agent-dependent feature tests
+
+#### Outcome
+
+Ship `FeatureTest`-based E2E coverage for features that require active session state: diff view (`d` key from `Review`), question mode (agent-generated questions with predefined answers), follow-up task navigation (sibling session launch), review request publish flow (`p` and `Shift+P` from `Review`), session activity timer display, and active model display in session header.
+
+#### Promote when
+
+Promote when `[1c7b7080] Quality: Ship one deterministic local session workflow slice` lands, providing in-process mock agent channels that can drive sessions to `Review`, `Question`, and other agent-dependent states within the PTY binary.
+
+#### Depends on
+
+`[1c7b7080] Quality: Ship one deterministic local session workflow slice` (parked)
+
 ### [6bb0cae7-c07c-4fab-ae6b-e74444d3f0f0] Planning: Move roadmap tasks to a single canonical TOML plan
 
 #### Outcome
@@ -229,7 +271,8 @@ Promote when maintainers want Agentty to list, claim, reorder, or transition roa
 - Testty proof pipeline is fully landed in `crates/testty/`. Future enhancements (e.g., additional proof backends, CI integration, or new recipe types) should be queued as new parked cards referencing that crate.
 - VHS feature GIF generation is fully landed with `VhsTapeSettings::feature_demo()` in testty, `BuilderEnv` + `save_feature_gif()` in E2E common helpers, and content-hash caching via `.hash` sidecar files. The showcase tests in `crates/agentty/tests/showcase.rs` remain separate for polished marketing demos with seeded databases.
 - Zola auto-discovery for feature GIFs is fully landed with `get_section()` in `features.html`, individual `.md` pages in `content/features/` with `weight` ordering and `extra.gif` frontmatter, a `feature-page.html` template for standalone pages, and the pattern documented in `managing-docs-with-zola.md`. The homepage feature card in `index.html` remains hardcoded and curated separately.
-- `Quality: Add feature-test skill` should codify the proven E2E → VHS GIF → feature `.md` → auto-discovered features page workflow into `skills/feature-test/SKILL.md`, referencing the `Scenario` + `BuilderEnv` + `save_feature_gif()` pattern from `crates/agentty/tests/e2e/common.rs` and the Zola content page conventions from `docs/site/content/features/`.
+- `Quality: Add feature-test skill` should codify the proven E2E → VHS GIF → feature `.md` → auto-discovered features page workflow into `skills/feature-test/SKILL.md`, referencing the `FeatureTest` builder pattern from `crates/agentty/tests/e2e/common.rs` and the Zola content page conventions from `docs/site/content/features/`.
+- The Feature Test Gate rule in `AGENTS.md` requires every user-visible feature to ship with a `FeatureTest`-based E2E test. The backlog of feature tests for already-shipped features is tracked across three queued/parked cards: `[a7e41b3c]` covers draft sessions and prompt input (testable now), `[b2f83d5e]` covers migrating legacy tests to the `FeatureTest` builder, and `[c4d92f8a]` covers agent-dependent features blocked on the local session harness `[1c7b7080]`.
 - E2E tests use the testty framework and drive the full UI flow (no pre-seeded database). Tests that require agent-dependent states (diff view from `Review`, question mode, follow-up task navigation) are deferred until an in-process mock agent channel can be wired into the PTY binary or the parked local session workflow harness lands.
 - The parked `[1c7b7080] Quality: Ship one deterministic local session workflow slice` covers in-process session testing with mock agent channels. The E2E test stream covers PTY-driven TUI testing. These are complementary, not overlapping.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.
