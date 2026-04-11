@@ -70,7 +70,7 @@ impl BranchPublishTaskFailure {
             title: match publish_branch_action {
                 PublishBranchAction::Push => "Branch push blocked".to_string(),
                 PublishBranchAction::PublishPullRequest => {
-                    "GitHub pull request publish blocked".to_string()
+                    "Review request publish blocked".to_string()
                 }
             },
         }
@@ -83,7 +83,7 @@ impl BranchPublishTaskFailure {
             title: match publish_branch_action {
                 PublishBranchAction::Push => "Branch push failed".to_string(),
                 PublishBranchAction::PublishPullRequest => {
-                    "GitHub pull request publish failed".to_string()
+                    "Review request publish failed".to_string()
                 }
             },
         }
@@ -97,12 +97,14 @@ pub(crate) enum BranchPublishTaskSuccess {
     Pushed {
         /// Remote branch name that was pushed successfully.
         branch_name: String,
-        /// Optional forge-native URL that opens a new review-request flow.
-        review_request_creation_url: Option<String>,
+        /// Optional forge-native metadata that can open or describe the new
+        /// review-request flow.
+        review_request_creation: Option<ReviewRequestCreationInfo>,
         /// Persisted upstream ref recorded after the successful push.
         upstream_reference: String,
     },
-    /// Carries the pushed branch name, linked pull request, and upstream ref.
+    /// Carries the pushed branch name, linked review request, and upstream
+    /// ref.
     PullRequestPublished {
         /// Remote branch name that was pushed successfully.
         branch_name: String,
@@ -117,11 +119,21 @@ pub(crate) enum BranchPublishTaskSuccess {
 pub(crate) type BranchPublishTaskResult =
     Result<BranchPublishTaskSuccess, BranchPublishTaskFailure>;
 
+/// Forge-specific metadata used to describe one review-request creation path
+/// after a branch push.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewRequestCreationInfo {
+    /// Forge family that can open or create the follow-up review request.
+    pub(crate) forge_kind: forge::ForgeKind,
+    /// Optional forge-native URL for starting the review-request flow.
+    pub(crate) web_url: Option<String>,
+}
+
 /// Returns the loading popup title for one branch-publish action.
 pub(crate) fn branch_publish_loading_title(publish_branch_action: PublishBranchAction) -> String {
     match publish_branch_action {
         PublishBranchAction::Push => "Pushing branch".to_string(),
-        PublishBranchAction::PublishPullRequest => "Publishing GitHub pull request".to_string(),
+        PublishBranchAction::PublishPullRequest => "Publishing review request".to_string(),
     }
 }
 
@@ -139,10 +151,10 @@ pub(crate) fn branch_publish_loading_message(
         }
         (PublishBranchAction::PublishPullRequest, Some(remote_branch_name)) => format!(
             "Pushing the session branch to `{remote_branch_name}` and creating or refreshing the \
-             GitHub pull request."
+             active forge review request."
         ),
         (PublishBranchAction::PublishPullRequest, None) => {
-            "Pushing the session branch and creating or refreshing the GitHub pull request."
+            "Pushing the session branch and creating or refreshing the active forge review request."
                 .to_string()
         }
     }
@@ -152,7 +164,7 @@ pub(crate) fn branch_publish_loading_message(
 pub(crate) fn branch_publish_loading_label(publish_branch_action: PublishBranchAction) -> String {
     match publish_branch_action {
         PublishBranchAction::Push => "Pushing branch...".to_string(),
-        PublishBranchAction::PublishPullRequest => "Publishing pull request...".to_string(),
+        PublishBranchAction::PublishPullRequest => "Publishing review request...".to_string(),
     }
 }
 
@@ -160,35 +172,62 @@ pub(crate) fn branch_publish_loading_label(publish_branch_action: PublishBranchA
 pub(crate) fn branch_publish_success_title(publish_branch_action: PublishBranchAction) -> String {
     match publish_branch_action {
         PublishBranchAction::Push => "Branch pushed".to_string(),
-        PublishBranchAction::PublishPullRequest => "GitHub pull request published".to_string(),
+        PublishBranchAction::PublishPullRequest => "Review request published".to_string(),
     }
 }
 
 /// Returns the success popup body for one completed branch push.
 pub(crate) fn branch_push_success_message(
     branch_name: &str,
-    review_request_creation_url: Option<&str>,
+    review_request_creation: Option<&ReviewRequestCreationInfo>,
 ) -> String {
-    match review_request_creation_url {
-        Some(review_request_creation_url) => format!(
-            "Pushed session branch `{branch_name}`.\n\nOpen this link to create the pull \
-             request:\n{review_request_creation_url}"
+    match review_request_creation {
+        Some(ReviewRequestCreationInfo {
+            forge_kind,
+            web_url: Some(review_request_creation_url),
+        }) => format!(
+            "Pushed session branch `{branch_name}`.\n\nOpen this link to create the {}:\n{}",
+            forge_kind.review_request_name(),
+            review_request_creation_url
+        ),
+        Some(ReviewRequestCreationInfo {
+            forge_kind,
+            web_url: None,
+        }) => format!(
+            "Pushed session branch `{branch_name}`.\n\nCreate the {} manually from your forge UI.",
+            forge_kind.review_request_name()
         ),
         None => format!(
-            "Pushed session branch `{branch_name}`.\n\nCreate the pull request manually from your \
-             forge UI."
+            "Pushed session branch `{branch_name}`.\n\nCreate the review request manually from \
+             your forge UI."
         ),
     }
 }
 
-/// Returns the success popup body for one completed pull-request publish.
+/// Returns the success popup title for one completed review-request publish.
+pub(crate) fn review_request_publish_success_title(review_request: &ReviewRequest) -> String {
+    format!(
+        "{} published",
+        review_request
+            .summary
+            .forge_kind
+            .review_request_display_name()
+    )
+}
+
+/// Returns the success popup body for one completed review-request publish.
 pub(crate) fn pull_request_publish_success_message(
     branch_name: &str,
     review_request: &ReviewRequest,
 ) -> String {
     format!(
-        "Published session branch `{branch_name}`.\n\nGitHub pull request {} is ready:\n{}",
-        review_request.summary.display_id, review_request.summary.web_url
+        "Published session branch `{branch_name}`.\n\n{} {} is ready:\n{}",
+        review_request
+            .summary
+            .forge_kind
+            .review_request_display_name(),
+        review_request.summary.display_id,
+        review_request.summary.web_url
     )
 }
 
@@ -260,8 +299,16 @@ pub(crate) fn detected_forge_kind_from_git_push_error(
         return Some(forge_kind);
     }
 
-    if normalized_detail.contains("github.com") || normalized_detail.contains(" gh ") {
+    if let Some(forge_kind) = detected_forge_kind_from_text(detail_message) {
+        return Some(forge_kind);
+    }
+
+    if normalized_detail.contains(" gh ") {
         return Some(forge::ForgeKind::GitHub);
+    }
+
+    if normalized_detail.contains(" glab ") {
+        return Some(forge::ForgeKind::GitLab);
     }
 
     None
@@ -276,6 +323,10 @@ pub(crate) fn git_push_authentication_message(
         Some(forge::ForgeKind::GitHub) => format!(
             "Git push requires authentication for this repository.\nAuthorize git access, then \
              {retry_action}.\nRun `gh auth login`, or configure credentials with a PAT/SSH key."
+        ),
+        Some(forge::ForgeKind::GitLab) => format!(
+            "Git push requires authentication for this repository.\nAuthorize git access, then \
+             {retry_action}.\nRun `glab auth login`, or configure credentials with a PAT/SSH key."
         ),
         None => format!(
             "Git push requires authentication for this repository.\nAuthorize git access, then \
@@ -311,17 +362,17 @@ pub(crate) async fn push_session_branch(
         remote_branch_name,
     )
     .await?;
-    let review_request_creation_url =
-        branch_review_request_creation_url(branch_publish_session, git_client, &branch_name).await;
+    let review_request_creation =
+        branch_review_request_creation_info(branch_publish_session, git_client, &branch_name).await;
 
     Ok(BranchPublishTaskSuccess::Pushed {
         branch_name,
-        review_request_creation_url,
+        review_request_creation,
         upstream_reference,
     })
 }
 
-/// Pushes one session branch, then creates or refreshes its GitHub pull
+/// Pushes one session branch, then creates or refreshes its forge review
 /// request.
 async fn publish_pull_request(
     branch_publish_session: &BranchPublishTaskSession,
@@ -334,7 +385,7 @@ async fn publish_pull_request(
     if !branch_publish_session.status.allows_review_actions() {
         return Err(BranchPublishTaskFailure::failed(
             PublishBranchAction::PublishPullRequest,
-            "Session must be in review to publish the pull request.".to_string(),
+            "Session must be in review to publish the review request.".to_string(),
         ));
     }
 
@@ -409,7 +460,7 @@ async fn push_session_branch_to_remote(
     Ok(upstream_reference)
 }
 
-/// Resolves one forge remote for pull-request publishing.
+/// Resolves one forge remote for review-request publishing.
 async fn review_request_remote(
     branch_publish_session: &BranchPublishTaskSession,
     git_client: Arc<dyn GitClient>,
@@ -421,12 +472,13 @@ async fn review_request_remote(
         .map_err(|error| {
             BranchPublishTaskFailure::failed(
                 PublishBranchAction::PublishPullRequest,
-                format!("Failed to resolve repository remote for pull request: {error}"),
+                format!("Failed to resolve repository remote for review request: {error}"),
             )
         })?;
 
     review_request_client
         .detect_remote(repo_url)
+        .map(|remote| remote.with_command_working_directory(branch_publish_session.folder.clone()))
         .map_err(|error| {
             BranchPublishTaskFailure::failed(
                 PublishBranchAction::PublishPullRequest,
@@ -435,7 +487,7 @@ async fn review_request_remote(
         })
 }
 
-/// Creates or refreshes one pull request for the published session branch and
+/// Creates or refreshes one review request for the published session branch and
 /// persists the normalized summary.
 async fn create_or_refresh_review_request(
     branch_publish_session: &BranchPublishTaskSession,
@@ -502,8 +554,8 @@ async fn create_or_refresh_review_request(
             BranchPublishTaskFailure::failed(
                 PublishBranchAction::PublishPullRequest,
                 format!(
-                    "Pull request publish succeeded, but Agentty could not persist the linked \
-                     pull request: {error}"
+                    "Review-request publish succeeded, but Agentty could not persist the linked \
+                     review request: {error}"
                 ),
             )
         })?;
@@ -530,14 +582,14 @@ async fn load_review_request_create_input(
         .ok_or_else(|| {
             BranchPublishTaskFailure::failed(
                 PublishBranchAction::PublishPullRequest,
-                "Session branch has no commit message for pull request publishing.".to_string(),
+                "Session branch has no commit message for review-request publishing.".to_string(),
             )
         })?;
     let review_request_commit_message =
         review_request::parse_review_request_commit_message(&commit_message).ok_or_else(|| {
             BranchPublishTaskFailure::failed(
                 PublishBranchAction::PublishPullRequest,
-                "Session branch commit message must have a non-empty title for pull request \
+                "Session branch commit message must have a non-empty title for review-request \
                  publishing."
                     .to_string(),
             )
@@ -551,21 +603,25 @@ async fn load_review_request_create_input(
     })
 }
 
-/// Returns one forge-native review-request creation URL for a pushed session.
-async fn branch_review_request_creation_url(
+/// Returns one forge-native review-request creation helper for a pushed
+/// session.
+async fn branch_review_request_creation_info(
     branch_publish_session: &BranchPublishTaskSession,
     git_client: Arc<dyn GitClient>,
     branch_name: &str,
-) -> Option<String> {
+) -> Option<ReviewRequestCreationInfo> {
     let repo_url = git_client
         .repo_url(branch_publish_session.folder.clone())
         .await
         .ok()?;
     let remote = forge::detect_remote(&repo_url).ok()?;
 
-    remote
-        .review_request_creation_url(branch_name, &branch_publish_session.base_branch)
-        .ok()
+    Some(ReviewRequestCreationInfo {
+        forge_kind: remote.forge_kind,
+        web_url: remote
+            .review_request_creation_url(branch_name, &branch_publish_session.base_branch)
+            .ok(),
+    })
 }
 
 /// Maps one branch-publish failure into blocked or failed popup copy.
@@ -586,7 +642,7 @@ pub(crate) fn branch_push_failure(
             detected_forge_kind_from_git_push_error(error),
             match publish_branch_action {
                 PublishBranchAction::Push => "push the branch again",
-                PublishBranchAction::PublishPullRequest => "publish the pull request again",
+                PublishBranchAction::PublishPullRequest => "publish the review request again",
             },
         ),
     )
@@ -604,12 +660,53 @@ fn detected_forge_kind_from_push_auth_url(detail_message: &str) -> Option<forge:
         return Some(forge::ForgeKind::GitHub);
     }
 
+    if forge::is_gitlab_host(host) {
+        return Some(forge::ForgeKind::GitLab);
+    }
+
     None
 }
 
 /// Returns whether `host` is a GitHub-style forge host.
 fn is_github_host(host: &str) -> bool {
     host == "github.com" || host.ends_with(".github.com")
+}
+
+/// Attempts to infer one forge kind from host-like tokens inside free-form
+/// git push error text.
+fn detected_forge_kind_from_text(detail_message: &str) -> Option<forge::ForgeKind> {
+    for token in detail_message.split_whitespace() {
+        let normalized_host = normalized_host_token(token);
+        if normalized_host.is_empty() {
+            continue;
+        }
+
+        if is_github_host(normalized_host) {
+            return Some(forge::ForgeKind::GitHub);
+        }
+
+        if forge::is_gitlab_host(normalized_host) {
+            return Some(forge::ForgeKind::GitLab);
+        }
+    }
+
+    None
+}
+
+/// Normalizes one host-like token found in free-form error text so forge
+/// detection can inspect just the hostname.
+fn normalized_host_token(token: &str) -> &str {
+    let token = token
+        .trim()
+        .trim_matches(|character: char| "\"'`()[]{}<>,;:".contains(character));
+    let token = token
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("ssh://");
+    let token = token.rsplit_once('@').map_or(token, |(_, host)| host);
+    let token = token.split('/').next().unwrap_or(token);
+
+    strip_port(token)
 }
 
 /// Extracts one remote host from one `git push` authentication prompt.
@@ -650,11 +747,65 @@ fn strip_port(host: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::git;
+
+    #[tokio::test]
+    async fn review_request_remote_attaches_session_worktree_to_detected_remote() {
+        // Arrange
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let branch_publish_session = BranchPublishTaskSession {
+            base_branch: "main".to_string(),
+            folder: session_folder.clone(),
+            id: "session-id".to_string(),
+            review_request: None,
+            status: Status::Review,
+        };
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .withf({
+                let session_folder = session_folder.clone();
+                move |candidate_folder| candidate_folder == &session_folder
+            })
+            .returning(|_| {
+                Box::pin(async { Ok("https://gitlab.com/agentty-xyz/agentty.git".to_string()) })
+            });
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .withf(|repo_url| repo_url == "https://gitlab.com/agentty-xyz/agentty.git")
+            .returning(|_| {
+                Ok(forge::ForgeRemote {
+                    command_working_directory: None,
+                    forge_kind: forge::ForgeKind::GitLab,
+                    host: "gitlab.com".to_string(),
+                    namespace: "agentty-xyz".to_string(),
+                    project: "agentty".to_string(),
+                    repo_url: "https://gitlab.com/agentty-xyz/agentty.git".to_string(),
+                    web_url: "https://gitlab.com/agentty-xyz/agentty".to_string(),
+                })
+            });
+
+        // Act
+        let remote = review_request_remote(
+            &branch_publish_session,
+            Arc::new(mock_git_client),
+            &mock_review_request_client,
+        )
+        .await
+        .expect("remote should resolve");
+
+        // Assert
+        assert_eq!(remote.command_working_directory, Some(session_folder));
+        assert_eq!(remote.forge_kind, forge::ForgeKind::GitLab);
+    }
 
     /// Describes one auth-guidance parsing scenario for `branch_push_failure`.
     struct AuthGuidanceCase {
         error: &'static str,
-        expect_github_guidance: bool,
+        expected_cli_guidance: Option<&'static str>,
         name: &'static str,
     }
 
@@ -685,22 +836,32 @@ mod tests {
             AuthGuidanceCase {
                 name: "mixed-case https url",
                 error: "Git push failed: fatal: could not read Username for 'HTTPS://GitHub.com/OpenAI/agentty': terminal prompts disabled",
-                expect_github_guidance: true,
+                expected_cli_guidance: Some("gh auth login"),
             },
             AuthGuidanceCase {
                 name: "password prompt without scheme",
                 error: "Git push failed: fatal: could not read Password for 'github.com/OpenAI/agentty': terminal prompts disabled",
-                expect_github_guidance: true,
+                expected_cli_guidance: Some("gh auth login"),
             },
             AuthGuidanceCase {
                 name: "github url with port and subpath",
                 error: "Git push failed: fatal: could not read Username for 'https://user@github.com:443/openai/agentty/path': terminal prompts disabled",
-                expect_github_guidance: true,
+                expected_cli_guidance: Some("gh auth login"),
             },
             AuthGuidanceCase {
-                name: "non-github host falls back to generic guidance",
+                name: "gitlab host uses glab guidance",
                 error: "Git push failed: fatal: could not read Username for 'https://gitlab.com/openai/agentty': terminal prompts disabled",
-                expect_github_guidance: false,
+                expected_cli_guidance: Some("glab auth login"),
+            },
+            AuthGuidanceCase {
+                name: "self-hosted gitlab token uses glab guidance",
+                error: "Git push failed: authentication failed while contacting gitlab.company.org for review branch",
+                expected_cli_guidance: Some("glab auth login"),
+            },
+            AuthGuidanceCase {
+                name: "non-forge host falls back to generic guidance",
+                error: "Git push failed: fatal: could not read Username for 'https://example.com/openai/agentty': terminal prompts disabled",
+                expected_cli_guidance: None,
             },
         ];
 
@@ -715,9 +876,9 @@ mod tests {
                 "case: {}",
                 case.name
             );
-            if case.expect_github_guidance {
+            if let Some(expected_cli_guidance) = case.expected_cli_guidance {
                 assert!(
-                    failure.message.contains("gh auth login"),
+                    failure.message.contains(expected_cli_guidance),
                     "case: {}",
                     case.name
                 );
@@ -728,11 +889,61 @@ mod tests {
                     case.name
                 );
                 assert!(
+                    !failure.message.contains("glab auth login"),
+                    "case: {}",
+                    case.name
+                );
+                assert!(
                     failure.message.contains("PAT/SSH key or credential helper"),
                     "case: {}",
                     case.name
                 );
             }
         }
+    }
+
+    #[test]
+    fn branch_push_success_message_uses_gitlab_merge_request_copy() {
+        // Arrange
+        let review_request_creation = ReviewRequestCreationInfo {
+            forge_kind: forge::ForgeKind::GitLab,
+            web_url: Some(
+                "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/new".to_string(),
+            ),
+        };
+
+        // Act
+        let message =
+            branch_push_success_message("agentty/session-1", Some(&review_request_creation));
+
+        // Assert
+        assert!(message.contains("create the merge request"));
+        assert!(message.contains("gitlab.com/agentty-xyz/agentty/-/merge_requests/new"));
+    }
+
+    #[test]
+    fn pull_request_publish_success_message_uses_gitlab_display_copy() {
+        // Arrange
+        let review_request = ReviewRequest {
+            last_refreshed_at: 42,
+            summary: forge::ReviewRequestSummary {
+                display_id: "!24".to_string(),
+                forge_kind: forge::ForgeKind::GitLab,
+                source_branch: "agentty/session-1".to_string(),
+                state: forge::ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Add GitLab support".to_string(),
+                web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24".to_string(),
+            },
+        };
+
+        // Act
+        let title = review_request_publish_success_title(&review_request);
+        let message = pull_request_publish_success_message("agentty/session-1", &review_request);
+
+        // Assert
+        assert_eq!(title, "GitLab merge request published");
+        assert!(message.contains("GitLab merge request !24 is ready"));
     }
 }

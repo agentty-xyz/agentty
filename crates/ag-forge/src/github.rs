@@ -702,6 +702,7 @@ mod tests {
 
     fn github_remote() -> ForgeRemote {
         ForgeRemote {
+            command_working_directory: None,
             forge_kind: ForgeKind::GitHub,
             host: "github.com".to_string(),
             namespace: "agentty-xyz".to_string(),

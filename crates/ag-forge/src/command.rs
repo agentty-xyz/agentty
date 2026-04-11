@@ -1,6 +1,7 @@
 //! Forge CLI command boundary used by review-request adapters.
 
 use std::io::ErrorKind;
+use std::path::PathBuf;
 
 use tokio::process::Command;
 
@@ -9,21 +10,24 @@ use super::ForgeFuture;
 /// One forge CLI invocation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ForgeCommand {
+    /// Argument vector passed to the executable.
+    pub(crate) arguments: Vec<String>,
     /// Environment variables applied to the spawned process.
     pub(crate) environment: Vec<(String, String)>,
     /// Executable name passed to the OS process launcher.
     pub(crate) executable: &'static str,
-    /// Argument vector passed to the executable.
-    pub(crate) arguments: Vec<String>,
+    /// Working directory used for one repository-aware forge command.
+    pub(crate) working_directory: Option<PathBuf>,
 }
 
 impl ForgeCommand {
     /// Builds one forge CLI command with no extra environment.
     pub(crate) fn new(executable: &'static str, arguments: Vec<String>) -> Self {
         Self {
+            arguments,
             environment: Vec::new(),
             executable,
-            arguments,
+            working_directory: None,
         }
     }
 
@@ -32,6 +36,24 @@ impl ForgeCommand {
         self.environment.push((key.to_string(), value.into()));
 
         self
+    }
+
+    /// Sets the working directory for one repository-aware forge command.
+    pub(crate) fn with_working_directory(mut self, working_directory: PathBuf) -> Self {
+        self.working_directory = Some(working_directory);
+
+        self
+    }
+
+    /// Sets the working directory when one repository path is available.
+    pub(crate) fn with_optional_working_directory(
+        self,
+        working_directory: Option<PathBuf>,
+    ) -> Self {
+        match working_directory {
+            Some(working_directory) => self.with_working_directory(working_directory),
+            None => self,
+        }
     }
 }
 
@@ -96,6 +118,10 @@ async fn run_command(command: ForgeCommand) -> Result<ForgeCommandOutput, ForgeC
 
     for (key, value) in &command.environment {
         process.env(key, value);
+    }
+
+    if let Some(working_directory) = &command.working_directory {
+        process.current_dir(working_directory);
     }
 
     let output = process.output().await.map_err(|error| {

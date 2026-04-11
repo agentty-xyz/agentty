@@ -55,8 +55,8 @@ Session statuses and what you can do in each state:
 |--------|-------------|-------------------|
 | **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
 | **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
-| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `/` open slash-command composer, `s` sync review request, `m` add to merge queue, `r` rebase, `o` open worktree, `p` publish branch, `Shift+P` create or refresh GitHub pull request, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
-| **AgentReview** | Agentty is generating the focused review output in the background. | `Enter` reply, `/` open slash-command composer, `s` sync review request, `m` add to merge queue, `o` open worktree, `p` publish branch, `Shift+P` create or refresh GitHub pull request, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
+| **Review** | Agent finished; changes are ready for review. | `Enter` reply, `/` open slash-command composer, `s` sync review request, `m` add to merge queue, `r` rebase, `o` open worktree, `p` publish branch, `Shift+P` create or refresh forge review request, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
+| **AgentReview** | Agentty is generating the focused review output in the background. | `Enter` reply, `/` open slash-command composer, `s` sync review request, `m` add to merge queue, `o` open worktree, `p` publish branch, `Shift+P` create or refresh forge review request, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) |
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
@@ -136,9 +136,10 @@ Session view exposes two publish shortcuts:
 - Leave the field empty to keep the default branch target for that session, or type a custom remote branch name before pressing `Enter`.
 - After the session branch already tracks a remote branch, Agentty locks the popup to that same remote branch instead of allowing renames.
 - Agentty publishes with `git push --force-with-lease` so rebased or amended session branches can update safely without overwriting unseen remote changes.
-- After the push succeeds, Agentty shows the branch name and, for GitHub remotes, a forge-native link you can open to start the pull request.
-- `Shift+P` opens the same publish popup for GitHub pull-request publishing, including an optional custom remote branch name before Agentty pushes the branch and creates or refreshes the linked pull request.
-- When the session already tracks a pull request, Agentty refreshes that same pull request instead of creating a duplicate.
+- After the push succeeds, Agentty shows the branch name and, for supported forges, a forge-native link you can open to start the pull request or merge request.
+- `Shift+P` opens the same publish popup for forge review-request publishing, including an optional custom remote branch name before Agentty pushes the branch and creates or refreshes the linked review request.
+- GitHub projects publish pull requests, while GitLab projects publish merge requests.
+- When the session already tracks a review request, Agentty refreshes that same review request instead of creating a duplicate.
 
 Branch-publish actions stay inside session view by using a publish input popup
 for both `p` and `Shift+P`, followed by informational popups for loading,
@@ -150,14 +151,17 @@ Branch publishing on `p` and `Shift+P` uses regular Git authentication only:
 - HTTPS remotes need a working credential helper or PAT.
 - SSH remotes need a working SSH key.
 
-GitHub pull-request publishing on `Shift+P` also requires authenticated `gh`
-access for the repository remote.
+Forge review-request publishing on `Shift+P` also requires the forge CLI for
+the repository remote: authenticated `gh` access for GitHub projects and
+authenticated `glab` access for GitLab projects.
+For the GitHub and GitLab CLI setup steps, see
+[Forge Authentication](@/docs/usage/forge-authentication.md).
 
 ## Review Request Sync
 
 <a id="usage-review-request-sync"></a>
 After publishing a branch, press `s` in session view to sync the review request
-status from the forge (GitHub). The `s` shortcut is available when the session
+status from the forge. The `s` shortcut is available when the session
 has a published branch or a linked review request and is in **Review** or
 **AgentReview** status.
 
@@ -166,9 +170,9 @@ The session list shows forge indicators next to the status label:
 | Indicator | Meaning |
 |-----------|---------|
 | `↑` | Branch published, no review request found yet. |
-| `⊙ #N` | Review request `#N` is open. |
-| `✓ #N` | Review request `#N` was merged. |
-| `✗ #N` | Review request `#N` was closed. |
+| `⊙ <id>` | Review request `<id>` is open, such as GitHub `#42` or GitLab `!42`. |
+| `✓ <id>` | Review request `<id>` was merged. |
+| `✗ <id>` | Review request `<id>` was closed. |
 
 When a sync detects that the review request was merged, Agentty transitions the
 session straight to **Done**.

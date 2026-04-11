@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeRemote,
-    GitHubReviewRequestAdapter, RealForgeCommandRunner, ReviewRequestError, ReviewRequestSummary,
-    detect_remote,
+    GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
+    ReviewRequestError, ReviewRequestSummary, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -18,7 +18,7 @@ pub trait ReviewRequestClient: Send + Sync {
     ///
     /// # Errors
     /// Returns [`ReviewRequestError::UnsupportedRemote`] when the remote does
-    /// not map to GitHub.
+    /// not map to a supported forge.
     fn detect_remote(&self, repo_url: String) -> Result<ForgeRemote, ReviewRequestError>;
 
     /// Finds an existing review request for `source_branch`.
@@ -91,9 +91,18 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         source_branch: String,
     ) -> ForgeFuture<Result<Option<ReviewRequestSummary>, ReviewRequestError>> {
-        let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+        match remote.forge_kind {
+            super::ForgeKind::GitHub => {
+                let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
 
-        Box::pin(async move { adapter.find_by_source_branch(remote, source_branch).await })
+                Box::pin(async move { adapter.find_by_source_branch(remote, source_branch).await })
+            }
+            super::ForgeKind::GitLab => {
+                let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move { adapter.find_by_source_branch(remote, source_branch).await })
+            }
+        }
     }
 
     fn create_review_request(
@@ -101,9 +110,18 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         input: CreateReviewRequestInput,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+        match remote.forge_kind {
+            super::ForgeKind::GitHub => {
+                let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
 
-        Box::pin(async move { adapter.create_review_request(remote, input).await })
+                Box::pin(async move { adapter.create_review_request(remote, input).await })
+            }
+            super::ForgeKind::GitLab => {
+                let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move { adapter.create_review_request(remote, input).await })
+            }
+        }
     }
 
     fn refresh_review_request(
@@ -111,9 +129,18 @@ impl ReviewRequestClient for RealReviewRequestClient {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewRequestSummary, ReviewRequestError>> {
-        let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+        match remote.forge_kind {
+            super::ForgeKind::GitHub => {
+                let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
 
-        Box::pin(async move { adapter.refresh_review_request(remote, display_id).await })
+                Box::pin(async move { adapter.refresh_review_request(remote, display_id).await })
+            }
+            super::ForgeKind::GitLab => {
+                let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move { adapter.refresh_review_request(remote, display_id).await })
+            }
+        }
     }
 
     fn review_request_web_url(
@@ -163,6 +190,33 @@ mod tests {
                 forge_kind: ForgeKind::GitHub,
                 message: "review request summary is missing a web URL".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn review_request_web_url_returns_gitlab_url_without_provider_routing() {
+        // Arrange
+        let client = RealReviewRequestClient::default();
+        let review_request = ReviewRequestSummary {
+            display_id: "!42".to_string(),
+            forge_kind: ForgeKind::GitLab,
+            source_branch: "feature/forge".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: Some("Draft".to_string()),
+            target_branch: "main".to_string(),
+            title: "Add forge boundary".to_string(),
+            web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42".to_string(),
+        };
+
+        // Act
+        let web_url = client
+            .review_request_web_url(&review_request)
+            .expect("gitlab review-request URL should be returned directly");
+
+        // Assert
+        assert_eq!(
+            web_url,
+            "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42"
         );
     }
 }

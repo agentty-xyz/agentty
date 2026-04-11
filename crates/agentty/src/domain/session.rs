@@ -243,7 +243,7 @@ pub struct ReviewRequest {
 pub enum PublishBranchAction {
     /// Pushes the session branch to the configured Git remote.
     Push,
-    /// Pushes the session branch and creates or refreshes a GitHub pull
+    /// Pushes the session branch and creates or refreshes the forge review
     /// request for it.
     PublishPullRequest,
 }
@@ -486,7 +486,7 @@ impl Session {
             .then_some(PublishBranchAction::Push)
     }
 
-    /// Returns the pull-request publish action currently available in session
+    /// Returns the review-request publish action currently available in session
     /// view.
     pub fn publish_pull_request_action(&self) -> Option<PublishBranchAction> {
         self.status
@@ -769,6 +769,20 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
         // Assert
         assert_eq!(forge_kind, ForgeKind::GitHub);
+    }
+
+    #[test]
+    fn test_forge_kind_from_str_gitlab() {
+        // Arrange
+        let raw_forge_kind = "GitLab";
+
+        // Act
+        let forge_kind = raw_forge_kind
+            .parse::<ForgeKind>()
+            .expect("failed to parse review-request forge");
+
+        // Assert
+        assert_eq!(forge_kind, ForgeKind::GitLab);
     }
 
     #[test]

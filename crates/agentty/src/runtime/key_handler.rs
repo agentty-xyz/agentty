@@ -1013,7 +1013,7 @@ mod tests {
                 ref message,
                 ref title,
                 ..
-            } if title == "Publishing GitHub pull request"
+            } if title == "Publishing review request"
                 && message.contains("`review/custom`")
         ));
     }

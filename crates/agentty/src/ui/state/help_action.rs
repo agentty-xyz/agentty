@@ -583,9 +583,9 @@ fn publish_branch_help_action(action: PublishBranchAction) -> HelpAction {
 fn publish_pull_request_help_action(action: PublishBranchAction) -> HelpAction {
     match action {
         PublishBranchAction::PublishPullRequest | PublishBranchAction::Push => HelpAction::new(
-            "publish PR",
+            "publish review",
             "Shift+P",
-            "Create or refresh GitHub pull request",
+            "Create or refresh forge review request",
         ),
     }
 }

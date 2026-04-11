@@ -10,3 +10,4 @@ Usage guides for Agentty:
 
 - [Workflow](@/docs/usage/workflow.md) - Interface layout, session lifecycle, slash commands, and data location.
 - [Keybindings](@/docs/usage/keybindings.md) - Keyboard shortcuts for each list, detail view, and input mode.
+- [Forge Authentication](@/docs/usage/forge-authentication.md) - GitHub and GitLab CLI setup for branch publishing and review-request publishing.

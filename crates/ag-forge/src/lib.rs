@@ -3,6 +3,7 @@
 mod client;
 mod command;
 mod github;
+mod gitlab;
 mod model;
 mod remote;
 
@@ -14,9 +15,10 @@ pub(crate) use command::{
     RealForgeCommandRunner, command_output_detail,
 };
 pub(crate) use github::GitHubReviewRequestAdapter;
+pub(crate) use gitlab::GitLabReviewRequestAdapter;
 pub use model::{
     CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, ReviewRequestError,
-    ReviewRequestState, ReviewRequestSummary,
+    ReviewRequestState, ReviewRequestSummary, is_gitlab_host,
 };
 pub use remote::detect_remote;
 pub(crate) use remote::{parse_remote_url, strip_port};

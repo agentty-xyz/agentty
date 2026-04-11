@@ -936,7 +936,8 @@ impl SessionManager {
             })?
             .ok_or_else(|| {
                 SessionError::Workflow(
-                    "Session branch has no commit message for pull request publishing.".to_string(),
+                    "Session branch has no commit message for review-request publishing."
+                        .to_string(),
                 )
             })?;
         let review_request_commit_message = review_request::parse_review_request_commit_message(
@@ -944,7 +945,7 @@ impl SessionManager {
         )
         .ok_or_else(|| {
             SessionError::Workflow(
-                "Session branch commit message must have a non-empty title for pull request \
+                "Session branch commit message must have a non-empty title for review-request \
                  publishing."
                     .to_string(),
             )
@@ -2164,6 +2165,7 @@ mod tests {
     /// Returns one GitHub forge-remote fixture for review-request tests.
     fn github_remote() -> forge::ForgeRemote {
         forge::ForgeRemote {
+            command_working_directory: Some(PathBuf::from("/tmp/session")),
             forge_kind: ForgeKind::GitHub,
             host: "github.com".to_string(),
             namespace: "agentty-xyz".to_string(),

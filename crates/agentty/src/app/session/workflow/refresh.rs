@@ -158,12 +158,16 @@ impl SessionManager {
         session: &crate::domain::session::Session,
         review_request: Option<&ReviewRequest>,
     ) -> Result<forge::ForgeRemote, SessionError> {
-        let repo_url = services
-            .git_client()
-            .repo_url(session.folder.clone())
-            .await
-            .ok()
-            .or_else(|| review_request.and_then(Self::review_request_repo_url))
+        if let Ok(repo_url) = services.git_client().repo_url(session.folder.clone()).await {
+            return services
+                .review_request_client()
+                .detect_remote(repo_url)
+                .map(|remote| remote.with_command_working_directory(session.folder.clone()))
+                .map_err(|error| SessionError::Workflow(error.detail_message()));
+        }
+
+        let repo_url = review_request
+            .and_then(Self::review_request_repo_url)
             .ok_or_else(|| {
                 SessionError::Workflow(
                     "Failed to resolve repository remote for linked review request".to_string(),
@@ -183,6 +187,10 @@ impl SessionManager {
         match review_request.summary.forge_kind {
             ForgeKind::GitHub => web_url
                 .split_once("/pull/")
+                .map(|(repo_url, _)| repo_url.to_string()),
+            ForgeKind::GitLab => web_url
+                .split_once("/-/merge_requests/")
+                .or_else(|| web_url.split_once("/merge_requests/"))
                 .map(|(repo_url, _)| repo_url.to_string()),
         }
     }
@@ -457,6 +465,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_request_remote_uses_live_worktree_for_detected_remote() {
+        // Arrange
+        let session_folder = PathBuf::from("/tmp/session");
+        let session = test_session(session_folder.clone(), None, Status::Review);
+        let database = database_with_session(&session).await;
+        let now = Instant::now();
+        let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
+        let clock: Arc<dyn Clock> = fake_clock;
+        let session_manager = session_manager_with_session(clock, session);
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .withf({
+                let session_folder = session_folder.clone();
+                move |candidate_folder| candidate_folder == &session_folder
+            })
+            .returning(|_| {
+                Box::pin(async { Ok("https://github.com/agentty-xyz/agentty".to_string()) })
+            });
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .withf(|repo_url| repo_url == "https://github.com/agentty-xyz/agentty")
+            .returning(|_| {
+                Ok(forge::ForgeRemote {
+                    command_working_directory: None,
+                    forge_kind: ForgeKind::GitHub,
+                    host: "github.com".to_string(),
+                    namespace: "agentty-xyz".to_string(),
+                    project: "agentty".to_string(),
+                    repo_url: "https://github.com/agentty-xyz/agentty".to_string(),
+                    web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+                })
+            });
+        let services = test_services(
+            database,
+            Arc::new(mock_git_client),
+            Arc::new(mock_review_request_client),
+        );
+
+        // Act
+        let remote = session_manager
+            .review_request_remote(&services, &session_manager.state.sessions[0], None)
+            .await
+            .expect("remote should resolve");
+
+        // Assert
+        assert_eq!(remote.command_working_directory, Some(session_folder));
+        assert_eq!(remote.forge_kind, ForgeKind::GitHub);
+    }
+
+    #[test]
+    fn review_request_repo_url_derives_gitlab_project_url() {
+        // Arrange
+        let review_request = ReviewRequest {
+            last_refreshed_at: 10,
+            summary: ReviewRequestSummary {
+                display_id: "!42".to_string(),
+                forge_kind: ForgeKind::GitLab,
+                source_branch: "agentty/session-".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Add forge review support".to_string(),
+                web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42".to_string(),
+            },
+        };
+
+        // Act
+        let repo_url = SessionManager::review_request_repo_url(&review_request);
+
+        // Assert
+        assert_eq!(
+            repo_url.as_deref(),
+            Some("https://gitlab.com/agentty-xyz/agentty")
+        );
+    }
+
+    #[tokio::test]
     async fn test_refresh_review_request_updates_done_session_from_stored_link_when_worktree_is_missing()
      {
         // Arrange
@@ -480,6 +569,7 @@ mod tests {
         let clock: Arc<dyn Clock> = fake_clock;
         let mut session_manager = session_manager_with_session(clock, session);
         let remote = forge::ForgeRemote {
+            command_working_directory: None,
             forge_kind: ForgeKind::GitHub,
             host: "github.com".to_string(),
             namespace: "agentty-xyz".to_string(),

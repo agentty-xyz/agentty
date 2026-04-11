@@ -7,7 +7,7 @@ Single-file roadmap for the active project backlog. Humans keep priorities and g
 | Area | Current state in codebase | Status |
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now launch sibling sessions from session view, and launched/open state survives refresh, reopen, and restart flows. | Landed |
-| Review request publish flow | Session chat keeps `p` for generic branch publishing and now exposes `Shift+P` to create or refresh the linked GitHub pull request while preserving the existing branch-publish popup flow. | Landed |
+| Review request publish flow | Session chat keeps `p` for generic branch publishing, and `Shift+P` now creates or refreshes the linked GitHub pull request or GitLab merge request while preserving the same publish popup flow. | Landed |
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
@@ -121,7 +121,7 @@ Each Agentty project can declare its expected landing path, and review-ready ses
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, and `docs/site/content/docs/getting-started/overview.md` to explain the new per-project delivery strategy setting and how it affects review-ready session actions.
 
-### [044ea311-f8d5-4fe5-945f-a08df8ef5f57] Delivery: Support GitLab merge-request publish on `Shift+P`
+### [a7e41b3c-9d28-4f56-8c1a-6b5e2d4f8a91] Quality: Add draft session and prompt input feature tests
 
 #### Assignee
 
@@ -129,24 +129,24 @@ Each Agentty project can declare its expected landing path, and review-ready ses
 
 #### Why now
 
-The current `Shift+P` flow already concentrates its GitHub-only assumptions in the forge model, publish workflow, and a small set of session-view copy surfaces. That makes GitLab merge-request support an atomic delivery slice that can land now without waiting on separate roadmap work.
+The feature-test skill is already active in `Ready Now`, so the next quality slice should immediately apply that pattern to already-landed visible behavior. Draft sessions and prompt input stay within the existing PTY feature-test harness and avoid the agent-dependent blockers tracked elsewhere.
 
 #### Usable outcome
 
-GitLab-hosted projects can use `Shift+P` to create or refresh merge requests with forge-native titles, messages, and helper copy, while GitHub pull-request behavior remains unchanged.
+`FeatureTest`-based E2E coverage validates draft session creation via `Shift+A`, draft staging persistence, and prompt-input affordances such as slash-command entry and file `@` mention lookup.
 
 #### Substeps
 
-- [ ] **Add GitLab review-request support to the forge and publish workflow.** Extend `crates/ag-forge/src/model.rs` and the review-request client plumbing it drives so Agentty can recognize GitLab remotes, build merge-request creation URLs, and expose GitLab display metadata needed by `crates/agentty/src/app/branch_publish.rs`.
-- [ ] **Make `Shift+P` status and overlay copy forge-aware.** Update the GitLab-sensitive publish titles, success and failure messages, and review-request URL handling in `crates/agentty/src/app/branch_publish.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, `crates/agentty/src/ui/component/publish_branch_overlay.rs`, and `crates/agentty/src/ui/state/help_action.rs` so session chat and publish overlays describe pull requests versus merge requests correctly for the active forge.
+- [ ] **Cover draft session creation with the `FeatureTest` builder.** Extend `crates/agentty/tests/e2e/session.rs` and shared helpers in `crates/agentty/tests/e2e/common.rs` so a feature test exercises `Shift+A`, verifies draft-mode session state, and confirms staged draft content persists through the visible session flow.
+- [ ] **Cover prompt input affordances with the same harness.** Add or extend `FeatureTest` scenarios in `crates/agentty/tests/e2e/session.rs` and `crates/agentty/tests/e2e/common.rs` so the PTY suite validates slash-command input and file `@` mention lookup behavior without reverting to the legacy `save_feature_gif` pattern.
 
 #### Tests
 
-- [ ] Add or extend regression coverage in `crates/ag-forge/src/model.rs`, `crates/agentty/src/app/branch_publish.rs`, `crates/agentty/src/app/session/workflow/refresh.rs`, `crates/agentty/src/ui/component/publish_branch_overlay.rs`, and `crates/agentty/src/ui/state/help_action.rs` for GitLab remote detection, merge-request URL generation, forge-aware publish messaging, and `Shift+P` help text.
+- [ ] Run `cargo test -p agentty --test e2e` after adding the new scenarios so the full PTY-driven feature-test suite validates the draft and prompt flows together.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to explain that `Shift+P` publishes the active forge review request, including GitHub pull requests and GitLab merge requests.
+- [ ] No user-facing docs needed unless the feature tests add new docs-side assets or feature pages beyond the standard `FeatureTest` flow.
 
 ## Ready Now Execution Order
 
@@ -155,24 +155,10 @@ flowchart TD
     R1["[5a84d7a9] Quality: settings, stats, and resize E2E"]
     R2["[c3f5a7d9] Quality: feature-test skill"]
     R3["[17a9e2ba] Delivery: project commit strategy"]
-    R4["[044ea311] Delivery: GitLab merge-request publish"]
+    R2 --> R4["[a7e41b3c] Quality: draft and prompt feature tests"]
 ```
 
 ## Queued Next
-
-### [a7e41b3c-9d28-4f56-8c1a-6b5e2d4f8a91] Quality: Add draft session and prompt input feature tests
-
-#### Outcome
-
-Ship `FeatureTest`-based E2E coverage for draft session creation via `Shift+A` (verify draft state, staged message persistence, draft title sync) and prompt input features (file `@` mention completion, slash command input) so the feature test gate is satisfied for these already-landed features.
-
-#### Promote when
-
-Promote when a `Ready Now` quality slot opens and the feature-test skill `[c3f5a7d9]` has landed to guide the test creation pattern.
-
-#### Depends on
-
-`[c3f5a7d9] Quality: Add feature-test skill for agent-driven E2E test creation` (in Ready Now)
 
 ### [b2f83d5e-1a64-47c9-9e3b-8c7d6f2a4e10] Quality: Migrate legacy E2E tests to `FeatureTest` builder
 
@@ -296,7 +282,6 @@ Promote when maintainers want Agentty to list, claim, reorder, or transition roa
 - The parked local session harness slice should come back only when the active quality slices stop churning the same session lifecycle seams.
 - The typed-error migration and module-test backfill are both complete. Convention cleanup remains open in the parked sweep card.
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
-- `Delivery: Support GitLab merge-request publish on Shift+P` should generalize the current GitHub-only review-request wording in session chat and related publish overlays, rather than adding a second forge-specific shortcut path.
 - Testty proof pipeline is fully landed in `crates/testty/`. Future enhancements (e.g., additional proof backends, CI integration, or new recipe types) should be queued as new parked cards referencing that crate.
 - VHS feature GIF generation is fully landed with `VhsTapeSettings::feature_demo()` in testty, `BuilderEnv` + `save_feature_gif()` in E2E common helpers, and content-hash caching via `.hash` sidecar files. The showcase tests in `crates/agentty/tests/showcase.rs` remain separate for polished marketing demos with seeded databases.
 - Zola auto-discovery for feature GIFs is fully landed with `get_section()` in `features.html`, individual `.md` pages in `content/features/` with `weight` ordering and `extra.gif` frontmatter, a `feature-page.html` template for standalone pages, and the pattern documented in `managing-docs-with-zola.md`. The homepage feature card in `index.html` remains hardcoded and curated separately.

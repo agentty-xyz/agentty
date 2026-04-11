@@ -12,8 +12,8 @@ use crate::ui::{Component, overlay};
 
 const PUSH_EDITABLE_HELP_TEXT: &str = "Enter: publish branch | Esc: cancel";
 const PUSH_LOCKED_HELP_TEXT: &str = "Enter: publish branch again | Esc: cancel";
-const PULL_REQUEST_EDITABLE_HELP_TEXT: &str = "Enter: publish pull request | Esc: cancel";
-const PULL_REQUEST_LOCKED_HELP_TEXT: &str = "Enter: publish pull request again | Esc: cancel";
+const PULL_REQUEST_EDITABLE_HELP_TEXT: &str = "Enter: publish review request | Esc: cancel";
+const PULL_REQUEST_LOCKED_HELP_TEXT: &str = "Enter: publish review request again | Esc: cancel";
 const INPUT_TITLE: &str = "Remote Branch";
 const MIN_OVERLAY_HEIGHT: u16 = 11;
 const MIN_OVERLAY_WIDTH: u16 = 58;
@@ -66,19 +66,19 @@ impl<'a> PublishBranchOverlay<'a> {
         match (self.publish_branch_action, self.locked_upstream_ref) {
             (PublishBranchAction::Push, Some(upstream_ref)) => format!(
                 "Already published to `{upstream_ref}`. This session stays locked to that remote \
-                 branch. Use `Shift+P` to create or refresh the GitHub pull request."
+                 branch. Use `Shift+P` to create or refresh the active forge review request."
             ),
             (PublishBranchAction::Push, None) => "Optional remote branch name for this branch \
                                                   publish. Use `Shift+P` to create or refresh the \
-                                                  GitHub pull request."
+                                                  active forge review request."
                 .to_string(),
             (PublishBranchAction::PublishPullRequest, Some(upstream_ref)) => format!(
-                "Already published to `{upstream_ref}`. Publish the GitHub pull request from this \
-                 locked branch."
+                "Already published to `{upstream_ref}`. Publish the active forge review request \
+                 from this locked branch."
             ),
             (PublishBranchAction::PublishPullRequest, None) => {
                 "Optional remote branch name for this publish before creating or refreshing the \
-                 GitHub pull request."
+                 active forge review request."
                     .to_string()
             }
         }
@@ -127,7 +127,7 @@ impl Component for PublishBranchOverlay<'_> {
         let popup_area = Self::popup_area(area);
         let title = match self.publish_branch_action {
             PublishBranchAction::Push => "Publish Branch",
-            PublishBranchAction::PublishPullRequest => "Publish GitHub Pull Request",
+            PublishBranchAction::PublishPullRequest => "Publish Review Request",
         };
         let block = overlay::overlay_block(title, palette::ACCENT);
         let inner_area = block.inner(popup_area);
@@ -277,8 +277,8 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Publish GitHub Pull Request"));
-        assert!(text.contains("GitHub pull request"));
+        assert!(text.contains("Publish Review Request"));
+        assert!(text.contains("forge review request"));
         assert!(text.contains(PULL_REQUEST_EDITABLE_HELP_TEXT));
     }
 }

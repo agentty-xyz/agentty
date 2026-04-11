@@ -3,6 +3,7 @@
 use std::fmt;
 use std::fmt::Write as _;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 
@@ -13,6 +14,8 @@ use url::Url;
 pub enum ForgeKind {
     /// GitHub-hosted pull requests.
     GitHub,
+    /// GitLab-hosted merge requests.
+    GitLab,
 }
 
 impl ForgeKind {
@@ -20,6 +23,7 @@ impl ForgeKind {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::GitHub => "GitHub",
+            Self::GitLab => "GitLab",
         }
     }
 
@@ -27,6 +31,7 @@ impl ForgeKind {
     pub fn cli_name(self) -> &'static str {
         match self {
             Self::GitHub => "gh",
+            Self::GitLab => "glab",
         }
     }
 
@@ -34,6 +39,7 @@ impl ForgeKind {
     pub fn auth_login_command(self) -> &'static str {
         match self {
             Self::GitHub => "gh auth login",
+            Self::GitLab => "glab auth login",
         }
     }
 
@@ -41,8 +47,38 @@ impl ForgeKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GitHub => "GitHub",
+            Self::GitLab => "GitLab",
         }
     }
+
+    /// Returns the forge-native review-request noun shown in user-facing copy.
+    pub fn review_request_name(self) -> &'static str {
+        match self {
+            Self::GitHub => "pull request",
+            Self::GitLab => "merge request",
+        }
+    }
+
+    /// Returns the combined forge and review-request name for user-facing copy.
+    pub fn review_request_display_name(self) -> String {
+        format!("{} {}", self.display_name(), self.review_request_name())
+    }
+
+    /// Returns the short UI indicator label for one review request.
+    pub fn review_request_short_name(self) -> &'static str {
+        match self {
+            Self::GitHub => "PR",
+            Self::GitLab => "MR",
+        }
+    }
+}
+
+/// Returns whether `host` looks like one GitLab instance hostname.
+pub fn is_gitlab_host(host: &str) -> bool {
+    host == "gitlab.com"
+        || host.ends_with(".gitlab.com")
+        || host.starts_with("gitlab.")
+        || host.contains(".gitlab.")
 }
 
 impl fmt::Display for ForgeKind {
@@ -57,6 +93,7 @@ impl FromStr for ForgeKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "GitHub" => Ok(Self::GitHub),
+            "GitLab" => Ok(Self::GitLab),
             _ => Err(format!("Unknown review-request forge: {value}")),
         }
     }
@@ -136,6 +173,9 @@ pub type ForgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 /// Normalized repository remote metadata for one supported forge.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForgeRemote {
+    /// Repository worktree used when forge CLI commands need local git
+    /// context.
+    pub command_working_directory: Option<PathBuf>,
     /// Forge family inferred from the repository remote.
     pub forge_kind: ForgeKind,
     /// Forge hostname used for browser and API calls.
@@ -154,6 +194,15 @@ pub struct ForgeRemote {
 }
 
 impl ForgeRemote {
+    /// Returns one remote copy that runs forge CLI commands from
+    /// `working_directory`.
+    #[must_use]
+    pub fn with_command_working_directory(mut self, working_directory: PathBuf) -> Self {
+        self.command_working_directory = Some(working_directory);
+
+        self
+    }
+
     /// Returns the `<namespace>/<project>` path used by forge CLIs and URLs.
     pub fn project_path(&self) -> String {
         format!("{}/{}", self.namespace, self.project)
@@ -174,6 +223,9 @@ impl ForgeRemote {
         match self.forge_kind {
             ForgeKind::GitHub => {
                 github_review_request_creation_url(self, source_branch, target_branch)
+            }
+            ForgeKind::GitLab => {
+                gitlab_review_request_creation_url(self, source_branch, target_branch)
             }
         }
     }
@@ -239,8 +291,8 @@ impl ReviewRequestError {
                 forge_kind.display_name(),
             ),
             Self::UnsupportedRemote { repo_url } => format!(
-                "Review requests are only supported for GitHub remotes.\nThis repository remote \
-                 is not supported: `{repo_url}`."
+                "Review requests are only supported for GitHub and GitLab remotes.\nThis \
+                 repository remote is not supported: `{repo_url}`."
             ),
             Self::OperationFailed {
                 forge_kind,
@@ -317,6 +369,31 @@ fn github_review_request_creation_url(
     Ok(url.into())
 }
 
+/// Builds one GitLab URL that opens the new merge-request flow.
+fn gitlab_review_request_creation_url(
+    remote: &ForgeRemote,
+    source_branch: &str,
+    target_branch: &str,
+) -> Result<String, ReviewRequestError> {
+    let mut url = parsed_remote_web_url(remote)?;
+
+    {
+        let mut path_segments = url
+            .path_segments_mut()
+            .map_err(|()| invalid_web_url_error(remote))?;
+        path_segments.pop_if_empty();
+        path_segments.push("-");
+        path_segments.push("merge_requests");
+        path_segments.push("new");
+    }
+
+    url.query_pairs_mut()
+        .append_pair("merge_request[source_branch]", source_branch)
+        .append_pair("merge_request[target_branch]", target_branch);
+
+    Ok(url.into())
+}
+
 /// Parses the stored repository web URL for one forge remote.
 fn parsed_remote_web_url(remote: &ForgeRemote) -> Result<Url, ReviewRequestError> {
     Url::parse(&remote.web_url).map_err(|_| invalid_web_url_error(remote))
@@ -378,6 +455,7 @@ mod tests {
     fn review_request_creation_url_returns_github_compare_link() {
         // Arrange
         let remote = ForgeRemote {
+            command_working_directory: None,
             forge_kind: ForgeKind::GitHub,
             host: "github.com".to_string(),
             namespace: "agentty-xyz".to_string(),
@@ -402,6 +480,7 @@ mod tests {
     fn review_request_creation_url_rejects_invalid_web_url() {
         // Arrange
         let remote = ForgeRemote {
+            command_working_directory: None,
             forge_kind: ForgeKind::GitHub,
             host: "github.com".to_string(),
             namespace: "agentty-xyz".to_string(),
@@ -422,6 +501,48 @@ mod tests {
                 forge_kind: ForgeKind::GitHub,
                 message: "repository remote is missing a valid web URL: `not a url`".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn forge_kind_from_str_gitlab() {
+        // Arrange
+        let raw_forge_kind = "GitLab";
+
+        // Act
+        let forge_kind = raw_forge_kind
+            .parse::<ForgeKind>()
+            .expect("gitlab forge kind should parse");
+
+        // Assert
+        assert_eq!(forge_kind, ForgeKind::GitLab);
+        assert_eq!(forge_kind.cli_name(), "glab");
+        assert_eq!(forge_kind.review_request_name(), "merge request");
+        assert_eq!(forge_kind.review_request_short_name(), "MR");
+    }
+
+    #[test]
+    fn review_request_creation_url_returns_gitlab_merge_request_link() {
+        // Arrange
+        let remote = ForgeRemote {
+            command_working_directory: None,
+            forge_kind: ForgeKind::GitLab,
+            host: "gitlab.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "git@gitlab.com:agentty-xyz/agentty.git".to_string(),
+            web_url: "https://gitlab.com/agentty-xyz/agentty".to_string(),
+        };
+
+        // Act
+        let url = remote
+            .review_request_creation_url("review/custom-branch", "main")
+            .expect("gitlab merge-request URL should be created");
+
+        // Assert
+        assert_eq!(
+            url,
+            "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/new?merge_request%5Bsource_branch%5D=review%2Fcustom-branch&merge_request%5Btarget_branch%5D=main"
         );
     }
 }

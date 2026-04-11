@@ -1,6 +1,9 @@
 //! Forge remote detection helpers shared across provider adapters.
 
-use super::{ForgeKind, ForgeRemote, GitHubReviewRequestAdapter, ReviewRequestError};
+use super::{
+    ForgeKind, ForgeRemote, GitHubReviewRequestAdapter, GitLabReviewRequestAdapter,
+    ReviewRequestError,
+};
 
 /// Parsed remote components extracted from one git remote URL.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,6 +27,7 @@ impl ParsedRemote {
     /// Converts the parsed remote into one supported forge remote.
     pub(crate) fn into_forge_remote(self, forge_kind: ForgeKind) -> ForgeRemote {
         ForgeRemote {
+            command_working_directory: None,
             forge_kind,
             host: self.host,
             namespace: self.namespace,
@@ -38,9 +42,13 @@ impl ParsedRemote {
 ///
 /// # Errors
 /// Returns [`ReviewRequestError::UnsupportedRemote`] when the repository
-/// remote does not map to GitHub.
+/// remote does not map to a supported forge.
 pub fn detect_remote(repo_url: &str) -> Result<ForgeRemote, ReviewRequestError> {
     if let Some(remote) = GitHubReviewRequestAdapter::detect_remote(repo_url) {
+        return Ok(remote);
+    }
+
+    if let Some(remote) = GitLabReviewRequestAdapter::detect_remote(repo_url) {
         return Ok(remote);
     }
 
@@ -137,6 +145,7 @@ mod tests {
         assert_eq!(
             remote,
             ForgeRemote {
+                command_working_directory: None,
                 forge_kind: ForgeKind::GitHub,
                 host: "github.com".to_string(),
                 namespace: "agentty-xyz".to_string(),
@@ -194,7 +203,45 @@ mod tests {
                 repo_url: repo_url.to_string(),
             }
         );
-        assert!(error.detail_message().contains("GitHub remotes"));
+        assert!(error.detail_message().contains("GitHub and GitLab remotes"));
         assert!(error.detail_message().contains("example.com"));
+    }
+
+    #[test]
+    fn detect_remote_returns_gitlab_remote_for_https_origin() {
+        // Arrange
+        let repo_url = "https://gitlab.com/agentty-xyz/agentty.git";
+
+        // Act
+        let remote = detect_remote(repo_url).expect("gitlab remote should be supported");
+
+        // Assert
+        assert_eq!(
+            remote,
+            ForgeRemote {
+                command_working_directory: None,
+                forge_kind: ForgeKind::GitLab,
+                host: "gitlab.com".to_string(),
+                namespace: "agentty-xyz".to_string(),
+                project: "agentty".to_string(),
+                repo_url: repo_url.to_string(),
+                web_url: "https://gitlab.com/agentty-xyz/agentty".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn detect_remote_returns_gitlab_remote_for_gitlab_subdomain_origin() {
+        // Arrange
+        let repo_url = "git@gitlab.company.org:team/agentty.git";
+
+        // Act
+        let remote = detect_remote(repo_url).expect("gitlab subdomain remote should be supported");
+
+        // Assert
+        assert_eq!(remote.forge_kind, ForgeKind::GitLab);
+        assert_eq!(remote.host, "gitlab.company.org");
+        assert_eq!(remote.project_path(), "team/agentty");
+        assert_eq!(remote.web_url, "https://gitlab.company.org/team/agentty");
     }
 }

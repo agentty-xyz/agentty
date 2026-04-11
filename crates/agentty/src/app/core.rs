@@ -2031,7 +2031,7 @@ impl App {
         let popup_mode = match result {
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name,
-                review_request_creation_url,
+                review_request_creation,
                 upstream_reference,
             }) => {
                 self.sessions
@@ -2041,7 +2041,7 @@ impl App {
                     Self::branch_publish_success_title(PublishBranchAction::Push),
                     Self::branch_publish_success_message(
                         &branch_name,
-                        review_request_creation_url.as_deref(),
+                        review_request_creation.as_ref(),
                     ),
                     false,
                     String::new(),
@@ -2059,7 +2059,7 @@ impl App {
                     .apply_review_request(&session_id, review_request.clone());
 
                 Self::view_info_popup_mode(
-                    Self::branch_publish_success_title(PublishBranchAction::PublishPullRequest),
+                    Self::review_request_publish_success_title(&review_request),
                     Self::pull_request_publish_success_message(&branch_name, &review_request),
                     false,
                     String::new(),
@@ -2459,12 +2459,21 @@ impl App {
     /// Returns the success popup body for one completed branch push.
     fn branch_publish_success_message(
         branch_name: &str,
-        review_request_creation_url: Option<&str>,
+        review_request_creation: Option<&crate::app::branch_publish::ReviewRequestCreationInfo>,
     ) -> String {
-        branch_push_success_message_text(branch_name, review_request_creation_url)
+        branch_push_success_message_text(branch_name, review_request_creation)
     }
 
-    /// Returns the success popup body for one completed pull-request publish.
+    /// Returns the success popup title for one completed review-request
+    /// publish.
+    fn review_request_publish_success_title(
+        review_request: &crate::domain::session::ReviewRequest,
+    ) -> String {
+        crate::app::branch_publish::review_request_publish_success_title(review_request)
+    }
+
+    /// Returns the success popup body for one completed review-request
+    /// publish.
     fn pull_request_publish_success_message(
         branch_name: &str,
         review_request: &crate::domain::session::ReviewRequest,
@@ -2744,11 +2753,12 @@ async fn run_sync_review_request(
     review_request_client: Arc<dyn ReviewRequestClient>,
 ) -> Result<SyncReviewRequestTaskResult, String> {
     let repo_url = git_client
-        .repo_url(folder)
+        .repo_url(folder.clone())
         .await
         .map_err(|error| format!("Failed to resolve repository remote: {error}"))?;
     let remote = review_request_client
         .detect_remote(repo_url)
+        .map(|remote| remote.with_command_working_directory(folder))
         .map_err(|error| error.detail_message())?;
 
     if let Some(review_request) = linked_review_request {
@@ -2923,7 +2933,7 @@ mod tests {
     fn test_pushed_branch_result(branch_name: &str) -> BranchPublishTaskResult {
         Ok(BranchPublishTaskSuccess::Pushed {
             branch_name: branch_name.to_string(),
-            review_request_creation_url: None,
+            review_request_creation: None,
             upstream_reference: format!("origin/{branch_name}"),
         })
     }
@@ -3453,7 +3463,13 @@ mod tests {
         let success_title = App::branch_publish_success_title(PublishBranchAction::Push);
         let success_message = App::branch_publish_success_message(
             "agentty/session-1",
-            Some("https://github.com/org/repo/compare/main...agentty%2Fsession-1?expand=1"),
+            Some(&crate::app::branch_publish::ReviewRequestCreationInfo {
+                forge_kind: forge::ForgeKind::GitHub,
+                web_url: Some(
+                    "https://github.com/org/repo/compare/main...agentty%2Fsession-1?expand=1"
+                        .to_string(),
+                ),
+            }),
         );
         let fallback_success_message =
             App::branch_publish_success_message("agentty/session-1", None);
@@ -3492,14 +3508,15 @@ mod tests {
                 "https://github.com/org/repo/compare/main...agentty%2Fsession-1?expand=1"
             )
         );
-        assert!(fallback_success_message.contains("Create the pull request manually"));
-        assert_eq!(pull_request_loading_title, "Publishing GitHub pull request");
+        assert!(fallback_success_message.contains("Create the review request manually"));
+        assert_eq!(pull_request_loading_title, "Publishing review request");
         assert_eq!(
             pull_request_loading_message,
-            "Pushing the session branch and creating or refreshing the GitHub pull request."
+            "Pushing the session branch and creating or refreshing the active forge review \
+             request."
         );
-        assert_eq!(pull_request_loading_label, "Publishing pull request...");
-        assert_eq!(pull_request_success_title, "GitHub pull request published");
+        assert_eq!(pull_request_loading_label, "Publishing review request...");
+        assert_eq!(pull_request_success_title, "Review request published");
         assert!(matches!(
             popup_mode,
             AppMode::ViewInfoPopup {
@@ -3676,10 +3693,13 @@ mod tests {
             result,
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name: "review/custom-branch".to_string(),
-                review_request_creation_url: Some(
-                    "https://github.com/agentty-xyz/agentty/compare/main...review%2Fcustom-branch?expand=1"
-                        .to_string()
-                ),
+                review_request_creation: Some(crate::app::branch_publish::ReviewRequestCreationInfo {
+                    forge_kind: forge::ForgeKind::GitHub,
+                    web_url: Some(
+                        "https://github.com/agentty-xyz/agentty/compare/main...review%2Fcustom-branch?expand=1"
+                            .to_string()
+                    ),
+                }),
                 upstream_reference: "origin/review/custom-branch".to_string(),
             })
         );
@@ -3723,7 +3743,7 @@ mod tests {
             result,
             Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name: session::session_branch("session-1"),
-                review_request_creation_url: None,
+                review_request_creation: None,
                 upstream_reference: "origin/agentty/session-1".to_string(),
             })
         );
@@ -3752,10 +3772,13 @@ mod tests {
             restore_view: expected_restore_view.clone(),
             result: Ok(BranchPublishTaskSuccess::Pushed {
                 branch_name: "agentty/session-1".to_string(),
-                review_request_creation_url: Some(
-                    "https://github.com/agentty-xyz/agentty/compare/main...agentty%2Fsession-1?expand=1"
-                        .to_string()
-                ),
+                review_request_creation: Some(crate::app::branch_publish::ReviewRequestCreationInfo {
+                    forge_kind: forge::ForgeKind::GitHub,
+                    web_url: Some(
+                        "https://github.com/agentty-xyz/agentty/compare/main...agentty%2Fsession-1?expand=1"
+                            .to_string()
+                    ),
+                }),
                 upstream_reference: "origin/agentty/session-1".to_string(),
             }),
             session_id: "session-1".to_string(),
@@ -3844,6 +3867,65 @@ mod tests {
                 .and_then(|session| session.review_request.clone()),
             Some(review_request)
         );
+    }
+
+    #[tokio::test]
+    async fn apply_branch_publish_action_update_sets_gitlab_merge_request_success_popup() {
+        // Arrange
+        let session_folder = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_selected_session(
+            session_folder.path().to_path_buf(),
+            "",
+            Arc::new(MockTmuxClient::new()),
+        )
+        .await;
+        let expected_restore_view = ConfirmationViewMode {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            scroll_offset: Some(2),
+            session_id: "session-1".to_string(),
+        };
+        let review_request = crate::domain::session::ReviewRequest {
+            last_refreshed_at: 77,
+            summary: crate::domain::session::ReviewRequestSummary {
+                display_id: "!24".to_string(),
+                forge_kind: ForgeKind::GitLab,
+                source_branch: "agentty/session-1".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: Some("Draft".to_string()),
+                target_branch: "main".to_string(),
+                title: "Add GitLab support".to_string(),
+                web_url: "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24".to_string(),
+            },
+        };
+
+        // Act
+        app.apply_branch_publish_action_update(BranchPublishActionUpdate {
+            restore_view: expected_restore_view.clone(),
+            result: Ok(BranchPublishTaskSuccess::PullRequestPublished {
+                branch_name: "agentty/session-1".to_string(),
+                review_request,
+                upstream_reference: "origin/agentty/session-1".to_string(),
+            }),
+            session_id: "session-1".to_string(),
+        });
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::ViewInfoPopup {
+                is_loading: false,
+                ref message,
+                ref restore_view,
+                ref title,
+                ..
+            } if title == "GitLab merge request published"
+                && message.contains("Published session branch `agentty/session-1`.")
+                && message.contains("GitLab merge request !24 is ready")
+                && message.contains("https://gitlab.com/agentty-xyz/agentty/-/merge_requests/24")
+                && restore_view == &expected_restore_view
+        ));
     }
 
     #[tokio::test]
@@ -5765,6 +5847,89 @@ mod tests {
             }
         );
         assert!(result.summary.is_some());
+    }
+
+    #[tokio::test]
+    async fn run_sync_review_request_attaches_worktree_to_detected_remote() {
+        // Arrange
+        let folder = PathBuf::from("/tmp/session-worktree");
+        let linked_review_request = crate::domain::session::ReviewRequest {
+            last_refreshed_at: 42,
+            summary: test_review_request_summary("#42", ReviewRequestState::Open),
+        };
+        let expected_remote = forge::ForgeRemote {
+            command_working_directory: Some(folder.clone()),
+            forge_kind: ForgeKind::GitHub,
+            host: "github.com".to_string(),
+            namespace: "agentty-xyz".to_string(),
+            project: "agentty".to_string(),
+            repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+        };
+        let expected_summary = test_review_request_summary("#42", ReviewRequestState::Merged);
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_repo_url()
+            .once()
+            .withf({
+                let folder = folder.clone();
+                move |candidate_folder| candidate_folder == &folder
+            })
+            .returning(|_| {
+                Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+            });
+        let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+        mock_review_request_client
+            .expect_detect_remote()
+            .once()
+            .withf(|repo_url| repo_url == "https://github.com/agentty-xyz/agentty.git")
+            .returning(|_| {
+                Ok(forge::ForgeRemote {
+                    command_working_directory: None,
+                    forge_kind: ForgeKind::GitHub,
+                    host: "github.com".to_string(),
+                    namespace: "agentty-xyz".to_string(),
+                    project: "agentty".to_string(),
+                    repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
+                    web_url: "https://github.com/agentty-xyz/agentty".to_string(),
+                })
+            });
+        mock_review_request_client
+            .expect_refresh_review_request()
+            .once()
+            .withf({
+                let expected_remote = expected_remote.clone();
+                move |candidate_remote, display_id| {
+                    candidate_remote == &expected_remote && display_id == "#42"
+                }
+            })
+            .returning({
+                let expected_summary = expected_summary.clone();
+                move |_, _| {
+                    let expected_summary = expected_summary.clone();
+
+                    Box::pin(async move { Ok(expected_summary) })
+                }
+            });
+
+        // Act
+        let result = run_sync_review_request(
+            folder,
+            Arc::new(mock_git_client),
+            Some(linked_review_request),
+            None,
+            Arc::new(mock_review_request_client),
+        )
+        .await
+        .expect("sync should succeed");
+
+        // Assert
+        assert_eq!(
+            result.outcome,
+            session::SyncReviewRequestOutcome::Merged {
+                display_id: "#42".to_string(),
+            }
+        );
     }
 
     #[test]
