@@ -994,7 +994,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
-                session_id: session_id.clone(),
+                session_id,
             },
         };
 

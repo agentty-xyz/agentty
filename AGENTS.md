@@ -315,6 +315,7 @@ User- or AI-triggered workflow guides invoked via slash commands. Pure markdown 
 | [`review`](skills/review/SKILL.md) | Structured code review with severity-categorized report output. |
 | [`implementation-plan`](skills/implementation-plan/SKILL.md) | Create iterative execution plans in `docs/plan/` with size budgeting. |
 | [`release`](skills/release/SKILL.md) | Version bump, changelog, tagging, and push workflow. |
+| [`feature-test`](skills/feature-test/SKILL.md) | Create E2E feature tests with VHS GIF generation and Zola page auto-discovery. |
 
 ### Analysis Skills (`skills/`)
 

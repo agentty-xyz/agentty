@@ -9,4 +9,5 @@ Reusable skills available to agents in this repository.
 - `release` covers version bumping, changelog updates, and release tagging.
 - `review` covers structured code-review workflow.
 - `security-audit` covers threat-model-driven project auditing.
+- `feature-test` covers E2E feature test creation with VHS GIF generation and Zola page auto-discovery.
 - `tech-debt` covers maintenance and cleanup sweeps.
