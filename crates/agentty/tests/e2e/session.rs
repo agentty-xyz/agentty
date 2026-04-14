@@ -5,12 +5,66 @@
 //! basics (typing, multiline via Alt+Enter, cancel via Esc), and returning
 //! to the session list from session view.
 
+use agentty::db::{DB_DIR, DB_FILE, Database};
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
+
+/// Seeds one review-ready session so session-view shortcut demos do not depend
+/// on live agent execution.
+fn seed_review_ready_session(env: &BuilderEnv) {
+    let canonical_workdir = env
+        .workdir
+        .canonicalize()
+        .expect("failed to canonicalize workdir");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path)
+            .await
+            .expect("failed to open database");
+        let project_id = database
+            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .await
+            .expect("failed to upsert project");
+
+        database
+            .touch_project_last_opened(project_id)
+            .await
+            .expect("failed to touch project");
+        database
+            .insert_session(
+                "review-shortcut-0001",
+                "gpt-5.4",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert review session");
+        database
+            .update_session_title(
+                "review-shortcut-0001",
+                "Refresh review request from session view",
+            )
+            .await
+            .expect("failed to update session title");
+        database
+            .update_session_diff_stats(12, 3, "review-shortcut-0001", "M")
+            .await
+            .expect("failed to seed diff stats");
+    });
+
+    std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))
+        .expect("failed to create seeded session worktree");
+}
 
 /// Verify that the Sessions tab shows an empty-state message when no
 /// sessions exist.
@@ -143,6 +197,42 @@ fn session_open_and_return_to_list() {
     assertion::assert_text_in_region(&frame, "test", &full);
 
     common::save_feature_gif(&scenario, &report, &env, "session_open");
+}
+
+/// Verify that pressing `p` in a review-ready session opens the review-request
+/// publish popup.
+#[test]
+fn review_request_publish_shortcut_opens_publish_popup() {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_request_publish_shortcut")
+        .with_git()
+        .setup(seed_review_ready_session)
+        .zola(
+            "Review request publish shortcut",
+            "Open the review-request publish popup directly from session view with `p`.",
+            42,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .sleep(std::time::Duration::from_secs(1))
+                    .press_key("p")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "review_request_publish_popup",
+                        "Review-request publish popup after pressing p",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Publish Review Request", &full);
+                assertion::assert_text_in_region(frame, "Enter: publish review request", &full);
+            },
+        );
 }
 
 /// Verify that `j` and `k` navigate the session list when multiple

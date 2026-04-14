@@ -515,9 +515,9 @@ mod tests {
 #### Why now
 Existing workflow pieces already exist.
 #### Usable outcome
-Pressing `Shift+P` creates or refreshes the pull request.
+Pressing `p` creates or refreshes the pull request.
 #### Substeps
-- [ ] **Add a dedicated `Shift+P` session-chat action for GitHub review requests.**
+- [ ] **Route review-request publishing through the `p` session-chat shortcut only.**
 - [ ] **Reuse the existing review-request workflow for GitHub sessions.**
 #### Tests
 - [ ] Cover the new shortcut.
@@ -554,7 +554,7 @@ Promote when maintainers want direct task management in Agentty.
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Substeps: Add a dedicated `Shift+P`"))
+                .any(|line| line.contains("Substeps: Route review-request publishing"))
         );
         assert!(
             lines

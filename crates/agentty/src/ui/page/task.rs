@@ -104,7 +104,7 @@ mod tests {
 #### Assignee
 `@minev-dev`
 #### Usable outcome
-Pressing `Shift+P` creates or refreshes the pull request.
+Pressing `p` creates or refreshes the pull request.
 #### Substeps
 - [ ] Reuse the existing review-request workflow for GitHub sessions.
 
@@ -181,7 +181,7 @@ Promote when maintainers want direct task management in Agentty.
 #### Assignee
 `@minev-dev`
 #### Usable outcome
-Pressing `Shift+P` creates or refreshes the pull request.
+Pressing `p` creates or refreshes the pull request.
 #### Substeps
 - [ ] First long scrolling line
 - [ ] Second long scrolling line

@@ -317,6 +317,9 @@ impl ZolaFeaturePage {
 pub(crate) struct FeatureTest {
     /// Feature name used for GIF filename and Zola page filename.
     name: String,
+    /// Optional environment setup hook that can seed database state or files
+    /// before the PTY session starts.
+    setup: Option<Box<dyn Fn(&BuilderEnv)>>,
     /// Whether to initialize a git repository in the workdir.
     with_git: bool,
     /// Optional Zola page metadata for auto-generation.
@@ -330,9 +333,18 @@ impl FeatureTest {
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            setup: None,
             with_git: false,
             zola_page: None,
         }
+    }
+
+    /// Configure an environment setup hook that runs after optional git
+    /// initialization and before the PTY session starts.
+    pub(crate) fn setup(mut self, setup: impl Fn(&BuilderEnv) + 'static) -> Self {
+        self.setup = Some(Box::new(setup));
+
+        self
     }
 
     /// Enable git initialization in the test workdir.
@@ -376,6 +388,10 @@ impl FeatureTest {
 
         if self.with_git {
             env.init_git().expect("failed to init git");
+        }
+
+        if let Some(setup) = &self.setup {
+            setup(&env);
         }
 
         let scenario = build_scenario(Scenario::new(&self.name));

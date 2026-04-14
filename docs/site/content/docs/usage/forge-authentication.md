@@ -10,7 +10,7 @@ pull-request or merge-request actions.
 
 That split matters:
 
-- `p` and `Shift+P` always run `git push` first.
+- `p` always runs `git push` first.
 - GitHub and GitLab CLI login only covers the forge CLI.
 - HTTPS remotes still need Git transport credentials when Git performs the
   push.
@@ -34,9 +34,8 @@ Use this setup when the repository remote is on GitHub.
 
 With that setup:
 
-- `p` can push the session branch through Git.
-- `Shift+P` can push through Git and then use `gh` to create or refresh the
-  pull request.
+- `p` pushes through Git and then uses `gh` to create or refresh the pull
+  request.
 
 ## GitLab
 
@@ -54,9 +53,8 @@ Use this setup when the repository remote is on GitLab.
 
 With that setup:
 
-- `p` still uses plain `git push`.
-- `Shift+P` uses plain `git push` first, then uses `glab` to create or refresh
-  the merge request.
+- `p` uses plain `git push` first, then uses `glab` to create or refresh the
+  merge request.
 
 If `glab auth status` says you are authenticated but Agentty still reports a
 push-authentication failure, the missing piece is Git HTTPS credentials rather

@@ -5,43 +5,38 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 use crate::domain::input::InputState;
-use crate::domain::session::PublishBranchAction;
 use crate::ui::component::chat_input::ChatInput;
 use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 
-const PUSH_EDITABLE_HELP_TEXT: &str = "Enter: publish branch | Esc: cancel";
-const PUSH_LOCKED_HELP_TEXT: &str = "Enter: publish branch again | Esc: cancel";
-const PULL_REQUEST_EDITABLE_HELP_TEXT: &str = "Enter: publish review request | Esc: cancel";
-const PULL_REQUEST_LOCKED_HELP_TEXT: &str = "Enter: publish review request again | Esc: cancel";
+const REVIEW_REQUEST_EDITABLE_HELP_TEXT: &str = "Enter: publish review request | Esc: cancel";
+const REVIEW_REQUEST_LOCKED_HELP_TEXT: &str = "Enter: refresh review request | Esc: cancel";
+const REVIEW_REQUEST_TITLE: &str = "Publish Review Request";
 const INPUT_TITLE: &str = "Remote Branch";
 const MIN_OVERLAY_HEIGHT: u16 = 11;
 const MIN_OVERLAY_WIDTH: u16 = 58;
 const OVERLAY_HEIGHT_PERCENT: u16 = 42;
 const OVERLAY_WIDTH_PERCENT: u16 = 62;
 
-/// Centered popup that collects an optional remote branch name for branch
-/// publishing.
+/// Centered popup that collects an optional remote branch name before
+/// publishing or refreshing the linked review request.
 pub struct PublishBranchOverlay<'a> {
     default_branch_name: &'a str,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
-    publish_branch_action: PublishBranchAction,
 }
 
 impl<'a> PublishBranchOverlay<'a> {
-    /// Creates a publish-branch popup for the provided input state.
+    /// Creates a publish popup for the provided input state.
     pub fn new(
         input: &'a InputState,
         default_branch_name: &'a str,
         locked_upstream_ref: Option<&'a str>,
-        publish_branch_action: PublishBranchAction,
     ) -> Self {
         Self {
             default_branch_name,
             input,
             locked_upstream_ref,
-            publish_branch_action,
         }
     }
 
@@ -63,37 +58,23 @@ impl<'a> PublishBranchOverlay<'a> {
 
     /// Returns the explanatory message shown above the branch field.
     fn message_text(&self) -> String {
-        match (self.publish_branch_action, self.locked_upstream_ref) {
-            (PublishBranchAction::Push, Some(upstream_ref)) => format!(
-                "Already published to `{upstream_ref}`. This session stays locked to that remote \
-                 branch. Use `Shift+P` to create or refresh the active forge review request."
+        match self.locked_upstream_ref {
+            Some(upstream_ref) => format!(
+                "Already published to `{upstream_ref}`. Agentty will refresh the linked forge \
+                 review request from this branch."
             ),
-            (PublishBranchAction::Push, None) => "Optional remote branch name for this branch \
-                                                  publish. Use `Shift+P` to create or refresh the \
-                                                  active forge review request."
+            None => "Optional remote branch name for this review-request publish. Agentty will \
+                     push the session branch and create or refresh the linked forge review \
+                     request."
                 .to_string(),
-            (PublishBranchAction::PublishPullRequest, Some(upstream_ref)) => format!(
-                "Already published to `{upstream_ref}`. Publish the active forge review request \
-                 from this locked branch."
-            ),
-            (PublishBranchAction::PublishPullRequest, None) => {
-                "Optional remote branch name for this publish before creating or refreshing the \
-                 active forge review request."
-                    .to_string()
-            }
         }
     }
 
     /// Returns the footer help line for the current overlay state.
     fn help_text(&self) -> &'static str {
-        match (
-            self.publish_branch_action,
-            self.locked_upstream_ref.is_some(),
-        ) {
-            (PublishBranchAction::Push, true) => PUSH_LOCKED_HELP_TEXT,
-            (PublishBranchAction::Push, false) => PUSH_EDITABLE_HELP_TEXT,
-            (PublishBranchAction::PublishPullRequest, true) => PULL_REQUEST_LOCKED_HELP_TEXT,
-            (PublishBranchAction::PublishPullRequest, false) => PULL_REQUEST_EDITABLE_HELP_TEXT,
+        match self.locked_upstream_ref.is_some() {
+            true => REVIEW_REQUEST_LOCKED_HELP_TEXT,
+            false => REVIEW_REQUEST_EDITABLE_HELP_TEXT,
         }
     }
 
@@ -125,11 +106,7 @@ impl<'a> PublishBranchOverlay<'a> {
 impl Component for PublishBranchOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let popup_area = Self::popup_area(area);
-        let title = match self.publish_branch_action {
-            PublishBranchAction::Push => "Publish Branch",
-            PublishBranchAction::PublishPullRequest => "Publish Review Request",
-        };
-        let block = overlay::overlay_block(title, palette::ACCENT);
+        let block = overlay::overlay_block(REVIEW_REQUEST_TITLE, palette::ACCENT);
         let inner_area = block.inner(popup_area);
         let sections = Layout::vertical([
             Constraint::Min(2),
@@ -191,8 +168,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let input = InputState::default();
-        let overlay =
-            PublishBranchOverlay::new(&input, "agentty/ff45463f", None, PublishBranchAction::Push);
+        let overlay = PublishBranchOverlay::new(&input, "agentty/ff45463f", None);
 
         // Act
         terminal
@@ -209,10 +185,11 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Publish Branch"));
+        assert!(text.contains(REVIEW_REQUEST_TITLE));
+        assert!(text.contains("Enter: publish review request"));
         assert!(text.contains("Leave blank to push as `agentty/ff45463f`"));
-        assert!(text.contains("Shift+P"));
-        assert!(text.contains(PUSH_EDITABLE_HELP_TEXT));
+        assert!(text.contains("create or refresh"));
+        assert!(text.contains("review request"));
     }
 
     #[test]
@@ -221,12 +198,8 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let input = InputState::with_text("review/custom".to_string());
-        let overlay = PublishBranchOverlay::new(
-            &input,
-            "agentty/ff45463f",
-            Some("origin/review/custom"),
-            PublishBranchAction::Push,
-        );
+        let overlay =
+            PublishBranchOverlay::new(&input, "agentty/ff45463f", Some("origin/review/custom"));
 
         // Act
         terminal
@@ -245,8 +218,8 @@ mod tests {
             .collect();
         assert!(text.contains("origin/review/custom"));
         assert!(text.contains("review/custom"));
-        assert!(text.contains("Shift+P"));
-        assert!(text.contains(PUSH_LOCKED_HELP_TEXT));
+        assert!(text.contains("review request"));
+        assert!(text.contains(REVIEW_REQUEST_LOCKED_HELP_TEXT));
     }
 
     #[test]
@@ -255,12 +228,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(120, 40);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let input = InputState::with_text("review/custom".to_string());
-        let overlay = PublishBranchOverlay::new(
-            &input,
-            "agentty/ff45463f",
-            None,
-            PublishBranchAction::PublishPullRequest,
-        );
+        let overlay = PublishBranchOverlay::new(&input, "agentty/ff45463f", None);
 
         // Act
         terminal
@@ -277,8 +245,8 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
-        assert!(text.contains("Publish Review Request"));
-        assert!(text.contains("forge review request"));
-        assert!(text.contains(PULL_REQUEST_EDITABLE_HELP_TEXT));
+        assert!(text.contains(REVIEW_REQUEST_TITLE));
+        assert!(text.contains("review request"));
+        assert!(text.contains(REVIEW_REQUEST_EDITABLE_HELP_TEXT));
     }
 }

@@ -88,8 +88,7 @@ state:
 | `/` | Open the composer with `/` prefilled for slash commands |
 | `s` | Start a staged draft session; or sync review request status when a branch is published |
 | `o` | Open worktree in tmux |
-| `p` | Publish session branch |
-| `Shift+P` | Create or refresh forge review request |
+| `p` | Create or refresh forge review request |
 | `d` | Show diff |
 | `f` | Append focused review output (regenerate if already present) |
 | `l` | Launch or open the selected follow-up task |
@@ -114,15 +113,14 @@ Additional notes:
 - **Open command behavior**: `o` always opens the session worktree in tmux.
   If one `Open Commands` entry is configured for the active project, it runs immediately.
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
-- **Branch publish**: `p` is available in **Review** and **AgentReview** and opens a publish popup. Press `Enter` with an empty field to keep the default session branch target, or type a custom remote branch name first.
-- **Forge review-request publish**: `Shift+P` is available in **Review** and
-  **AgentReview**. It opens the publish popup, accepts the same optional
-  custom branch name as `p`, then creates or refreshes the linked forge review
+- **Review-request publish**: `p` is available in **Review** and
+  **AgentReview**. It opens the publish popup, accepts an optional custom
+  remote branch name, then creates or refreshes the linked forge review
   request after the branch push succeeds. GitHub projects publish pull
   requests, while GitLab projects publish merge requests.
 - **Focused review persistence**: when a focused review has already been generated, it stays visible after opening `d` diff mode and returning to the session view.
 - **Branch publish lock**: once a session branch already tracks a remote branch, Agentty locks the popup field and re-publishes to that same remote branch only.
-- **Branch publish auth**: `p` and `Shift+P` always run `git push` first. HTTPS remotes therefore need Git credentials even when the forge CLI is already logged in. `Shift+P` also needs authenticated `gh` access for GitHub repositories and authenticated `glab` access for GitLab repositories. See [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab CLI setup steps.
+- **Branch publish auth**: `p` always runs `git push` first. HTTPS remotes therefore need Git credentials even when the forge CLI is already logged in. Review-request publishing on `p` also needs authenticated `gh` access for GitHub repositories and authenticated `glab` access for GitLab repositories. See [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab CLI setup steps.
 - **Follow-up tasks**: `l` launches the selected follow-up task into a sibling session the first time, then reopens that linked sibling on later presses. Use `[` and `]` to move between follow-up tasks when a session has more than one.
 - **Question**: opening the session enters Question Input mode until all prompts are answered and submitted, or the clarification turn is ended with `Esc`.
 - **Done**: `t` toggles between summary and full output.

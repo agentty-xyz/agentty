@@ -478,14 +478,6 @@ impl Session {
         has_forge_context && matches!(self.status, Status::Review | Status::AgentReview)
     }
 
-    /// Returns the session branch-publish action currently available in
-    /// session view.
-    pub fn publish_branch_action(&self) -> Option<PublishBranchAction> {
-        self.status
-            .allows_review_actions()
-            .then_some(PublishBranchAction::Push)
-    }
-
     /// Returns the review-request publish action currently available in session
     /// view.
     pub fn publish_pull_request_action(&self) -> Option<PublishBranchAction> {
@@ -798,42 +790,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_publish_branch_action_returns_push_for_review_session() {
-        // Arrange
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".to_string(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
-            output: String::new(),
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::Review,
-            summary: None,
-            title: None,
-            updated_at: 0,
-        };
-
-        // Act
-        let action = session.publish_branch_action();
-
-        // Assert
-        assert_eq!(action, Some(PublishBranchAction::Push));
-    }
-
-    #[test]
     fn test_publish_pull_request_action_returns_publish_for_review_session() {
         // Arrange
         let session = Session {
@@ -867,42 +823,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
         // Assert
         assert_eq!(action, Some(PublishBranchAction::PublishPullRequest));
-    }
-
-    #[test]
-    fn test_publish_branch_action_returns_push_for_agent_review_session() {
-        // Arrange
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".to_string(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 0,
-            is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
-            output: String::new(),
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: None,
-            questions: Vec::new(),
-            review_request: None,
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::AgentReview,
-            summary: None,
-            title: None,
-            updated_at: 0,
-        };
-
-        // Act
-        let action = session.publish_branch_action();
-
-        // Assert
-        assert_eq!(action, Some(PublishBranchAction::Push));
     }
 
     #[test]
@@ -942,54 +862,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_publish_branch_action_returns_none_for_in_progress_session() {
-        // Arrange
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".to_string(),
-            in_progress_started_at: Some(60),
-            in_progress_total_seconds: 120,
-            is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
-            output: String::new(),
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: Some("origin/agentty/session-id".to_string()),
-            questions: Vec::new(),
-            review_request: Some(ReviewRequest {
-                last_refreshed_at: 0,
-                summary: ReviewRequestSummary {
-                    display_id: "#42".to_string(),
-                    forge_kind: ForgeKind::GitHub,
-                    source_branch: "agentty/session-id".to_string(),
-                    state: ReviewRequestState::Open,
-                    status_summary: None,
-                    target_branch: "main".to_string(),
-                    title: "Review request".to_string(),
-                    web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-                },
-            }),
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::InProgress,
-            summary: None,
-            title: None,
-            updated_at: 0,
-        };
-
-        // Act
-        let action = session.publish_branch_action();
-
-        // Assert
-        assert_eq!(action, None);
-    }
-
-    #[test]
     fn test_publish_pull_request_action_returns_none_for_in_progress_session() {
         // Arrange
         let session = Session {
@@ -1020,54 +892,6 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
 
         // Act
         let action = session.publish_pull_request_action();
-
-        // Assert
-        assert_eq!(action, None);
-    }
-
-    #[test]
-    fn test_publish_branch_action_returns_none_for_done_session() {
-        // Arrange
-        let session = Session {
-            base_branch: "main".to_string(),
-            created_at: 0,
-            draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
-            follow_up_tasks: Vec::new(),
-            id: "session-id".to_string(),
-            in_progress_started_at: None,
-            in_progress_total_seconds: 180,
-            is_draft: false,
-            model: AgentModel::Gemini3FlashPreview,
-            output: String::new(),
-            project_name: "project".to_string(),
-            prompt: String::new(),
-            reasoning_level_override: None,
-            published_upstream_ref: Some("origin/agentty/session-id".to_string()),
-            questions: Vec::new(),
-            review_request: Some(ReviewRequest {
-                last_refreshed_at: 0,
-                summary: ReviewRequestSummary {
-                    display_id: "#42".to_string(),
-                    forge_kind: ForgeKind::GitHub,
-                    source_branch: "agentty/session-id".to_string(),
-                    state: ReviewRequestState::Open,
-                    status_summary: None,
-                    target_branch: "main".to_string(),
-                    title: "Review request".to_string(),
-                    web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-                },
-            }),
-            size: SessionSize::Xs,
-            stats: SessionStats::default(),
-            status: Status::Done,
-            summary: None,
-            title: None,
-            updated_at: 0,
-        };
-
-        // Act
-        let action = session.publish_branch_action();
 
         // Assert
         assert_eq!(action, None);

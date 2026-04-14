@@ -581,7 +581,6 @@ impl<'a> SessionChatPage<'a> {
             can_sync_review_request: session.can_sync_review_request(),
             follow_up_task_action: selected_follow_up_task_action,
             has_multiple_follow_up_tasks: session.follow_up_tasks.len() > 1,
-            publish_branch_action: session.publish_branch_action(),
             publish_pull_request_action: session.publish_pull_request_action(),
             session_state,
         });
@@ -1546,8 +1545,7 @@ mod tests {
         let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
 
         // Assert
-        assert!(help_text.contains("p: publish branch"));
-        assert!(help_text.contains("Shift+P"));
+        assert!(help_text.contains("p: PR"));
     }
 
     #[test]
@@ -1563,8 +1561,7 @@ mod tests {
         assert!(help_text.contains("f: review"));
         assert!(help_text.contains("Enter: reply"));
         assert!(help_text.contains("m: add to merge queue"));
-        assert!(help_text.contains("p: publish branch"));
-        assert!(help_text.contains("Shift+P"));
+        assert!(help_text.contains("p: PR"));
         assert!(!help_text.contains("r: rebase"));
     }
 

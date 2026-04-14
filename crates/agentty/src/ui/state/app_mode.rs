@@ -176,12 +176,12 @@ pub enum AppMode {
         selected_command_index: usize,
     },
     /// Session-view popup that collects an optional remote branch name before
-    /// publishing the current session branch.
+    /// publishing or refreshing the current forge review request.
     PublishBranchInput {
         /// Default remote branch name used when users leave the field blank.
         default_branch_name: String,
         /// Editable remote branch name. An empty value keeps the default push
-        /// target for the session branch.
+        /// target for the session branch before review-request publication.
         input: InputState,
         /// Existing upstream reference, when the session branch already tracks
         /// one remote branch and the input must stay locked.
@@ -285,7 +285,6 @@ pub enum HelpContext {
         has_multiple_follow_up_tasks: bool,
         review_status_message: Option<String>,
         review_text: Option<String>,
-        publish_branch_action: Option<PublishBranchAction>,
         publish_pull_request_action: Option<PublishBranchAction>,
         session_id: String,
         session_state: ViewSessionState,
@@ -310,7 +309,6 @@ impl HelpContext {
                 can_sync_review_request,
                 follow_up_task_action,
                 has_multiple_follow_up_tasks,
-                publish_branch_action,
                 publish_pull_request_action,
                 session_state,
                 ..
@@ -318,7 +316,6 @@ impl HelpContext {
                 can_sync_review_request: *can_sync_review_request,
                 follow_up_task_action: *follow_up_task_action,
                 has_multiple_follow_up_tasks: *has_multiple_follow_up_tasks,
-                publish_branch_action: *publish_branch_action,
                 publish_pull_request_action: *publish_pull_request_action,
                 session_state: *session_state,
             }),
@@ -337,7 +334,6 @@ impl HelpContext {
                 has_multiple_follow_up_tasks: _,
                 review_status_message,
                 review_text,
-                publish_branch_action: _,
                 publish_pull_request_action: _,
                 session_id,
                 scroll_offset,
@@ -436,7 +432,6 @@ mod tests {
             has_multiple_follow_up_tasks: false,
             review_status_message: None,
             review_text: None,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
@@ -468,7 +463,6 @@ mod tests {
             has_multiple_follow_up_tasks: false,
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Ready".to_string()),
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::InProgress,
@@ -494,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_help_context_view_keybindings_include_publish_branch_action() {
+    fn test_help_context_view_keybindings_include_publish_pull_request_action() {
         // Arrange
         let context = HelpContext::View {
             can_sync_review_request: false,
@@ -503,7 +497,6 @@ mod tests {
             has_multiple_follow_up_tasks: false,
             review_status_message: None,
             review_text: None,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_id: "session-id".to_string(),
             session_state: ViewSessionState::Interactive,
@@ -515,7 +508,6 @@ mod tests {
 
         // Assert
         assert!(bindings.iter().any(|binding| binding.key == "p"));
-        assert!(bindings.iter().any(|binding| binding.key == "Shift+P"));
     }
 
     #[test]

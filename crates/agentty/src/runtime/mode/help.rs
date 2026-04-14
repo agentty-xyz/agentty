@@ -104,7 +104,6 @@ mod tests {
                 has_multiple_follow_up_tasks: false,
                 review_status_message: None,
                 review_text: None,
-                publish_branch_action: None,
                 publish_pull_request_action: None,
                 session_id: "s1".to_string(),
                 session_state: ViewSessionState::Interactive,

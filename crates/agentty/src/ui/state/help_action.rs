@@ -71,8 +71,6 @@ pub(crate) struct ViewHelpState {
     /// Whether the current session exposes more than one follow-up task to
     /// cycle through.
     pub(crate) has_multiple_follow_up_tasks: bool,
-    /// Branch-publish action available for the current session, when any.
-    pub(crate) publish_branch_action: Option<PublishBranchAction>,
     /// Pull-request publish action available for the current session, when
     /// any.
     pub(crate) publish_pull_request_action: Option<PublishBranchAction>,
@@ -302,10 +300,6 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("review", "f", "Focused review"));
     }
 
-    if let Some(publish_branch_action) = state.publish_branch_action {
-        actions.push(publish_branch_help_action(publish_branch_action));
-    }
-
     if let Some(publish_pull_request_action) = state.publish_pull_request_action {
         actions.push(publish_pull_request_help_action(
             publish_pull_request_action,
@@ -401,10 +395,6 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_show_review {
         actions.push(HelpAction::new("review", "f", "Focused review"));
-    }
-
-    if let Some(publish_branch_action) = state.publish_branch_action {
-        actions.push(publish_branch_help_action(publish_branch_action));
     }
 
     if let Some(publish_pull_request_action) = state.publish_pull_request_action {
@@ -569,24 +559,13 @@ fn list_base_actions() -> Vec<HelpAction> {
     ]
 }
 
-/// Returns the view-mode shortcut entry for the current branch-publish action.
-fn publish_branch_help_action(action: PublishBranchAction) -> HelpAction {
-    match action {
-        PublishBranchAction::Push | PublishBranchAction::PublishPullRequest => {
-            HelpAction::new("publish branch", "p", "Publish session branch to remote")
-        }
-    }
-}
-
 /// Returns the view-mode shortcut entry for the current pull-request publish
 /// action.
 fn publish_pull_request_help_action(action: PublishBranchAction) -> HelpAction {
     match action {
-        PublishBranchAction::PublishPullRequest | PublishBranchAction::Push => HelpAction::new(
-            "publish review",
-            "Shift+P",
-            "Create or refresh forge review request",
-        ),
+        PublishBranchAction::PublishPullRequest | PublishBranchAction::Push => {
+            HelpAction::new("PR", "p", "Create or refresh forge review request")
+        }
     }
 }
 
@@ -690,7 +669,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::InProgress,
         };
@@ -712,7 +690,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Rebasing,
         };
@@ -734,7 +711,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::MergeQueue,
         };
@@ -756,7 +732,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
         };
@@ -770,9 +745,9 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|action| action.key == "p" && action.footer_label == "publish branch")
+                .any(|action| action.key == "p" && action.footer_label == "PR")
         );
-        assert!(actions.iter().any(|action| action.key == "Shift+P"));
+        assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "Enter"));
         assert!(actions.iter().any(|action| {
@@ -795,7 +770,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::AgentReview,
         };
@@ -807,7 +781,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "d"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "m"));
-        assert!(actions.iter().any(|action| action.key == "Shift+P"));
+        assert!(actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "r"));
     }
 
@@ -818,7 +792,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Interactive,
         };
@@ -840,7 +813,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::NewSession,
         };
@@ -865,7 +837,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
         };
@@ -875,7 +846,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "t"));
-        assert!(actions.iter().any(|action| action.key == "p"));
+        assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "f"));
@@ -890,7 +861,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
         };
@@ -904,7 +874,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
-        assert!(actions.iter().any(|action| action.key == "Shift+P"));
+        assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(actions.iter().any(|action| action.key == "r"));
     }
@@ -916,7 +886,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::AgentReview,
         };
@@ -930,7 +899,7 @@ mod tests {
         assert!(actions.iter().any(|action| action.key == "o"));
         assert!(actions.iter().any(|action| action.key == "f"));
         assert!(actions.iter().any(|action| action.key == "p"));
-        assert!(actions.iter().any(|action| action.key == "Shift+P"));
+        assert!(actions.iter().any(|action| action.key == "p"));
         assert!(actions.iter().any(|action| action.key == "m"));
         assert!(!actions.iter().any(|action| action.key == "r"));
     }
@@ -942,7 +911,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: None,
             session_state: ViewSessionState::Rebasing,
         };
@@ -952,7 +920,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "o"));
-        assert!(actions.iter().any(|action| action.key == "p"));
+        assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
     }
@@ -964,7 +932,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::NewSession,
         };
@@ -984,7 +951,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::MergeQueue,
         };
@@ -1007,7 +973,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Canceled,
         };
@@ -1059,7 +1024,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::InProgress,
         };
@@ -1081,7 +1045,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
         };
@@ -1100,7 +1063,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
         };
@@ -1141,7 +1103,6 @@ mod tests {
             can_sync_review_request: true,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
         };
@@ -1165,7 +1126,6 @@ mod tests {
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
         };
