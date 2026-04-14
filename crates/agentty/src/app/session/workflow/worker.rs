@@ -35,6 +35,23 @@ use crate::infra::{agent, process};
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
 
+/// Per-turn data captured at enqueue time that travels alongside the channel
+/// turn but is consumed only after turn completion.
+///
+/// Groups per-turn state that would otherwise be threaded as individual
+/// parameters through the `run_channel_turn` → `apply_turn_result` →
+/// `apply_successful_turn_result` call chain. Future per-turn data (retry
+/// policies, model overrides, etc.) should be added here instead of widening
+/// every intermediate signature.
+pub(super) struct TurnMetadata {
+    /// Published-upstream reference captured when the turn was queued,
+    /// consumed after turn completion by the auto-push workflow.
+    pub(super) published_upstream_ref: Option<String>,
+    /// Session model used for stats, title generation, and post-turn
+    /// auto-commit model resolution.
+    pub(super) session_model: AgentModel,
+}
+
 /// Single command variant serialized per session worker.
 ///
 /// Replaces the previous four-variant enum (`Reply`, `ReplyAppServer`,
@@ -45,15 +62,12 @@ pub(super) enum SessionCommand {
     Run {
         /// Persisted operation identifier.
         operation_id: String,
-        /// Persisted published-upstream reference captured when the turn was
-        /// queued, if this session already tracks a remote review branch.
-        published_upstream_ref: Option<String>,
         /// Whether this is a first-message start or a follow-up resume.
         request_kind: AgentRequestKind,
         /// Structured user prompt payload.
         prompt: TurnPrompt,
-        /// Session model used for stats and post-turn operations.
-        session_model: AgentModel,
+        /// Per-turn metadata consumed during and after turn execution.
+        turn_metadata: TurnMetadata,
     },
 }
 
@@ -318,21 +332,13 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         let SessionCommand::Run {
-            published_upstream_ref,
             request_kind,
             prompt,
-            session_model,
+            turn_metadata,
             ..
         } = command;
 
-        Self::run_channel_turn(
-            context,
-            published_upstream_ref,
-            request_kind,
-            prompt,
-            session_model,
-        )
-        .await
+        Self::run_channel_turn(context, turn_metadata, request_kind, prompt).await
     }
 
     /// Executes one agent turn through the session channel and applies all
@@ -353,10 +359,9 @@ impl SessionWorkerService {
     /// in [`run_turn_with_cancellation`].
     async fn run_channel_turn(
         context: &SessionWorkerContext,
-        published_upstream_ref: Option<String>,
+        turn_metadata: TurnMetadata,
         request_kind: AgentRequestKind,
         prompt: TurnPrompt,
-        session_model: AgentModel,
     ) -> Result<(), SessionError> {
         // Swap in a fresh token so stale cancellations from previous
         // turns are discarded. The cloned token is passed to
@@ -409,7 +414,7 @@ impl SessionWorkerService {
         let req = TurnRequest {
             folder: context.folder.clone(),
             live_session_output: Some(Arc::clone(&context.output)),
-            model: session_model.as_str().to_string(),
+            model: turn_metadata.session_model.as_str().to_string(),
             request_kind: request_kind.clone(),
             prompt: prompt.clone(),
             provider_conversation_id,
@@ -431,7 +436,7 @@ impl SessionWorkerService {
             session_project_id,
             &request_kind,
             &prompt.text,
-            session_model,
+            turn_metadata.session_model,
         )
         .await;
 
@@ -445,8 +450,7 @@ impl SessionWorkerService {
 
         let _ = consumer.await;
 
-        let result =
-            apply_turn_result(context, published_upstream_ref, session_model, turn_result).await;
+        let result = apply_turn_result(context, turn_metadata, turn_result).await;
 
         if let Some((session_size, added_lines, deleted_lines)) =
             SessionTaskService::refresh_persisted_session_diff_stats(
@@ -774,15 +778,11 @@ fn terminate_child_process(context: &SessionWorkerContext) {
 /// `RefreshSessions`, and skips reducer projection emission.
 async fn apply_turn_result(
     context: &SessionWorkerContext,
-    published_upstream_ref: Option<String>,
-    session_model: AgentModel,
+    turn_metadata: TurnMetadata,
     turn_result: Result<TurnResult, AgentError>,
 ) -> Result<Status, SessionError> {
     match turn_result {
-        Ok(result) => {
-            apply_successful_turn_result(context, published_upstream_ref, session_model, result)
-                .await
-        }
+        Ok(result) => apply_successful_turn_result(context, turn_metadata, result).await,
         Err(error) => {
             let error_text = error.to_string();
             let message = format!("\n{}\n", error_text.trim());
@@ -805,8 +805,7 @@ async fn apply_turn_result(
 /// returning the next session status.
 async fn apply_successful_turn_result(
     context: &SessionWorkerContext,
-    published_upstream_ref: Option<String>,
-    session_model: AgentModel,
+    turn_metadata: TurnMetadata,
     result: TurnResult,
 ) -> Result<Status, SessionError> {
     let TurnResult {
@@ -829,7 +828,7 @@ async fn apply_successful_turn_result(
     }
     let turn_applied_state = match (TurnPersistence {
         context,
-        session_model,
+        session_model: turn_metadata.session_model,
     }
     .apply(
         &assistant_message,
@@ -859,7 +858,7 @@ async fn apply_successful_turn_result(
     let auto_commit_model = SessionTaskService::load_auto_commit_model_setting(
         &context.db,
         &context.session_id,
-        session_model,
+        turn_metadata.session_model,
     )
     .await;
 
@@ -874,7 +873,7 @@ async fn apply_successful_turn_result(
         session_model: auto_commit_model,
     })
     .await;
-    start_published_branch_auto_push(context, published_upstream_ref);
+    start_published_branch_auto_push(context, turn_metadata.published_upstream_ref);
 
     Ok(target_status)
 }
@@ -1197,19 +1196,23 @@ mod tests {
         // Arrange
         let start_command = SessionCommand::Run {
             operation_id: "op-start".to_string(),
-            published_upstream_ref: None,
             request_kind: AgentRequestKind::SessionStart,
             prompt: "prompt".into(),
-            session_model: AgentModel::ClaudeSonnet46,
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                session_model: AgentModel::ClaudeSonnet46,
+            },
         };
         let resume_command = SessionCommand::Run {
             operation_id: "op-resume".to_string(),
-            published_upstream_ref: None,
             request_kind: AgentRequestKind::SessionResume {
                 session_output: None,
             },
             prompt: "prompt".into(),
-            session_model: AgentModel::ClaudeSonnet46,
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                session_model: AgentModel::ClaudeSonnet46,
+            },
         };
 
         // Act
@@ -1416,7 +1419,7 @@ mod tests {
                 Box::pin(async {
                     // Simulate a long-running app-server turn that never
                     // completes on its own.
-                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    tokio::time::sleep(std::time::Duration::from_hours(1)).await;
                     unreachable!("should be cancelled before completing")
                 })
             });
@@ -1457,10 +1460,12 @@ mod tests {
         // Act
         let result = SessionWorkerService::run_channel_turn(
             &context,
-            None,
+            TurnMetadata {
+                published_upstream_ref: None,
+                session_model: AgentModel::Gemini3FlashPreview,
+            },
             AgentRequestKind::SessionStart,
             "test prompt".into(),
-            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -1552,10 +1557,12 @@ mod tests {
         // `run_channel_turn` swaps in a fresh token.
         let result = SessionWorkerService::run_channel_turn(
             &context,
-            None,
+            TurnMetadata {
+                published_upstream_ref: None,
+                session_model: AgentModel::Gemini3FlashPreview,
+            },
             AgentRequestKind::SessionStart,
             "test prompt".into(),
-            AgentModel::Gemini3FlashPreview,
         )
         .await;
 
@@ -1868,10 +1875,13 @@ mod tests {
         });
 
         // Act
-        let status =
-            apply_turn_result(&context, None, AgentModel::Gemini3FlashPreview, turn_result)
-                .await
-                .expect("turn result should succeed");
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: None,
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+        let status = apply_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
         let sessions = db.load_sessions().await.expect("failed to load sessions");
 
         // Assert
@@ -1970,14 +1980,13 @@ mod tests {
         });
 
         // Act
-        let status = apply_turn_result(
-            &context,
-            Some("origin/agentty/session-id".to_string()),
-            AgentModel::Gemini3FlashPreview,
-            turn_result,
-        )
-        .await
-        .expect("turn result should succeed");
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: Some("origin/agentty/session-id".to_string()),
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+        let status = apply_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
@@ -2074,14 +2083,13 @@ mod tests {
         });
 
         // Act
-        let status = apply_turn_result(
-            &context,
-            Some("origin/agentty/session-id".to_string()),
-            AgentModel::Gemini3FlashPreview,
-            turn_result,
-        )
-        .await
-        .expect("turn result should succeed");
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: Some("origin/agentty/session-id".to_string()),
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+        let status = apply_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
         let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
             let mut sync_events = Vec::new();
             while sync_events.len() < 2 {
@@ -2165,7 +2173,11 @@ mod tests {
         });
 
         // Act
-        let error = apply_turn_result(&context, None, AgentModel::Gemini3FlashPreview, turn_result)
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: None,
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+        let error = apply_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect_err("turn result should fail when metadata persistence fails");
         let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
@@ -2251,10 +2263,13 @@ mod tests {
         });
 
         // Act
-        let status =
-            apply_turn_result(&context, None, AgentModel::Gemini3FlashPreview, turn_result)
-                .await
-                .expect("turn result should succeed");
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: None,
+            session_model: AgentModel::Gemini3FlashPreview,
+        };
+        let status = apply_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
         let output = output.lock().expect("output lock poisoned");
 
         // Assert
@@ -2314,7 +2329,11 @@ mod tests {
         });
 
         // Act
-        let status = apply_turn_result(&context, None, AgentModel::Gpt54, turn_result)
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: None,
+            session_model: AgentModel::Gpt54,
+        };
+        let status = apply_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
         let instruction_conversation_id = db

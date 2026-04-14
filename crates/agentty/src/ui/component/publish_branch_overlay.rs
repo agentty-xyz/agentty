@@ -72,9 +72,10 @@ impl<'a> PublishBranchOverlay<'a> {
 
     /// Returns the footer help line for the current overlay state.
     fn help_text(&self) -> &'static str {
-        match self.locked_upstream_ref.is_some() {
-            true => REVIEW_REQUEST_LOCKED_HELP_TEXT,
-            false => REVIEW_REQUEST_EDITABLE_HELP_TEXT,
+        if self.locked_upstream_ref.is_some() {
+            REVIEW_REQUEST_LOCKED_HELP_TEXT
+        } else {
+            REVIEW_REQUEST_EDITABLE_HELP_TEXT
         }
     }
 

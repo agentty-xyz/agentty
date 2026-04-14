@@ -321,7 +321,7 @@ async fn stream_stdout(
 /// should complete quickly. The timeout prevents a hung subprocess from
 /// blocking the parent turn indefinitely. `kill_on_drop(true)` on the
 /// child ensures the process is terminated when the future is dropped.
-const REPAIR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const REPAIR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Spawns a fresh CLI process for one protocol-repair retry and returns
 /// the parsed provider content string.

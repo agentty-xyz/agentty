@@ -199,7 +199,7 @@ mod tests {
     async fn test_await_returns_join_error_when_task_is_aborted() {
         // Arrange
         let handle: JoinHandle<Result<(), TestError>> = tokio::spawn(async {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            tokio::time::sleep(std::time::Duration::from_mins(1)).await;
 
             Ok(())
         });

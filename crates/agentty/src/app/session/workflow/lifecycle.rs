@@ -8,7 +8,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::worker::SessionCommand;
+use super::worker::{SessionCommand, TurnMetadata};
 use super::{
     SessionTaskService, draft, session_branch, session_folder, unix_timestamp_from_system_time,
 };
@@ -528,10 +528,12 @@ impl SessionManager {
         let operation_id = Uuid::new_v4().to_string();
         let command = SessionCommand::Run {
             operation_id,
-            published_upstream_ref: None,
             request_kind: AgentRequestKind::SessionStart,
             prompt: prompt.clone(),
-            session_model,
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                session_model,
+            },
         };
         if let Err(error) = self
             .enqueue_session_command(services, &persisted_session_id, command)
@@ -1333,10 +1335,12 @@ impl SessionManager {
 
         SessionCommand::Run {
             operation_id,
-            published_upstream_ref,
             request_kind,
             prompt,
-            session_model,
+            turn_metadata: TurnMetadata {
+                published_upstream_ref,
+                session_model,
+            },
         }
     }
 
