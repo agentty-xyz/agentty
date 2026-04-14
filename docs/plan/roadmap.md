@@ -8,6 +8,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now launch sibling sessions from session view, and launched/open state survives refresh, reopen, and restart flows. | Landed |
 | Review request publish flow | Session chat keeps `p` for generic branch publishing, and `Shift+P` now creates or refreshes the linked GitHub pull request or GitLab merge request while preserving the same publish popup flow. | Landed |
+| Published branch sync | Sessions can publish a remote branch manually, but later turns do not push follow-up commits until the user republishes the branch. | Missing |
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
@@ -16,7 +17,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 
 ## Active Streams
 
-- `Delivery`: project-level landing strategy plus forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
+- `Delivery`: project-level landing strategy, published-branch freshness, and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
 
 ## Planning Model
@@ -62,11 +63,39 @@ Each Agentty project can declare its expected landing path, and review-ready ses
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, and `docs/site/content/docs/getting-started/overview.md` to explain the new per-project delivery strategy setting and how it affects review-ready session actions.
 
+### [45f1c32f-6ecf-4f4c-861f-adc3f08736cf] Delivery: Auto-push published session branches after each turn
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+Published review branches already exist, but every follow-up turn currently leaves the remote branch stale until the user republishes it manually, which slows review handoff and makes linked pull requests drift behind the live session.
+
+#### Usable outcome
+
+Once a session has a published upstream branch, each later completed turn automatically pushes the updated worktree so the remote review branch stays current without extra publish actions.
+
+#### Substeps
+
+- [ ] **Queue auto-push from completed turns that already track an upstream ref.** Update the post-turn workflow in `crates/agentty/src/app/session/workflow/worker.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and `crates/agentty/src/app/session/core.rs` so successful turns reuse the persisted `published_upstream_ref`, skip unpublished sessions, and route push outcomes through the existing session event pipeline instead of blocking unrelated sessions.
+- [ ] **Reuse branch-publish git plumbing for background sync pushes.** Extend `crates/agentty/src/app/branch_publish.rs`, `crates/agentty/src/app/core.rs`, and `crates/agentty/src/infra/git/client.rs` so automatic per-turn pushes share the same upstream-resolution and persistence rules as manual publish actions, while surfacing failure details in session output without clearing the stored upstream ref.
+- [ ] **Reflect branch freshness in the active session UI.** Update `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and related session-view state/helpers so users can tell when an automatic push is in progress or failed after a turn, without changing the existing manual `p` and `Shift+P` shortcuts.
+
+#### Tests
+
+- [ ] Add or extend coverage in `crates/agentty/src/app/session/workflow/worker.rs`, `crates/agentty/src/app/branch_publish.rs`, `crates/agentty/src/app/core.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, and `crates/agentty/src/ui/page/session_chat.rs` for auto-push success, unpublished-session no-op behavior, failure reporting, and session-view status updates after a completed turn.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/getting-started/overview.md` to explain that published session branches now stay in sync automatically after later turns, while unpublished sessions still require the existing manual publish flow.
+
 ## Ready Now Execution Order
 
 ```mermaid
 flowchart TD
-    R1["[17a9e2ba] Delivery: project commit strategy"]
+    R1["[17a9e2ba] Delivery: project commit strategy"] --> R2["[45f1c32f] Delivery: auto-push published branches"]
 ```
 
 ## Queued Next
@@ -106,6 +135,7 @@ No parked user-facing cards right now.
 ## Context Notes
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
+- `Delivery: Auto-push published session branches after each turn` should reuse the persisted published upstream state, keep unpublished sessions on the manual publish path, and preserve visible failure context when a background sync push does not succeed.
 - `Protocol: Track explicit Claude session identity for one-time bootstrap reuse` should land before the broader compact-resume follow-up so Claude sessions stop paying the full bootstrap cost on every turn.
 - Roadmap entries stay user-facing; implementation validation and documentation belong in each step's `#### Tests` and `#### Docs` sections instead of as standalone backlog cards.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.
