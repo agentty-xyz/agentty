@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.4] - 2026-04-13
+
+### Added
+
+- Add GitLab support to forge review requests.
+- Add `feature-test` skill for E2E tests with VHS GIF generation.
+
+### Changed
+
+- Auto-sync already-published session branches after completed turns.
+- Consolidate review-request publishing under `p`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.7.3] - 2026-04-08
 
 ### Added
