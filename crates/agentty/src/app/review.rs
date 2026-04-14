@@ -181,12 +181,16 @@ pub(crate) fn apply_review_updates(
 
 /// Starts focused review generation for sessions that just entered review.
 ///
+/// Uses a status-based check instead of transition detection because the
+/// render-loop `sync_from_handles()` may update session status before the
+/// reducer processes the corresponding event, making transition detection
+/// unreliable.
+///
 /// Sessions returning to `InProgress` clear their cached review immediately so
 /// the next completed diff triggers a fresh assist run.
 pub(crate) async fn auto_start_reviews(
     review_cache: &mut HashMap<String, ReviewCacheEntry>,
     session_ids: &HashSet<String>,
-    previous_session_states: &HashMap<String, Status>,
     session_state: &mut SessionState,
     git_client: Arc<dyn GitClient>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -209,18 +213,13 @@ pub(crate) async fn auto_start_reviews(
             continue;
         };
 
-        let previous_status = previous_session_states.get(session_id).copied();
-
         if current_status == Status::InProgress {
             review_cache.remove(session_id);
 
             continue;
         }
 
-        let transitioned_to_review =
-            current_status == Status::Review && matches!(previous_status, Some(Status::InProgress));
-
-        if !transitioned_to_review {
+        if current_status != Status::Review {
             continue;
         }
 
@@ -234,12 +233,11 @@ pub(crate) async fn auto_start_reviews(
         }
 
         let new_hash = diff_content_hash(&diff);
-        let existing_hash = review_cache.get(session_id).and_then(|entry| match entry {
-            ReviewCacheEntry::Ready { .. } => Some(entry.diff_hash()),
-            _ => None,
-        });
 
-        if existing_hash == Some(new_hash) {
+        if review_cache
+            .get(session_id)
+            .is_some_and(|entry| entry.diff_hash() == new_hash)
+        {
             continue;
         }
 

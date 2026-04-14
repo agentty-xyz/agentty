@@ -408,6 +408,9 @@ impl AppEventBatch {
 
     /// Merges one completed-turn projection into the per-session batch.
     ///
+    /// Agent responses also mark the session as touched so the reducer still
+    /// synchronizes handle-backed status and evaluates auto-review startup
+    /// even when the matching `SessionUpdated` event lands in a later tick.
     /// Latest reducer-facing fields replace the older projection, while token
     /// deltas accumulate to preserve usage across multiple queued completions
     /// for the same session.
@@ -416,6 +419,8 @@ impl AppEventBatch {
         session_id: String,
         turn_applied_state: TurnAppliedState,
     ) {
+        self.session_ids.insert(session_id.clone());
+
         match self.applied_turns.entry(session_id) {
             Entry::Occupied(mut occupied_entry) => {
                 occupied_entry.get_mut().merge_newer(turn_applied_state);
@@ -1766,7 +1771,6 @@ impl App {
         auto_start_reviews(
             &mut self.review_cache,
             &event_batch.session_ids,
-            &previous_session_states,
             &mut self.sessions,
             self.services.git_client(),
             self.services.event_sender(),
@@ -2061,15 +2065,10 @@ impl App {
 
     /// Starts focused review generation for sessions that just entered review.
     #[cfg(test)]
-    async fn auto_start_reviews(
-        &mut self,
-        session_ids: &HashSet<String>,
-        previous_session_states: &HashMap<String, Status>,
-    ) {
+    async fn auto_start_reviews(&mut self, session_ids: &HashSet<String>) {
         auto_start_reviews(
             &mut self.review_cache,
             session_ids,
-            previous_session_states,
             &mut self.sessions,
             self.services.git_client(),
             self.services.event_sender(),
@@ -4966,6 +4965,119 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies agent-response events still trigger auto review when the
+    /// handle has already advanced to `Review` but the paired
+    /// `SessionUpdated` event has not been reduced yet.
+    async fn apply_app_events_agent_response_starts_auto_review_from_synced_handle_status() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-1";
+        let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
+        let expected_hash = diff_content_hash(diff_text);
+
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-auto-review-sync")));
+        app.sessions.sessions[0].status = Status::InProgress;
+        app.sessions.handles.insert(
+            session_id.to_string(),
+            SessionHandles::new(String::new(), Status::InProgress),
+        );
+        *app.sessions
+            .handles
+            .get(session_id)
+            .expect("expected session handles")
+            .status
+            .lock()
+            .expect("expected handle status lock") = Status::Review;
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id: session_id.to_string(),
+            turn_applied_state: test_turn_applied_state(
+                Vec::new(),
+                Vec::new(),
+                None,
+                SessionStats::default(),
+            ),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        ));
+        assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+        assert_eq!(
+            *app.sessions
+                .handles
+                .get(session_id)
+                .expect("expected session handles")
+                .status
+                .lock()
+                .expect("expected handle status lock"),
+            Status::AgentReview
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies auto review still triggers when the render-loop
+    /// `sync_from_handles()` has already synced the session snapshot to
+    /// `Review` before the reducer processes the `AgentResponseReceived`
+    /// event. This is the primary race condition that caused unreliable
+    /// auto-review triggering.
+    async fn apply_app_events_agent_response_starts_auto_review_when_snapshot_already_review() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-1";
+        let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
+        let expected_hash = diff_content_hash(diff_text);
+
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-already-review")));
+        // Simulate sync_from_handles() having already updated the snapshot
+        // to `Review` in a prior render tick.
+        app.sessions.sessions[0].status = Status::Review;
+        app.sessions.handles.insert(
+            session_id.to_string(),
+            SessionHandles::new(String::new(), Status::Review),
+        );
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id: session_id.to_string(),
+            turn_applied_state: test_turn_applied_state(
+                Vec::new(),
+                Vec::new(),
+                None,
+                SessionStats::default(),
+            ),
+        })
+        .await;
+
+        // Assert
+        assert!(matches!(
+            app.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
+        ));
+        assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+    }
+
+    #[tokio::test]
     /// Verifies one reducer tick preserves the latest turn projection while
     /// accumulating token usage from multiple queued completions.
     async fn apply_app_events_agent_response_batches_same_session_turns() {
@@ -5807,10 +5919,9 @@ mod tests {
             },
         );
         let session_ids = HashSet::from([session_id.to_string()]);
-        let previous_states = HashMap::from([(session_id.to_string(), Status::Review)]);
 
         // Act
-        app.auto_start_reviews(&session_ids, &previous_states).await;
+        app.auto_start_reviews(&session_ids).await;
 
         // Assert
         assert!(!app.review_cache.contains_key(session_id));
@@ -5836,7 +5947,6 @@ mod tests {
             },
         );
         let session_ids = HashSet::from([session_id.to_string()]);
-        let previous_states = HashMap::from([(session_id.to_string(), Status::InProgress)]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -5845,7 +5955,7 @@ mod tests {
         install_mock_git_client(&mut app, mock_git_client);
 
         // Act
-        app.auto_start_reviews(&session_ids, &previous_states).await;
+        app.auto_start_reviews(&session_ids).await;
 
         // Assert
         assert!(matches!(
@@ -5855,7 +5965,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_start_reviews_starts_loading_for_review_transition() {
+    /// Verifies that a review already in `Loading` state with matching diff
+    /// hash is not re-triggered by a subsequent reducer tick.
+    async fn auto_start_reviews_skips_when_already_loading_with_same_hash() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-1";
+        app.sessions
+            .sessions
+            .push(test_session(PathBuf::from("/tmp/session-loading-skip")));
+        app.sessions.sessions[0].status = Status::Review;
+
+        let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
+        let hash = diff_content_hash(diff_text);
+        app.review_cache.insert(
+            session_id.to_string(),
+            ReviewCacheEntry::Loading { diff_hash: hash },
+        );
+        let session_ids = HashSet::from([session_id.to_string()]);
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.auto_start_reviews(&session_ids).await;
+
+        // Assert — still Loading, not re-triggered
+        assert!(matches!(
+            app.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == hash
+        ));
+        // Status remains Review because mark_session_agent_review was not called.
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+    }
+
+    #[tokio::test]
+    async fn auto_start_reviews_starts_loading_for_review_session() {
         // Arrange
         let mut app = new_test_app().await;
         let session_id = "session-1";
@@ -5867,7 +6015,6 @@ mod tests {
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let expected_hash = diff_content_hash(diff_text);
         let session_ids = HashSet::from([session_id.to_string()]);
-        let previous_states = HashMap::from([(session_id.to_string(), Status::InProgress)]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -5876,7 +6023,7 @@ mod tests {
         install_mock_git_client(&mut app, mock_git_client);
 
         // Act
-        app.auto_start_reviews(&session_ids, &previous_states).await;
+        app.auto_start_reviews(&session_ids).await;
 
         // Assert
         assert!(matches!(
