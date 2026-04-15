@@ -77,6 +77,7 @@ struct SessionChatRenderContext<'a> {
     mode: &'a AppMode,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<String, String>,
+    session_worktree_availability: &'a HashMap<String, bool>,
     sessions: &'a [Session],
     scroll_offset: Option<u16>,
     wall_clock_unix_seconds: i64,
@@ -94,6 +95,7 @@ struct PublishBranchOverlayContext<'a> {
     locked_upstream_ref: Option<&'a str>,
     restore_view: &'a ConfirmationViewMode,
     session_progress_messages: &'a HashMap<String, String>,
+    session_worktree_availability: &'a HashMap<String, bool>,
     sessions: &'a [Session],
 }
 
@@ -104,6 +106,7 @@ struct RouteAuxContext<'a> {
     default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
     session_progress_messages: &'a HashMap<String, String>,
+    session_worktree_availability: &'a HashMap<String, bool>,
     wall_clock_unix_seconds: i64,
 }
 
@@ -119,6 +122,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         project_table_state,
         projects,
         session_progress_messages,
+        session_worktree_availability,
         settings,
         stats_activity,
         task_roadmap,
@@ -150,6 +154,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         default_reasoning_level: shared.settings.reasoning_level,
         follow_up_task_positions,
         session_progress_messages,
+        session_worktree_availability,
         wall_clock_unix_seconds,
     };
 
@@ -197,6 +202,7 @@ fn render_list_or_overlay_mode(
                         follow_up_task_positions: aux.follow_up_task_positions,
                         restore_view: view_mode,
                         session_progress_messages: aux.session_progress_messages,
+                        session_worktree_availability: aux.session_worktree_availability,
                         sessions: shared.sessions,
                         wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
                     },
@@ -251,6 +257,10 @@ fn render_list_or_overlay_mode(
             aux.default_reasoning_level,
             aux.wall_clock_unix_seconds,
             ViewInfoPopupRenderContext {
+                can_open_worktree: *aux
+                    .session_worktree_availability
+                    .get(&restore_view.session_id)
+                    .unwrap_or(&false),
                 is_loading: *is_loading,
                 loading_label,
                 message,
@@ -307,6 +317,9 @@ struct SessionOverlayRenderContext<'a> {
     restore_view: &'a ConfirmationViewMode,
     /// Active progress messages keyed by session id.
     session_progress_messages: &'a HashMap<String, String>,
+    /// Whether each background session currently has a materialized
+    /// worktree, keyed by session id.
+    session_worktree_availability: &'a HashMap<String, bool>,
     /// Session rows available for background rendering.
     sessions: &'a [Session],
     /// Render-time clock used for deterministic timers.
@@ -332,6 +345,7 @@ fn render_session_overlay_background(
             mode: &background_mode,
             session_id: &context.restore_view.session_id,
             session_progress_messages: context.session_progress_messages,
+            session_worktree_availability: context.session_worktree_availability,
             sessions: context.sessions,
             scroll_offset: context.restore_view.scroll_offset,
             wall_clock_unix_seconds: context.wall_clock_unix_seconds,
@@ -391,6 +405,7 @@ fn render_session_or_diff_mode(
                 mode,
                 session_id,
                 session_progress_messages: aux.session_progress_messages,
+                session_worktree_availability: aux.session_worktree_availability,
                 sessions,
                 scroll_offset: *scroll_offset,
                 wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
@@ -409,6 +424,7 @@ fn render_session_or_diff_mode(
                 follow_up_task_positions: aux.follow_up_task_positions,
                 restore_view,
                 session_progress_messages: aux.session_progress_messages,
+                session_worktree_availability: aux.session_worktree_availability,
                 sessions,
                 wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
             },
@@ -433,6 +449,7 @@ fn render_session_or_diff_mode(
                 locked_upstream_ref: locked_upstream_ref.as_deref(),
                 restore_view,
                 session_progress_messages: aux.session_progress_messages,
+                session_worktree_availability: aux.session_worktree_availability,
                 sessions,
             },
             aux.wall_clock_unix_seconds,
@@ -493,6 +510,7 @@ fn render_publish_branch_overlay(
         locked_upstream_ref,
         restore_view,
         session_progress_messages,
+        session_worktree_availability,
         sessions,
     } = *context;
     render_session_overlay_background(
@@ -504,6 +522,7 @@ fn render_publish_branch_overlay(
             follow_up_task_positions,
             restore_view,
             session_progress_messages,
+            session_worktree_availability,
             sessions,
             wall_clock_unix_seconds,
         },
@@ -526,6 +545,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         mode,
         session_id,
         session_progress_messages,
+        session_worktree_availability,
         sessions,
         scroll_offset,
         wall_clock_unix_seconds,
@@ -551,6 +571,11 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         active_prompt_output,
         active_progress,
         wall_clock_unix_seconds,
+    )
+    .can_open_worktree(
+        *session_worktree_availability
+            .get(session_id)
+            .unwrap_or(&false),
     )
     .selected_follow_up_task_position(follow_up_task_positions.get(session_id).copied())
     .render(f, area);
@@ -718,6 +743,7 @@ mod tests {
                         default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
+                        session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
                     },
                 );
@@ -760,6 +786,7 @@ mod tests {
                         default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
+                        session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
                     },
                 );
@@ -802,6 +829,7 @@ mod tests {
                         default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
                         session_progress_messages: &progress_messages,
+                        session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
                     },
                 );
@@ -847,6 +875,7 @@ mod tests {
                         follow_up_task_positions: &HashMap::new(),
                         restore_view: &view_mode,
                         session_progress_messages: &progress_messages,
+                        session_worktree_availability: &HashMap::new(),
                         sessions: &sessions,
                         wall_clock_unix_seconds: 0,
                     },

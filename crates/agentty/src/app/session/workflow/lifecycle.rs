@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use ag_forge as forge;
 use askama::Template;
 use tokio::sync::mpsc;
+use tracing::warn;
 use uuid::Uuid;
 
 use super::worker::{SessionCommand, TurnMetadata};
@@ -47,6 +48,7 @@ struct DeletedSessionCleanup {
     folder: PathBuf,
     has_git_branch: bool,
     session_id: String,
+    staged_draft_root: PathBuf,
     working_dir: PathBuf,
 }
 
@@ -149,11 +151,15 @@ impl SessionManager {
     /// Creates a blank draft session that stages prompts until explicitly
     /// started.
     ///
+    /// Draft sessions defer worktree creation until the staged bundle starts
+    /// so the session branch can be based on the latest local base-branch
+    /// state.
+    ///
     /// Returns the identifier of the newly created session.
     ///
     /// # Errors
-    /// Returns an error if the worktree, session files, database record, or
-    /// backend setup cannot be created.
+    /// Returns an error if the session files or database record cannot be
+    /// created, or if regular-session worktree/backend setup fails.
     pub async fn create_draft_session(
         &mut self,
         projects: &ProjectManager,
@@ -201,34 +207,16 @@ impl SessionManager {
                 SessionError::Workflow("Failed to find git repository root".to_string())
             })?;
 
-        {
-            let folder = folder.clone();
-            let repo_root = repo_root.clone();
-            let worktree_branch = worktree_branch.clone();
-            let base_branch = base_branch.to_string();
-            git_client
-                .create_worktree(repo_root, folder, worktree_branch, base_branch)
-                .await
-                .map_err(|error| {
-                    SessionError::Workflow(format!("Failed to create git worktree: {error}"))
-                })?;
-        }
-
-        let data_dir = folder.join(SESSION_DATA_DIR);
-        if let Err(error) = services.fs_client().create_dir_all(data_dir).await {
-            self.rollback_failed_session_creation(
+        if !is_draft {
+            self.create_session_worktree(
                 services,
+                &session_id,
                 &folder,
                 &repo_root,
-                &session_id,
                 &worktree_branch,
-                false,
+                base_branch,
             )
-            .await;
-
-            return Err(SessionError::Workflow(format!(
-                "Failed to create session metadata directory: {error}"
-            )));
+            .await?;
         }
 
         let insert_result = if is_draft {
@@ -277,7 +265,8 @@ impl SessionManager {
             .insert_session_creation_activity_now(&session_id)
             .await;
 
-        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
+        if !is_draft && let Err(error) = agent::create_backend(session_model.kind()).setup(&folder)
+        {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -297,6 +286,182 @@ impl SessionManager {
         Ok(session_id)
     }
 
+    /// Creates the git worktree and session-local metadata directory for one
+    /// session branch.
+    ///
+    /// # Errors
+    /// Returns an error if git worktree creation fails or the `.agentty`
+    /// metadata directory cannot be created inside the worktree.
+    async fn create_session_worktree(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+        folder: &Path,
+        repo_root: &Path,
+        worktree_branch: &str,
+        base_branch: &str,
+    ) -> Result<(), SessionError> {
+        let git_client = services.git_client();
+        git_client
+            .create_worktree(
+                repo_root.to_path_buf(),
+                folder.to_path_buf(),
+                worktree_branch.to_string(),
+                base_branch.to_string(),
+            )
+            .await
+            .map_err(|error| {
+                SessionError::Workflow(format!("Failed to create git worktree: {error}"))
+            })?;
+
+        let data_dir = folder.join(SESSION_DATA_DIR);
+        if let Err(error) = services.fs_client().create_dir_all(data_dir).await {
+            self.rollback_failed_session_creation(
+                services,
+                folder,
+                repo_root,
+                session_id,
+                worktree_branch,
+                false,
+            )
+            .await;
+
+            return Err(SessionError::Workflow(format!(
+                "Failed to create session metadata directory: {error}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Ensures a draft session has a usable worktree and backend setup before
+    /// its first live turn starts.
+    ///
+    /// Non-draft sessions are created eagerly and therefore skip this path.
+    /// Draft sessions create their worktree lazily here so staged prompts can
+    /// remain detached from the base branch until the user starts the session.
+    ///
+    /// # Errors
+    /// Returns an error if repository discovery, worktree creation, or
+    /// backend setup fails.
+    async fn ensure_session_worktree_ready(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        let (base_branch, folder, persisted_session_id, session_model) = {
+            let session = self.session_or_err(session_id)?;
+            if !session.is_draft_session() {
+                return Ok(());
+            }
+
+            (
+                session.base_branch.clone(),
+                session.folder.clone(),
+                session.id.clone(),
+                session.model,
+            )
+        };
+
+        if services.fs_client().is_dir(folder.clone()) {
+            agent::create_backend(session_model.kind())
+                .setup(&folder)
+                .map_err(|error| {
+                    SessionError::Workflow(format!("Failed to setup session backend: {error}"))
+                })?;
+            self.set_session_worktree_available(session_id, true);
+
+            return Ok(());
+        }
+
+        let repo_root = self.load_session_repo_root(services, session_id).await?;
+        let worktree_branch = session_branch(&persisted_session_id);
+
+        self.create_session_worktree(
+            services,
+            &persisted_session_id,
+            &folder,
+            &repo_root,
+            &worktree_branch,
+            &base_branch,
+        )
+        .await?;
+
+        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
+            let cleanup_errors = Self::cleanup_session_worktree_resources(
+                services.fs_client().clone(),
+                services.git_client(),
+                folder,
+                worktree_branch,
+                Some(repo_root),
+                true,
+            )
+            .await;
+
+            if !cleanup_errors.is_empty() {
+                return Err(SessionError::Workflow(format!(
+                    "Failed to setup session backend: {error}. Cleanup also failed: {}",
+                    cleanup_errors.join("; ")
+                )));
+            }
+
+            return Err(SessionError::Workflow(format!(
+                "Failed to setup session backend: {error}"
+            )));
+        }
+        self.set_session_worktree_available(session_id, true);
+
+        Ok(())
+    }
+
+    /// Resolves the repository root for one persisted session.
+    ///
+    /// # Errors
+    /// Returns an error if the session project cannot be resolved or no git
+    /// repository root can be found for the project path.
+    async fn load_session_repo_root(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<PathBuf, SessionError> {
+        let project_id = services
+            .db()
+            .load_session_project_id(session_id)
+            .await?
+            .ok_or_else(|| {
+                SessionError::Workflow(
+                    "Session project is required to create a worktree".to_string(),
+                )
+            })?;
+        let project_path = self.load_project_path(services, project_id).await?;
+
+        services
+            .git_client()
+            .find_git_repo_root(project_path)
+            .await
+            .ok_or_else(|| SessionError::Workflow("Failed to find git repository root".to_string()))
+    }
+
+    /// Loads the persisted project path for one project identifier.
+    ///
+    /// # Errors
+    /// Returns an error if the project row does not exist or cannot be loaded.
+    async fn load_project_path(
+        &self,
+        services: &AppServices,
+        project_id: i64,
+    ) -> Result<PathBuf, SessionError> {
+        let project_row = services
+            .db()
+            .get_project(project_id)
+            .await?
+            .ok_or_else(|| {
+                SessionError::Workflow(format!("Project with id `{project_id}` was not found"))
+            })?;
+
+        Ok(PathBuf::from(project_row.path))
+    }
+
     /// Appends one staged draft message to a `New` session without launching
     /// the agent yet.
     ///
@@ -311,6 +476,7 @@ impl SessionManager {
         &mut self,
         services: &AppServices,
         project_id: i64,
+        project_working_dir: &Path,
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), SessionError> {
@@ -361,6 +527,11 @@ impl SessionManager {
         let title_generation_model =
             setting::load_default_fast_model_setting(services, Some(project_id), session_model)
                 .await;
+        let title_generation_folder = if services.fs_client().is_dir(folder.clone()) {
+            folder.clone()
+        } else {
+            project_working_dir.to_path_buf()
+        };
 
         draft::store_staged_draft_attachments(
             services.fs_client().as_ref(),
@@ -396,7 +567,7 @@ impl SessionManager {
             services.event_sender(),
             services.db().clone(),
             &persisted_session_id,
-            &folder,
+            &title_generation_folder,
             &title_generation_prompt,
             title_generation_model,
             Some(title_generation_task_generation),
@@ -411,6 +582,9 @@ impl SessionManager {
     }
 
     /// Starts a `New` session from its persisted staged draft bundle.
+    ///
+    /// This materializes the deferred draft worktree before launching the
+    /// first live turn.
     ///
     /// # Errors
     /// Returns an error if the session is missing, is not a draft session, no
@@ -471,7 +645,8 @@ impl SessionManager {
     /// may replace that initial title once.
     ///
     /// # Errors
-    /// Returns an error if the session is missing or prompt persistence fails.
+    /// Returns an error if the session is missing, its worktree cannot be
+    /// prepared, or prompt persistence fails.
     pub async fn start_session(
         &mut self,
         services: &AppServices,
@@ -479,6 +654,9 @@ impl SessionManager {
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), SessionError> {
         let prompt = prompt.into();
+        self.ensure_session_worktree_ready(services, session_id)
+            .await?;
+
         let session_index = self.session_index_or_err(session_id)?;
         let (persisted_session_id, session_model, title) = {
             let session = self
@@ -876,6 +1054,7 @@ impl SessionManager {
 
         let session = self.state.sessions.remove(selected_index);
         self.state.handles.remove(&session.id);
+        self.remove_session_worktree_availability(&session.id);
         self.abort_title_generation_task(&session.id);
         self.clear_history_replay_pending(&session.id);
 
@@ -890,11 +1069,14 @@ impl SessionManager {
         let _ = services.db().delete_session(&session.id).await;
         services.emit_app_event(AppEvent::RefreshSessions);
 
+        let staged_draft_root = services.base_path().join(&session.id);
+
         Some(DeletedSessionCleanup {
             branch_name: session_branch(&session.id),
             folder: session.folder,
             has_git_branch: projects.has_git_branch(),
             session_id: session.id,
+            staged_draft_root,
             working_dir: projects.working_dir().to_path_buf(),
         })
     }
@@ -911,7 +1093,7 @@ impl SessionManager {
             None
         };
 
-        Self::cleanup_session_worktree_resources(
+        let cleanup_errors = Self::cleanup_session_worktree_resources(
             fs_client.clone(),
             git_client,
             cleanup.folder,
@@ -920,6 +1102,10 @@ impl SessionManager {
             cleanup.has_git_branch,
         )
         .await;
+        Self::warn_cleanup_errors(&cleanup.session_id, &cleanup_errors);
+        if fs_client.is_dir(cleanup.staged_draft_root.clone()) {
+            let _ = fs_client.remove_dir_all(cleanup.staged_draft_root).await;
+        }
         Self::cleanup_session_temp_directory(fs_client, &cleanup.session_id).await;
     }
 
@@ -1733,7 +1919,7 @@ impl SessionManager {
                 .await
                 .ok();
 
-            Self::cleanup_session_worktree_resources(
+            let cleanup_errors = Self::cleanup_session_worktree_resources(
                 services.fs_client().clone(),
                 services.git_client(),
                 folder,
@@ -1742,6 +1928,7 @@ impl SessionManager {
                 true,
             )
             .await;
+            Self::warn_cleanup_errors(session_id, &cleanup_errors);
             Self::cleanup_session_temp_directory(services.fs_client(), session_id).await;
         }
 
@@ -1753,7 +1940,9 @@ impl SessionManager {
     /// This best-effort helper is shared by terminal-state cleanup and session
     /// deletion so both paths remove the linked worktree checkout, delete the
     /// session branch when the shared repository root is known, and finally
-    /// remove the directory from disk.
+    /// remove the directory from disk. Any cleanup failures are returned as
+    /// human-readable messages so callers can surface them when needed.
+    #[must_use]
     async fn cleanup_session_worktree_resources(
         fs_client: Arc<dyn FsClient>,
         git_client: Arc<dyn git::GitClient>,
@@ -1761,19 +1950,33 @@ impl SessionManager {
         branch_name: String,
         repo_root: Option<PathBuf>,
         remove_git_resources: bool,
-    ) {
-        if remove_git_resources {
-            // Best-effort cleanup: worktree may already be removed.
-            let _ = git_client.remove_worktree(folder.clone()).await;
+    ) -> Vec<String> {
+        let mut cleanup_errors = Vec::new();
 
-            if let Some(repo_root) = repo_root {
-                // Best-effort cleanup: branch may already be removed.
-                let _ = git_client.delete_branch(repo_root, branch_name).await;
+        if remove_git_resources {
+            if let Err(error) = git_client.remove_worktree(folder.clone()).await {
+                cleanup_errors.push(format!("failed to remove worktree: {error}"));
+            }
+
+            if let Some(repo_root) = repo_root
+                && let Err(error) = git_client.delete_branch(repo_root, branch_name).await
+            {
+                cleanup_errors.push(format!("failed to delete branch: {error}"));
             }
         }
 
-        // Best-effort cleanup: worktree directory may already be removed.
-        let _ = fs_client.remove_dir_all(folder).await;
+        if let Err(error) = fs_client.remove_dir_all(folder).await {
+            cleanup_errors.push(format!("failed to remove worktree directory: {error}"));
+        }
+
+        cleanup_errors
+    }
+
+    /// Emits debug-visible warnings for best-effort cleanup failures.
+    fn warn_cleanup_errors(session_id: &str, cleanup_errors: &[String]) {
+        for cleanup_error in cleanup_errors {
+            warn!(session_id = session_id, "{cleanup_error}");
+        }
     }
 
     /// Removes Agentty-managed prompt attachment files and prunes their
@@ -2416,7 +2619,13 @@ mod tests {
 
         // Act
         let error = session_manager
-            .stage_draft_message(&services, 1, "session-id", prompt)
+            .stage_draft_message(
+                &services,
+                1,
+                Path::new("/tmp/project"),
+                "session-id",
+                prompt,
+            )
             .await
             .expect_err("attachment metadata failure should abort draft staging");
         let persisted_session = load_persisted_session_row(&database).await;
@@ -2426,6 +2635,129 @@ mod tests {
         assert!(persisted_session.prompt.is_empty());
         assert!(session_manager.sessions[0].prompt.is_empty());
         assert!(session_manager.sessions[0].draft_attachments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_session_worktree_ready_skips_non_draft_sessions() {
+        // Arrange
+        let session = test_session("", Status::New, None, "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client.expect_is_dir().times(0);
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_create_worktree().times(0);
+        mock_git_client.expect_find_git_repo_root().times(0);
+        let services = test_services_with_fs_client(
+            database,
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let result = session_manager
+            .ensure_session_worktree_ready(&services, "session-id")
+            .await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_session_worktree_ready_reuses_existing_draft_worktree() {
+        // Arrange
+        let mut session = test_session("", Status::New, None, "");
+        session.is_draft = true;
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client.expect_is_dir().once().return_const(true);
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_create_worktree().times(0);
+        mock_git_client.expect_find_git_repo_root().times(0);
+        let services = test_services_with_fs_client(
+            database,
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        let result = session_manager
+            .ensure_session_worktree_ready(&services, "session-id")
+            .await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_session_worktree_resources_collects_cleanup_errors() {
+        // Arrange
+        let mut mock_fs_client = fs::MockFsClient::new();
+        mock_fs_client
+            .expect_remove_dir_all()
+            .once()
+            .returning(|_| {
+                Box::pin(async {
+                    Err(fs::FsError::Io(std::io::Error::other(
+                        "simulated directory cleanup failure",
+                    )))
+                })
+            });
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_remove_worktree()
+            .once()
+            .returning(|_| {
+                Box::pin(async {
+                    Err(git::GitError::CommandFailed {
+                        command: "git worktree remove".to_string(),
+                        stderr: "simulated worktree removal failure".to_string(),
+                    })
+                })
+            });
+        mock_git_client
+            .expect_delete_branch()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(git::GitError::CommandFailed {
+                        command: "git branch -D".to_string(),
+                        stderr: "simulated branch deletion failure".to_string(),
+                    })
+                })
+            });
+
+        // Act
+        let cleanup_errors = SessionManager::cleanup_session_worktree_resources(
+            Arc::new(mock_fs_client),
+            Arc::new(mock_git_client),
+            PathBuf::from("/tmp/session"),
+            "agentty/session-id".to_string(),
+            Some(PathBuf::from("/tmp/repo")),
+            true,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(cleanup_errors.len(), 3);
+        assert!(
+            cleanup_errors
+                .iter()
+                .any(|message| message.contains("failed to remove worktree"))
+        );
+        assert!(
+            cleanup_errors
+                .iter()
+                .any(|message| message.contains("failed to delete branch"))
+        );
+        assert!(
+            cleanup_errors
+                .iter()
+                .any(|message| message.contains("failed to remove worktree directory"))
+        );
     }
 
     #[tokio::test]

@@ -279,6 +279,7 @@ pub enum HelpContext {
     /// Generic list-mode help context with precomputed keybindings.
     List { keybindings: Vec<HelpAction> },
     View {
+        can_open_worktree: bool,
         can_sync_review_request: bool,
         done_session_output_mode: DoneSessionOutputMode,
         follow_up_task_action: Option<FollowUpTaskAction>,
@@ -306,6 +307,7 @@ impl HelpContext {
     pub fn keybindings(&self) -> Vec<HelpAction> {
         match self {
             HelpContext::View {
+                can_open_worktree,
                 can_sync_review_request,
                 follow_up_task_action,
                 has_multiple_follow_up_tasks,
@@ -313,6 +315,7 @@ impl HelpContext {
                 session_state,
                 ..
             } => help_action::view_actions(ViewHelpState {
+                can_open_worktree: *can_open_worktree,
                 can_sync_review_request: *can_sync_review_request,
                 follow_up_task_action: *follow_up_task_action,
                 has_multiple_follow_up_tasks: *has_multiple_follow_up_tasks,
@@ -426,6 +429,7 @@ mod tests {
     fn test_help_context_view_keybindings_for_in_progress_hide_edit_actions() {
         // Arrange
         let context = HelpContext::View {
+            can_open_worktree: true,
             can_sync_review_request: false,
             done_session_output_mode: DoneSessionOutputMode::Summary,
             follow_up_task_action: None,
@@ -457,6 +461,7 @@ mod tests {
     fn test_help_context_restore_mode_ignores_view_help_flags() {
         // Arrange
         let context = HelpContext::View {
+            can_open_worktree: true,
             can_sync_review_request: false,
             done_session_output_mode: DoneSessionOutputMode::Summary,
             follow_up_task_action: None,
@@ -491,6 +496,7 @@ mod tests {
     fn test_help_context_view_keybindings_include_publish_pull_request_action() {
         // Arrange
         let context = HelpContext::View {
+            can_open_worktree: true,
             can_sync_review_request: false,
             done_session_output_mode: DoneSessionOutputMode::Summary,
             follow_up_task_action: None,

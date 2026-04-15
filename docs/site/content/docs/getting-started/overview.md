@@ -18,7 +18,7 @@ It runs AI coding agents in dedicated AI sessions.
 <a id="overview-operational-lift"></a>
 When you start a session, Agentty does the operational heavy lifting for workflow safety:
 
-- Spawns a clean worktree branch for every session.
+- Spawns a clean worktree branch for every live session.
 - Runs agent-driven edits in isolation from your base branch.
 - Keeps terminal output, diffs, and generated changes in one reviewable stream.
 - Keeps already-published session branches synced after later completed turns.
@@ -36,11 +36,14 @@ When you start a session, Agentty does the operational heavy lifting for workflo
 
 <a id="overview-worktree-isolation"></a>
 Every session runs in its own [git worktree](https://git-scm.com/docs/git-worktree),
-created automatically when the session starts:
+created automatically when the live session starts:
 
 - The worktree branch is named `agentty/<hash>`, where `<hash>` is derived from
   the session ID.
 - The branch is based on whichever branch was active when you launched `agentty`.
+- Regular sessions create the worktree as soon as you start the first prompt.
+  Draft sessions delay worktree creation until you press `s` to start the
+  staged bundle.
 - All agent edits happen inside the worktree, keeping your base branch untouched
   until you explicitly merge.
 - If worktree creation fails (e.g., git is not installed or permissions are

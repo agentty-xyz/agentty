@@ -351,7 +351,7 @@ pub struct Session {
     /// Ordered image attachments staged for the draft-session prompt stored in
     /// `prompt` while the session remains `New`.
     pub draft_attachments: Vec<TurnPromptAttachment>,
-    /// Worktree folder path for this session.
+    /// Planned or active worktree folder path for this session.
     pub folder: PathBuf,
     /// Persisted read-only follow-up tasks emitted after the latest turn.
     pub follow_up_tasks: Vec<SessionFollowUpTask>,

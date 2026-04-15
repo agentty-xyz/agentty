@@ -188,15 +188,16 @@ impl AppStartup {
         let mut table_state = TableState::default();
         let mut handles = std::collections::HashMap::new();
         let fs_client = services.fs_client();
-        let (sessions, stats_activity) = SessionManager::load_sessions_with_fs_client(
-            services.base_path(),
-            services.db(),
-            active_project_id,
-            startup_working_dir,
-            &mut handles,
-            fs_client.as_ref(),
-        )
-        .await;
+        let (sessions, stats_activity, session_worktree_availability) =
+            SessionManager::load_sessions_with_fs_client(
+                services.base_path(),
+                services.db(),
+                active_project_id,
+                startup_working_dir,
+                &mut handles,
+                fs_client.as_ref(),
+            )
+            .await;
         let clock = services.clock();
         let (sessions_row_count, sessions_updated_at_max) = services
             .db()
@@ -205,7 +206,7 @@ impl AppStartup {
             .unwrap_or((0, 0));
         table_state.select(preferred_initial_session_index(&sessions));
 
-        SessionManager::new(
+        let mut session_manager = SessionManager::new(
             session::SessionDefaults {
                 model: default_session_model,
             },
@@ -219,7 +220,10 @@ impl AppStartup {
                 sessions_updated_at_max,
             ),
             stats_activity,
-        )
+        );
+        session_manager.replace_session_worktree_availability(session_worktree_availability);
+
+        session_manager
     }
 
     /// Spawns background pollers for git status and version checks.

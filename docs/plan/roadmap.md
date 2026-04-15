@@ -18,6 +18,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 ## Active Streams
 
 - `Delivery`: project-level landing strategy, published-branch freshness, and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
+- `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
 
 ## Planning Model
@@ -91,11 +92,67 @@ Once a session has a published upstream branch, each later completed turn automa
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/getting-started/overview.md` to explain that published session branches now stay in sync automatically after later turns, while unpublished sessions still require the existing manual publish flow.
 
+### [a7e41b3c-9d28-4f56-8c1a-6b5e2d4f8a91] Quality: Add draft session and prompt input feature tests
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+The `feature-test` skill has landed, so the next quality slice should immediately apply that pattern to already-landed visible behavior. Draft sessions and prompt input stay within the existing PTY feature-test harness and avoid the agent-dependent blockers tracked elsewhere.
+
+#### Usable outcome
+
+`FeatureTest`-based E2E coverage validates draft session creation via `Shift+A`, draft staging persistence, draft-only worktree affordances such as hiding `o` until the staged bundle starts, and prompt-input affordances such as slash-command entry and file `@` mention lookup.
+
+#### Substeps
+
+- [ ] **Cover draft session creation with the `FeatureTest` builder.** Extend `crates/agentty/tests/e2e/session.rs` and shared helpers in `crates/agentty/tests/e2e/common.rs` so a feature test exercises `Shift+A`, verifies draft-mode session state, confirms staged draft content persists through the visible session flow, and checks that `o` stays hidden until the draft session actually starts.
+- [ ] **Teach the PTY feature-test harness to synthesize shifted character shortcuts.** The current `testty` key helper cannot drive `Shift+A` with the required `KeyModifiers::SHIFT`, which blocks end-to-end coverage for draft-session entry points even though the runtime path is unit-tested.
+- [ ] **Cover prompt input affordances with the same harness.** Add or extend `FeatureTest` scenarios in `crates/agentty/tests/e2e/session.rs` and `crates/agentty/tests/e2e/common.rs` so the PTY suite validates slash-command input and file `@` mention lookup behavior without reverting to the legacy `save_feature_gif` pattern.
+
+#### Tests
+
+- [ ] Run `cargo test -p agentty --test e2e` after adding the new scenarios so the full PTY-driven feature-test suite validates the draft and prompt flows together.
+
+#### Docs
+
+- [ ] No user-facing docs needed unless the feature tests add new docs-side assets or feature pages beyond the standard `FeatureTest` flow.
+
+### [b2f83d5e-1a64-47c9-9e3b-8c7d6f2a4e10] Quality: Migrate legacy E2E tests to `FeatureTest` builder
+
+#### Assignee
+
+`@andagaev`
+
+#### Why now
+
+The `feature-test` skill has landed, codifying the `FeatureTest` builder pattern. Migrating the remaining legacy tests now standardizes the entire E2E suite before new feature tests accumulate more pattern divergence.
+
+#### Usable outcome
+
+All E2E tests in `crates/agentty/tests/e2e/` use the declarative `FeatureTest` builder for lifecycle management, GIF generation, and Zola page creation, eliminating the legacy `save_feature_gif` and direct `Scenario` patterns.
+
+#### Substeps
+
+- [ ] **Migrate navigation and confirmation E2E tests to `FeatureTest` builder.** Update tests in `crates/agentty/tests/e2e/navigation.rs` and `crates/agentty/tests/e2e/confirmation.rs` to use the `FeatureTest` builder from `crates/agentty/tests/e2e/common.rs` instead of manual `Scenario` + `save_feature_gif` calls.
+- [ ] **Migrate session and project E2E tests to `FeatureTest` builder.** Update tests in `crates/agentty/tests/e2e/session.rs` and `crates/agentty/tests/e2e/project.rs` to use the `FeatureTest` builder, and remove the legacy `save_feature_gif` helper from `crates/agentty/tests/e2e/common.rs` once no tests reference it.
+
+#### Tests
+
+- [ ] Run `cargo test -p agentty --test e2e` after migration to verify all scenarios still pass and GIF generation still works.
+
+#### Docs
+
+- [ ] No user-facing doc changes needed — this is an internal test infrastructure migration.
+
 ## Ready Now Execution Order
 
 ```mermaid
 flowchart TD
     R1["[17a9e2ba] Delivery: project commit strategy"] --> R2["[45f1c32f] Delivery: auto-push published branches"]
+    R3["[a7e41b3c] Quality: draft and prompt feature tests"] --> R4["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
 ```
 
 ## Queued Next

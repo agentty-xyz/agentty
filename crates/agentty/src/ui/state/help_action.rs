@@ -63,6 +63,9 @@ pub enum ViewSessionState {
 /// Action availability snapshot for view-mode help projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ViewHelpState {
+    /// Whether the current session currently has a local worktree directory
+    /// available to open.
+    pub(crate) can_open_worktree: bool,
     /// Whether the session can sync its review request state from the forge.
     pub(crate) can_sync_review_request: bool,
     /// Launch/open action available for the selected follow-up task, when the
@@ -249,15 +252,16 @@ pub(crate) fn task_footer_actions() -> Vec<HelpAction> {
 /// These entries are used by the help overlay and include all available
 /// actions.
 pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
-    let can_open_worktree = matches!(
-        state.session_state,
-        ViewSessionState::Interactive
-            | ViewSessionState::InProgress
-            | ViewSessionState::NewSession
-            | ViewSessionState::Rebasing
-            | ViewSessionState::Review
-            | ViewSessionState::AgentReview
-    );
+    let can_open_worktree = state.can_open_worktree
+        && matches!(
+            state.session_state,
+            ViewSessionState::Interactive
+                | ViewSessionState::InProgress
+                | ViewSessionState::NewSession
+                | ViewSessionState::Rebasing
+                | ViewSessionState::Review
+                | ViewSessionState::AgentReview
+        );
     let can_edit_session = matches!(
         state.session_state,
         ViewSessionState::Interactive
@@ -359,15 +363,16 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 /// in the footer, while `AgentReview` hides the rebase shortcut until focused
 /// review generation finishes.
 pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
-    let can_open_worktree = matches!(
-        state.session_state,
-        ViewSessionState::Interactive
-            | ViewSessionState::InProgress
-            | ViewSessionState::NewSession
-            | ViewSessionState::Rebasing
-            | ViewSessionState::Review
-            | ViewSessionState::AgentReview
-    );
+    let can_open_worktree = state.can_open_worktree
+        && matches!(
+            state.session_state,
+            ViewSessionState::Interactive
+                | ViewSessionState::InProgress
+                | ViewSessionState::NewSession
+                | ViewSessionState::Rebasing
+                | ViewSessionState::Review
+                | ViewSessionState::AgentReview
+        );
     let can_edit_session = matches!(
         state.session_state,
         ViewSessionState::Interactive
@@ -666,6 +671,7 @@ mod tests {
     fn test_view_actions_in_progress_shows_open_and_stop_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -684,9 +690,29 @@ mod tests {
     }
 
     #[test]
+    fn test_view_actions_hide_open_when_worktree_is_unavailable() {
+        // Arrange
+        let state = ViewHelpState {
+            can_open_worktree: false,
+            can_sync_review_request: false,
+            follow_up_task_action: None,
+            has_multiple_follow_up_tasks: false,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Review,
+        };
+
+        // Act
+        let actions = view_actions(state);
+
+        // Assert
+        assert!(!actions.iter().any(|action| action.key == "o"));
+    }
+
+    #[test]
     fn test_view_actions_rebasing_shows_open_without_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -708,6 +734,7 @@ mod tests {
     fn test_view_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -729,6 +756,7 @@ mod tests {
     fn test_view_actions_review_shows_diff() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -767,6 +795,7 @@ mod tests {
     fn test_view_actions_agent_review_hides_rebase() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -789,6 +818,7 @@ mod tests {
     fn test_view_actions_interactive_hides_diff() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -810,6 +840,7 @@ mod tests {
     fn test_view_actions_new_session_shows_add_draft_and_start() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -834,6 +865,7 @@ mod tests {
     fn test_view_actions_done_shows_toggle_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -858,6 +890,7 @@ mod tests {
     fn test_view_footer_actions_review_shows_advanced_actions() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -883,6 +916,7 @@ mod tests {
     fn test_view_footer_actions_agent_review_hides_rebase() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -908,6 +942,7 @@ mod tests {
     fn test_view_footer_actions_rebasing_shows_open_without_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -929,6 +964,7 @@ mod tests {
     fn test_view_footer_actions_new_session_keeps_edit_actions_grouped() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -948,6 +984,7 @@ mod tests {
     fn test_view_footer_actions_merge_queue_hides_worktree_shortcuts_and_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -970,6 +1007,7 @@ mod tests {
     fn test_view_actions_canceled_without_branch_publish_action() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -1021,6 +1059,7 @@ mod tests {
     fn test_view_footer_actions_in_progress_shows_stop_and_open() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -1042,6 +1081,7 @@ mod tests {
     fn test_view_actions_review_hides_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -1060,6 +1100,7 @@ mod tests {
     fn test_view_footer_actions_review_hides_stop() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -1100,6 +1141,7 @@ mod tests {
     fn test_view_actions_shows_sync_when_can_sync_review_request_true() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: true,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,
@@ -1123,6 +1165,7 @@ mod tests {
     fn test_view_actions_hides_sync_when_can_sync_review_request_false() {
         // Arrange
         let state = ViewHelpState {
+            can_open_worktree: true,
             can_sync_review_request: false,
             follow_up_task_action: None,
             has_multiple_follow_up_tasks: false,

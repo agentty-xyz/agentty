@@ -859,6 +859,7 @@ impl App {
             None
         });
         let session_git_statuses = self.sessions.session_git_statuses().clone();
+        let session_worktree_availability = self.sessions.session_worktree_availability().clone();
         let follow_up_task_positions = self.sessions.state().follow_up_task_positions.clone();
         let active_prompt_outputs = self.sessions.active_prompt_outputs().clone();
         let session_progress_messages = self.session_progress_messages.clone();
@@ -892,6 +893,7 @@ impl App {
                 follow_up_task_positions: &follow_up_task_positions,
                 session_git_statuses: &session_git_statuses,
                 session_progress_messages: &session_progress_messages,
+                session_worktree_availability: &session_worktree_availability,
                 settings,
                 stats_activity,
                 sessions,
@@ -1126,10 +1128,17 @@ impl App {
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
         let active_project_id = self.projects.active_project_id();
+        let project_working_dir = self.projects.working_dir().to_path_buf();
 
         Ok(self
             .sessions
-            .stage_draft_message(&self.services, active_project_id, session_id, prompt)
+            .stage_draft_message(
+                &self.services,
+                active_project_id,
+                project_working_dir.as_path(),
+                session_id,
+                prompt,
+            )
             .await?)
     }
 
@@ -1344,6 +1353,8 @@ impl App {
 
     /// Opens the selected session worktree in tmux and optionally runs one
     /// provided open command.
+    ///
+    /// Sessions without a materialized worktree are treated as a no-op.
     pub(crate) async fn open_session_worktree_in_tmux_with_command(
         &self,
         open_command: Option<&str>,
@@ -1351,6 +1362,9 @@ impl App {
         let Some(session) = self.selected_session() else {
             return;
         };
+        if !self.services.fs_client().is_dir(session.folder.clone()) {
+            return;
+        }
 
         let Some(window_id) = self
             .tmux_client
@@ -3493,6 +3507,9 @@ mod tests {
     ) -> App {
         // Arrange
         let mut app = new_test_app_with_tmux_client(tmux_client).await;
+        if !session_folder.as_os_str().is_empty() {
+            std::fs::create_dir_all(&session_folder).expect("failed to create session folder");
+        }
 
         // Act
         app.settings.open_command = open_command.to_string();
@@ -4114,6 +4131,28 @@ mod tests {
             Arc::new(mock_tmux_client),
         )
         .await;
+
+        // Act
+        app.open_session_worktree_in_tmux().await;
+
+        // Assert
+        // Expectations are validated by `mockall`.
+    }
+
+    #[tokio::test]
+    async fn open_session_worktree_in_tmux_skips_missing_worktree_folder() {
+        // Arrange
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let missing_session_folder = temp_dir.path().join("missing-session-worktree");
+        let mut mock_tmux_client = MockTmuxClient::new();
+        mock_tmux_client.expect_open_window_for_folder().times(0);
+        mock_tmux_client.expect_run_command_in_window().times(0);
+        let mut app = new_test_app_with_tmux_client(Arc::new(mock_tmux_client)).await;
+        app.settings.open_command = "npm run dev".to_string();
+        app.sessions
+            .sessions
+            .push(test_session(missing_session_folder));
+        app.sessions.table_state.select(Some(0));
 
         // Act
         app.open_session_worktree_in_tmux().await;

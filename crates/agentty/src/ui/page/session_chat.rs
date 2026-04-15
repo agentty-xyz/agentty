@@ -48,6 +48,7 @@ impl PreparedPromptPanel {
 pub struct SessionChatPage<'a> {
     pub active_prompt_output: Option<&'a str>,
     pub active_progress: Option<&'a str>,
+    pub can_open_worktree: bool,
     pub default_reasoning_level: ReasoningLevel,
     pub mode: &'a AppMode,
     pub selected_follow_up_task_position: Option<usize>,
@@ -88,6 +89,7 @@ impl<'a> SessionChatPage<'a> {
         Self {
             active_prompt_output,
             active_progress,
+            can_open_worktree: false,
             default_reasoning_level,
             mode,
             selected_follow_up_task_position: None,
@@ -103,6 +105,14 @@ impl<'a> SessionChatPage<'a> {
     #[must_use]
     pub fn selected_follow_up_task_position(mut self, position: Option<usize>) -> Self {
         self.selected_follow_up_task_position = position;
+        self
+    }
+
+    /// Sets whether the rendered session currently exposes a materialized
+    /// worktree that can be opened from the footer/help affordances.
+    #[must_use]
+    pub fn can_open_worktree(mut self, can_open_worktree: bool) -> Self {
+        self.can_open_worktree = can_open_worktree;
         self
     }
 
@@ -548,6 +558,7 @@ impl<'a> SessionChatPage<'a> {
 
         let help_actions = Self::view_footer_actions(
             session,
+            self.can_open_worktree,
             self.done_session_output_mode(),
             self.selected_follow_up_task_position,
         );
@@ -567,6 +578,7 @@ impl<'a> SessionChatPage<'a> {
     /// and `help`.
     fn view_footer_actions(
         session: &Session,
+        can_open_worktree: bool,
         done_session_output_mode: DoneSessionOutputMode,
         selected_follow_up_task_position: Option<usize>,
     ) -> Vec<help_action::HelpAction> {
@@ -578,6 +590,7 @@ impl<'a> SessionChatPage<'a> {
             .and_then(|position| session.follow_up_task(position))
             .map(crate::domain::session::SessionFollowUpTask::action);
         let mut actions = help_action::view_footer_actions(ViewHelpState {
+            can_open_worktree,
             can_sync_review_request: session.can_sync_review_request(),
             follow_up_task_action: selected_follow_up_task_action,
             has_multiple_follow_up_tasks: session.follow_up_tasks.len() > 1,
@@ -986,7 +999,7 @@ mod tests {
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
-            folder: PathBuf::new(),
+            folder: std::env::temp_dir(),
             follow_up_tasks: Vec::new(),
             id: "session-id".to_string(),
             in_progress_started_at: None,
@@ -1030,10 +1043,12 @@ mod tests {
 
     fn view_help_text(
         session: &Session,
+        can_open_worktree: bool,
         done_session_output_mode: DoneSessionOutputMode,
     ) -> String {
         help_action::footer_line(&SessionChatPage::view_footer_actions(
             session,
+            can_open_worktree,
             done_session_output_mode,
             None,
         ))
@@ -1054,7 +1069,7 @@ mod tests {
         }];
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("launch task"));
@@ -1434,7 +1449,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("q: back"));
@@ -1452,7 +1467,7 @@ mod tests {
         session.status = Status::Rebasing;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("q: back"));
@@ -1475,7 +1490,7 @@ mod tests {
                 let mut session = session_fixture();
                 session.status = *session_status;
 
-                view_help_text(&session, DoneSessionOutputMode::Summary)
+                view_help_text(&session, true, DoneSessionOutputMode::Summary)
             })
             .collect();
 
@@ -1495,7 +1510,7 @@ mod tests {
         session.status = Status::Canceled;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert_eq!(help_text, "q: back | j/k: scroll | ?: help");
@@ -1505,15 +1520,16 @@ mod tests {
     fn test_view_help_text_new_session_shows_draft_and_start_actions() {
         // Arrange
         let mut session = session_fixture();
+        session.folder = PathBuf::new();
         session.is_draft = true;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, false, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("Enter: add draft"));
         assert!(help_text.contains("s: start"));
-        assert!(help_text.contains("o: open"));
+        assert!(!help_text.contains("o: open"));
         assert!(help_text.contains("m: add to merge queue"));
         assert!(help_text.contains("r: rebase"));
         assert!(help_text.contains("/: commands menu"));
@@ -1527,7 +1543,7 @@ mod tests {
         session.status = Status::Review;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(!help_text.contains("d: diff"));
@@ -1543,7 +1559,7 @@ mod tests {
         session.status = Status::Review;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("p: PR"));
@@ -1556,7 +1572,7 @@ mod tests {
         session.status = Status::AgentReview;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(help_text.contains("f: review"));
@@ -1573,7 +1589,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Summary);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
 
         // Assert
         assert!(!help_text.contains("o: open"));
@@ -1588,7 +1604,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Output);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Output);
 
         // Assert
         assert!(help_text.contains("t: summary"));
@@ -1601,7 +1617,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let help_text = view_help_text(&session, DoneSessionOutputMode::Review);
+        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Review);
 
         // Assert
         assert!(help_text.contains("t: summary"));

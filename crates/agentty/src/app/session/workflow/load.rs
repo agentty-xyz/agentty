@@ -7,55 +7,31 @@ use super::{draft, session_folder};
 use crate::app::SessionManager;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::{
-    DailyActivity, ReviewRequest, ReviewRequestSummary, Session, SessionHandles, SessionSize,
-    SessionStats, Status,
+    DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
+    SessionFollowUpTask, SessionHandles, SessionSize, SessionStats, Status,
 };
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::db::{Database, SessionRow};
-use crate::infra::fs::{FsClient, RealFsClient};
+use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
+/// Precomputed fields needed to assemble one loaded session snapshot.
+struct LoadedSessionInput {
+    draft_attachments: Vec<crate::infra::channel::TurnPromptAttachment>,
+    follow_up_tasks: Vec<SessionFollowUpTask>,
+    folder: std::path::PathBuf,
+    project_name: String,
+    questions: Vec<QuestionItem>,
+    reasoning_level_override: Option<ReasoningLevel>,
+    review_request: Option<ReviewRequest>,
+    row: SessionRow,
+    session_model: AgentModel,
+    session_output: String,
+    session_status: Status,
+    size: SessionSize,
+}
+
 impl SessionManager {
-    /// Loads session models from the database and reuses live handles when
-    /// possible.
-    ///
-    /// Existing handles are reused in place to preserve `Arc` identity so
-    /// that background workers holding cloned references continue to work.
-    ///
-    /// When a handle already exists, live handle output is treated as
-    /// authoritative for the returned in-memory snapshot to avoid clobbering
-    /// fresh runtime output with stale persisted rows. Active statuses are also
-    /// preserved from live handles, while terminal persisted statuses (`Done`,
-    /// `Canceled`) override stale in-memory status.
-    ///
-    /// New handles are inserted for sessions that don't have entries yet.
-    /// Sessions whose worktree folder disappeared during merge cleanup remain
-    /// visible while a live handle still reports the terminalizing merge
-    /// transition, which avoids dropping the active view before `Done` is
-    /// persisted.
-    ///
-    /// Returns both loaded sessions and local-day activity counts aggregated
-    /// from persisted session-creation activity history.
-    pub(crate) async fn load_sessions(
-        base: &Path,
-        db: &Database,
-        active_project_id: i64,
-        working_dir: &Path,
-        handles: &mut HashMap<String, SessionHandles>,
-    ) -> (Vec<Session>, Vec<DailyActivity>) {
-        let fs_client = RealFsClient;
-
-        Self::load_sessions_with_fs_client(
-            base,
-            db,
-            active_project_id,
-            working_dir,
-            handles,
-            &fs_client,
-        )
-        .await
-    }
-
     /// Loads session models from the database using the provided filesystem
     /// boundary to decide which session folders exist.
     ///
@@ -70,8 +46,9 @@ impl SessionManager {
     ///
     /// New handles are inserted for sessions that don't have entries yet.
     ///
-    /// Returns both loaded sessions and local-day activity counts aggregated
-    /// from persisted session-creation activity history.
+    /// Returns loaded sessions, local-day activity counts aggregated from
+    /// persisted session-creation activity history, and cached worktree
+    /// availability keyed by session id.
     pub(crate) async fn load_sessions_with_fs_client(
         base: &Path,
         db: &Database,
@@ -79,7 +56,7 @@ impl SessionManager {
         working_dir: &Path,
         handles: &mut HashMap<String, SessionHandles>,
         fs_client: &dyn FsClient,
-    ) -> (Vec<Session>, Vec<DailyActivity>) {
+    ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<String, bool>) {
         let project_name = working_dir
             .file_name()
             .and_then(|name| name.to_str())
@@ -94,6 +71,7 @@ impl SessionManager {
         let stats_activity = db.load_session_activity().await.unwrap_or_default();
         let mut sessions: Vec<Session> = Vec::new();
         let mut follow_up_tasks_by_session = HashMap::<String, Vec<_>>::new();
+        let mut session_worktree_availability = HashMap::new();
 
         for persisted_follow_up_task in persisted_follow_up_tasks {
             follow_up_tasks_by_session
@@ -113,11 +91,13 @@ impl SessionManager {
 
             if should_skip_missing_folder_session(
                 has_session_folder,
+                row.is_draft,
                 persisted_status,
                 live_handle_status,
             ) {
                 continue;
             }
+            session_worktree_availability.insert(row.id.clone(), has_session_folder);
             let session_model = row
                 .model
                 .parse::<AgentModel>()
@@ -167,41 +147,23 @@ impl SessionManager {
                 .remove(&row.id)
                 .unwrap_or_default();
 
-            sessions.push(Session {
-                base_branch: row.base_branch,
-                created_at: row.created_at,
+            sessions.push(Self::build_loaded_session(LoadedSessionInput {
                 draft_attachments,
-                folder,
                 follow_up_tasks,
-                id: row.id,
-                in_progress_started_at: row.in_progress_started_at,
-                in_progress_total_seconds: row.in_progress_total_seconds,
-                is_draft: row.is_draft,
-                model: session_model,
-                output: session_output,
+                folder,
                 project_name: project_name.clone(),
-                prompt: row.prompt,
-                reasoning_level_override,
-                published_upstream_ref: row.published_upstream_ref,
-                published_branch_sync_status:
-                    crate::domain::session::PublishedBranchSyncStatus::Idle,
                 questions,
+                reasoning_level_override,
                 review_request,
+                row,
+                session_model,
+                session_output,
+                session_status,
                 size: persisted_size,
-                stats: SessionStats {
-                    added_lines: row.added_lines.cast_unsigned(),
-                    deleted_lines: row.deleted_lines.cast_unsigned(),
-                    input_tokens: row.input_tokens.cast_unsigned(),
-                    output_tokens: row.output_tokens.cast_unsigned(),
-                },
-                status: session_status,
-                summary: row.summary,
-                title: row.title,
-                updated_at: row.updated_at,
-            });
+            }));
         }
 
-        (sessions, stats_activity)
+        (sessions, stats_activity, session_worktree_availability)
     }
 
     /// Computes diff-derived session size and line-count totals from one
@@ -227,12 +189,49 @@ impl SessionManager {
 
         (SessionSize::from_diff(&diff), added_lines, deleted_lines)
     }
+
+    /// Builds one in-memory session snapshot from a database row plus the
+    /// transient fields computed during reload.
+    fn build_loaded_session(input: LoadedSessionInput) -> Session {
+        Session {
+            base_branch: input.row.base_branch,
+            created_at: input.row.created_at,
+            draft_attachments: input.draft_attachments,
+            folder: input.folder,
+            follow_up_tasks: input.follow_up_tasks,
+            id: input.row.id,
+            in_progress_started_at: input.row.in_progress_started_at,
+            in_progress_total_seconds: input.row.in_progress_total_seconds,
+            is_draft: input.row.is_draft,
+            model: input.session_model,
+            output: input.session_output,
+            project_name: input.project_name,
+            prompt: input.row.prompt,
+            reasoning_level_override: input.reasoning_level_override,
+            published_upstream_ref: input.row.published_upstream_ref,
+            published_branch_sync_status: PublishedBranchSyncStatus::Idle,
+            questions: input.questions,
+            review_request: input.review_request,
+            size: input.size,
+            stats: SessionStats {
+                added_lines: input.row.added_lines.cast_unsigned(),
+                deleted_lines: input.row.deleted_lines.cast_unsigned(),
+                input_tokens: input.row.input_tokens.cast_unsigned(),
+                output_tokens: input.row.output_tokens.cast_unsigned(),
+            },
+            status: input.session_status,
+            summary: input.row.summary,
+            title: input.row.title,
+            updated_at: input.row.updated_at,
+        }
+    }
 }
 
 /// Returns whether one persisted session row should be skipped because its
 /// worktree folder is missing and no merge-cleanup transition is still active.
 fn should_skip_missing_folder_session(
     has_session_folder: bool,
+    is_draft_session: bool,
     persisted_status: Status,
     live_handle_status: Option<Status>,
 ) -> bool {
@@ -241,6 +240,10 @@ fn should_skip_missing_folder_session(
     }
 
     if matches!(persisted_status, Status::Done | Status::Canceled) {
+        return false;
+    }
+
+    if is_draft_session && persisted_status == Status::New {
         return false;
     }
 
@@ -392,7 +395,7 @@ mod tests {
         );
 
         // Act
-        let (sessions, _) = SessionManager::load_sessions_with_fs_client(
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             base_path,
             &db,
             project_id,
@@ -421,6 +424,66 @@ mod tests {
         let handle_status = *handle.status.lock().expect("failed to lock handle status");
         assert_eq!(handle_output, live_output);
         assert_eq!(handle_status, live_status);
+    }
+
+    /// Ensures reload caches worktree availability alongside loaded session
+    /// rows.
+    #[tokio::test]
+    async fn test_load_sessions_reports_worktree_availability() {
+        // Arrange
+        let db = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+        let session_with_worktree_id = "worktree-available";
+        let session_without_worktree_id = "draft-missing";
+        db.insert_session(
+            session_with_worktree_id,
+            "gemini-3-flash-preview",
+            "main",
+            "New",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session with worktree");
+        db.insert_draft_session(
+            session_without_worktree_id,
+            "gemini-3-flash-preview",
+            "main",
+            "New",
+            project_id,
+        )
+        .await
+        .expect("failed to insert draft session");
+
+        let base_path = Path::new("/virtual/session-base");
+        let mock_fs_client =
+            create_folder_lookup_mock(vec![session_folder(base_path, session_with_worktree_id)]);
+        let mut handles = HashMap::new();
+
+        // Act
+        let (_, _, session_worktree_availability) = SessionManager::load_sessions_with_fs_client(
+            base_path,
+            &db,
+            project_id,
+            Path::new("/tmp/test"),
+            &mut handles,
+            &mock_fs_client,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            session_worktree_availability.get(session_with_worktree_id),
+            Some(&true)
+        );
+        assert_eq!(
+            session_worktree_availability.get(session_without_worktree_id),
+            Some(&false)
+        );
     }
 
     /// Ensures reload reads the persisted summary for active sessions.
@@ -460,7 +523,7 @@ mod tests {
         );
 
         // Act
-        let (sessions, _) = SessionManager::load_sessions_with_fs_client(
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             base_path,
             &db,
             project_id,
@@ -513,7 +576,7 @@ mod tests {
         );
 
         // Act
-        let (sessions, _) = SessionManager::load_sessions_with_fs_client(
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             base_path,
             &db,
             project_id,
@@ -582,7 +645,7 @@ mod tests {
         let mut handles = HashMap::new();
 
         // Act
-        let (sessions, _) = SessionManager::load_sessions_with_fs_client(
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             base_path,
             &db,
             project_id,
@@ -651,7 +714,7 @@ mod tests {
         let mut handles = HashMap::new();
 
         // Act
-        let (sessions, _) = SessionManager::load_sessions_with_fs_client(
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             base_path,
             &db,
             project_id,
@@ -714,6 +777,7 @@ mod tests {
         // Act
         let should_skip = should_skip_missing_folder_session(
             has_session_folder,
+            false,
             persisted_status,
             live_handle_status,
         );
@@ -734,12 +798,34 @@ mod tests {
         // Act
         let should_skip = should_skip_missing_folder_session(
             has_session_folder,
+            false,
             persisted_status,
             live_handle_status,
         );
 
         // Assert
         assert!(should_skip);
+    }
+
+    #[test]
+    /// Verifies missing-folder draft sessions stay visible before their
+    /// deferred worktree is created.
+    fn should_skip_missing_folder_session_keeps_new_draft_session() {
+        // Arrange
+        let has_session_folder = false;
+        let persisted_status = Status::New;
+        let live_handle_status = None;
+
+        // Act
+        let should_skip = should_skip_missing_folder_session(
+            has_session_folder,
+            true,
+            persisted_status,
+            live_handle_status,
+        );
+
+        // Assert
+        assert!(!should_skip);
     }
 
     #[test]

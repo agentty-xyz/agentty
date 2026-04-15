@@ -105,15 +105,19 @@ impl SessionManager {
             .and_then(|index| self.state.sessions.get(index))
             .map(|session| session.id.clone());
 
-        let (sessions, stats_activity) = Self::load_sessions(
-            services.base_path(),
-            services.db(),
-            projects.active_project_id(),
-            projects.working_dir(),
-            &mut self.state.handles,
-        )
-        .await;
+        let (sessions, stats_activity, session_worktree_availability) =
+            Self::load_sessions_with_fs_client(
+                services.base_path(),
+                services.db(),
+                projects.active_project_id(),
+                projects.working_dir(),
+                &mut self.state.handles,
+                services.fs_client().as_ref(),
+            )
+            .await;
         self.state.sessions = sessions;
+        self.state
+            .replace_session_worktree_availability(session_worktree_availability);
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);

@@ -72,8 +72,7 @@ struct ViewSessionSnapshot {
     can_sync_review_request: bool,
     can_open_worktree: bool,
     follow_up_task_action: Option<FollowUpTaskAction>,
-    has_multiple_follow_up_tasks: bool,
-    is_action_allowed: bool,
+    publish_branch_action: Option<PublishBranchAction>,
     publish_pull_request_action: Option<PublishBranchAction>,
     session_state: ViewSessionState,
     session_status: Status,
@@ -173,13 +172,13 @@ async fn handle_view_key(
 
             return false;
         }
-        KeyCode::Char('[') if view_session_snapshot.has_multiple_follow_up_tasks => {
+        KeyCode::Char('[') if app.has_multiple_follow_up_tasks(&view_context.session_id) => {
             app.select_previous_follow_up_task(&view_context.session_id);
         }
-        KeyCode::Char(']') if view_session_snapshot.has_multiple_follow_up_tasks => {
+        KeyCode::Char(']') if app.has_multiple_follow_up_tasks(&view_context.session_id) => {
             app.select_next_follow_up_task(&view_context.session_id);
         }
-        KeyCode::Enter if view_session_snapshot.is_action_allowed => {
+        KeyCode::Enter if is_view_action_allowed(view_session_snapshot.session_status) => {
             switch_view_to_prompt(
                 app,
                 view_context,
@@ -191,7 +190,8 @@ async fn handle_view_key(
             );
         }
         KeyCode::Char('/')
-            if view_session_snapshot.is_action_allowed && is_insertable_char_key(key) =>
+            if is_view_action_allowed(view_session_snapshot.session_status)
+                && is_insertable_char_key(key) =>
         {
             switch_view_to_prompt(
                 app,
@@ -234,6 +234,18 @@ async fn handle_view_key(
         }
         KeyCode::Char('p')
             if key.modifiers == event::KeyModifiers::NONE
+                && view_session_snapshot.publish_branch_action.is_some() =>
+        {
+            let Some(publish_branch_action) = view_session_snapshot.publish_branch_action else {
+                return true;
+            };
+            open_publish_branch_input(app, view_context, publish_branch_action);
+
+            return false;
+        }
+        KeyCode::Char(character)
+            if character.eq_ignore_ascii_case(&'p')
+                && key.modifiers == event::KeyModifiers::SHIFT
                 && view_session_snapshot.publish_pull_request_action.is_some() =>
         {
             let Some(publish_pull_request_action) =
@@ -241,7 +253,7 @@ async fn handle_view_key(
             else {
                 return true;
             };
-            open_review_request_publish_input(app, view_context, publish_pull_request_action);
+            open_publish_branch_input(app, view_context, publish_pull_request_action);
 
             return false;
         }
@@ -252,7 +264,7 @@ async fn handle_view_key(
         {
             open_or_regenerate_review(app, view_context, pending_update).await;
         }
-        KeyCode::Char('m') if view_session_snapshot.is_action_allowed => {
+        KeyCode::Char('m') if is_view_action_allowed(view_session_snapshot.session_status) => {
             open_merge_confirmation(app, view_context);
         }
         KeyCode::Char('r') if is_view_rebase_allowed(view_session_snapshot.session_status) => {
@@ -272,15 +284,7 @@ async fn handle_view_key(
             return false;
         }
         KeyCode::Char('?') => {
-            open_view_help_overlay(
-                app,
-                view_context,
-                view_session_snapshot.can_sync_review_request,
-                view_session_snapshot.follow_up_task_action,
-                view_session_snapshot.has_multiple_follow_up_tasks,
-                view_session_snapshot.publish_pull_request_action,
-                view_session_snapshot.session_state,
-            );
+            open_view_help_overlay(app, view_context, view_session_snapshot);
             return false;
         }
         _ => {}
@@ -386,17 +390,24 @@ async fn open_or_regenerate_review(
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
     let session = app.sessions.sessions.get(view_context.session_index)?;
     let session_status = session.status;
+    let can_open_worktree = is_view_worktree_open_allowed(session_status)
+        && *app
+            .sessions
+            .session_worktree_availability()
+            .get(&view_context.session_id)
+            .unwrap_or(&false);
 
     Some(ViewSessionSnapshot {
         can_start_staged_session: session.is_draft_session()
             && session.status == Status::New
             && session.has_staged_drafts(),
         can_sync_review_request: session.can_sync_review_request(),
-        can_open_worktree: is_view_worktree_open_allowed(session_status)
-            && can_open_session_worktree(session_status),
+        can_open_worktree,
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
-        has_multiple_follow_up_tasks: app.has_multiple_follow_up_tasks(&view_context.session_id),
-        is_action_allowed: is_view_action_allowed(session_status),
+        publish_branch_action: session
+            .status
+            .allows_review_actions()
+            .then_some(PublishBranchAction::Push),
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
         session_status,
@@ -572,45 +583,34 @@ fn switch_view_to_prompt(
     };
 }
 
-/// Returns whether the worktree-open shortcut (`o`) is enabled for the
-/// provided session status.
-fn can_open_session_worktree(status: Status) -> bool {
-    !matches!(
-        status,
-        Status::Done | Status::Canceled | Status::Merging | Status::Queued
-    )
-}
-
 /// Opens the help overlay while preserving the currently viewed session state.
 fn open_view_help_overlay(
     app: &mut App,
     view_context: &ViewContext,
-    can_sync_review_request: bool,
-    follow_up_task_action: Option<FollowUpTaskAction>,
-    has_multiple_follow_up_tasks: bool,
-    publish_pull_request_action: Option<PublishBranchAction>,
-    session_state: ViewSessionState,
+    view_session_snapshot: &ViewSessionSnapshot,
 ) {
     app.mode = AppMode::Help {
         context: HelpContext::View {
-            can_sync_review_request,
+            can_open_worktree: view_session_snapshot.can_open_worktree,
+            can_sync_review_request: view_session_snapshot.can_sync_review_request,
             done_session_output_mode: view_context.done_session_output_mode,
-            follow_up_task_action,
-            has_multiple_follow_up_tasks,
+            follow_up_task_action: view_session_snapshot.follow_up_task_action,
+            has_multiple_follow_up_tasks: app
+                .has_multiple_follow_up_tasks(&view_context.session_id),
             review_status_message: view_context.review_status_message.clone(),
             review_text: view_context.review_text.clone(),
-            publish_pull_request_action,
+            publish_pull_request_action: view_session_snapshot.publish_pull_request_action,
             session_id: view_context.session_id.clone(),
-            session_state,
+            session_state: view_session_snapshot.session_state,
             scroll_offset: view_context.scroll_offset,
         },
         scroll_offset: 0,
     };
 }
 
-/// Opens the session-view review-request publish popup and preserves the
-/// current view state for cancel or submit.
-fn open_review_request_publish_input(
+/// Opens the session-view publish popup and preserves the current view state
+/// for cancel or submit.
+fn open_publish_branch_input(
     app: &mut App,
     view_context: &ViewContext,
     publish_branch_action: PublishBranchAction,
@@ -1338,9 +1338,56 @@ mod tests {
 
         // Assert
         assert!(!snapshot.can_open_worktree);
-        assert!(!snapshot.is_action_allowed);
         assert_eq!(snapshot.session_state, ViewSessionState::Done);
         assert_eq!(snapshot.session_status, Status::Done);
+    }
+
+    #[tokio::test]
+    async fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_session() {
+        // Arrange
+        let (mut app, _base_dir) =
+            new_test_app_with_git_and_tmux_client(Arc::new(MockTmuxClient::new())).await;
+        let session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id,
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(!snapshot.can_open_worktree);
+        assert_eq!(snapshot.session_state, ViewSessionState::NewSession);
+    }
+
+    #[tokio::test]
+    async fn test_view_session_snapshot_reads_cached_worktree_availability() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions
+            .set_session_worktree_available(&session_id, false);
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id,
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(!snapshot.can_open_worktree);
     }
 
     #[tokio::test]
@@ -2098,23 +2145,26 @@ mod tests {
             session_id: session_id.clone(),
             session_index: 0,
         };
+        let view_session_snapshot = ViewSessionSnapshot {
+            can_start_staged_session: false,
+            can_sync_review_request: false,
+            can_open_worktree: true,
+            follow_up_task_action: None,
+            publish_branch_action: Some(PublishBranchAction::Push),
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+            session_state: ViewSessionState::Review,
+            session_status: Status::Review,
+        };
 
         // Act
-        open_view_help_overlay(
-            &mut app,
-            &view_context,
-            false,
-            None,
-            false,
-            Some(PublishBranchAction::PublishPullRequest),
-            ViewSessionState::Review,
-        );
+        open_view_help_overlay(&mut app, &view_context, &view_session_snapshot);
 
         // Assert
         assert!(matches!(
             app.mode,
             AppMode::Help {
                 context: HelpContext::View {
+                    can_open_worktree: true,
                     can_sync_review_request: false,
                     done_session_output_mode: DoneSessionOutputMode::Review,
                     follow_up_task_action: None,
@@ -2134,7 +2184,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_review_request_publish_input_preserves_view_context() {
+    async fn test_open_publish_branch_input_preserves_view_context() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         let view_context = ViewContext {
@@ -2147,7 +2197,7 @@ mod tests {
         };
 
         // Act
-        open_review_request_publish_input(
+        open_publish_branch_input(
             &mut app,
             &view_context,
             PublishBranchAction::PublishPullRequest,
@@ -2179,7 +2229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_review_request_publish_input_locks_existing_upstream_branch_name() {
+    async fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions[0].published_upstream_ref = Some("origin/review/custom".to_string());
@@ -2193,7 +2243,7 @@ mod tests {
         };
 
         // Act
-        open_review_request_publish_input(
+        open_publish_branch_input(
             &mut app,
             &view_context,
             PublishBranchAction::PublishPullRequest,
@@ -2212,48 +2262,48 @@ mod tests {
     }
 
     #[test]
-    fn test_can_open_session_worktree_disables_canceled_state() {
+    fn test_is_view_worktree_open_allowed_disables_canceled_state() {
         // Arrange
         let status = Status::Canceled;
 
         // Act
-        let result = can_open_session_worktree(status);
+        let result = is_view_worktree_open_allowed(status);
 
         // Assert
         assert!(!result);
     }
 
     #[test]
-    fn test_can_open_session_worktree_disables_done_state() {
+    fn test_is_view_worktree_open_allowed_disables_done_state() {
         // Arrange
         let status = Status::Done;
 
         // Act
-        let result = can_open_session_worktree(status);
+        let result = is_view_worktree_open_allowed(status);
 
         // Assert
         assert!(!result);
     }
 
     #[test]
-    fn test_can_open_session_worktree_disables_queued_state() {
+    fn test_is_view_worktree_open_allowed_disables_queued_state() {
         // Arrange
         let status = Status::Queued;
 
         // Act
-        let result = can_open_session_worktree(status);
+        let result = is_view_worktree_open_allowed(status);
 
         // Assert
         assert!(!result);
     }
 
     #[test]
-    fn test_can_open_session_worktree_enables_review_state() {
+    fn test_is_view_worktree_open_allowed_enables_review_state() {
         // Arrange
         let status = Status::Review;
 
         // Act
-        let result = can_open_session_worktree(status);
+        let result = is_view_worktree_open_allowed(status);
 
         // Assert
         assert!(result);
@@ -2498,8 +2548,7 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: false,
             follow_up_task_action: None,
-            has_multiple_follow_up_tasks: false,
-            is_action_allowed: false,
+            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
             session_status: Status::Done,
@@ -2611,8 +2660,7 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: true,
             follow_up_task_action: None,
-            has_multiple_follow_up_tasks: false,
-            is_action_allowed: true,
+            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
             session_status: Status::Review,
@@ -2655,7 +2703,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_view_key_p_opens_pull_request_publish_input() {
+    async fn test_handle_view_key_p_opens_branch_publish_input() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
@@ -2672,8 +2720,7 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: true,
             follow_up_task_action: None,
-            has_multiple_follow_up_tasks: false,
-            is_action_allowed: true,
+            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
             session_status: Status::Review,
@@ -2691,6 +2738,59 @@ mod tests {
         let should_apply = handle_view_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            view_key_context,
+            &mut pending_update,
+        )
+        .await;
+
+        // Assert
+        assert!(!should_apply);
+        assert!(matches!(
+            app.mode,
+            AppMode::PublishBranchInput {
+                publish_branch_action: PublishBranchAction::Push,
+                ref restore_view,
+                ..
+            } if restore_view.session_id == session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_view_key_shift_p_opens_review_request_publish_input() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.clone(),
+            scroll_offset: Some(2),
+        };
+        let view_context = view_context(&mut app).expect("expected view context");
+        let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+        let view_session_snapshot = ViewSessionSnapshot {
+            can_start_staged_session: false,
+            can_sync_review_request: false,
+            can_open_worktree: true,
+            follow_up_task_action: None,
+            publish_branch_action: Some(PublishBranchAction::Push),
+            publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
+            session_state: ViewSessionState::Review,
+            session_status: Status::Review,
+        };
+        let view_key_context = ViewKeyContext {
+            context: &view_context,
+            metrics: ViewMetrics {
+                total_lines: 10,
+                view_height: 5,
+            },
+            session_snapshot: &view_session_snapshot,
+        };
+
+        // Act
+        let should_apply = handle_view_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT),
             view_key_context,
             &mut pending_update,
         )
@@ -2744,8 +2844,7 @@ mod tests {
                 can_sync_review_request: false,
                 can_open_worktree: false,
                 follow_up_task_action: None,
-                has_multiple_follow_up_tasks: false,
-                is_action_allowed: false,
+                publish_branch_action: None,
                 publish_pull_request_action: None,
                 session_state: ViewSessionState::Done,
                 session_status: Status::Done,

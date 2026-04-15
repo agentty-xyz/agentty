@@ -56,7 +56,7 @@ Session statuses and what you can do in each state:
 
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
-| **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree, scroll, help |
+| **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first and only create their worktree when the staged bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree after the session has started, scroll, help |
 | **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
 | **Review** | Agent finished; changes are ready for review. | `Enter` reply, `/` open slash-command composer, `s` sync review request, `m` add to merge queue, `r` rebase, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
 | **AgentReview** | Agentty is generating the focused review output in the background. | `Enter` reply, `/` open slash-command composer, `s` sync review request, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, `l` launch/open follow-up task, `[` / `]` select follow-up task, scroll, help |
@@ -185,7 +185,10 @@ From the **Sessions** tab, press `a` to create a regular session or `Shift+A`
 to create a draft session. Regular sessions keep the fast path: type the first
 prompt and press `Enter` to start the agent immediately. Draft sessions stage
 each `Enter` as one ordered draft message, show the staged bundle in session
-view, and start only after you press `s`.
+view, keep the `o` shortcut hidden until a worktree exists, and start only
+after you press `s`. The draft worktree is created at that start step so the
+branch is based on the latest local base-branch state instead of the moment
+the draft session was first created.
 
 ### Typical Transitions
 

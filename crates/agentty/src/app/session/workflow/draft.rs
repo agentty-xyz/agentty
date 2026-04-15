@@ -27,9 +27,8 @@ pub(super) async fn load_staged_draft_attachments(
     session_id: &str,
 ) -> Vec<TurnPromptAttachment> {
     let attachment_path = staged_draft_attachment_path(base, session_id);
-    let attachment_bytes = match fs_client.read_file(attachment_path).await {
-        Ok(bytes) => bytes,
-        Err(_) => return Vec::new(),
+    let Ok(attachment_bytes) = fs_client.read_file(attachment_path).await else {
+        return Vec::new();
     };
 
     serde_json::from_slice(&attachment_bytes).unwrap_or_default()
@@ -37,10 +36,10 @@ pub(super) async fn load_staged_draft_attachments(
 
 /// Persists the staged draft-session attachment list for one session.
 ///
-/// An empty slice removes the metadata file entirely. When attachments are
-/// present, the session metadata directory is created before the JSON payload
-/// is written so draft staging still works after external cleanup removed the
-/// folder.
+/// An empty slice removes the metadata file and its dedicated
+/// `SESSION_DATA_DIR` directory. When attachments are present, the session
+/// metadata directory is created before the JSON payload is written so draft
+/// staging still works after external cleanup removed the folder.
 ///
 /// # Errors
 /// Returns an error if the attachment metadata cannot be serialized or
@@ -53,7 +52,14 @@ pub(super) async fn store_staged_draft_attachments(
 ) -> Result<(), FsError> {
     let attachment_path = staged_draft_attachment_path(base, session_id);
     if attachments.is_empty() {
-        return fs_client.remove_file(attachment_path).await;
+        fs_client.remove_file(attachment_path).await?;
+
+        let session_data_dir = base.join(session_id).join(SESSION_DATA_DIR);
+        if fs_client.is_dir(session_data_dir.clone()) {
+            fs_client.remove_dir_all(session_data_dir).await?;
+        }
+
+        return Ok(());
     }
 
     let Some(parent_dir) = attachment_path.parent() else {
@@ -104,11 +110,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_store_staged_draft_attachments_empty_slice_removes_metadata_file() {
+    async fn test_store_staged_draft_attachments_empty_slice_removes_metadata_directory() {
         // Arrange
         let temp_dir = tempdir().expect("failed to create temp dir");
         let fs_client = RealFsClient;
-        let session_data_dir = temp_dir.path().join("session-1").join(SESSION_DATA_DIR);
+        let session_root = temp_dir.path().join("session-1");
+        let session_data_dir = session_root.join(SESSION_DATA_DIR);
         tokio::fs::create_dir_all(&session_data_dir)
             .await
             .expect("failed to create session data dir");
@@ -124,6 +131,8 @@ mod tests {
 
         // Assert
         assert!(!attachment_path.exists());
+        assert!(session_root.exists());
+        assert!(!session_data_dir.exists());
     }
 
     #[tokio::test]
@@ -149,5 +158,36 @@ mod tests {
         let loaded_attachments =
             load_staged_draft_attachments(&fs_client, temp_dir.path(), "session-1").await;
         assert_eq!(loaded_attachments, attachments);
+    }
+
+    #[tokio::test]
+    /// Ensures clearing staged attachments preserves unrelated files stored
+    /// under the session root.
+    async fn test_store_staged_draft_attachments_empty_slice_preserves_other_session_files() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let fs_client = RealFsClient;
+        let session_root = temp_dir.path().join("session-1");
+        let session_data_dir = session_root.join(SESSION_DATA_DIR);
+        let unrelated_file = session_root.join("notes.txt");
+        tokio::fs::create_dir_all(&session_data_dir)
+            .await
+            .expect("failed to create session data dir");
+        tokio::fs::write(&unrelated_file, b"keep me")
+            .await
+            .expect("failed to seed unrelated file");
+        let attachment_path = staged_draft_attachment_path(temp_dir.path(), "session-1");
+        tokio::fs::write(&attachment_path, b"[]")
+            .await
+            .expect("failed to seed attachment file");
+
+        // Act
+        store_staged_draft_attachments(&fs_client, temp_dir.path(), "session-1", &[])
+            .await
+            .expect("failed to clear attachments");
+
+        // Assert
+        assert!(unrelated_file.exists());
+        assert!(!session_data_dir.exists());
     }
 }

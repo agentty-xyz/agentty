@@ -36,6 +36,7 @@ thiserror.workspace = true
 nix.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
 

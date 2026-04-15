@@ -31,6 +31,7 @@ pub(crate) struct SyncBlockedPopupRenderContext<'a> {
 /// Borrowed parameters for rendering a session-view info popup overlay.
 #[derive(Clone, Copy)]
 pub(crate) struct ViewInfoPopupRenderContext<'a> {
+    pub(crate) can_open_worktree: bool,
     pub(crate) is_loading: bool,
     pub(crate) loading_label: &'a str,
     pub(crate) message: &'a str,
@@ -105,6 +106,7 @@ pub(crate) fn render_view_info_popup(
     context: ViewInfoPopupRenderContext<'_>,
 ) {
     let ViewInfoPopupRenderContext {
+        can_open_worktree,
         is_loading,
         loading_label,
         message,
@@ -129,6 +131,7 @@ pub(crate) fn render_view_info_popup(
             active_progress,
             wall_clock_unix_seconds,
         )
+        .can_open_worktree(can_open_worktree)
         .render(f, area);
     }
 
@@ -561,6 +564,7 @@ mod tests {
     fn test_resolve_help_background_returns_none_for_missing_view_session() {
         // Arrange
         let help_context = HelpContext::View {
+            can_open_worktree: true,
             can_sync_review_request: false,
             done_session_output_mode: DoneSessionOutputMode::Summary,
             follow_up_task_action: None,

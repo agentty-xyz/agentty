@@ -57,6 +57,9 @@ pub struct RenderContext<'a> {
     pub session_git_statuses: &'a HashMap<String, SessionGitStatus>,
     /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<String, String>,
+    /// Whether each rendered session currently has a materialized worktree on
+    /// disk, keyed by session id.
+    pub session_worktree_availability: &'a HashMap<String, bool>,
     /// Mutable project-scoped settings snapshot.
     pub settings: &'a mut SettingsManager,
     /// Daily session activity series used by the stats view.

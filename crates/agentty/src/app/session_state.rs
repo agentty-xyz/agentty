@@ -22,6 +22,8 @@ pub struct SessionState {
     /// affordances.
     pub(crate) follow_up_task_positions: HashMap<String, usize>,
     pub handles: HashMap<String, SessionHandles>,
+    /// Cached worktree-directory availability keyed by session id.
+    pub(crate) session_worktree_availability: HashMap<String, bool>,
     pub sessions: Vec<Session>,
     pub table_state: TableState,
     pub(crate) clock: Arc<dyn Clock>,
@@ -50,6 +52,7 @@ impl SessionState {
         Self {
             follow_up_task_positions: HashMap::new(),
             handles,
+            session_worktree_availability: HashMap::new(),
             sessions,
             table_state,
             clock,
@@ -176,6 +179,27 @@ impl SessionState {
         session_git_statuses: HashMap<String, SessionGitStatus>,
     ) {
         self.session_git_statuses = session_git_statuses;
+    }
+
+    /// Replaces cached worktree-availability snapshots with one fresh reload
+    /// result.
+    pub(crate) fn replace_session_worktree_availability(
+        &mut self,
+        session_worktree_availability: HashMap<String, bool>,
+    ) {
+        self.session_worktree_availability = session_worktree_availability;
+    }
+
+    /// Updates cached worktree availability for one session after a lifecycle
+    /// transition materializes or removes its worktree.
+    pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
+        self.session_worktree_availability
+            .insert(session_id.to_string(), is_available);
+    }
+
+    /// Drops cached worktree availability for one removed session.
+    pub(crate) fn remove_session_worktree_availability(&mut self, session_id: &str) {
+        self.session_worktree_availability.remove(session_id);
     }
 
     /// Drops cached git-status entries for sessions that are no longer active

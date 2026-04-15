@@ -455,6 +455,33 @@ impl SessionManager {
         &self.state.session_git_statuses
     }
 
+    /// Replaces cached worktree-availability snapshots from the latest
+    /// session reload.
+    pub(crate) fn replace_session_worktree_availability(
+        &mut self,
+        session_worktree_availability: HashMap<String, bool>,
+    ) {
+        self.state
+            .replace_session_worktree_availability(session_worktree_availability);
+    }
+
+    /// Returns cached worktree availability keyed by session id.
+    pub(crate) fn session_worktree_availability(&self) -> &HashMap<String, bool> {
+        &self.state.session_worktree_availability
+    }
+
+    /// Updates cached worktree availability for one session after its
+    /// lifecycle materializes or removes the worktree.
+    pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
+        self.state
+            .set_session_worktree_available(session_id, is_available);
+    }
+
+    /// Drops cached worktree availability for one removed session.
+    pub(crate) fn remove_session_worktree_availability(&mut self, session_id: &str) {
+        self.state.remove_session_worktree_availability(session_id);
+    }
+
     /// Returns the selected follow-up task position for one session.
     pub(crate) fn selected_follow_up_task_position(&self, session_id: &str) -> Option<usize> {
         self.state.selected_follow_up_task_position(session_id)
@@ -582,7 +609,9 @@ mod tests {
     use crate::infra::agent::AgentResponse;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
-    use crate::infra::channel::{AgentRequestKind, MockAgentChannel, TurnResult};
+    use crate::infra::channel::{
+        AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnResult,
+    };
     use crate::infra::db::Database;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
@@ -782,6 +811,9 @@ mod tests {
         mock.expect_get_ahead_behind()
             .times(0..)
             .returning(|_| Box::pin(async { Ok((0, 0)) }));
+        mock.expect_get_ref_ahead_behind()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
         mock.expect_list_upstream_commit_titles()
             .times(0..)
             .returning(|_| Box::pin(async { Ok(Vec::new()) }));
@@ -1715,6 +1747,7 @@ mod tests {
         assert_eq!(session_id, app.sessions.sessions[0].id);
         assert!(app.sessions.sessions[0].is_draft_session());
         assert_eq!(app.sessions.sessions[0].status, Status::New);
+        assert!(!app.sessions.sessions[0].folder.exists());
 
         let db_sessions = app
             .services
@@ -2135,6 +2168,13 @@ mod tests {
             "First draft\n\nSecond draft"
         );
         assert!(app.sessions.sessions[0].draft_attachments.is_empty());
+        assert!(app.sessions.sessions[0].folder.exists());
+        assert!(
+            app.sessions.sessions[0]
+                .folder
+                .join(SESSION_DATA_DIR)
+                .is_dir()
+        );
         let db_sessions = app
             .services
             .db()
@@ -2142,6 +2182,37 @@ mod tests {
             .await
             .expect("failed to load");
         assert_eq!(db_sessions[0].prompt, "First draft\n\nSecond draft");
+    }
+
+    #[tokio::test]
+    async fn test_delete_selected_draft_session_removes_staged_draft_metadata() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_draft_session()
+            .await
+            .expect("failed to create draft session");
+        app.stage_draft_message(
+            &session_id,
+            TurnPrompt {
+                attachments: vec![TurnPromptAttachment {
+                    placeholder: "[Image #1]".to_string(),
+                    local_image_path: dir.path().join("draft-image.png"),
+                }],
+                text: "First draft".to_string(),
+            },
+        )
+        .await
+        .expect("failed to stage first draft");
+        let staged_draft_root = app.services.base_path().join(&session_id);
+        assert!(staged_draft_root.exists());
+
+        // Act
+        app.delete_selected_session().await;
+
+        // Assert
+        assert!(!staged_draft_root.exists());
     }
 
     #[tokio::test]
@@ -2564,9 +2635,16 @@ mod tests {
             .collect();
 
         // Act
-        let (sessions, stats_activity) =
-            SessionManager::load_sessions(dir.path(), &db, project_id, &working_dir, &mut handles)
-                .await;
+        let fs_client = fs::RealFsClient;
+        let (sessions, stats_activity, _) = SessionManager::load_sessions_with_fs_client(
+            dir.path(),
+            &db,
+            project_id,
+            &working_dir,
+            &mut handles,
+            &fs_client,
+        )
+        .await;
 
         // Assert
         assert_eq!(sessions.len(), 3);
@@ -2603,9 +2681,16 @@ mod tests {
         let mut handles: HashMap<String, SessionHandles> = HashMap::new();
 
         // Act
-        let (sessions, stats_activity) =
-            SessionManager::load_sessions(dir.path(), &db, project_id, &working_dir, &mut handles)
-                .await;
+        let fs_client = fs::RealFsClient;
+        let (sessions, stats_activity, _) = SessionManager::load_sessions_with_fs_client(
+            dir.path(),
+            &db,
+            project_id,
+            &working_dir,
+            &mut handles,
+            &fs_client,
+        )
+        .await;
 
         // Assert
         assert_eq!(sessions.len(), 1);
@@ -2848,12 +2933,14 @@ mod tests {
             .expect("failed to write test file");
 
         // Act
-        let (reloaded_sessions, _) = SessionManager::load_sessions(
+        let fs_client = fs::RealFsClient;
+        let (reloaded_sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             app.services.base_path(),
             app.services.db(),
             app.projects.active_project_id(),
             app.projects.working_dir(),
             &mut app.sessions.handles,
+            &fs_client,
         )
         .await;
         let db_sessions = app
@@ -2970,12 +3057,14 @@ mod tests {
             .expect("failed to write test file");
 
         // Act
-        let (reloaded_sessions, _) = SessionManager::load_sessions(
+        let fs_client = fs::RealFsClient;
+        let (reloaded_sessions, _, _) = SessionManager::load_sessions_with_fs_client(
             app.services.base_path(),
             app.services.db(),
             app.projects.active_project_id(),
             app.projects.working_dir(),
             &mut app.sessions.handles,
+            &fs_client,
         )
         .await;
         let db_sessions = app
