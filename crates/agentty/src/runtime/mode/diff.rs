@@ -14,62 +14,87 @@ use crate::ui::util::{diff_view_max_scroll_offset, parse_diff_lines, selected_di
 /// when present; otherwise it rebuilds session view with any cached focused
 /// review output for the same session.
 pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
-    if key.code == KeyCode::Char('?') {
-        let mode = std::mem::replace(&mut app.mode, AppMode::List);
-        if let AppMode::Diff {
-            diff,
-            file_explorer_selected_index,
-            restore_question,
-            session_id,
-            scroll_offset,
-            ..
-        } = mode
-        {
-            app.mode = AppMode::Help {
-                context: HelpContext::Diff {
-                    diff,
-                    file_explorer_selected_index,
-                    restore_question,
-                    session_id,
-                    scroll_offset,
-                },
-                scroll_offset: 0,
-            };
-        } else {
-            app.mode = mode;
-        }
-
+    if handle_help_key(app, key) {
         return EventResult::Continue;
     }
 
-    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-        let mode = std::mem::replace(&mut app.mode, AppMode::List);
-        if let AppMode::Diff {
-            restore_question,
-            session_id,
-            ..
-        } = mode
-        {
-            app.mode = if let Some(snapshot) = restore_question {
-                snapshot.into_question_mode()
-            } else {
-                let (review_status_message, review_text) = app.review_view_state(&session_id);
-
-                AppMode::View {
-                    done_session_output_mode: DoneSessionOutputMode::Summary,
-                    review_status_message,
-                    review_text,
-                    session_id,
-                    scroll_offset: None,
-                }
-            };
-        } else {
-            app.mode = mode;
-        }
-
+    if handle_exit_key(app, key) {
         return EventResult::Continue;
     }
 
+    handle_navigation_key(app, content_area, key);
+
+    EventResult::Continue
+}
+
+/// Opens diff help while preserving the current diff-mode snapshot.
+fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
+    if key.code != KeyCode::Char('?') {
+        return false;
+    }
+
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+    if let AppMode::Diff {
+        diff,
+        file_explorer_selected_index,
+        restore_question,
+        session_id,
+        scroll_offset,
+        ..
+    } = mode
+    {
+        app.mode = AppMode::Help {
+            context: HelpContext::Diff {
+                diff,
+                file_explorer_selected_index,
+                restore_question,
+                session_id,
+                scroll_offset,
+            },
+            scroll_offset: 0,
+        };
+    } else {
+        app.mode = mode;
+    }
+
+    true
+}
+
+/// Leaves diff mode and restores the originating view or question state.
+fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
+    if !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+        return false;
+    }
+
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+    if let AppMode::Diff {
+        restore_question,
+        session_id,
+        ..
+    } = mode
+    {
+        app.mode = if let Some(snapshot) = restore_question {
+            snapshot.into_question_mode()
+        } else {
+            let (review_status_message, review_text) = app.review_view_state(&session_id);
+
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message,
+                review_text,
+                session_id,
+                scroll_offset: None,
+            }
+        };
+    } else {
+        app.mode = mode;
+    }
+
+    true
+}
+
+/// Applies file-selection and scroll navigation keys in diff mode.
+fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
     if let AppMode::Diff {
         diff,
         file_explorer_selected_index,
@@ -134,8 +159,6 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
             _ => {}
         }
     }
-
-    EventResult::Continue
 }
 
 /// Returns true when the key event is a plain character key with no

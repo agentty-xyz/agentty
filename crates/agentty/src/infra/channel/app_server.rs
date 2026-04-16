@@ -105,8 +105,6 @@ impl AgentChannel for AppServerAgentChannel {
                                     // Fire-and-forget: receiver may be dropped during shutdown.
                                     let _ =
                                         events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
-
-                                    continue;
                                 }
                             }
                             AppServerStreamEvent::ProgressUpdate(progress) => {

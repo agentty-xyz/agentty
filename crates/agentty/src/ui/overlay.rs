@@ -21,21 +21,41 @@ const OVERLAY_VERTICAL_PADDING: u16 = 1;
 /// Borrowed parameters for rendering the sync-blocked popup overlay.
 #[derive(Clone, Copy)]
 pub(crate) struct SyncBlockedPopupRenderContext<'a> {
+    /// Default branch shown in the popup detail, when available.
     pub(crate) default_branch: Option<&'a str>,
+    /// Whether the popup should render its loading indicator.
     pub(crate) is_loading: bool,
+    /// Main popup detail message.
     pub(crate) message: &'a str,
+    /// Active project name shown in the popup detail, when available.
     pub(crate) project_name: Option<&'a str>,
+    /// Popup title.
     pub(crate) title: &'a str,
 }
 
 /// Borrowed parameters for rendering a session-view info popup overlay.
 #[derive(Clone, Copy)]
 pub(crate) struct ViewInfoPopupRenderContext<'a> {
+    /// Whether the restored session background can open its worktree.
     pub(crate) can_open_worktree: bool,
+    /// Active project-scoped default reasoning level.
+    pub(crate) default_reasoning_level: ReasoningLevel,
+    /// Whether the popup should render its loading indicator.
     pub(crate) is_loading: bool,
+    /// Loading indicator label.
     pub(crate) loading_label: &'a str,
+    /// Popup detail message.
     pub(crate) message: &'a str,
+    /// Restored session view rendered behind the popup.
+    pub(crate) restore_view: &'a ConfirmationViewMode,
+    /// Session progress messages keyed by session id.
+    pub(crate) session_progress_messages: &'a HashMap<String, String>,
+    /// Session rows available for restored background rendering.
+    pub(crate) sessions: &'a [Session],
+    /// Popup title.
     pub(crate) title: &'a str,
+    /// Render-time clock used for deterministic timers.
+    pub(crate) wall_clock_unix_seconds: i64,
 }
 
 /// Renders the list background and generic confirmation overlay.
@@ -98,19 +118,19 @@ pub(crate) fn render_sync_blocked_popup(
 pub(crate) fn render_view_info_popup(
     f: &mut Frame,
     area: Rect,
-    restore_view: &ConfirmationViewMode,
-    sessions: &[Session],
-    session_progress_messages: &HashMap<String, String>,
-    default_reasoning_level: ReasoningLevel,
-    wall_clock_unix_seconds: i64,
     context: ViewInfoPopupRenderContext<'_>,
 ) {
     let ViewInfoPopupRenderContext {
         can_open_worktree,
+        default_reasoning_level,
         is_loading,
         loading_label,
         message,
+        restore_view,
+        session_progress_messages,
+        sessions,
         title,
+        wall_clock_unix_seconds,
     } = context;
     let background_mode = restore_view.clone().into_view_mode();
 
@@ -121,16 +141,16 @@ pub(crate) fn render_view_info_popup(
         let active_progress = session_progress_messages
             .get(&restore_view.session_id)
             .map(std::string::String::as_str);
-        page::session_chat::SessionChatPage::new(
-            sessions,
-            session_index,
-            restore_view.scroll_offset,
-            &background_mode,
-            default_reasoning_level,
-            None,
+        page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
+            active_prompt_output: None,
             active_progress,
+            default_reasoning_level,
+            mode: &background_mode,
+            scroll_offset: restore_view.scroll_offset,
+            session_index,
+            sessions,
             wall_clock_unix_seconds,
-        )
+        })
         .can_open_worktree(can_open_worktree)
         .render(f, area);
     }
@@ -358,16 +378,16 @@ fn render_help_background(
             let active_progress = session_progress_messages
                 .get(session_id)
                 .map(std::string::String::as_str);
-            page::session_chat::SessionChatPage::new(
-                sessions,
-                session_index,
-                scroll_offset,
-                &bg_mode,
-                list_background.settings.reasoning_level,
-                None,
+            page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
+                active_prompt_output: None,
                 active_progress,
+                default_reasoning_level: list_background.settings.reasoning_level,
+                mode: &bg_mode,
+                scroll_offset,
+                session_index,
+                sessions,
                 wall_clock_unix_seconds,
-            )
+            })
             .render(f, area);
         }
         Some(ResolvedHelpBackground::Diff {

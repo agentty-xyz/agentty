@@ -468,6 +468,46 @@ pub async fn push_current_branch(repo_path: PathBuf) -> Result<String, GitError>
     .await?
 }
 
+/// Checks whether a branch already exists on the remote.
+///
+/// Resolves the remote name from the current branch config, falling back
+/// to `origin`, then runs `git ls-remote --heads <remote> <branch>`.
+/// Returns `true` when the remote reports at least one matching ref.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `remote_branch_name` - Branch name to look up on the remote
+///
+/// # Errors
+/// Returns a [`GitError`] if the `git ls-remote` command fails.
+pub async fn remote_branch_exists(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+) -> Result<bool, GitError> {
+    spawn_blocking(move || -> Result<bool, GitError> {
+        let remote_name =
+            current_branch_remote_name(&repo_path).unwrap_or_else(|_| "origin".to_string());
+        let output = run_git_command_output_sync(
+            &repo_path,
+            &["ls-remote", "--heads", &remote_name, &remote_branch_name],
+        )?;
+
+        if !output.status.success() {
+            let detail = command_output_detail(&output.stdout, &output.stderr);
+
+            return Err(GitError::CommandFailed {
+                command: "git ls-remote".to_string(),
+                stderr: detail,
+            });
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        Ok(!stdout.trim().is_empty())
+    })
+    .await?
+}
+
 /// Pushes the current branch to one explicit remote branch name with
 /// `--force-with-lease` and returns the resulting upstream reference.
 ///

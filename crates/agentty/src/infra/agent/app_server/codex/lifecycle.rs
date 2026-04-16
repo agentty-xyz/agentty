@@ -87,7 +87,7 @@ pub(super) async fn start_runtime_with_built_command(
     AppServerError,
 > {
     let (mut child, stdin, stdout) =
-        app_server_transport::spawn_runtime_command(command, "codex app-server").await?;
+        app_server_transport::spawn_runtime_command(command, "codex app-server")?;
     let mut transport = CodexStdioTransport::new(stdin, stdout);
     let mut state = CodexRuntimeState::new(request.folder.clone(), request.model.clone());
 
@@ -434,42 +434,49 @@ pub(super) async fn execute_turn_event_loop<Transport: CodexRuntimeTransport>(
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
 ) -> Result<(String, u64, u64), AppServerError> {
     let prompt = prompt.into();
-    execute_turn_event_loop_with_timeout(
-        transport,
+    let input = CodexTurnEventLoopInput {
         folder,
         model,
-        thread_id,
-        &prompt,
+        prompt,
         reasoning_level,
         stream_tx,
-        app_server_transport::TURN_TIMEOUT,
-    )
-    .await
+        thread_id,
+        turn_timeout: app_server_transport::TURN_TIMEOUT,
+    };
+
+    execute_turn_event_loop_with_timeout(transport, input).await
+}
+
+/// Borrowed inputs used to start and monitor one Codex app-server turn.
+pub(super) struct CodexTurnEventLoopInput<'a> {
+    /// Worktree folder where the turn should execute.
+    folder: &'a Path,
+    /// Model id requested for the turn.
+    model: &'a str,
+    /// Prompt payload sent to the runtime.
+    prompt: TurnPrompt,
+    /// Reasoning level sent to the runtime.
+    reasoning_level: ReasoningLevel,
+    /// Stream sender that receives progress and assistant chunks.
+    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    /// Runtime thread id for the active provider conversation.
+    thread_id: &'a str,
+    /// Maximum time to wait for the turn completion event.
+    turn_timeout: Duration,
 }
 
 /// Sends one `turn/start` request and processes the event stream using a
 /// caller-provided timeout window.
 pub(super) async fn execute_turn_event_loop_with_timeout<Transport: CodexRuntimeTransport>(
     transport: &mut Transport,
-    folder: &Path,
-    model: &str,
-    thread_id: &str,
-    prompt: impl Into<TurnPrompt>,
-    reasoning_level: ReasoningLevel,
-    stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
-    turn_timeout: Duration,
+    input: CodexTurnEventLoopInput<'_>,
 ) -> Result<(String, u64, u64), AppServerError> {
-    let prompt = prompt.into();
-    let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
-    let turn_start_payload = build_turn_start_payload(
-        folder,
-        model,
-        reasoning_level,
-        thread_id,
-        &prompt,
-        &turn_start_id,
-    );
-    transport.write_json_line(turn_start_payload).await?;
+    let turn_start_id = write_turn_start_request(transport, &input).await?;
+    let CodexTurnEventLoopInput {
+        stream_tx,
+        turn_timeout,
+        ..
+    } = input;
 
     let mut assistant_messages = Vec::new();
     let mut active_turn_id: Option<String> = None;
@@ -563,6 +570,25 @@ pub(super) async fn execute_turn_event_loop_with_timeout<Transport: CodexRuntime
     })
     .await
     .map_err(|_| turn_completed_timeout_error(turn_timeout))?
+}
+
+/// Writes the initial `turn/start` request and returns its request id.
+async fn write_turn_start_request<Transport: CodexRuntimeTransport>(
+    transport: &mut Transport,
+    input: &CodexTurnEventLoopInput<'_>,
+) -> Result<String, AppServerError> {
+    let turn_start_id = format!("turn-start-{}", uuid::Uuid::new_v4());
+    let turn_start_payload = build_turn_start_payload(
+        input.folder,
+        input.model,
+        input.reasoning_level,
+        input.thread_id,
+        &input.prompt,
+        &turn_start_id,
+    );
+    transport.write_json_line(turn_start_payload).await?;
+
+    Ok(turn_start_id)
 }
 
 /// Builds one `turn/start` request payload for the active thread.

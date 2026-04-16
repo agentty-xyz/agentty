@@ -428,9 +428,10 @@ mod tests {
         let error =
             ClipboardError::TaskJoin(tokio::runtime::Runtime::new().expect("runtime").block_on(
                 async {
-                    tokio::task::spawn_blocking(|| panic!("test"))
-                        .await
-                        .expect_err("should panic")
+                    let handle = tokio::spawn(std::future::pending::<()>());
+                    handle.abort();
+
+                    handle.await.expect_err("should be cancelled")
                 },
             ));
         let normalized_error = normalize_clipboard_image_error(&error);

@@ -15,6 +15,7 @@ use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Status};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
+use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
@@ -136,8 +137,49 @@ async fn handle_view_key(
     let view_metrics = view_key_context.metrics;
     let view_session_snapshot = view_key_context.session_snapshot;
 
+    if let Some(should_apply_pending_update) = handle_primary_view_key(
+        app,
+        key,
+        view_context,
+        view_session_snapshot,
+        pending_update,
+    )
+    .await
+    {
+        return should_apply_pending_update;
+    }
+
+    if handle_scroll_key(key, view_metrics, pending_update) {
+        return true;
+    }
+
+    if let Some(should_apply_pending_update) = handle_workflow_view_key(
+        app,
+        key,
+        view_context,
+        view_session_snapshot,
+        pending_update,
+    )
+    .await
+    {
+        return should_apply_pending_update;
+    }
+
+    true
+}
+
+/// Handles primary session-view actions that do not need diff/review routing.
+async fn handle_primary_view_key(
+    app: &mut App,
+    key: KeyEvent,
+    view_context: &ViewContext,
+    view_session_snapshot: &ViewSessionSnapshot,
+    pending_update: &ViewPendingUpdate,
+) -> Option<bool> {
     match key.code {
-        KeyCode::Char('q') => app.mode = AppMode::List,
+        KeyCode::Char('q') => {
+            app.mode = AppMode::List;
+        }
         KeyCode::Char('o') if view_session_snapshot.can_open_worktree => {
             open_worktree_for_view_session(app, view_context).await;
         }
@@ -153,7 +195,7 @@ async fn handle_view_key(
                 .await;
             }
 
-            return false;
+            return Some(false);
         }
         KeyCode::Char('s') if view_session_snapshot.can_start_staged_session => {
             if let Err(error) = app.start_staged_session(&view_context.session_id).await {
@@ -164,13 +206,13 @@ async fn handle_view_key(
                 .await;
             }
 
-            return false;
+            return Some(false);
         }
         KeyCode::Char('s') if view_session_snapshot.can_sync_review_request => {
             let restore_view = confirmation_view_mode(view_context);
             app.start_sync_review_request_action(restore_view, &view_context.session_id);
 
-            return false;
+            return Some(false);
         }
         KeyCode::Char('[') if app.has_multiple_follow_up_tasks(&view_context.session_id) => {
             app.select_previous_follow_up_task(&view_context.session_id);
@@ -203,6 +245,19 @@ async fn handle_view_key(
                 pending_update.scroll_offset,
             );
         }
+        _ => return None,
+    }
+
+    Some(true)
+}
+
+/// Handles scroll-only keys in session view.
+fn handle_scroll_key(
+    key: KeyEvent,
+    view_metrics: ViewMetrics,
+    pending_update: &mut ViewPendingUpdate,
+) -> bool {
+    match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
             pending_update.scroll_offset =
                 scroll_offset_down(pending_update.scroll_offset, view_metrics, 1);
@@ -226,6 +281,22 @@ async fn handle_view_key(
                 view_metrics,
             ));
         }
+        _ => return false,
+    }
+
+    true
+}
+
+/// Handles workflow actions in session view such as diff, publish, review,
+/// merge, rebase, cancellation, and help.
+async fn handle_workflow_view_key(
+    app: &mut App,
+    key: KeyEvent,
+    view_context: &ViewContext,
+    view_session_snapshot: &ViewSessionSnapshot,
+    pending_update: &mut ViewPendingUpdate,
+) -> Option<bool> {
+    match key.code {
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && is_view_diff_allowed(view_session_snapshot.session_status) =>
@@ -237,11 +308,11 @@ async fn handle_view_key(
                 && view_session_snapshot.publish_branch_action.is_some() =>
         {
             let Some(publish_branch_action) = view_session_snapshot.publish_branch_action else {
-                return true;
+                return Some(true);
             };
             open_publish_branch_input(app, view_context, publish_branch_action);
 
-            return false;
+            return Some(false);
         }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'p')
@@ -251,11 +322,11 @@ async fn handle_view_key(
             let Some(publish_pull_request_action) =
                 view_session_snapshot.publish_pull_request_action
             else {
-                return true;
+                return Some(true);
             };
             open_publish_branch_input(app, view_context, publish_pull_request_action);
 
-            return false;
+            return Some(false);
         }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'f')
@@ -281,16 +352,16 @@ async fn handle_view_key(
         {
             end_in_progress_turn(app, &view_context.session_id).await;
 
-            return false;
+            return Some(false);
         }
         KeyCode::Char('?') => {
             open_view_help_overlay(app, view_context, view_session_snapshot);
-            return false;
+            return Some(false);
         }
-        _ => {}
+        _ => return None,
     }
 
-    true
+    Some(true)
 }
 
 /// Opens a merge confirmation overlay for the active view session.
@@ -515,11 +586,9 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         // branch fires and triggers graceful channel shutdown. The
         // worker sends SIGTERM to CLI child processes inside the
         // cancellation path where the PID is guaranteed valid.
-        handles
-            .cancel_token
-            .lock()
-            .expect("cancel token lock poisoned")
-            .cancel();
+        if let Ok(cancel_token) = handles.cancel_token.lock() {
+            cancel_token.cancel();
+        }
     }
 
     if app
@@ -717,13 +786,17 @@ fn view_total_lines(
         .map_or(0, |session| {
             SessionChatPage::rendered_output_line_count(
                 session,
-                active_prompt_output,
-                app.sessions.selected_follow_up_task_position(session_id),
                 output_width,
-                done_session_output_mode,
-                review_status_message,
-                review_text,
-                active_progress,
+                SessionOutputLineContext {
+                    active_prompt_output,
+                    active_progress,
+                    done_session_output_mode,
+                    review_status_message,
+                    review_text,
+                    selected_follow_up_task_position: app
+                        .sessions
+                        .selected_follow_up_task_position(session_id),
+                },
             )
         })
 }

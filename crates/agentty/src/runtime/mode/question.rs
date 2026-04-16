@@ -8,6 +8,7 @@ use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPrompt;
 use crate::runtime::EventResult;
 use crate::runtime::mode::{at_mention, input_key};
+use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
     AppMode, DoneSessionOutputMode, QuestionFocus, QuestionModeSnapshot,
@@ -168,13 +169,15 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
 
             SessionChatPage::rendered_output_line_count(
                 session,
-                active_prompt_output,
-                None,
                 output_width,
-                DoneSessionOutputMode::Summary,
-                None,
-                None,
-                active_progress,
+                SessionOutputLineContext {
+                    active_prompt_output,
+                    active_progress,
+                    done_session_output_mode: DoneSessionOutputMode::Summary,
+                    review_status_message: None,
+                    review_text: None,
+                    selected_follow_up_task_position: None,
+                },
             )
         });
 

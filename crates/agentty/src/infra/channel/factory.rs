@@ -13,11 +13,6 @@ use crate::infra::channel::contract::AgentChannel;
 ///
 /// CLI providers (Claude) use [`CliAgentChannel`]; app-server providers
 /// (Gemini, Codex) use [`AppServerAgentChannel`].
-///
-/// # Panics
-///
-/// Panics if an app-server transport kind does not provide an app-server
-/// client implementation.
 pub fn create_agent_channel(
     kind: AgentKind,
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
@@ -26,10 +21,12 @@ pub fn create_agent_channel(
     let transport = agent::transport_mode(kind);
 
     if transport.uses_app_server() {
-        let app_server_client = agent::create_app_server_client(kind, app_server_client_override)
-            .expect("app-server backend should provide an app-server client");
-
-        Arc::new(AppServerAgentChannel::new(app_server_client, kind))
+        match agent::create_app_server_client(kind, app_server_client_override) {
+            Some(app_server_client) => {
+                Arc::new(AppServerAgentChannel::new(app_server_client, kind))
+            }
+            None => Arc::new(CliAgentChannel::with_backend(Arc::from(backend), kind)),
+        }
     } else {
         Arc::new(CliAgentChannel::with_backend(Arc::from(backend), kind))
     }

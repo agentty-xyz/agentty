@@ -11,6 +11,11 @@ use super::response_parser::ParsedResponse;
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::infra::app_server::AppServerClient;
 
+/// Factory hook used to build or override provider-specific app-server
+/// clients.
+type AppServerClientFactory =
+    fn(Option<Arc<dyn AppServerClient>>) -> Option<Arc<dyn AppServerClient>>;
+
 /// Creates the backend implementation for the selected agent provider.
 pub fn create_backend(kind: AgentKind) -> Box<dyn AgentBackend> {
     (provider_descriptor(kind).backend_factory)()
@@ -126,8 +131,7 @@ pub(crate) fn provider_kind_for_model(model: &str) -> Result<AgentKind, String> 
 
 /// One backend/provider descriptor containing construction and parsing hooks.
 struct AgentProviderDescriptor {
-    app_server_client_factory:
-        fn(Option<Arc<dyn AppServerClient>>) -> Option<Arc<dyn AppServerClient>>,
+    app_server_client_factory: AppServerClientFactory,
     app_server_thought_policy: AppServerThoughtPolicy,
     backend_factory: fn() -> Box<dyn AgentBackend>,
     parse_response: fn(&str, &str) -> ParsedResponse,

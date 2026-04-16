@@ -153,7 +153,7 @@ mod tests {
     };
 
     /// Captures the dynamic request id from a written payload.
-    fn remember_request_id(id_store: Arc<Mutex<Option<String>>>, payload: &Value) {
+    fn remember_request_id(id_store: &Arc<Mutex<Option<String>>>, payload: &Value) {
         let id = payload
             .get("id")
             .and_then(Value::as_str)
@@ -179,7 +179,7 @@ mod tests {
                 let request_id = Arc::clone(&request_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&request_id), &payload);
+                    remember_request_id(&request_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -236,7 +236,7 @@ mod tests {
                 let init_id = Arc::clone(&init_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&init_id), &payload);
+                    remember_request_id(&init_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -276,7 +276,7 @@ mod tests {
                 let session_new_id = Arc::clone(&session_new_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&session_new_id), &payload);
+                    remember_request_id(&session_new_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -316,125 +316,7 @@ mod tests {
         let mut sequence = Sequence::new();
         let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
 
-        transport
-            .expect_write_json_line()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .withf(|payload| {
-                payload.get("method").and_then(Value::as_str) == Some("session/prompt")
-            })
-            .returning({
-                let prompt_id = Arc::clone(&prompt_id);
-
-                move |payload| {
-                    remember_request_id(Arc::clone(&prompt_id), &payload);
-
-                    Box::pin(async { Ok(()) })
-                }
-            });
-        transport
-            .expect_next_stdout()
-            .in_sequence(&mut sequence)
-            .times(1)
-            .return_once(|| {
-                Box::pin(async {
-                    Ok(Some(
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "id": "permission-1",
-                            "method": "session/request_permission",
-                            "params": {
-                                "sessionId": "session-1",
-                                "options": [{
-                                    "optionId": "allow-once",
-                                    "kind": "allow_once"
-                                }]
-                            }
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
-        transport
-            .expect_write_json_line()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .withf(|payload| payload.get("id") == Some(&Value::String("permission-1".to_string())))
-            .returning(|_| Box::pin(async { Ok(()) }));
-        transport
-            .expect_next_stdout()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(|| {
-                Box::pin(async {
-                    Ok(Some(
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "method": "session/update",
-                            "params": {
-                                "sessionId": "session-1",
-                                "update": {
-                                    "sessionUpdate": "tool_call",
-                                    "title": "read_file"
-                                }
-                            }
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
-        transport
-            .expect_next_stdout()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(|| {
-                Box::pin(async {
-                    Ok(Some(
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "method": "session/update",
-                            "params": {
-                                "sessionId": "session-1",
-                                "update": {
-                                    "sessionUpdate": "agent_message_chunk",
-                                    "content": {
-                                        "type": "text",
-                                        "text": "Chunk text"
-                                    }
-                                }
-                            }
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
-        transport
-            .expect_next_stdout()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(move || {
-                let response_id = prompt_id
-                    .lock()
-                    .expect("prompt mutex should lock")
-                    .clone()
-                    .expect("prompt id should be recorded");
-
-                Box::pin(async move {
-                    Ok(Some(
-                        serde_json::json!({
-                            "id": response_id,
-                            "result": {
-                                "usage": {
-                                    "inputTokens": 11,
-                                    "outputTokens": 4
-                                },
-                                "response": "Chunk text"
-                            }
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
+        expect_permission_progress_chunk_and_completion(&mut transport, &mut sequence, prompt_id);
 
         // Act
         let result = lifecycle::run_turn_with_runtime(
@@ -465,6 +347,176 @@ mod tests {
                 phase: None,
             })
         );
+    }
+
+    /// Expects a Gemini prompt flow with permission approval, tool progress,
+    /// content delta, and final completion.
+    fn expect_permission_progress_chunk_and_completion(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+        prompt_id: Arc<Mutex<Option<String>>>,
+    ) {
+        expect_prompt_request(transport, sequence, &prompt_id);
+        expect_permission_request_and_response(transport, sequence);
+        expect_tool_progress_update(transport, sequence);
+        expect_message_chunk_update(transport, sequence);
+        expect_prompt_completion(transport, sequence, prompt_id);
+    }
+
+    /// Expects the initial Gemini prompt request.
+    fn expect_prompt_request(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+        prompt_id: &Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some("session/prompt")
+            })
+            .returning({
+                let prompt_id = Arc::clone(prompt_id);
+
+                move |payload| {
+                    remember_request_id(&prompt_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+    }
+
+    /// Expects permission request output and the matching approval response.
+    fn expect_permission_request_and_response(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+    ) {
+        transport
+            .expect_next_stdout()
+            .in_sequence(sequence)
+            .times(1)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": "permission-1",
+                            "method": "session/request_permission",
+                            "params": {
+                                "sessionId": "session-1",
+                                "options": [{
+                                    "optionId": "allow-once",
+                                    "kind": "allow_once"
+                                }]
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| payload.get("id") == Some(&Value::String("permission-1".to_string())))
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }
+
+    /// Expects one Gemini tool-progress update.
+    fn expect_tool_progress_update(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+    ) {
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {
+                                "sessionId": "session-1",
+                                "update": {
+                                    "sessionUpdate": "tool_call",
+                                    "title": "read_file"
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
+    /// Expects one assistant message chunk update.
+    fn expect_message_chunk_update(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+    ) {
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "session/update",
+                            "params": {
+                                "sessionId": "session-1",
+                                "update": {
+                                    "sessionUpdate": "agent_message_chunk",
+                                    "content": {
+                                        "type": "text",
+                                        "text": "Chunk text"
+                                    }
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+    }
+
+    /// Expects the final Gemini prompt completion response.
+    fn expect_prompt_completion(
+        transport: &mut MockGeminiRuntimeTransport,
+        sequence: &mut Sequence,
+        prompt_id: Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(move || {
+                let response_id = prompt_id
+                    .lock()
+                    .expect("prompt mutex should lock")
+                    .clone()
+                    .expect("prompt id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "result": {
+                                "usage": {
+                                    "inputTokens": 11,
+                                    "outputTokens": 4
+                                },
+                                "response": "Chunk text"
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
     }
 
     #[test]

@@ -183,7 +183,7 @@ pub async fn shutdown_child(child: &mut tokio::process::Child) {
 ///
 /// Returns a provider error when the command cannot be spawned or either
 /// required stdio pipe is unavailable.
-pub async fn spawn_runtime_command(
+pub fn spawn_runtime_command(
     command: std::process::Command,
     runtime_name: &str,
 ) -> Result<

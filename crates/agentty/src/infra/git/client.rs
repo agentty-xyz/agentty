@@ -18,7 +18,8 @@ use super::{
     is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
     push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
-    rebase_start, remove_worktree, repo_url, squash_merge, squash_merge_diff, stage_all,
+    rebase_start, remote_branch_exists, remove_worktree, repo_url, squash_merge, squash_merge_diff,
+    stage_all,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -258,6 +259,17 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         remote_branch_name: String,
     ) -> GitFuture<Result<String, GitError>>;
+
+    /// Checks whether `remote_branch_name` already exists on the remote for
+    /// the repository at `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when the remote lookup command fails.
+    fn remote_branch_exists(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<bool, GitError>>;
 
     /// Resolves the current upstream reference for `repo_path`.
     ///
@@ -515,6 +527,14 @@ impl GitClient for RealGitClient {
         Box::pin(async move {
             push_current_branch_to_remote_branch(repo_path, remote_branch_name).await
         })
+    }
+
+    fn remote_branch_exists(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<bool, GitError>> {
+        Box::pin(async move { remote_branch_exists(repo_path, remote_branch_name).await })
     }
 
     fn current_upstream_reference(

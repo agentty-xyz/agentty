@@ -22,6 +22,9 @@ pub(crate) struct BranchPublishTaskSession {
     pub(crate) folder: PathBuf,
     /// Stable session identifier.
     pub(crate) id: String,
+    /// Persisted upstream reference from a previous push, when the session
+    /// already tracks one.
+    pub(crate) published_upstream_ref: Option<String>,
     /// Persisted linked review request, when the session already tracks one.
     pub(crate) review_request: Option<ReviewRequest>,
     /// Current session lifecycle state checked before push.
@@ -35,6 +38,7 @@ impl BranchPublishTaskSession {
             base_branch: session.base_branch.clone(),
             folder: session.folder.clone(),
             id: session.id.clone(),
+            published_upstream_ref: session.published_upstream_ref.clone(),
             review_request: session.review_request.clone(),
             status: session.status,
         }
@@ -56,6 +60,9 @@ pub(crate) struct BranchPublishActionUpdate {
 /// failures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BranchPublishTaskFailure {
+    /// Whether the failure represents a blocked state (e.g. auth required)
+    /// rather than an execution error.
+    pub(crate) is_blocked: bool,
     /// Popup body text describing the failure.
     pub(crate) message: String,
     /// Popup title shown for the failure.
@@ -66,6 +73,7 @@ impl BranchPublishTaskFailure {
     /// Builds one blocked-state popup payload from an actionable message.
     pub(crate) fn blocked(publish_branch_action: PublishBranchAction, message: String) -> Self {
         Self {
+            is_blocked: true,
             message,
             title: match publish_branch_action {
                 PublishBranchAction::Push => "Branch push blocked".to_string(),
@@ -79,6 +87,7 @@ impl BranchPublishTaskFailure {
     /// Builds one failure-state popup payload from an execution error.
     pub(crate) fn failed(publish_branch_action: PublishBranchAction, message: String) -> Self {
         Self {
+            is_blocked: false,
             message,
             title: match publish_branch_action {
                 PublishBranchAction::Push => "Branch push failed".to_string(),
@@ -86,6 +95,17 @@ impl BranchPublishTaskFailure {
                     "Review request publish failed".to_string()
                 }
             },
+        }
+    }
+
+    /// Rebuilds the popup title for a different publish action while
+    /// preserving the blocked/failed distinction and original message.
+    #[cfg(test)]
+    pub(crate) fn with_action(self, publish_branch_action: PublishBranchAction) -> Self {
+        if self.is_blocked {
+            Self::blocked(publish_branch_action, self.message)
+        } else {
+            Self::failed(publish_branch_action, self.message)
         }
     }
 }
@@ -267,16 +287,10 @@ pub(crate) async fn run_branch_publish_action(
 }
 
 /// Returns whether error output looks like a git push authentication failure.
-pub(crate) fn is_git_push_authentication_error(detail_message: &str) -> bool {
-    let normalized_detail = detail_message.to_ascii_lowercase();
-
-    let is_push_context = normalized_detail.contains("git push failed")
-        || (normalized_detail.contains("push")
-            && (normalized_detail.contains("remote") || normalized_detail.contains("origin")));
-    if !is_push_context {
-        return false;
-    }
-
+/// Returns whether `normalized_detail` (already lower-cased) contains any
+/// credential- or authentication-related keywords produced by git remote
+/// operations.
+fn has_authentication_error_keywords(normalized_detail: &str) -> bool {
     normalized_detail.contains("authentication failed")
         || normalized_detail.contains("terminal prompts disabled")
         || normalized_detail.contains("could not read username")
@@ -287,6 +301,19 @@ pub(crate) fn is_git_push_authentication_error(detail_message: &str) -> bool {
         || normalized_detail.contains("support for password authentication was removed")
         || normalized_detail.contains("the requested url returned error: 403")
         || normalized_detail.contains("repository not found")
+}
+
+pub(crate) fn is_git_push_authentication_error(detail_message: &str) -> bool {
+    let normalized_detail = detail_message.to_ascii_lowercase();
+
+    let is_push_context = normalized_detail.contains("git push failed")
+        || (normalized_detail.contains("push")
+            && (normalized_detail.contains("remote") || normalized_detail.contains("origin")));
+    if !is_push_context {
+        return false;
+    }
+
+    has_authentication_error_keywords(&normalized_detail)
 }
 
 /// Attempts to infer one forge kind from a git push authentication failure.
@@ -312,6 +339,14 @@ pub(crate) fn detected_forge_kind_from_git_push_error(
     }
 
     None
+}
+
+/// Returns the user-facing retry guidance phrase for one publish action.
+fn retry_action_text(publish_branch_action: PublishBranchAction) -> &'static str {
+    match publish_branch_action {
+        PublishBranchAction::Push => "push the branch again",
+        PublishBranchAction::PublishPullRequest => "publish the review request again",
+    }
 }
 
 /// Returns actionable copy for one git push authentication failure.
@@ -358,11 +393,12 @@ pub(crate) async fn push_session_branch(
         &db,
         branch_publish_session.folder.clone(),
         git_client.clone(),
+        publish_branch_action,
         &branch_publish_session.id,
         remote_branch_name,
+        branch_publish_session.published_upstream_ref.as_deref(),
     )
-    .await
-    .map_err(|failure| branch_push_failure(publish_branch_action, &failure.message))?;
+    .await?;
     let review_request_creation =
         branch_review_request_creation_info(branch_publish_session, git_client, &branch_name).await;
 
@@ -398,13 +434,12 @@ async fn publish_pull_request(
         &db,
         branch_publish_session.folder.clone(),
         git_client.clone(),
+        PublishBranchAction::PublishPullRequest,
         &branch_publish_session.id,
         remote_branch_name,
+        branch_publish_session.published_upstream_ref.as_deref(),
     )
-    .await
-    .map_err(|failure| {
-        branch_push_failure(PublishBranchAction::PublishPullRequest, &failure.message)
-    })?;
+    .await?;
     let remote = review_request_remote(
         branch_publish_session,
         git_client.clone(),
@@ -431,13 +466,58 @@ async fn publish_pull_request(
 
 /// Pushes the session branch to the configured remote and persists the
 /// resulting upstream reference.
+///
+/// When `remote_branch_name` is supplied and the session has no prior
+/// `published_upstream_ref`, a pre-flight `git ls-remote` check blocks
+/// the push if the remote branch already exists.
 pub(crate) async fn push_session_branch_to_remote(
     db: &db::Database,
     folder: PathBuf,
     git_client: Arc<dyn GitClient>,
+    publish_branch_action: PublishBranchAction,
     session_id: &str,
     remote_branch_name: Option<&str>,
+    published_upstream_ref: Option<&str>,
 ) -> Result<String, BranchPublishTaskFailure> {
+    let retry_text = retry_action_text(publish_branch_action);
+
+    if let Some(target_branch) = remote_branch_name
+        && published_upstream_ref.is_none()
+    {
+        let already_exists = git_client
+            .remote_branch_exists(folder.clone(), target_branch.to_string())
+            .await
+            .map_err(|error| {
+                let detail = error.to_string();
+                let normalized = detail.to_ascii_lowercase();
+
+                if has_authentication_error_keywords(&normalized) {
+                    BranchPublishTaskFailure::blocked(
+                        publish_branch_action,
+                        git_push_authentication_message(
+                            detected_forge_kind_from_git_push_error(&detail),
+                            retry_text,
+                        ),
+                    )
+                } else {
+                    BranchPublishTaskFailure::failed(
+                        publish_branch_action,
+                        format!("Failed to check remote branch existence: {error}"),
+                    )
+                }
+            })?;
+
+        if already_exists {
+            return Err(BranchPublishTaskFailure::blocked(
+                publish_branch_action,
+                format!(
+                    "Remote branch `{target_branch}` already exists. Choose a different name or \
+                     use the default session branch."
+                ),
+            ));
+        }
+    }
+
     let upstream_reference = match remote_branch_name {
         Some(remote_branch_name) => {
             git_client
@@ -447,17 +527,30 @@ pub(crate) async fn push_session_branch_to_remote(
         None => git_client.push_current_branch(folder).await,
     }
     .map_err(|error| {
-        BranchPublishTaskFailure::failed(
-            PublishBranchAction::Push,
-            format!("Failed to publish session branch: {error}"),
-        )
+        let detail = error.to_string();
+        let normalized = detail.to_ascii_lowercase();
+
+        if has_authentication_error_keywords(&normalized) {
+            BranchPublishTaskFailure::blocked(
+                publish_branch_action,
+                git_push_authentication_message(
+                    detected_forge_kind_from_git_push_error(&detail),
+                    retry_text,
+                ),
+            )
+        } else {
+            BranchPublishTaskFailure::failed(
+                publish_branch_action,
+                format!("Failed to publish session branch: {error}"),
+            )
+        }
     })?;
 
     db.update_session_published_upstream_ref(session_id, Some(&upstream_reference))
         .await
         .map_err(|error| {
             BranchPublishTaskFailure::failed(
-                PublishBranchAction::Push,
+                publish_branch_action,
                 format!(
                     "Branch push succeeded, but Agentty could not persist the upstream reference: \
                      {error}"
@@ -633,6 +726,7 @@ async fn branch_review_request_creation_info(
 }
 
 /// Maps one branch-publish failure into blocked or failed popup copy.
+#[cfg(test)]
 pub(crate) fn branch_push_failure(
     publish_branch_action: PublishBranchAction,
     error: &str,
@@ -766,6 +860,7 @@ mod tests {
             base_branch: "main".to_string(),
             folder: session_folder.clone(),
             id: "session-id".to_string(),
+            published_upstream_ref: None,
             review_request: None,
             status: Status::Review,
         };
@@ -829,6 +924,10 @@ mod tests {
         let expected_session_folder = session_folder.clone();
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+        mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .once()
             .withf(move |folder, remote_branch_name| {
@@ -841,8 +940,10 @@ mod tests {
             &database,
             session_folder,
             Arc::new(mock_git_client),
+            PublishBranchAction::Push,
             "session-id",
             Some("agentty/session-id"),
+            None,
         )
         .await
         .expect("branch push should succeed");
@@ -1005,5 +1106,243 @@ mod tests {
         // Assert
         assert_eq!(title, "GitLab merge request published");
         assert!(message.contains("GitLab merge request !24 is ready"));
+    }
+
+    #[tokio::test]
+    async fn push_blocks_when_custom_remote_branch_already_exists() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            Some("feature/existing"),
+            None,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn push_skips_existence_check_when_upstream_ref_already_set() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let expected_folder = session_folder.clone();
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .withf(move |folder, branch| folder == &expected_folder && branch == "feature/existing")
+            .returning(|_, _| Box::pin(async { Ok("origin/feature/existing".to_string()) }));
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            Some("feature/existing"),
+            Some("origin/feature/existing"),
+        )
+        .await;
+
+        // Assert
+        let upstream = result.expect("push should succeed");
+        assert_eq!(upstream, "origin/feature/existing");
+    }
+
+    #[tokio::test]
+    async fn push_skips_existence_check_when_no_custom_branch_name() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch()
+            .once()
+            .returning(|_| Box::pin(async { Ok("origin/agentty/session-id".to_string()) }));
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            None,
+            None,
+        )
+        .await;
+
+        // Assert
+        let upstream = result.expect("push should succeed");
+        assert_eq!(upstream, "origin/agentty/session-id");
+    }
+
+    #[tokio::test]
+    async fn push_shows_auth_guidance_when_ls_remote_returns_auth_error() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(git::GitError::CommandFailed {
+                        command: "git ls-remote".to_string(),
+                        stderr: "fatal: could not read Username for \
+                                 'https://github.com/org/repo': terminal prompts disabled"
+                            .to_string(),
+                    })
+                })
+            });
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            Some("feature/new-branch"),
+            None,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("Git push requires authentication"));
+        assert!(failure.message.contains("push the branch again"));
+        assert!(failure.message.contains("gh auth login"));
+    }
+
+    #[tokio::test]
+    async fn push_shows_auth_guidance_when_push_returns_auth_error() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open database");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let session_folder = PathBuf::from("/tmp/session-worktree");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch()
+            .once()
+            .returning(|_| {
+                Box::pin(async {
+                    Err(git::GitError::CommandFailed {
+                        command: "git push".to_string(),
+                        stderr:
+                            "fatal: Authentication failed for 'https://gitlab.com/org/repo.git/'"
+                                .to_string(),
+                    })
+                })
+            });
+
+        // Act
+        let result = push_session_branch_to_remote(
+            &database,
+            session_folder,
+            Arc::new(mock_git_client),
+            PublishBranchAction::Push,
+            "session-id",
+            None,
+            None,
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("Git push requires authentication"));
+        assert!(failure.message.contains("push the branch again"));
+        assert!(failure.message.contains("glab auth login"));
+    }
+
+    #[test]
+    fn with_action_preserves_blocked_distinction() {
+        // Arrange
+        let blocked =
+            BranchPublishTaskFailure::blocked(PublishBranchAction::Push, "auth error".to_string());
+        let failed = BranchPublishTaskFailure::failed(
+            PublishBranchAction::Push,
+            "generic error".to_string(),
+        );
+
+        // Act
+        let adjusted_blocked = blocked.with_action(PublishBranchAction::PublishPullRequest);
+        let adjusted_failed = failed.with_action(PublishBranchAction::PublishPullRequest);
+
+        // Assert
+        assert_eq!(adjusted_blocked.title, "Review request publish blocked");
+        assert_eq!(adjusted_blocked.message, "auth error");
+        assert_eq!(adjusted_failed.title, "Review request publish failed");
+        assert_eq!(adjusted_failed.message, "generic error");
     }
 }

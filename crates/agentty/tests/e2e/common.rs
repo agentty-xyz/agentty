@@ -106,10 +106,10 @@ impl BuilderEnv {
         let mut paths = vec![self.stub_bin.clone()];
         paths.extend(std::env::split_paths(&system_path));
 
-        std::env::join_paths(paths)
-            .expect("valid PATH")
-            .to_string_lossy()
-            .into_owned()
+        match std::env::join_paths(paths) {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(_) => self.stub_bin.to_string_lossy().into_owned(),
+        }
     }
 }
 
@@ -121,7 +121,7 @@ fn feature_output_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let output_dir = Path::new(manifest_dir).join("../../docs/site/static/features");
 
-    std::fs::create_dir_all(&output_dir).expect("failed to create feature output dir");
+    let _ = std::fs::create_dir_all(&output_dir);
 
     output_dir
 }
@@ -156,8 +156,6 @@ pub(crate) fn save_feature_gif(
 ) {
     // Graceful skip when VHS is not installed.
     if check_vhs_installed().is_err() {
-        println!("VHS not installed — skipping feature GIF for {name}");
-
         return;
     }
 
@@ -174,8 +172,6 @@ pub(crate) fn save_feature_gif(
         && let Ok(cached) = std::fs::read_to_string(&hash_path)
         && cached.trim() == hash_string
     {
-        println!("Feature GIF unchanged — skipping {name}");
-
         return;
     }
 
@@ -200,18 +196,16 @@ pub(crate) fn save_feature_gif(
     match tape.execute(&tape_path) {
         Ok(_) => {
             // Update the sidecar hash on success.
-            std::fs::write(&hash_path, &hash_string).expect("failed to write hash sidecar");
+            let _ = std::fs::write(&hash_path, &hash_string);
 
             // Clean up the tape file and screenshot.
             let _ = std::fs::remove_file(&tape_path);
             let _ = std::fs::remove_file(&screenshot_path);
-
-            println!("Feature GIF saved to {}", gif_path.display());
         }
         Err(error) => {
             // Clean up on failure.
             let _ = std::fs::remove_file(&tape_path);
-            println!("VHS execution failed for {name}: {error}");
+            let _ = error;
         }
     }
 }
@@ -235,7 +229,7 @@ fn feature_content_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let content_dir = Path::new(manifest_dir).join("../../docs/site/content/features");
 
-    std::fs::create_dir_all(&content_dir).expect("failed to create feature content dir");
+    let _ = std::fs::create_dir_all(&content_dir);
 
     content_dir
 }
@@ -276,9 +270,7 @@ impl ZolaFeaturePage {
             weight = self.weight,
         );
 
-        std::fs::write(&page_path, content).expect("failed to write Zola feature page");
-
-        println!("Zola feature page created at {}", page_path.display());
+        let _ = std::fs::write(&page_path, content);
     }
 }
 
@@ -319,12 +311,15 @@ pub(crate) struct FeatureTest {
     name: String,
     /// Optional environment setup hook that can seed database state or files
     /// before the PTY session starts.
-    setup: Option<Box<dyn Fn(&BuilderEnv)>>,
+    setup: Option<FeatureSetupHook>,
     /// Whether to initialize a git repository in the workdir.
     with_git: bool,
     /// Optional Zola page metadata for auto-generation.
     zola_page: Option<ZolaFeaturePage>,
 }
+
+/// Boxed setup hook used by [`FeatureTest`] before launching the PTY session.
+type FeatureSetupHook = Box<dyn Fn(&BuilderEnv) -> Result<(), Box<dyn std::error::Error>>>;
 
 impl FeatureTest {
     /// Create a new feature test builder with the given name.
@@ -341,7 +336,10 @@ impl FeatureTest {
 
     /// Configure an environment setup hook that runs after optional git
     /// initialization and before the PTY session starts.
-    pub(crate) fn setup(mut self, setup: impl Fn(&BuilderEnv) + 'static) -> Self {
+    pub(crate) fn setup(
+        mut self,
+        setup: impl Fn(&BuilderEnv) -> Result<(), Box<dyn std::error::Error>> + 'static,
+    ) -> Self {
         self.setup = Some(Box::new(setup));
 
         self
@@ -382,16 +380,16 @@ impl FeatureTest {
         self,
         build_scenario: impl FnOnce(Scenario) -> Scenario,
         assert: impl FnOnce(&TerminalFrame, &ProofReport),
-    ) {
-        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-        let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::TempDir::new()?;
+        let env = BuilderEnv::new(temp.path())?;
 
         if self.with_git {
-            env.init_git().expect("failed to init git");
+            env.init_git()?;
         }
 
         if let Some(setup) = &self.setup {
-            setup(&env);
+            setup(&env)?;
         }
 
         let scenario = build_scenario(Scenario::new(&self.name));
@@ -404,27 +402,27 @@ impl FeatureTest {
         let result = FeatureDemo::new(&self.name)
             .gif_output_dir(feature_output_dir())
             .run(&scenario, env.builder(), &cargo_bin("agentty"), &env_pairs)
-            .expect("feature demo execution failed");
+            .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
 
         // Surface GIF generation diagnostics — fail on unexpected errors.
         match &result.gif_status {
-            GifStatus::Generated(path) => {
-                println!("Feature GIF saved to {}", path.display());
-            }
-            GifStatus::CacheHit(path) => {
-                println!("Feature GIF unchanged — skipping {}", path.display());
-            }
-            GifStatus::VhsNotInstalled => {
-                println!("VHS not installed — skipping feature GIF for {}", self.name);
-            }
-            GifStatus::NoOutputDir => {
-                println!("No GIF output dir — skipping GIF for {}", self.name);
-            }
+            GifStatus::Generated(_)
+            | GifStatus::CacheHit(_)
+            | GifStatus::VhsNotInstalled
+            | GifStatus::NoOutputDir => {}
             GifStatus::DirCreateFailed(err) => {
-                panic!("Feature GIF dir creation failed for {}: {err}", self.name);
+                return Err(std::io::Error::other(format!(
+                    "Feature GIF dir creation failed for {}: {err}",
+                    self.name
+                ))
+                .into());
             }
             GifStatus::TapeExecutionFailed(err) => {
-                panic!("VHS tape execution failed for {}: {err}", self.name);
+                return Err(std::io::Error::other(format!(
+                    "VHS tape execution failed for {}: {err}",
+                    self.name
+                ))
+                .into());
             }
         }
 
@@ -433,6 +431,8 @@ impl FeatureTest {
         if let Some(zola_page) = self.zola_page {
             zola_page.ensure(&self.name);
         }
+
+        Ok(())
     }
 }
 

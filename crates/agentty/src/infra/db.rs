@@ -2285,6 +2285,46 @@ WHERE id = ?
     #[tokio::test]
     async fn test_load_sessions_maps_joined_session_fields() {
         // Arrange
+        let (database, project_id) = database_with_joined_session_fields().await;
+
+        // Act
+        let session_row = load_session_row(&database, "session-a").await;
+
+        // Assert
+        assert_eq!(session_row.id, "session-a");
+        assert_eq!(session_row.base_branch, "main");
+        assert_eq!(session_row.created_at, 100);
+        assert_eq!(session_row.updated_at, 200);
+        assert_eq!(session_row.model, "claude-opus-4.1");
+        assert_eq!(session_row.status, "Review");
+        assert_eq!(session_row.in_progress_started_at, None);
+        assert_eq!(session_row.in_progress_total_seconds, 120);
+        assert_eq!(session_row.project_id, Some(project_id));
+        assert_eq!(session_row.prompt, "Implement the feature");
+        assert_eq!(session_row.output, "First line\nSecond line");
+        assert_eq!(session_row.added_lines, 14);
+        assert_eq!(session_row.deleted_lines, 6);
+        assert_eq!(session_row.input_tokens, 11);
+        assert_eq!(session_row.output_tokens, 29);
+        assert_eq!(session_row.size, "L");
+        assert_eq!(
+            session_row.summary.as_deref(),
+            Some("Implemented the requested feature")
+        );
+        assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
+        assert_eq!(session_row.title.as_deref(), Some("Feature work"));
+        assert_eq!(
+            session_row.published_upstream_ref.as_deref(),
+            Some("origin/agentty/session-a")
+        );
+        assert_review_request_row(&session_row);
+
+        assert_joined_session_follow_up_tasks(&database).await;
+    }
+
+    /// Builds an in-memory database with one session covering joined fields
+    /// returned by `load_sessions()`.
+    async fn database_with_joined_session_fields() -> (Database, i64) {
         let database = Database::open_in_memory()
             .await
             .expect("failed to open in-memory db");
@@ -2295,6 +2335,14 @@ WHERE id = ?
         let review_request = review_request_fixture();
 
         insert_session_fixture(&database, "session-a", "main", "Review", project_id).await;
+        persist_joined_session_metadata(&database, &review_request).await;
+        persist_joined_session_output(&database).await;
+
+        (database, project_id)
+    }
+
+    /// Persists metadata fields asserted by the joined-session mapping test.
+    async fn persist_joined_session_metadata(database: &Database, review_request: &ReviewRequest) {
         database
             .update_session_created_at("session-a", 100)
             .await
@@ -2346,14 +2394,6 @@ WHERE id = ?
             .await
             .expect("failed to update session stats");
         database
-            .update_session_status_with_timing_at("session-a", "InProgress", 50)
-            .await
-            .expect("failed to open in-progress timing window");
-        database
-            .update_session_status_with_timing_at("session-a", "Review", 170)
-            .await
-            .expect("failed to close in-progress timing window");
-        database
             .update_session_model("session-a", "claude-opus-4.1")
             .await
             .expect("failed to update session model");
@@ -2362,9 +2402,22 @@ WHERE id = ?
             .await
             .expect("failed to update published upstream ref");
         database
-            .update_session_review_request("session-a", Some(&review_request))
+            .update_session_review_request("session-a", Some(review_request))
             .await
             .expect("failed to update review request");
+    }
+
+    /// Persists timing and output fields asserted by the joined-session
+    /// mapping test.
+    async fn persist_joined_session_output(database: &Database) {
+        database
+            .update_session_status_with_timing_at("session-a", "InProgress", 50)
+            .await
+            .expect("failed to open in-progress timing window");
+        database
+            .update_session_status_with_timing_at("session-a", "Review", 170)
+            .await
+            .expect("failed to close in-progress timing window");
         database
             .replace_session_output("session-a", "First line")
             .await
@@ -2377,39 +2430,11 @@ WHERE id = ?
             .update_session_updated_at("session-a", 200)
             .await
             .expect("failed to update session updated_at");
+    }
 
-        // Act
-        let session_row = load_session_row(&database, "session-a").await;
-
-        // Assert
-        assert_eq!(session_row.id, "session-a");
-        assert_eq!(session_row.base_branch, "main");
-        assert_eq!(session_row.created_at, 100);
-        assert_eq!(session_row.updated_at, 200);
-        assert_eq!(session_row.model, "claude-opus-4.1");
-        assert_eq!(session_row.status, "Review");
-        assert_eq!(session_row.in_progress_started_at, None);
-        assert_eq!(session_row.in_progress_total_seconds, 120);
-        assert_eq!(session_row.project_id, Some(project_id));
-        assert_eq!(session_row.prompt, "Implement the feature");
-        assert_eq!(session_row.output, "First line\nSecond line");
-        assert_eq!(session_row.added_lines, 14);
-        assert_eq!(session_row.deleted_lines, 6);
-        assert_eq!(session_row.input_tokens, 11);
-        assert_eq!(session_row.output_tokens, 29);
-        assert_eq!(session_row.size, "L");
-        assert_eq!(
-            session_row.summary.as_deref(),
-            Some("Implemented the requested feature")
-        );
-        assert_eq!(session_row.questions.as_deref(), Some("[\"Need logs?\"]"));
-        assert_eq!(session_row.title.as_deref(), Some("Feature work"));
-        assert_eq!(
-            session_row.published_upstream_ref.as_deref(),
-            Some("origin/agentty/session-a")
-        );
-        assert_review_request_row(&session_row);
-
+    /// Asserts follow-up task rows persisted for the joined-session mapping
+    /// test.
+    async fn assert_joined_session_follow_up_tasks(database: &Database) {
         let follow_up_tasks = database
             .load_session_follow_up_tasks()
             .await
@@ -2419,6 +2444,7 @@ WHERE id = ?
             .filter(|task| task.session_id == "session-a")
             .map(|task| task.text)
             .collect::<Vec<_>>();
+
         assert_eq!(
             follow_up_task_text,
             vec![

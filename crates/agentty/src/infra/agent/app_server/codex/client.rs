@@ -171,7 +171,7 @@ mod tests {
 
     /// Captures the dynamic request id from a written payload and returns it
     /// through the provided mutex.
-    fn remember_request_id(id_store: Arc<Mutex<Option<String>>>, payload: &Value) {
+    fn remember_request_id(id_store: &Arc<Mutex<Option<String>>>, payload: &Value) {
         let id = payload
             .get("id")
             .and_then(Value::as_str)
@@ -258,7 +258,7 @@ mod tests {
                 let request_id = Arc::clone(&request_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&request_id), &payload);
+                    remember_request_id(&request_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -314,7 +314,7 @@ mod tests {
                 let resume_id = Arc::clone(&resume_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&resume_id), &payload);
+                    remember_request_id(&resume_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -347,7 +347,7 @@ mod tests {
                 let start_id = Arc::clone(&start_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&start_id), &payload);
+                    remember_request_id(&start_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -408,7 +408,7 @@ mod tests {
                 let compact_id = Arc::clone(&compact_id);
 
                 move |payload| {
-                    remember_request_id(Arc::clone(&compact_id), &payload);
+                    remember_request_id(&compact_id, &payload);
 
                     Box::pin(async { Ok(()) })
                 }
@@ -467,108 +467,7 @@ mod tests {
         let mut sequence = Sequence::new();
         let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
 
-        transport
-            .expect_write_json_line()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .withf(|payload| {
-                payload.get("method").and_then(Value::as_str) == Some("thread/compact/start")
-            })
-            .returning({
-                let compact_id = Arc::clone(&compact_id);
-
-                move |payload| {
-                    remember_request_id(Arc::clone(&compact_id), &payload);
-
-                    Box::pin(async { Ok(()) })
-                }
-            });
-        transport
-            .expect_wait_for_response_line()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(move |_| {
-                let response_id = compact_id
-                    .lock()
-                    .expect("compact mutex should lock")
-                    .clone()
-                    .expect("compact id should be recorded");
-
-                Box::pin(async move {
-                    Ok(serde_json::json!({"id": response_id, "result": {}}).to_string())
-                })
-            });
-        transport
-            .expect_next_stdout()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|| {
-                Box::pin(async {
-                    Ok(Some(
-                        serde_json::json!({
-                            "method": "turn/completed",
-                            "params": {"turn": {"status": "completed"}}
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
-        transport
-            .expect_write_json_line()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("turn/start"))
-            .returning({
-                let turn_id = Arc::clone(&turn_id);
-
-                move |payload| {
-                    remember_request_id(Arc::clone(&turn_id), &payload);
-
-                    Box::pin(async { Ok(()) })
-                }
-            });
-        transport
-            .expect_next_stdout()
-            .in_sequence(&mut sequence)
-            .times(1)
-            .return_once(move || {
-                let response_id = turn_id
-                    .lock()
-                    .expect("turn mutex should lock")
-                    .clone()
-                    .expect("turn id should be recorded");
-
-                Box::pin(async move {
-                    Ok(Some(
-                        serde_json::json!({
-                            "id": response_id,
-                            "result": {"turn": {"id": "turn-123"}}
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
-        transport
-            .expect_next_stdout()
-            .times(1)
-            .in_sequence(&mut sequence)
-            .return_once(|| {
-                Box::pin(async {
-                    Ok(Some(
-                        serde_json::json!({
-                            "method": "turn/completed",
-                            "params": {
-                                "turn": {
-                                    "id": "turn-123",
-                                    "status": "completed",
-                                    "usage": {"inputTokens": 12, "outputTokens": 3}
-                                }
-                            }
-                        })
-                        .to_string(),
-                    ))
-                })
-            });
+        expect_proactive_compaction_turn(&mut transport, &mut sequence, compact_id, turn_id);
 
         // Act
         let result = lifecycle::run_turn_with_runtime(
@@ -593,6 +492,117 @@ mod tests {
                 "Compacting context".to_string()
             ))
         );
+    }
+
+    /// Expects a proactive compaction request followed by a successful turn.
+    fn expect_proactive_compaction_turn(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        compact_id: Arc<Mutex<Option<String>>>,
+        turn_id: Arc<Mutex<Option<String>>>,
+    ) {
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| {
+                payload.get("method").and_then(Value::as_str) == Some("thread/compact/start")
+            })
+            .returning({
+                let compact_id = Arc::clone(&compact_id);
+
+                move |payload| {
+                    remember_request_id(&compact_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_wait_for_response_line()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(move |_| {
+                let response_id = compact_id
+                    .lock()
+                    .expect("compact mutex should lock")
+                    .clone()
+                    .expect("compact id should be recorded");
+
+                Box::pin(async move {
+                    Ok(serde_json::json!({"id": response_id, "result": {}}).to_string())
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .returning(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {"turn": {"status": "completed"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_write_json_line()
+            .times(1)
+            .in_sequence(sequence)
+            .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("turn/start"))
+            .returning({
+                let turn_id = Arc::clone(&turn_id);
+
+                move |payload| {
+                    remember_request_id(&turn_id, &payload);
+
+                    Box::pin(async { Ok(()) })
+                }
+            });
+        transport
+            .expect_next_stdout()
+            .in_sequence(sequence)
+            .times(1)
+            .return_once(move || {
+                let response_id = turn_id
+                    .lock()
+                    .expect("turn mutex should lock")
+                    .clone()
+                    .expect("turn id should be recorded");
+
+                Box::pin(async move {
+                    Ok(Some(
+                        serde_json::json!({
+                            "id": response_id,
+                            "result": {"turn": {"id": "turn-123"}}
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
+        transport
+            .expect_next_stdout()
+            .times(1)
+            .in_sequence(sequence)
+            .return_once(|| {
+                Box::pin(async {
+                    Ok(Some(
+                        serde_json::json!({
+                            "method": "turn/completed",
+                            "params": {
+                                "turn": {
+                                    "id": "turn-123",
+                                    "status": "completed",
+                                    "usage": {"inputTokens": 12, "outputTokens": 3}
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                })
+            });
     }
 
     #[test]

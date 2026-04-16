@@ -215,10 +215,12 @@ pub fn diff_render_layout(
     let prefix_width =
         gutter_width * LINE_NUMBER_COLUMN_COUNT + GUTTER_EXTRA_WIDTH + SIGN_COLUMN_WIDTH;
     let scrollbar_width = usize::from(reserve_scrollbar_width) * SCROLLBAR_WIDTH;
+    let scrollbar_width = u16::try_from(scrollbar_width).unwrap_or(u16::MAX);
     let content_width = diff_area
         .width
         .saturating_sub(BORDER_HORIZONTAL_WIDTH)
-        .saturating_sub(scrollbar_width as u16) as usize;
+        .saturating_sub(scrollbar_width);
+    let content_width = usize::from(content_width);
     let viewport_height = diff_area.height.saturating_sub(BORDER_HORIZONTAL_WIDTH);
 
     DiffRenderLayout {
@@ -240,7 +242,8 @@ pub fn clamp_diff_scroll_offset(
     line_count: usize,
     viewport_height: u16,
 ) -> u16 {
-    let max_scroll = line_count.saturating_sub(usize::from(viewport_height)) as u16;
+    let max_scroll = line_count.saturating_sub(usize::from(viewport_height));
+    let max_scroll = u16::try_from(max_scroll).unwrap_or(u16::MAX);
 
     scroll_offset.min(max_scroll)
 }

@@ -20,7 +20,7 @@ use crate::app::session::{
 use crate::app::{AppEvent, AppServices, SessionManager, branch_publish};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
-    PublishedBranchSyncStatus, SessionFollowUpTask, SessionStats, Status,
+    PublishBranchAction, PublishedBranchSyncStatus, SessionFollowUpTask, SessionStats, Status,
 };
 use crate::domain::setting::SettingName;
 use crate::infra::channel::{
@@ -366,14 +366,7 @@ impl SessionWorkerService {
         // Swap in a fresh token so stale cancellations from previous
         // turns are discarded. The cloned token is passed to
         // `run_turn_with_cancellation` for the duration of this turn.
-        let turn_cancel_token = {
-            let mut guard = context
-                .cancel_token
-                .lock()
-                .expect("cancel token lock poisoned");
-            *guard = CancellationToken::new();
-            guard.clone()
-        };
+        let turn_cancel_token = fresh_turn_cancel_token(context)?;
 
         if matches!(request_kind, AgentRequestKind::SessionResume { .. }) {
             // Best-effort: questions persistence failure is non-critical.
@@ -759,12 +752,26 @@ fn terminate_child_process(context: &SessionWorkerContext) {
     let active_pid = context
         .child_pid
         .lock()
-        .expect("child_pid lock poisoned")
-        .take();
+        .ok()
+        .and_then(|mut child_pid| child_pid.take());
 
     if let Some(pid) = active_pid {
         process::send_terminate_signal(pid);
     }
+}
+
+/// Replaces the shared cancellation token for a new turn and returns the
+/// token used by the running channel future.
+fn fresh_turn_cancel_token(
+    context: &SessionWorkerContext,
+) -> Result<CancellationToken, SessionError> {
+    let mut guard = context
+        .cancel_token
+        .lock()
+        .map_err(|_| SessionError::Workflow("cancel token lock poisoned".to_string()))?;
+    *guard = CancellationToken::new();
+
+    Ok(guard.clone())
 }
 
 /// joined question text so clarification prompts remain visible while
@@ -902,40 +909,70 @@ fn start_published_branch_auto_push(
         sync_status: PublishedBranchSyncStatus::InProgress,
     });
 
+    let auto_push_input = PublishedBranchAutoPushInput {
+        app_event_tx,
+        db,
+        folder,
+        git_client,
+        output,
+        published_upstream_ref,
+        session_id,
+        sync_operation_id,
+    };
     tokio::spawn(async move {
-        run_published_branch_auto_push(
-            app_event_tx,
-            db,
-            folder,
-            git_client,
-            output,
-            session_id,
-            sync_operation_id,
-            published_upstream_ref,
-        )
-        .await;
+        run_published_branch_auto_push_task(auto_push_input).await;
     });
+}
+
+/// Owned inputs needed by one detached published-branch auto-push task across
+/// session workflows.
+pub(super) struct PublishedBranchAutoPushInput {
+    /// Reducer event sender used to publish auto-push progress and completion.
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Database handle used to resolve and persist branch-publish state.
+    pub(super) db: Database,
+    /// Session worktree folder pushed to its tracked upstream branch.
+    pub(super) folder: PathBuf,
+    /// Git boundary used for the remote push operation.
+    pub(super) git_client: Arc<dyn GitClient>,
+    /// Shared transcript buffer used to append push failure messages.
+    pub(super) output: Arc<Mutex<String>>,
+    /// Published upstream reference that provides the remote branch target.
+    pub(super) published_upstream_ref: String,
+    /// Session id whose branch is being pushed.
+    pub(super) session_id: String,
+    /// Auto-push operation id used to ignore stale completion updates.
+    pub(super) sync_operation_id: String,
 }
 
 /// Runs one detached auto-push for a previously published session branch and
 /// reports its state through the app event pipeline.
-pub(super) async fn run_published_branch_auto_push(
-    app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    db: Database,
-    folder: PathBuf,
-    git_client: Arc<dyn GitClient>,
-    output: Arc<Mutex<String>>,
-    session_id: String,
-    sync_operation_id: String,
-    published_upstream_ref: String,
-) {
+pub(super) async fn run_published_branch_auto_push(input: PublishedBranchAutoPushInput) {
+    run_published_branch_auto_push_task(input).await;
+}
+
+/// Executes one detached published-branch auto-push from owned task inputs.
+async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput) {
+    let PublishedBranchAutoPushInput {
+        app_event_tx,
+        db,
+        folder,
+        git_client,
+        output,
+        session_id,
+        sync_operation_id,
+        published_upstream_ref,
+    } = input;
+
     let remote_branch_name = remote_branch_name_from_upstream_ref(&published_upstream_ref);
     let push_result = branch_publish::push_session_branch_to_remote(
         &db,
         folder,
         git_client,
+        PublishBranchAction::Push,
         &session_id,
         Some(remote_branch_name.as_str()),
+        Some(&published_upstream_ref),
     )
     .await;
 
@@ -948,10 +985,6 @@ pub(super) async fn run_published_branch_auto_push(
             });
         }
         Err(failure) => {
-            let failure = branch_publish::branch_push_failure(
-                crate::domain::session::PublishBranchAction::Push,
-                &failure.message,
-            );
             let message = format!("\n[Branch Push Error] {}\n", failure.message);
             SessionTaskService::append_session_output(
                 &output,

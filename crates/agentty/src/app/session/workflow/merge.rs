@@ -447,32 +447,14 @@ impl SessionMergeService {
         let base_branch = match db.get_session_base_branch(&id).await {
             Ok(Some(base_branch)) => base_branch,
             Ok(None) => {
-                // Best-effort: status transition failure is non-critical.
-                let _ = SessionTaskService::update_status(
-                    &status,
-                    clock.as_ref(),
-                    &db,
-                    &app_event_tx,
-                    &id,
-                    Status::Review,
-                )
-                .await;
+                Self::restore_review_status(&status, clock.as_ref(), &db, &app_event_tx, &id).await;
 
                 return Err(SessionError::Workflow(
                     "No git worktree for this session".to_string(),
                 ));
             }
             Err(error) => {
-                // Best-effort: status transition failure is non-critical.
-                let _ = SessionTaskService::update_status(
-                    &status,
-                    clock.as_ref(),
-                    &db,
-                    &app_event_tx,
-                    &id,
-                    Status::Review,
-                )
-                .await;
+                Self::restore_review_status(&status, clock.as_ref(), &db, &app_event_tx, &id).await;
 
                 return Err(SessionError::Db(error));
             }
@@ -480,16 +462,7 @@ impl SessionMergeService {
 
         let working_dir = projects.working_dir().to_path_buf();
         let Some(repo_root) = git_client.find_git_repo_root(working_dir).await else {
-            // Best-effort: status transition failure is non-critical.
-            let _ = SessionTaskService::update_status(
-                &status,
-                clock.as_ref(),
-                &db,
-                &app_event_tx,
-                &id,
-                Status::Review,
-            )
-            .await;
+            Self::restore_review_status(&status, clock.as_ref(), &db, &app_event_tx, &id).await;
 
             return Err(SessionError::Workflow(
                 "Failed to find git repository root".to_string(),
@@ -517,6 +490,27 @@ impl SessionMergeService {
         });
 
         Ok(())
+    }
+
+    /// Restores a failed merge-start attempt to `Review` status without
+    /// masking the original error.
+    async fn restore_review_status(
+        status: &Arc<Mutex<Status>>,
+        clock: &dyn Clock,
+        db: &Database,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_id: &str,
+    ) {
+        // Best-effort: status transition failure is non-critical.
+        let _ = SessionTaskService::update_status(
+            status,
+            clock,
+            db,
+            app_event_tx,
+            session_id,
+            Status::Review,
+        )
+        .await;
     }
 
     /// Rebases a reviewed session branch onto its base branch.
@@ -1369,19 +1363,19 @@ impl SessionManager {
         let git_client = Arc::clone(git_client);
         let output = Arc::clone(output);
         let session_id = session_id.to_string();
+        let auto_push_input = super::worker::PublishedBranchAutoPushInput {
+            app_event_tx,
+            db,
+            folder,
+            git_client,
+            output,
+            published_upstream_ref,
+            session_id,
+            sync_operation_id,
+        };
 
         tokio::spawn(async move {
-            super::worker::run_published_branch_auto_push(
-                app_event_tx,
-                db,
-                folder,
-                git_client,
-                output,
-                session_id,
-                sync_operation_id,
-                published_upstream_ref,
-            )
-            .await;
+            super::worker::run_published_branch_auto_push(auto_push_input).await;
         });
     }
 

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::domain::agent::AgentKind;
 use crate::infra::agent;
+use crate::infra::agent::app_server::{RealCodexAppServerClient, RealGeminiAcpClient};
 use crate::infra::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse,
@@ -21,10 +22,8 @@ impl RoutingAppServerClient {
     /// Creates a router backed by production Codex and Gemini clients.
     pub fn new() -> Self {
         Self::new_with_clients(
-            agent::create_app_server_client(AgentKind::Codex, None)
-                .expect("Codex should provide an app-server client"),
-            agent::create_app_server_client(AgentKind::Gemini, None)
-                .expect("Gemini should provide an app-server client"),
+            Arc::new(RealCodexAppServerClient::new()),
+            Arc::new(RealGeminiAcpClient::new()),
         )
     }
 

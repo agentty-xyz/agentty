@@ -40,7 +40,7 @@ pub use sync::{
     diff, fetch_remote, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
     head_commit_message, head_short_hash, is_worktree_clean, list_local_commit_titles,
     list_upstream_commit_titles, pull_rebase, push_current_branch,
-    push_current_branch_to_remote_branch, stage_all,
+    push_current_branch_to_remote_branch, remote_branch_exists, stage_all,
 };
 /// Re-exported worktree and branch-detection APIs.
 pub use worktree::{create_worktree, detect_git_info, find_git_repo_root, remove_worktree};

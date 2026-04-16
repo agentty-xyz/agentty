@@ -26,14 +26,68 @@ use crate::ui::util::{format_token_count, move_input_cursor_down, move_input_cur
 /// After the first turn starts, follow-up submissions must route through the
 /// normal reply path even though the session still records draft origin.
 struct PromptContext {
-    can_delete_on_cancel: bool,
-    is_at_mention: bool,
-    is_draft_session: bool,
-    is_new_session: bool,
-    is_slash_command: bool,
+    input_mode: PromptInputMode,
     scroll_offset: Option<u16>,
     session_id: String,
     session_index: usize,
+    session_mode: PromptSessionMode,
+}
+
+impl PromptContext {
+    /// Returns whether `Esc` should delete the blank session backing this
+    /// prompt instead of restoring session view.
+    fn can_delete_on_cancel(&self) -> bool {
+        self.session_mode == PromptSessionMode::NewDeletable
+    }
+
+    /// Returns whether the prompt is currently editing an active `@` mention.
+    fn is_at_mention(&self) -> bool {
+        self.input_mode == PromptInputMode::AtMention
+    }
+
+    /// Returns whether the prompt belongs to a draft session that only stages
+    /// messages while still in `Status::New`.
+    fn is_draft_session(&self) -> bool {
+        self.session_mode == PromptSessionMode::NewDraft
+    }
+
+    /// Returns whether the prompt belongs to a session that has not started
+    /// its first turn.
+    fn is_new_session(&self) -> bool {
+        self.session_mode != PromptSessionMode::Existing
+    }
+
+    /// Returns whether the prompt is currently editing a slash command.
+    fn is_slash_command(&self) -> bool {
+        self.input_mode == PromptInputMode::SlashCommand
+    }
+}
+
+/// Active prompt input sub-mode used for specialized key routing.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PromptInputMode {
+    /// Prompt text is editing an active file `@` mention.
+    AtMention,
+    /// Prompt text starts with a slash-command prefix.
+    SlashCommand,
+    /// Prompt text is normal user input.
+    Text,
+}
+
+/// Session lifecycle shape that determines prompt submission and cancellation
+/// behavior.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PromptSessionMode {
+    /// Existing session receiving a follow-up reply.
+    Existing,
+    /// New non-draft session that can be deleted when prompt composition is
+    /// canceled.
+    NewDeletable,
+    /// New draft session that stages prompt text instead of starting a turn.
+    NewDraft,
+    /// New non-draft session that should be preserved on cancel because it has
+    /// staged drafts.
+    NewRegular,
 }
 
 /// Handles key input while the app is in `AppMode::Prompt`.
@@ -49,11 +103,11 @@ where
         return Ok(EventResult::Continue);
     };
 
-    if !prompt_context.is_slash_command {
+    if !prompt_context.is_slash_command() {
         reset_prompt_slash_state(app);
     }
 
-    if prompt_context.is_at_mention && handle_at_mention_key(app, key) {
+    if prompt_context.is_at_mention() && handle_at_mention_key(app, key) {
         return Ok(EventResult::Continue);
     }
 
@@ -103,10 +157,10 @@ where
         KeyCode::Right => handle_prompt_right(app, key),
         KeyCode::Up => handle_prompt_up_key(app, terminal, prompt_context)?,
         KeyCode::Down => handle_prompt_down_key(app, terminal, prompt_context)?,
-        KeyCode::Char('k') if prompt_context.is_slash_command && is_plain_char_key(key, 'k') => {
+        KeyCode::Char('k') if prompt_context.is_slash_command() && is_plain_char_key(key, 'k') => {
             handle_prompt_up_key(app, terminal, prompt_context)?;
         }
-        KeyCode::Char('j') if prompt_context.is_slash_command && is_plain_char_key(key, 'j') => {
+        KeyCode::Char('j') if prompt_context.is_slash_command() && is_plain_char_key(key, 'j') => {
             handle_prompt_down_key(app, terminal, prompt_context)?;
         }
         KeyCode::Home => handle_prompt_input(app, InputState::move_home),
@@ -220,29 +274,36 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
         return None;
     };
 
-    let (can_delete_on_cancel, is_draft_session, is_new_session) = app
-        .sessions
-        .sessions
-        .get(session_index)
-        .map_or((false, false, false), |session| {
-            let is_new_session = session.status == crate::domain::session::Status::New;
+    let session_mode =
+        app.sessions
+            .sessions
+            .get(session_index)
+            .map_or(PromptSessionMode::Existing, |session| {
+                let is_new_session = session.status == crate::domain::session::Status::New;
 
-            (
-                is_new_session && !session.is_draft_session() && !session.has_staged_drafts(),
-                is_new_session && session.is_draft_session(),
-                is_new_session,
-            )
-        });
+                match (
+                    is_new_session,
+                    session.is_draft_session(),
+                    session.has_staged_drafts(),
+                ) {
+                    (true, true, _) => PromptSessionMode::NewDraft,
+                    (true, false, false) => PromptSessionMode::NewDeletable,
+                    (true, false, true) => PromptSessionMode::NewRegular,
+                    (false, _, _) => PromptSessionMode::Existing,
+                }
+            });
+    let input_mode = match (is_at_mention, is_slash_command) {
+        (true, _) => PromptInputMode::AtMention,
+        (false, true) => PromptInputMode::SlashCommand,
+        (false, false) => PromptInputMode::Text,
+    };
 
     Some(PromptContext {
-        can_delete_on_cancel,
-        is_at_mention,
-        is_draft_session,
-        is_new_session,
-        is_slash_command,
+        input_mode,
         scroll_offset,
         session_id,
         session_index,
+        session_mode,
     })
 }
 
@@ -273,7 +334,7 @@ fn sync_prompt_at_mention_state(app: &mut App) {
     };
 
     match sync_action {
-        at_mention::AtMentionSyncAction::Activate if !prompt_context.is_slash_command => {
+        at_mention::AtMentionSyncAction::Activate if !prompt_context.is_slash_command() => {
             activate_at_mention(app, &prompt_context);
         }
         at_mention::AtMentionSyncAction::Dismiss => dismiss_at_mention(app),
@@ -327,7 +388,7 @@ fn handle_prompt_up_key<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    if prompt_context.is_slash_command {
+    if prompt_context.is_slash_command() {
         if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
             slash_state.selected_index = slash_state.selected_index.saturating_sub(1);
         }
@@ -360,7 +421,7 @@ fn handle_prompt_down_key<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    if prompt_context.is_slash_command {
+    if prompt_context.is_slash_command() {
         advance_prompt_slash_selection(app);
 
         return Ok(());
@@ -477,7 +538,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
 /// A submitted prompt clears any cached focused-review output for the session
 /// so the next turn starts from the raw transcript again.
 async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext) {
-    if prompt_context.is_slash_command {
+    if prompt_context.is_slash_command() {
         handle_prompt_slash_submit(app, prompt_context).await;
 
         return;
@@ -488,7 +549,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
 
-    if prompt_context.is_draft_session {
+    if prompt_context.is_draft_session() {
         if let Err(error) = app
             .stage_draft_message(&prompt_context.session_id, prompt)
             .await
@@ -500,7 +561,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
             )
             .await;
         }
-    } else if prompt_context.is_new_session {
+    } else if prompt_context.is_new_session() {
         if let Err(error) = app.start_session(&prompt_context.session_id, prompt).await {
             append_output_for_session(
                 app,
@@ -695,7 +756,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
 /// Existing focused-review output is restored into session view because no new
 /// prompt was submitted.
 async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext) {
-    if prompt_context.is_slash_command {
+    if prompt_context.is_slash_command() {
         if let AppMode::Prompt {
             input, slash_state, ..
         } = &mut app.mode
@@ -709,7 +770,7 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
 
     cleanup_prompt_attachment_state(app).await;
 
-    if prompt_context.can_delete_on_cancel {
+    if prompt_context.can_delete_on_cancel() {
         app.delete_selected_session_deferred_cleanup().await;
         app.mode = AppMode::List;
 
@@ -2360,7 +2421,7 @@ mod tests {
         let context = prompt_context(&mut app).expect("expected prompt context");
 
         // Assert
-        assert!(!context.is_at_mention);
+        assert!(!context.is_at_mention());
     }
 
     #[tokio::test]
@@ -2526,7 +2587,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-        assert!(prompt_context.is_new_session);
+        assert!(prompt_context.is_new_session());
         assert_eq!(app.sessions.sessions.len(), 1);
 
         // Act
@@ -2542,8 +2603,8 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_draft_prompt_app("", None).await;
         let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-        assert!(prompt_context.is_new_session);
-        assert!(!prompt_context.can_delete_on_cancel);
+        assert!(prompt_context.is_new_session());
+        assert!(!prompt_context.can_delete_on_cancel());
         assert_eq!(app.sessions.sessions.len(), 1);
 
         // Act
@@ -2669,7 +2730,7 @@ mod tests {
         handle_prompt_submit_key(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(!prompt_context.is_draft_session);
+        assert!(!prompt_context.is_draft_session());
         assert!(matches!(app.mode, AppMode::View { .. }));
         assert!(
             !app.sessions.sessions[0]

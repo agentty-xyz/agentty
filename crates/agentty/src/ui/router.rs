@@ -180,48 +180,7 @@ fn render_list_or_overlay_mode(
             shared.list_background(),
             aux.wall_clock_unix_seconds,
         ),
-        AppMode::Confirmation {
-            confirmation_intent,
-            confirmation_message,
-            confirmation_title,
-            restore_view,
-            selected_confirmation_index,
-            ..
-        } => {
-            if matches!(
-                confirmation_intent,
-                ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview
-            ) && let Some(view_mode) = restore_view
-            {
-                render_session_confirmation_overlay(
-                    f,
-                    area,
-                    SessionOverlayRenderContext {
-                        active_prompt_outputs: aux.active_prompt_outputs,
-                        default_reasoning_level: aux.default_reasoning_level,
-                        follow_up_task_positions: aux.follow_up_task_positions,
-                        restore_view: view_mode,
-                        session_progress_messages: aux.session_progress_messages,
-                        session_worktree_availability: aux.session_worktree_availability,
-                        sessions: shared.sessions,
-                        wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
-                    },
-                    &SessionConfirmationContext {
-                        confirmation_message,
-                        confirmation_title,
-                        selected_confirmation_index: *selected_confirmation_index,
-                    },
-                );
-            } else {
-                overlay::render_confirmation_overlay(
-                    f,
-                    area,
-                    mode,
-                    shared.list_background(),
-                    aux.wall_clock_unix_seconds,
-                );
-            }
-        }
+        AppMode::Confirmation { .. } => render_confirmation_mode(f, area, mode, shared, aux),
 
         AppMode::SyncBlockedPopup {
             default_branch,
@@ -242,31 +201,9 @@ fn render_list_or_overlay_mode(
                 title,
             },
         ),
-        AppMode::ViewInfoPopup {
-            is_loading,
-            loading_label,
-            message,
-            restore_view,
-            title,
-        } => overlay::render_view_info_popup(
-            f,
-            area,
-            restore_view,
-            shared.sessions,
-            aux.session_progress_messages,
-            aux.default_reasoning_level,
-            aux.wall_clock_unix_seconds,
-            ViewInfoPopupRenderContext {
-                can_open_worktree: *aux
-                    .session_worktree_availability
-                    .get(&restore_view.session_id)
-                    .unwrap_or(&false),
-                is_loading: *is_loading,
-                loading_label,
-                message,
-                title,
-            },
-        ),
+        AppMode::ViewInfoPopup { .. } => {
+            render_view_info_popup_mode(f, area, mode, shared.sessions, aux);
+        }
         AppMode::Help {
             context: help_context,
             scroll_offset,
@@ -290,6 +227,104 @@ fn render_list_or_overlay_mode(
     }
 
     true
+}
+
+/// Renders confirmation modes, including session-scoped confirmations that
+/// preserve the originating chat background.
+fn render_confirmation_mode(
+    f: &mut Frame,
+    area: Rect,
+    mode: &AppMode,
+    shared: &mut RouteSharedContext<'_>,
+    aux: RouteAuxContext<'_>,
+) {
+    let AppMode::Confirmation {
+        confirmation_intent,
+        confirmation_message,
+        confirmation_title,
+        restore_view,
+        selected_confirmation_index,
+        ..
+    } = mode
+    else {
+        return;
+    };
+
+    if matches!(
+        confirmation_intent,
+        ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview
+    ) && let Some(view_mode) = restore_view
+    {
+        render_session_confirmation_overlay(
+            f,
+            area,
+            SessionOverlayRenderContext {
+                active_prompt_outputs: aux.active_prompt_outputs,
+                default_reasoning_level: aux.default_reasoning_level,
+                follow_up_task_positions: aux.follow_up_task_positions,
+                restore_view: view_mode,
+                session_progress_messages: aux.session_progress_messages,
+                session_worktree_availability: aux.session_worktree_availability,
+                sessions: shared.sessions,
+                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+            },
+            &SessionConfirmationContext {
+                confirmation_message,
+                confirmation_title,
+                selected_confirmation_index: *selected_confirmation_index,
+            },
+        );
+
+        return;
+    }
+
+    overlay::render_confirmation_overlay(
+        f,
+        area,
+        mode,
+        shared.list_background(),
+        aux.wall_clock_unix_seconds,
+    );
+}
+
+/// Renders an informational popup above a restored session-view background.
+fn render_view_info_popup_mode(
+    f: &mut Frame,
+    area: Rect,
+    mode: &AppMode,
+    sessions: &[Session],
+    aux: RouteAuxContext<'_>,
+) {
+    let AppMode::ViewInfoPopup {
+        is_loading,
+        loading_label,
+        message,
+        restore_view,
+        title,
+    } = mode
+    else {
+        return;
+    };
+
+    overlay::render_view_info_popup(
+        f,
+        area,
+        ViewInfoPopupRenderContext {
+            can_open_worktree: *aux
+                .session_worktree_availability
+                .get(&restore_view.session_id)
+                .unwrap_or(&false),
+            default_reasoning_level: aux.default_reasoning_level,
+            is_loading: *is_loading,
+            loading_label,
+            message,
+            restore_view,
+            session_progress_messages: aux.session_progress_messages,
+            sessions,
+            title,
+            wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+        },
+    );
 }
 
 /// Borrowed context for the confirmation overlay portion of a session-scoped
@@ -562,16 +597,16 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         .get(session_id)
         .map(std::string::String::as_str);
 
-    page::session_chat::SessionChatPage::new(
-        sessions,
-        session_index,
-        scroll_offset,
-        mode,
-        default_reasoning_level,
+    page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
         active_prompt_output,
         active_progress,
+        default_reasoning_level,
+        mode,
+        scroll_offset,
+        session_index,
+        sessions,
         wall_clock_unix_seconds,
-    )
+    })
     .can_open_worktree(
         *session_worktree_availability
             .get(session_id)

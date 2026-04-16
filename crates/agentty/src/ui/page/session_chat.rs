@@ -58,6 +58,28 @@ pub struct SessionChatPage<'a> {
     pub wall_clock_unix_seconds: i64,
 }
 
+/// Borrowed inputs needed to construct one session chat page renderer.
+#[derive(Clone, Copy)]
+pub struct SessionChatPageInput<'a> {
+    /// Exact prompt transcript block for the currently active turn, when one
+    /// has been submitted in this app process.
+    pub active_prompt_output: Option<&'a str>,
+    /// Transient progress text rendered in the active-status loader row.
+    pub active_progress: Option<&'a str>,
+    /// Active project-scoped default reasoning level.
+    pub default_reasoning_level: ReasoningLevel,
+    /// Current UI mode that determines view, prompt, and question rendering.
+    pub mode: &'a AppMode,
+    /// Current vertical output scroll offset.
+    pub scroll_offset: Option<u16>,
+    /// Index of the session being rendered.
+    pub session_index: usize,
+    /// Session rows available to the page.
+    pub sessions: &'a [Session],
+    /// Render-time clock used for deterministic timers.
+    pub wall_clock_unix_seconds: i64,
+}
+
 impl<'a> SessionChatPage<'a> {
     /// Fixed prompt-mode actions rendered in the composer help footer while
     /// staging drafts for an explicit draft session.
@@ -76,16 +98,18 @@ impl<'a> SessionChatPage<'a> {
     ];
 
     /// Creates a session chat page renderer.
-    pub fn new(
-        sessions: &'a [Session],
-        session_index: usize,
-        scroll_offset: Option<u16>,
-        mode: &'a AppMode,
-        default_reasoning_level: ReasoningLevel,
-        active_prompt_output: Option<&'a str>,
-        active_progress: Option<&'a str>,
-        wall_clock_unix_seconds: i64,
-    ) -> Self {
+    pub fn new(input: SessionChatPageInput<'a>) -> Self {
+        let SessionChatPageInput {
+            active_prompt_output,
+            active_progress,
+            default_reasoning_level,
+            mode,
+            scroll_offset,
+            session_index,
+            sessions,
+            wall_clock_unix_seconds,
+        } = input;
+
         Self {
             active_prompt_output,
             active_progress,
@@ -124,26 +148,10 @@ impl<'a> SessionChatPage<'a> {
     /// scroll math can stay in sync with what users see.
     pub(crate) fn rendered_output_line_count(
         session: &Session,
-        active_prompt_output: Option<&str>,
-        selected_follow_up_task_position: Option<usize>,
         output_width: u16,
-        done_session_output_mode: DoneSessionOutputMode,
-        review_status_message: Option<&str>,
-        review_text: Option<&str>,
-        active_progress: Option<&str>,
+        context: SessionOutputLineContext<'_>,
     ) -> u16 {
-        SessionOutput::rendered_line_count(
-            session,
-            output_width,
-            SessionOutputLineContext {
-                active_prompt_output,
-                active_progress,
-                done_session_output_mode,
-                review_status_message,
-                review_text,
-                selected_follow_up_task_position,
-            },
-        )
+        SessionOutput::rendered_line_count(session, output_width, context)
     }
 
     /// Returns the selected `Done`-session output mode for the active page
@@ -1023,6 +1031,20 @@ mod tests {
         }
     }
 
+    /// Builds a default test page for one session and mode.
+    fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPage<'a> {
+        SessionChatPage::new(SessionChatPageInput {
+            active_prompt_output: None,
+            active_progress: None,
+            default_reasoning_level: ReasoningLevel::default(),
+            mode,
+            scroll_offset: None,
+            session_index: 0,
+            sessions: std::slice::from_ref(session),
+            wall_clock_unix_seconds: 0,
+        })
+    }
+
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
         buffer
             .content()
@@ -1401,13 +1423,15 @@ mod tests {
         // Act
         let rendered_line_count = SessionChatPage::rendered_output_line_count(
             &session,
-            None,
-            None,
             20,
-            DoneSessionOutputMode::Summary,
-            None,
-            None,
-            None,
+            SessionOutputLineContext {
+                active_prompt_output: None,
+                active_progress: None,
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message: None,
+                review_text: None,
+                selected_follow_up_task_position: None,
+            },
         );
 
         // Assert
@@ -1429,13 +1453,15 @@ mod tests {
         // Act
         let rendered_line_count = SessionChatPage::rendered_output_line_count(
             &session,
-            None,
-            None,
             80,
-            DoneSessionOutputMode::Review,
-            Some("Reviewing changes with gpt-5.4"),
-            None,
-            None,
+            SessionOutputLineContext {
+                active_prompt_output: None,
+                active_progress: None,
+                done_session_output_mode: DoneSessionOutputMode::Review,
+                review_status_message: Some("Reviewing changes with gpt-5.4"),
+                review_text: None,
+                selected_follow_up_task_position: None,
+            },
         );
 
         // Assert
@@ -1638,16 +1664,16 @@ mod tests {
             input: InputState::with_text("line\n".repeat(80)),
             scroll_offset: None,
         };
-        let page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let page = SessionChatPage::new(SessionChatPageInput {
+            active_prompt_output: None,
+            active_progress: None,
+            default_reasoning_level: ReasoningLevel::default(),
+            mode: &mode,
+            scroll_offset: None,
+            session_index: 0,
+            sessions: std::slice::from_ref(&session),
+            wall_clock_unix_seconds: 0,
+        });
         let area = Rect::new(0, 0, 120, 30);
 
         // Act
@@ -1672,16 +1698,7 @@ mod tests {
             input: InputState::with_text("line\n".repeat(80)),
             scroll_offset: None,
         };
-        let page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let page = test_session_chat_page(&session, &mode);
         let area = Rect::new(0, 0, 120, 8);
 
         // Act
@@ -1706,16 +1723,7 @@ mod tests {
             input: InputState::default(),
             scroll_offset: None,
         };
-        let page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let page = test_session_chat_page(&session, &mode);
 
         // Act
         let review_text = page.review_text();
@@ -1810,16 +1818,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let page = test_session_chat_page(&session, &mode);
         let area = Rect::new(0, 0, 120, 30);
         let options_height = question_options_height(&[], area.height.saturating_sub(1));
         let layout_available = area.height.saturating_sub(1).saturating_sub(options_height);
@@ -1862,16 +1861,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let page = test_session_chat_page(&session, &mode);
         let area = Rect::new(0, 0, 120, 8);
 
         // Act
@@ -1899,16 +1889,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let page = test_session_chat_page(&session, &mode);
         let area = Rect::new(0, 0, 80, 20);
 
         // Act
@@ -1948,16 +1929,7 @@ mod tests {
         session.stats.input_tokens = 1_250;
         session.stats.output_tokens = 2_500;
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let width = 120;
         let backend = ratatui::backend::TestBackend::new(width, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -1998,16 +1970,7 @@ mod tests {
         session.title = Some(long_title.to_string());
         session.model = AgentModel::Gpt54;
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let backend = ratatui::backend::TestBackend::new(28, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -2031,16 +1994,7 @@ mod tests {
         let mut session = session_fixture();
         session.title = Some("Header Session".to_string());
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let width = 120;
         let backend = ratatui::backend::TestBackend::new(width, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -2120,16 +2074,16 @@ mod tests {
         session.model = AgentModel::Gpt54;
         session.in_progress_started_at = Some(0);
         let mode = AppMode::List;
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            3_660,
-        );
+        let mut page = SessionChatPage::new(SessionChatPageInput {
+            active_prompt_output: None,
+            active_progress: None,
+            default_reasoning_level: ReasoningLevel::default(),
+            mode: &mode,
+            scroll_offset: None,
+            session_index: 0,
+            sessions: std::slice::from_ref(&session),
+            wall_clock_unix_seconds: 3_660,
+        });
         let backend = ratatui::backend::TestBackend::new(50, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -2166,16 +2120,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let backend = ratatui::backend::TestBackend::new(32, 8);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -2211,16 +2156,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let width = 40;
         let height = 12;
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -2269,16 +2205,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: Some(0),
         };
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let width = 50;
         let height = 14;
         let backend = ratatui::backend::TestBackend::new(width, height);
@@ -2323,16 +2250,7 @@ mod tests {
             scroll_offset: None,
             selected_option_index: None,
         };
-        let mut page = SessionChatPage::new(
-            std::slice::from_ref(&session),
-            0,
-            None,
-            &mode,
-            ReasoningLevel::default(),
-            None,
-            None,
-            0,
-        );
+        let mut page = test_session_chat_page(&session, &mode);
         let backend = ratatui::backend::TestBackend::new(30, 6);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 

@@ -44,6 +44,9 @@ use assert_cmd::cargo::cargo_bin;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+/// Result type used by ignored showcase-generation tests.
+type ShowcaseResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
 /// Default feature output directory derived from the crate manifest location.
 fn default_output_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -55,12 +58,11 @@ fn default_output_dir() -> PathBuf {
 ///
 /// Uses `FEATURE_OUTPUT` if set, otherwise defaults to
 /// `docs/site/static/features` relative to the workspace root.
-fn feature_output_dir() -> PathBuf {
+fn feature_output_dir() -> ShowcaseResult<PathBuf> {
     let path = std::env::var("FEATURE_OUTPUT").map_or_else(|_| default_output_dir(), PathBuf::from);
-    std::fs::create_dir_all(&path).expect("failed to create feature output dir");
+    std::fs::create_dir_all(&path)?;
 
-    path.canonicalize()
-        .expect("failed to canonicalize output dir")
+    Ok(path.canonicalize()?)
 }
 
 /// Build a VHS tape that launches agentty with the given environment.
@@ -133,20 +135,16 @@ fn build_tape(
 ///
 /// Writes the tape to a temporary file, runs `vhs`, and asserts the
 /// output file exists at `output_path` on completion.
-fn execute_tape(tape_content: &str, name: &str, output_path: &Path) {
+fn execute_tape(tape_content: &str, name: &str, output_path: &Path) -> ShowcaseResult {
     let tape_path = std::env::temp_dir().join(format!("{name}.tape"));
-    std::fs::write(&tape_path, tape_content).expect("failed to write tape file");
+    std::fs::write(&tape_path, tape_content)?;
 
-    println!("VHS tape written to {}", tape_path.display());
-
-    let output = Command::new("vhs")
-        .arg(&tape_path)
-        .output()
-        .expect("failed to run vhs — is it installed? (brew install vhs)");
+    let output = Command::new("vhs").arg(&tape_path).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("VHS execution failed: {stderr}");
+
+        return Err(std::io::Error::other(format!("VHS execution failed: {stderr}")).into());
     }
 
     assert!(
@@ -155,30 +153,24 @@ fn execute_tape(tape_content: &str, name: &str, output_path: &Path) {
         output_path.display()
     );
 
-    println!("Feature GIF saved to {}", output_path.display());
+    Ok(())
 }
 
 /// Seed the database with realistic projects and sessions.
 ///
 /// Opens the `SQLite` database, runs migrations, and inserts sample data
 /// that makes the UI look populated and visually compelling.
-async fn seed_database(agentty_root: &Path, workdir: &Path) {
+async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
     let db_path = agentty_root.join(DB_DIR).join(DB_FILE);
-    let database = Database::open(&db_path)
-        .await
-        .expect("failed to open database");
+    let database = Database::open(&db_path).await?;
 
     // Register the project (mirrors what agentty does on startup).
     let project_id = database
         .upsert_project(&workdir.to_string_lossy(), Some("main"))
-        .await
-        .expect("failed to upsert project");
+        .await?;
 
     // Touch last-opened so the project sorts to the top.
-    database
-        .touch_project_last_opened(project_id)
-        .await
-        .expect("failed to touch project");
+    database.touch_project_last_opened(project_id).await?;
 
     // Session data: (id, model, status, title, size).
     let sessions = [
@@ -238,23 +230,20 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) {
     for (session_id, model, status, title, size) in &sessions {
         database
             .insert_session(session_id, model, "main", status, project_id)
-            .await
-            .expect("failed to insert session");
+            .await?;
 
-        database
-            .update_session_title(session_id, title)
-            .await
-            .expect("failed to update session title");
+        database.update_session_title(session_id, title).await?;
 
         database
             .update_session_diff_stats(10, 5, session_id, size)
-            .await
-            .expect("failed to update session diff stats");
+            .await?;
 
         // Create the worktree directory so the session shows a valid folder.
         let session_wt = wt_dir.join(&session_id[..8]);
-        std::fs::create_dir_all(&session_wt).expect("failed to create session worktree dir");
+        std::fs::create_dir_all(&session_wt)?;
     }
+
+    Ok(())
 }
 
 // ── Feature Scenarios ────────────────────────────────────────────────────
@@ -264,23 +253,19 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) {
 /// Returns `(agentty_root, workdir)` with canonicalized paths so the
 /// seeded project path matches what the binary resolves (critical on
 /// macOS where `/var/folders` is a symlink to `/private/var/folders`).
-async fn setup_feature_env(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
+async fn setup_feature_env(temp: &tempfile::TempDir) -> ShowcaseResult<(PathBuf, PathBuf)> {
     let agentty_root = temp.path().join("agentty_root");
     let workdir = temp.path().join("my-project");
-    std::fs::create_dir_all(&agentty_root).expect("failed to create agentty root");
-    std::fs::create_dir_all(&workdir).expect("failed to create workdir");
+    std::fs::create_dir_all(&agentty_root)?;
+    std::fs::create_dir_all(&workdir)?;
 
     // Canonicalize so the seeded path matches the binary's resolved CWD.
-    let agentty_root = agentty_root
-        .canonicalize()
-        .expect("failed to canonicalize agentty root");
-    let workdir = workdir
-        .canonicalize()
-        .expect("failed to canonicalize workdir");
+    let agentty_root = agentty_root.canonicalize()?;
+    let workdir = workdir.canonicalize()?;
 
-    seed_database(&agentty_root, &workdir).await;
+    seed_database(&agentty_root, &workdir).await?;
 
-    (agentty_root, workdir)
+    Ok((agentty_root, workdir))
 }
 
 /// Generate a feature GIF of the Sessions tab with populated data.
@@ -290,12 +275,12 @@ async fn setup_feature_env(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
 /// workflow and UI layout.
 #[tokio::test]
 #[ignore = "requires VHS and a renderable terminal — run explicitly with --ignored"]
-async fn feature_sessions_tab() {
+async fn feature_sessions_tab() -> ShowcaseResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let (agentty_root, workdir) = setup_feature_env(&temp).await;
+    let temp = tempfile::TempDir::new()?;
+    let (agentty_root, workdir) = setup_feature_env(&temp).await?;
     let binary_path = cargo_bin("agentty");
-    let gif_path = feature_output_dir().join("sessions.gif");
+    let gif_path = feature_output_dir()?.join("sessions.gif");
 
     let steps = "\
 Sleep 2s
@@ -306,8 +291,8 @@ Sleep 2s
 
     let tape = build_tape(&gif_path, &binary_path, &agentty_root, &workdir, steps);
 
-    // Act
-    execute_tape(&tape, "feature_sessions", &gif_path);
+    // Act + Assert
+    execute_tape(&tape, "feature_sessions", &gif_path)
 }
 
 /// Generate a feature GIF cycling through all tabs.
@@ -316,12 +301,12 @@ Sleep 2s
 /// a complete overview of the agentty interface.
 #[tokio::test]
 #[ignore = "requires VHS and a renderable terminal — run explicitly with --ignored"]
-async fn feature_tab_tour() {
+async fn feature_tab_tour() -> ShowcaseResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let (agentty_root, workdir) = setup_feature_env(&temp).await;
+    let temp = tempfile::TempDir::new()?;
+    let (agentty_root, workdir) = setup_feature_env(&temp).await?;
     let binary_path = cargo_bin("agentty");
-    let gif_path = feature_output_dir().join("tab_tour.gif");
+    let gif_path = feature_output_dir()?.join("tab_tour.gif");
 
     let steps = "\
 Sleep 2s
@@ -335,6 +320,6 @@ Sleep 2s
 
     let tape = build_tape(&gif_path, &binary_path, &agentty_root, &workdir, steps);
 
-    // Act
-    execute_tape(&tape, "feature_tab_tour", &gif_path);
+    // Act + Assert
+    execute_tape(&tape, "feature_tab_tour", &gif_path)
 }

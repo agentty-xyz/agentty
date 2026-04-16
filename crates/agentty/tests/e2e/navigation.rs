@@ -7,12 +7,23 @@ use testty::scenario::Scenario;
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
 
+type E2eResult = Result<(), Box<dyn std::error::Error>>;
+
+/// Builds a temporary E2E environment for navigation tests.
+fn navigation_env() -> Result<(tempfile::TempDir, BuilderEnv), Box<dyn std::error::Error>> {
+    let temp = tempfile::TempDir::new()?;
+    let env = BuilderEnv::new(temp.path())?;
+
+    Ok((temp, env))
+}
+
 /// Verify that agentty startup renders the Projects tab as selected.
 ///
 /// Launches agentty in a clean environment and asserts that the expected
 /// tabs and labels appear in the correct regions with appropriate styling.
 #[test]
-fn startup_shows_projects_tab() {
+fn startup_shows_projects_tab() -> E2eResult {
+    // Arrange, Act, Assert
     FeatureTest::new("startup")
         .zola(
             "Startup",
@@ -31,7 +42,9 @@ fn startup_shows_projects_tab() {
                 assertion::assert_text_in_region(frame, "Agentty", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
             },
-        );
+        )?;
+
+    Ok(())
 }
 
 /// Verify that Tab key switches between tabs.
@@ -39,10 +52,9 @@ fn startup_shows_projects_tab() {
 /// Starts on Projects tab, presses Tab, and verifies the next tab
 /// becomes selected while Projects becomes unselected.
 #[test]
-fn tab_key_switches_tabs() {
+fn tab_key_switches_tabs() -> E2eResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    let (_temp, env) = navigation_env()?;
 
     let scenario = Scenario::new("tab_switch")
         .compose(&common::wait_for_agentty_startup())
@@ -53,15 +65,15 @@ fn tab_key_switches_tabs() {
         .capture_labeled("after", "Sessions tab selected");
 
     // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
+    let (frame, report) = scenario.run_with_proof(env.builder())?;
 
     // Assert — after pressing Tab, "Sessions" should be selected.
     let full = Region::full(frame.cols(), frame.rows());
     assertion::assert_text_in_region(&frame, "No sessions", &full);
 
     common::save_feature_gif(&scenario, &report, &env, "tab_switch");
+
+    Ok(())
 }
 
 /// Verify that pressing Tab cycles through all four tabs in order.
@@ -69,10 +81,9 @@ fn tab_key_switches_tabs() {
 /// Starts on Projects, presses Tab three times, and asserts each
 /// successive tab becomes selected: Sessions → Stats → Settings.
 #[test]
-fn tab_cycles_through_all_tabs() {
+fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    let (_temp, env) = navigation_env()?;
 
     let scenario = Scenario::new("tab_full_cycle")
         .compose(&common::wait_for_agentty_startup())
@@ -91,9 +102,7 @@ fn tab_cycles_through_all_tabs() {
         .capture_labeled("settings", "Settings tab selected");
 
     // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
+    let (frame, report) = scenario.run_with_proof(env.builder())?;
 
     // Assert — final frame should have Settings selected.
     let full = Region::full(frame.cols(), frame.rows());
@@ -116,6 +125,8 @@ fn tab_cycles_through_all_tabs() {
     assertion::assert_text_in_region(&stats_frame, "TokenStats", &stats_full);
 
     common::save_feature_gif(&scenario, &report, &env, "tab_full_cycle");
+
+    Ok(())
 }
 
 /// Verify that pressing `q` opens a quit confirmation dialog.
@@ -123,10 +134,9 @@ fn tab_cycles_through_all_tabs() {
 /// The dialog should display the title "Confirm Quit" and the message
 /// "Quit agentty?" with selectable options.
 #[test]
-fn quit_shows_confirmation_dialog() {
+fn quit_shows_confirmation_dialog() -> E2eResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    let (_temp, env) = navigation_env()?;
 
     let scenario = Scenario::new("quit_confirmation")
         .compose(&common::wait_for_agentty_startup())
@@ -137,9 +147,7 @@ fn quit_shows_confirmation_dialog() {
         .capture_labeled("dialog", "Quit confirmation dialog");
 
     // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
+    let (frame, report) = scenario.run_with_proof(env.builder())?;
 
     // Assert
     let full = Region::full(frame.cols(), frame.rows());
@@ -147,14 +155,15 @@ fn quit_shows_confirmation_dialog() {
     assertion::assert_text_in_region(&frame, "Quit agentty?", &full);
 
     common::save_feature_gif(&scenario, &report, &env, "quit_confirmation");
+
+    Ok(())
 }
 
 /// Verify that the footer shows keybinding hints on startup.
 #[test]
-fn startup_shows_footer_hints() {
+fn startup_shows_footer_hints() -> E2eResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    let (_temp, env) = navigation_env()?;
 
     let scenario = Scenario::new("footer_hints")
         .compose(&common::wait_for_agentty_startup())
@@ -162,9 +171,7 @@ fn startup_shows_footer_hints() {
         .capture_labeled("startup", "Footer with keybinding hints");
 
     // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
+    let (frame, report) = scenario.run_with_proof(env.builder())?;
 
     // Assert
     let footer = Region::footer(frame.cols(), frame.rows());
@@ -175,6 +182,8 @@ fn startup_shows_footer_hints() {
     );
 
     common::save_feature_gif(&scenario, &report, &env, "footer_hints");
+
+    Ok(())
 }
 
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
@@ -183,10 +192,9 @@ fn startup_shows_footer_hints() {
 /// via three Tab presses, then presses `BackTab` three times to cycle back
 /// through Stats → Sessions → Projects.
 #[test]
-fn backtab_cycles_tabs_reverse() {
+fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    let (_temp, env) = navigation_env()?;
 
     let scenario = Scenario::new("backtab_reverse")
         .compose(&common::wait_for_agentty_startup())
@@ -212,9 +220,7 @@ fn backtab_cycles_tabs_reverse() {
         .capture_labeled("back_to_projects", "Projects tab after third BackTab");
 
     // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
+    let (frame, report) = scenario.run_with_proof(env.builder())?;
 
     // Assert — final frame should have Projects selected.
     let full = Region::full(frame.cols(), frame.rows());
@@ -234,15 +240,16 @@ fn backtab_cycles_tabs_reverse() {
     assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
 
     common::save_feature_gif(&scenario, &report, &env, "backtab_reverse");
+
+    Ok(())
 }
 
 /// Verify that `?` opens the help overlay with keybinding content, and
 /// `Esc` closes it and restores the previous view.
 #[test]
-fn help_overlay_toggle() {
+fn help_overlay_toggle() -> E2eResult {
     // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    let (_temp, env) = navigation_env()?;
 
     let scenario = Scenario::new("help_overlay")
         .compose(&common::wait_for_agentty_startup())
@@ -259,9 +266,7 @@ fn help_overlay_toggle() {
         .capture_labeled("help_closed", "Help overlay dismissed");
 
     // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
+    let (frame, report) = scenario.run_with_proof(env.builder())?;
 
     // Assert — help overlay should show "Keybindings" title when open.
     let help_frame = common::frame_from_capture(&report.captures[1]);
@@ -281,4 +286,6 @@ fn help_overlay_toggle() {
     );
 
     common::save_feature_gif(&scenario, &report, &env, "help_overlay");
+
+    Ok(())
 }

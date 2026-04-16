@@ -554,6 +554,57 @@ mod tests {
     async fn test_refresh_review_request_updates_done_session_from_stored_link_when_worktree_is_missing()
      {
         // Arrange
+        let MissingWorktreeReviewRefreshFixture {
+            database,
+            services,
+            mut session_manager,
+        } = missing_worktree_review_refresh_fixture().await;
+
+        // Act
+        let review_request = session_manager
+            .refresh_review_request(&services, "session-id")
+            .await
+            .expect("linked review request should refresh");
+        let persisted_row = database
+            .load_sessions()
+            .await
+            .expect("failed to load session rows")
+            .into_iter()
+            .find(|row| row.id == "session-id")
+            .expect("session row should exist");
+
+        // Assert
+        assert_eq!(review_request.last_refreshed_at, 77);
+        assert_eq!(review_request.summary.state, ReviewRequestState::Merged);
+        assert_eq!(
+            session_manager.state.sessions[0]
+                .review_request
+                .as_ref()
+                .map(|review_request| review_request.summary.state),
+            Some(ReviewRequestState::Merged)
+        );
+        assert_eq!(
+            persisted_row
+                .review_request
+                .as_ref()
+                .map(|row| row.state.as_str()),
+            Some("Merged")
+        );
+    }
+
+    /// Test fixture for refreshing a stored review request after its worktree
+    /// has been deleted.
+    struct MissingWorktreeReviewRefreshFixture {
+        /// Database containing the linked review request session.
+        database: Database,
+        /// App services wired with git and forge mocks.
+        services: AppServices,
+        /// Session manager seeded with the linked session.
+        session_manager: SessionManager,
+    }
+
+    /// Builds the missing-worktree review refresh fixture.
+    async fn missing_worktree_review_refresh_fixture() -> MissingWorktreeReviewRefreshFixture {
         let temp_dir = tempdir().expect("failed to create temp dir");
         let missing_folder = temp_dir.path().join("missing-session-folder");
         let linked_review_request = ReviewRequest {
@@ -572,7 +623,7 @@ mod tests {
             SystemTime::UNIX_EPOCH + Duration::from_secs(77),
         ));
         let clock: Arc<dyn Clock> = fake_clock;
-        let mut session_manager = session_manager_with_session(clock, session);
+        let session_manager = session_manager_with_session(clock, session);
         let remote = forge::ForgeRemote {
             command_working_directory: None,
             forge_kind: ForgeKind::GitHub,
@@ -620,11 +671,8 @@ mod tests {
         mock_review_request_client
             .expect_refresh_review_request()
             .times(1)
-            .withf({
-                let remote = remote.clone();
-                move |candidate_remote, display_id| {
-                    candidate_remote == &remote && display_id == "#42"
-                }
+            .withf(move |candidate_remote, display_id| {
+                candidate_remote == &remote && display_id == "#42"
             })
             .returning(move |_, _| {
                 let refreshed_summary = refreshed_summary.clone();
@@ -637,36 +685,11 @@ mod tests {
             Arc::new(mock_review_request_client),
         );
 
-        // Act
-        let review_request = session_manager
-            .refresh_review_request(&services, "session-id")
-            .await
-            .expect("linked review request should refresh");
-        let persisted_row = database
-            .load_sessions()
-            .await
-            .expect("failed to load session rows")
-            .into_iter()
-            .find(|row| row.id == "session-id")
-            .expect("session row should exist");
-
-        // Assert
-        assert_eq!(review_request.last_refreshed_at, 77);
-        assert_eq!(review_request.summary.state, ReviewRequestState::Merged);
-        assert_eq!(
-            session_manager.state.sessions[0]
-                .review_request
-                .as_ref()
-                .map(|review_request| review_request.summary.state),
-            Some(ReviewRequestState::Merged)
-        );
-        assert_eq!(
-            persisted_row
-                .review_request
-                .as_ref()
-                .map(|row| row.state.as_str()),
-            Some("Merged")
-        );
+        MissingWorktreeReviewRefreshFixture {
+            database,
+            services,
+            session_manager,
+        }
     }
 
     #[test]

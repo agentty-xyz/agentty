@@ -71,7 +71,7 @@ pub(super) async fn start_runtime(
             ))
         })?;
     let (mut child, stdin, stdout) =
-        app_server_transport::spawn_runtime_command(command, "gemini --experimental-acp").await?;
+        app_server_transport::spawn_runtime_command(command, "gemini --experimental-acp")?;
     let mut transport = GeminiStdioTransport::new(stdin, stdout);
     let mut state = GeminiRuntimeState::new(request.folder.clone(), request.model.clone());
 

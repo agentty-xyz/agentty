@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -230,14 +232,14 @@ pub fn format_duration_compact(duration_seconds: i64) -> String {
     let mut label = String::new();
 
     if hour_count > 0 {
-        label.push_str(&format!("{hour_count}h"));
+        let _ = write!(label, "{hour_count}h");
     }
 
     if minute_count > 0 {
-        label.push_str(&format!("{minute_count}m"));
+        let _ = write!(label, "{minute_count}m");
     }
 
-    label.push_str(&format!("{second_count}s"));
+    let _ = write!(label, "{second_count}s");
 
     label
 }

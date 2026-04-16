@@ -67,13 +67,13 @@ impl<'a> DiffPage<'a> {
         ]);
 
         let mut layout = diff_util::diff_render_layout(parsed, area, false);
-        let mut lines = self.build_diff_lines(parsed, layout);
+        let mut lines = Self::build_diff_lines(parsed, layout);
         let mut show_scrollbar =
             diff_util::diff_has_scrollable_overflow(lines.len(), layout.viewport_height);
 
         if show_scrollbar {
             layout = diff_util::diff_render_layout(parsed, area, true);
-            lines = self.build_diff_lines(parsed, layout);
+            lines = Self::build_diff_lines(parsed, layout);
             show_scrollbar =
                 diff_util::diff_has_scrollable_overflow(lines.len(), layout.viewport_height);
         }
@@ -92,7 +92,13 @@ impl<'a> DiffPage<'a> {
         f.render_widget(paragraph, area);
 
         if show_scrollbar {
-            self.render_diff_scrollbar(f, area, layout.viewport_height, scroll_offset, total_lines);
+            Self::render_diff_scrollbar(
+                f,
+                area,
+                layout.viewport_height,
+                scroll_offset,
+                total_lines,
+            );
         }
     }
 
@@ -113,7 +119,6 @@ impl<'a> DiffPage<'a> {
     /// Builds wrapped diff lines for the diff panel, optionally reserving one
     /// column for the scrollbar thumb.
     fn build_diff_lines<'line>(
-        &self,
         parsed: &[DiffLine<'line>],
         layout: diff_util::DiffRenderLayout,
     ) -> Vec<Line<'line>> {
@@ -185,7 +190,6 @@ impl<'a> DiffPage<'a> {
     /// Renders a slim scrollbar inside the diff panel so users can see their
     /// position in long diffs at a glance.
     fn render_diff_scrollbar(
-        &self,
         f: &mut Frame,
         area: Rect,
         viewport_height: u16,
@@ -204,11 +208,10 @@ impl<'a> DiffPage<'a> {
         let thumb_height = (track_height * track_height / total_lines).max(1);
         let max_scroll = total_lines.saturating_sub(track_height);
         let max_thumb_offset = track_height.saturating_sub(thumb_height);
-        let thumb_offset = if max_scroll == 0 {
-            0
-        } else {
-            usize::from(scroll_offset) * max_thumb_offset / max_scroll
-        };
+        let thumb_offset = usize::from(scroll_offset)
+            .saturating_mul(max_thumb_offset)
+            .checked_div(max_scroll)
+            .unwrap_or(0);
 
         let scrollbar_area = diff_util::diff_scrollbar_area(area, viewport_height);
         let mut scrollbar_lines = Vec::with_capacity(track_height);

@@ -223,13 +223,11 @@ pub(crate) enum AppEvent {
 struct AppEventBatch {
     applied_turns: HashMap<String, TurnAppliedState>,
     at_mention_entries_updates: HashMap<String, Vec<FileEntry>>,
+    branch_publish_action_update: Option<BranchPublishActionUpdate>,
+    git_status_update: Option<GitStatusBatchUpdate>,
+    latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     published_branch_sync_updates: Vec<(String, PublishedBranchSyncUpdate)>,
     review_updates: HashMap<String, ReviewUpdate>,
-    git_status_update: Option<(u32, u32)>,
-    has_git_status_update: bool,
-    has_latest_available_version_update: bool,
-    latest_available_version_update: Option<String>,
-    branch_publish_action_update: Option<BranchPublishActionUpdate>,
     session_git_status_updates: HashMap<String, SessionGitStatus>,
     session_ids: HashSet<String>,
     session_model_updates: HashMap<String, AgentModel>,
@@ -242,6 +240,20 @@ struct AppEventBatch {
     sync_review_request_update: Option<SyncReviewRequestUpdate>,
     sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     update_status: Option<UpdateStatus>,
+}
+
+/// Optional aggregate git status payload from the latest status event in one
+/// reducer batch.
+struct GitStatusBatchUpdate {
+    /// Main worktree added/deleted line counts, when available.
+    status: Option<(u32, u32)>,
+}
+
+/// Optional version-availability payload from the latest updater event in one
+/// reducer batch.
+struct LatestAvailableVersionUpdate {
+    /// Latest available version string, or `None` when no update is available.
+    latest_available_version: Option<String>,
 }
 
 /// One ordered published-branch sync update queued for one session.
@@ -269,17 +281,10 @@ impl AppEventBatch {
             AppEvent::GitStatusUpdated {
                 session_statuses,
                 status,
-            } => {
-                self.has_git_status_update = true;
-                self.git_status_update = status;
-                self.session_git_status_updates = session_statuses;
-            }
+            } => self.collect_git_status_updated(session_statuses, status),
             AppEvent::VersionAvailabilityUpdated {
                 latest_available_version,
-            } => {
-                self.has_latest_available_version_update = true;
-                self.latest_available_version_update = latest_available_version;
-            }
+            } => self.collect_version_availability_updated(latest_available_version),
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.update_status = Some(update_status);
             }
@@ -310,10 +315,7 @@ impl AppEventBatch {
                     .insert(session_id, progress_message);
             }
             AppEvent::SyncMainCompleted { result } => {
-                if result.is_ok() {
-                    self.should_refresh_git_status = true;
-                }
-                self.sync_main_result = Some(result);
+                self.collect_sync_main_completed(result);
             }
             AppEvent::SessionSizeUpdated {
                 added_lines,
@@ -335,42 +337,17 @@ impl AppEventBatch {
                 restore_view,
                 result,
                 session_id,
-            } => {
-                if result.is_ok() {
-                    self.should_refresh_git_status = true;
-                }
-                self.branch_publish_action_update = Some(BranchPublishActionUpdate {
-                    restore_view,
-                    result: *result,
-                    session_id,
-                });
-            }
+            } => self.collect_branch_publish_action_completed(restore_view, *result, session_id),
             AppEvent::ReviewPrepared {
                 diff_hash,
                 review_text,
                 session_id,
-            } => {
-                self.review_updates.insert(
-                    session_id,
-                    ReviewUpdate {
-                        diff_hash,
-                        result: Ok(review_text),
-                    },
-                );
-            }
+            } => self.collect_review_prepared(diff_hash, review_text, session_id),
             AppEvent::ReviewPreparationFailed {
                 diff_hash,
                 error,
                 session_id,
-            } => {
-                self.review_updates.insert(
-                    session_id,
-                    ReviewUpdate {
-                        diff_hash,
-                        result: Err(error),
-                    },
-                );
-            }
+            } => self.collect_review_preparation_failed(diff_hash, error, session_id),
             AppEvent::SessionUpdated { session_id } => {
                 self.session_ids.insert(session_id);
             }
@@ -382,33 +359,129 @@ impl AppEventBatch {
                 session_id,
                 sync_operation_id,
                 sync_status,
-            } => {
-                if matches!(
-                    sync_status,
-                    PublishedBranchSyncStatus::Idle | PublishedBranchSyncStatus::Succeeded
-                ) {
-                    self.should_refresh_git_status = true;
-                }
-                self.published_branch_sync_updates.push((
-                    session_id,
-                    PublishedBranchSyncUpdate {
-                        sync_operation_id,
-                        sync_status,
-                    },
-                ));
-            }
+            } => self.collect_published_branch_sync_updated(
+                session_id,
+                sync_operation_id,
+                sync_status,
+            ),
             AppEvent::SyncReviewRequestCompleted {
                 restore_view,
                 result,
                 session_id,
-            } => {
-                self.sync_review_request_update = Some(SyncReviewRequestUpdate {
-                    restore_view,
-                    result,
-                    session_id,
-                });
-            }
+            } => self.collect_sync_review_request_completed(restore_view, result, session_id),
         }
+    }
+
+    /// Stores the latest git status event for this reducer batch.
+    fn collect_git_status_updated(
+        &mut self,
+        session_statuses: HashMap<String, SessionGitStatus>,
+        status: Option<(u32, u32)>,
+    ) {
+        self.git_status_update = Some(GitStatusBatchUpdate { status });
+        self.session_git_status_updates = session_statuses;
+    }
+
+    /// Stores the latest version availability event for this reducer batch.
+    fn collect_version_availability_updated(&mut self, latest_available_version: Option<String>) {
+        self.latest_available_version_update = Some(LatestAvailableVersionUpdate {
+            latest_available_version,
+        });
+    }
+
+    /// Stores the latest default-branch sync result for this reducer batch.
+    fn collect_sync_main_completed(
+        &mut self,
+        result: Result<SyncMainOutcome, SyncSessionStartError>,
+    ) {
+        if result.is_ok() {
+            self.should_refresh_git_status = true;
+        }
+
+        self.sync_main_result = Some(result);
+    }
+
+    /// Stores the latest branch-publish action result for this reducer batch.
+    fn collect_branch_publish_action_completed(
+        &mut self,
+        restore_view: ConfirmationViewMode,
+        result: BranchPublishTaskResult,
+        session_id: String,
+    ) {
+        if result.is_ok() {
+            self.should_refresh_git_status = true;
+        }
+
+        self.branch_publish_action_update = Some(BranchPublishActionUpdate {
+            restore_view,
+            result,
+            session_id,
+        });
+    }
+
+    /// Stores a successful focused-review preparation result.
+    fn collect_review_prepared(&mut self, diff_hash: u64, review_text: String, session_id: String) {
+        self.review_updates.insert(
+            session_id,
+            ReviewUpdate {
+                diff_hash,
+                result: Ok(review_text),
+            },
+        );
+    }
+
+    /// Stores a failed focused-review preparation result.
+    fn collect_review_preparation_failed(
+        &mut self,
+        diff_hash: u64,
+        error: String,
+        session_id: String,
+    ) {
+        self.review_updates.insert(
+            session_id,
+            ReviewUpdate {
+                diff_hash,
+                result: Err(error),
+            },
+        );
+    }
+
+    /// Queues one published-branch sync state transition for ordered
+    /// reducer application.
+    fn collect_published_branch_sync_updated(
+        &mut self,
+        session_id: String,
+        sync_operation_id: String,
+        sync_status: PublishedBranchSyncStatus,
+    ) {
+        if matches!(
+            sync_status,
+            PublishedBranchSyncStatus::Idle | PublishedBranchSyncStatus::Succeeded
+        ) {
+            self.should_refresh_git_status = true;
+        }
+
+        self.published_branch_sync_updates.push((
+            session_id,
+            PublishedBranchSyncUpdate {
+                sync_operation_id,
+                sync_status,
+            },
+        ));
+    }
+
+    /// Stores the latest review-request sync result for this reducer batch.
+    fn collect_sync_review_request_completed(
+        &mut self,
+        restore_view: ConfirmationViewMode,
+        result: Result<SyncReviewRequestTaskResult, String>,
+        session_id: String,
+    ) {
+        self.sync_review_request_update = Some(SyncReviewRequestUpdate {
+            restore_view,
+            result,
+            session_id,
+        });
     }
 
     /// Merges one completed-turn projection into the per-session batch.
@@ -1689,18 +1762,8 @@ impl App {
     /// Session updates are synchronized from runtime handles first. Any touched
     /// session that reached terminal status (`Done`, `Canceled`) then drops its
     /// worker queue so background workers can shut down provider runtimes.
-    async fn apply_app_event_batch(&mut self, event_batch: AppEventBatch) {
-        let previous_session_states = event_batch
-            .session_ids
-            .iter()
-            .filter_map(|session_id| {
-                self.sessions
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == *session_id)
-                    .map(|session| (session_id.clone(), session.status))
-            })
-            .collect::<HashMap<_, _>>();
+    async fn apply_app_event_batch(&mut self, mut event_batch: AppEventBatch) {
+        let previous_session_states = self.previous_session_states(&event_batch.session_ids);
 
         if event_batch.should_force_reload {
             self.refresh_sessions_now().await;
@@ -1712,14 +1775,16 @@ impl App {
             self.restart_git_status_task();
         }
 
-        if event_batch.has_git_status_update {
-            self.projects.set_git_status(event_batch.git_status_update);
+        if let Some(git_status_update) = &event_batch.git_status_update {
+            self.projects.set_git_status(git_status_update.status);
             self.sessions
-                .replace_session_git_statuses(event_batch.session_git_status_updates);
+                .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
         }
 
-        if event_batch.has_latest_available_version_update {
-            self.latest_available_version = event_batch.latest_available_version_update;
+        if let Some(latest_available_version_update) = &event_batch.latest_available_version_update
+        {
+            self.latest_available_version
+                .clone_from(&latest_available_version_update.latest_available_version);
         }
 
         if let Some(update_status) = event_batch.update_status {
@@ -1772,14 +1837,9 @@ impl App {
                 .await;
         }
 
-        for (session_id, progress_message) in event_batch.session_progress_updates {
-            if let Some(progress_message) = progress_message {
-                self.session_progress_messages
-                    .insert(session_id, progress_message);
-            } else {
-                self.session_progress_messages.remove(&session_id);
-            }
-        }
+        self.apply_session_progress_updates(std::mem::take(
+            &mut event_batch.session_progress_updates,
+        ));
 
         for (session_id, turn_applied_state) in event_batch.applied_turns {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
@@ -1818,6 +1878,36 @@ impl App {
             .await;
         self.retain_valid_session_progress_messages();
         self.sessions.retain_active_prompt_outputs();
+    }
+
+    /// Returns status snapshots for sessions touched before applying a
+    /// reducer batch.
+    fn previous_session_states(&self, session_ids: &HashSet<String>) -> HashMap<String, Status> {
+        session_ids
+            .iter()
+            .filter_map(|session_id| {
+                self.sessions
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == *session_id)
+                    .map(|session| (session_id.clone(), session.status))
+            })
+            .collect()
+    }
+
+    /// Applies active progress message updates from one reducer batch.
+    fn apply_session_progress_updates(
+        &mut self,
+        session_progress_updates: HashMap<String, Option<String>>,
+    ) {
+        for (session_id, progress_message) in session_progress_updates {
+            if let Some(progress_message) = progress_message {
+                self.session_progress_messages
+                    .insert(session_id, progress_message);
+            } else {
+                self.session_progress_messages.remove(&session_id);
+            }
+        }
     }
 
     /// Routes one persisted turn projection to the currently focused session
@@ -2918,7 +3008,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::app::branch_publish::{BranchPublishTaskResult, BranchPublishTaskSuccess};
+    use crate::app::branch_publish::BranchPublishTaskSuccess;
     use crate::app::review::ReviewUpdate;
     use crate::app::startup::HOME_PROJECT_SCAN_MAX_RESULTS;
     use crate::app::{diff_content_hash, review_loading_message};
@@ -3025,12 +3115,12 @@ mod tests {
     }
 
     /// Builds a successful branch-publish batch payload for one session.
-    fn test_pushed_branch_result(branch_name: &str) -> BranchPublishTaskResult {
-        Ok(BranchPublishTaskSuccess::Pushed {
+    fn test_pushed_branch_result(branch_name: &str) -> BranchPublishTaskSuccess {
+        BranchPublishTaskSuccess::Pushed {
             branch_name: branch_name.to_string(),
             review_request_creation: None,
             upstream_reference: format!("origin/{branch_name}"),
-        })
+        }
     }
 
     /// Builds a test app rooted at one temporary workspace with an injected
@@ -3698,10 +3788,85 @@ mod tests {
             Err(BranchPublishTaskFailure {
                 ref title,
                 ref message,
+                ..
             }) if title == "Branch push blocked"
                 && message.contains("Git push requires authentication")
                 && message.contains("gh auth login")
         ));
+    }
+
+    #[tokio::test]
+    async fn push_session_branch_preserves_blocked_when_remote_branch_exists() {
+        // Arrange
+        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
+            "/tmp/review-session",
+        )));
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(true) }));
+        let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let database = crate::infra::db::Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        let result = push_session_branch(
+            PublishBranchAction::Push,
+            &branch_session,
+            database,
+            git_client,
+            Some("feature/existing"),
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn push_session_branch_shows_auth_guidance_when_ls_remote_fails_with_auth_error() {
+        // Arrange
+        let branch_session = BranchPublishTaskSession::from_session(&test_session(PathBuf::from(
+            "/tmp/review-session",
+        )));
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(crate::infra::git::GitError::CommandFailed {
+                        command: "git ls-remote".to_string(),
+                        stderr: "fatal: could not read Username for \
+                                 'https://github.com/org/repo': terminal prompts disabled"
+                            .to_string(),
+                    })
+                })
+            });
+        let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
+        let database = crate::infra::db::Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        let result = push_session_branch(
+            PublishBranchAction::Push,
+            &branch_session,
+            database,
+            git_client,
+            Some("feature/new"),
+        )
+        .await;
+
+        // Assert
+        let failure = result.expect_err("push should be blocked");
+        assert_eq!(failure.title, "Branch push blocked");
+        assert!(failure.message.contains("Git push requires authentication"));
+        assert!(failure.message.contains("gh auth login"));
     }
 
     #[tokio::test]
@@ -3756,6 +3921,10 @@ mod tests {
             "/tmp/review-session",
         )));
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_remote_branch_exists()
+            .once()
+            .returning(|_, _| Box::pin(async { Ok(false) }));
         mock_git_client
             .expect_push_current_branch_to_remote_branch()
             .with(
@@ -4607,12 +4776,12 @@ mod tests {
         });
         event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
             restore_view: test_confirmation_view_mode("session-a"),
-            result: Box::new(test_pushed_branch_result("feature/first")),
+            result: Box::new(Ok(test_pushed_branch_result("feature/first"))),
             session_id: "session-a".to_string(),
         });
         event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
             restore_view: test_confirmation_view_mode("session-b"),
-            result: Box::new(test_pushed_branch_result("feature/final")),
+            result: Box::new(Ok(test_pushed_branch_result("feature/final"))),
             session_id: "session-b".to_string(),
         });
 
@@ -4635,7 +4804,7 @@ mod tests {
             event_batch.branch_publish_action_update,
             Some(BranchPublishActionUpdate {
                 restore_view: test_confirmation_view_mode("session-b"),
-                result: test_pushed_branch_result("feature/final"),
+                result: Ok(test_pushed_branch_result("feature/final")),
                 session_id: "session-b".to_string(),
             })
         );
