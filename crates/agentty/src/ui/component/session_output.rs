@@ -154,7 +154,9 @@ impl<'a> SessionOutput<'a> {
     /// so completed-turn metadata stays visually attached to the finished
     /// turn. Focused-review output is appended after transcript content so it
     /// reads like agent-produced session output instead of replacing the
-    /// transcript panel.
+    /// transcript panel, but it is suppressed once the session reaches `Done`
+    /// because merged sessions should only show final summary or transcript
+    /// content.
     fn output_lines(
         session: &Session,
         output_area: Rect,
@@ -194,7 +196,9 @@ impl<'a> SessionOutput<'a> {
         }
         Self::append_transcript_footer_lines(&mut lines, trailing_footer_text, inner_width);
         Self::append_active_turn_lines(&mut lines, active_turn_text.as_deref(), inner_width);
-        Self::append_review_lines(&mut lines, review_text, inner_width);
+        if Self::shows_review_lines(session.status) {
+            Self::append_review_lines(&mut lines, review_text, inner_width);
+        }
         Self::append_published_branch_sync_lines(&mut lines, session);
 
         if matches!(
@@ -438,6 +442,15 @@ impl<'a> SessionOutput<'a> {
         }
 
         !(status == Status::Done && done_session_output_mode == DoneSessionOutputMode::Summary)
+    }
+
+    /// Returns whether focused-review output belongs in the current session
+    /// view.
+    ///
+    /// Merged sessions enter `Status::Done`, and at that point any cached
+    /// review text is stale next to the final summary or transcript view.
+    fn shows_review_lines(status: Status) -> bool {
+        status != Status::Done
     }
 
     /// Appends focused-review output to the transcript when review text is
@@ -1493,6 +1506,40 @@ mod tests {
 
         // Assert
         assert!(text.contains("Press t to switch to summary."));
+    }
+
+    #[test]
+    /// Verifies stale focused-review cache text is not shown after a session
+    /// has been merged into its final `Done` state.
+    fn test_output_lines_done_session_hides_cached_review_text() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "merged transcript".to_string();
+        session.status = Status::Done;
+        let assisted_text = "## Review\n\n### Project Impact\n\n- Review summary";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            line_context(
+                DoneSessionOutputMode::Output,
+                None,
+                Some("Reviewing changes with gpt-5.4"),
+                Some(assisted_text),
+                None,
+            ),
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("merged transcript"));
+        assert!(!text.contains("Review summary"));
+        assert!(!text.contains("Project Impact"));
     }
 
     #[test]
