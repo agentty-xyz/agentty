@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  coverage:
+  test:
     runs-on: ubuntu-22.04
 
     steps:
@@ -37,8 +37,35 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Generate LCOV report
-        run: cargo llvm-cov --workspace --lcov --output-path coverage.lcov --locked -- --test-threads=1
+      - name: Test
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path coverage.lcov --locked -- --test-threads=1
+          # Summarize LCOV totals in the GitHub Actions run summary.
+          awk '
+            BEGIN {
+              print "## Test coverage"
+              print ""
+              print "| Metric | Covered | Total | Coverage |"
+              print "| --- | ---: | ---: | ---: |"
+            }
+            /^LF:/ { lines += substr($0, 4) }
+            /^LH:/ { covered_lines += substr($0, 4) }
+            /^FNF:/ { functions += substr($0, 5) }
+            /^FNH:/ { covered_functions += substr($0, 5) }
+            /^BRF:/ { branches += substr($0, 5) }
+            /^BRH:/ { covered_branches += substr($0, 5) }
+            END {
+              report("Lines", covered_lines, lines)
+              report("Functions", covered_functions, functions)
+              if (branches > 0) {
+                report("Branches", covered_branches, branches)
+              }
+            }
+            function report(label, covered, total) {
+              coverage = total == 0 ? "n/a" : sprintf("%.2f%%", covered * 100 / total)
+              printf "| %s | %d | %d | %s |\n", label, covered, total, coverage
+            }
+          ' coverage.lcov >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
         uses: codecov/codecov-action@v5
