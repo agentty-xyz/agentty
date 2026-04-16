@@ -8,7 +8,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 |------|---------------------------|--------|
 | Follow-up task workflow | Persisted follow-up tasks now launch sibling sessions from session view, and launched/open state survives refresh, reopen, and restart flows. | Landed |
 | Review request publish flow | Session chat keeps `p` for generic branch publishing, and `Shift+P` now creates or refreshes the linked GitHub pull request or GitLab merge request while preserving the same publish popup flow. | Landed |
-| Published branch sync | Sessions can publish a remote branch manually, but later turns do not push follow-up commits until the user republishes the branch. | Missing |
+| Published branch sync | Sessions now auto-push already-published remote branches after later completed turns and surface sync progress or failure in session output. | Landed |
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
@@ -18,7 +18,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 
 ## Active Streams
 
-- `Delivery`: project-level landing strategy, published-branch freshness, and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
+- `Delivery`: project-level landing strategy and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
 - `Guidance`: page-specific in-app hints that help users discover common workflows without expanding footer help.
 - `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
@@ -65,34 +65,6 @@ Each Agentty project can declare its expected landing path, and review-ready ses
 #### Docs
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/usage/keybindings.md`, and `docs/site/content/docs/getting-started/overview.md` to explain the new per-project delivery strategy setting and how it affects review-ready session actions.
-
-### [45f1c32f-6ecf-4f4c-861f-adc3f08736cf] Delivery: Auto-push published session branches after each turn
-
-#### Assignee
-
-`@minev-dev`
-
-#### Why now
-
-Published review branches already exist, but every follow-up turn currently leaves the remote branch stale until the user republishes it manually, which slows review handoff and makes linked pull requests drift behind the live session.
-
-#### Usable outcome
-
-Once a session has a published upstream branch, each later completed turn automatically pushes the updated worktree so the remote review branch stays current without extra publish actions.
-
-#### Substeps
-
-- [ ] **Queue auto-push from completed turns that already track an upstream ref.** Update the post-turn workflow in `crates/agentty/src/app/session/workflow/worker.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and `crates/agentty/src/app/session/core.rs` so successful turns reuse the persisted `published_upstream_ref`, skip unpublished sessions, and route push outcomes through the existing session event pipeline instead of blocking unrelated sessions.
-- [ ] **Reuse branch-publish git plumbing for background sync pushes.** Extend `crates/agentty/src/app/branch_publish.rs`, `crates/agentty/src/app/core.rs`, and `crates/agentty/src/infra/git/client.rs` so automatic per-turn pushes share the same upstream-resolution and persistence rules as manual publish actions, while surfacing failure details in session output without clearing the stored upstream ref.
-- [ ] **Reflect branch freshness in the active session UI.** Update `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and related session-view state/helpers so users can tell when an automatic push is in progress or failed after a turn, without changing the existing manual `p` and `Shift+P` shortcuts.
-
-#### Tests
-
-- [ ] Add or extend coverage in `crates/agentty/src/app/session/workflow/worker.rs`, `crates/agentty/src/app/branch_publish.rs`, `crates/agentty/src/app/core.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, and `crates/agentty/src/ui/page/session_chat.rs` for auto-push success, unpublished-session no-op behavior, failure reporting, and session-view status updates after a completed turn.
-
-#### Docs
-
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/getting-started/overview.md` to explain that published session branches now stay in sync automatically after later turns, while unpublished sessions still require the existing manual publish flow.
 
 ### [a7e41b3c-9d28-4f56-8c1a-6b5e2d4f8a91] Quality: Add draft session and prompt input feature tests
 
@@ -178,30 +150,45 @@ Users see a page-aware hint in the top status bar for the sessions list and sess
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to describe the rotating page-specific header hints where they affect visible session-list and session-chat guidance.
 
+### [8d03ed45-0f91-4d1d-b761-2d74f7027ef7] Protocol: Track explicit Claude session identity for one-time bootstrap reuse
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+Codex and Gemini already avoid re-sending the full protocol wrapper on every follow-up turn, so Claude is now the remaining provider that still pays that repeated prompt cost because its resumed session identity is not explicit.
+
+#### Usable outcome
+
+Claude-backed sessions persist one explicit provider session identifier, letting later turns reuse the compact reminder path whenever Claude resumes the same live session and only falling back to full bootstrap replay when that context is actually gone.
+
+#### Substeps
+
+- [ ] **Capture and persist Claude resume identity from successful turns.** Update `crates/agentty/src/infra/channel/cli.rs`, `crates/agentty/src/infra/channel/contract.rs`, and `crates/agentty/src/app/session/workflow/worker.rs` so Claude turn results surface one normalized provider session identifier and store the matching instruction-bootstrap marker after successful session turns instead of treating all Claude resumes as identity-less.
+- [ ] **Reuse the compact reminder when Claude resumes the same live session.** Update `crates/agentty/src/infra/agent/claude.rs`, `crates/agentty/src/infra/agent/instruction.rs`, and `crates/agentty/src/infra/agent/prompt.rs` so Claude resume turns choose `DeltaOnly` when the persisted bootstrap marker still matches the active Claude session identity, while first turns and one-shot prompts keep the full bootstrap path.
+- [ ] **Preserve replay fallback when Claude context changes or resets.** Update `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/infra/agent/submission.rs`, and related Claude/session resume plumbing so cleared or replaced Claude session identity still forces the existing full bootstrap plus transcript replay behavior instead of reusing stale prompt state.
+
+#### Tests
+
+- [ ] Add or extend coverage in `crates/agentty/src/infra/channel/cli.rs`, `crates/agentty/src/infra/agent/claude.rs`, `crates/agentty/src/infra/agent/instruction.rs`, and `crates/agentty/src/app/session/workflow/worker.rs` for Claude session-identity extraction, persisted bootstrap-marker reuse, compact reminder selection on matching resumes, and replay fallback after identity loss or change.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/agents/backends.md` and `docs/site/content/docs/architecture/runtime-flow.md` to describe Claude's explicit session identity, its compact-reminder reuse behavior, and the conditions that still trigger full bootstrap replay.
+
 ## Ready Now Execution Order
 
 ```mermaid
 flowchart TD
-    R1["[17a9e2ba] Delivery: project commit strategy"] --> R2["[45f1c32f] Delivery: auto-push published branches"]
-    R3["[a7e41b3c] Quality: draft and prompt feature tests"] --> R4["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
-    R5["[6d7f8942] Guidance: rotating page hints"]
+    R1["[17a9e2ba] Delivery: project commit strategy"]
+    R2["[a7e41b3c] Quality: draft and prompt feature tests"] --> R3["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
+    R4["[6d7f8942] Guidance: rotating page hints"]
+    R5["[8d03ed45] Protocol: Claude session identity"]
 ```
 
 ## Queued Next
-
-### [8d03ed45-0f91-4d1d-b761-2d74f7027ef7] Protocol: Track explicit Claude session identity for one-time bootstrap reuse
-
-#### Outcome
-
-Give Claude-backed sessions an explicit provider session identifier so Agentty can safely reuse the same bootstrap-once instruction delivery strategy instead of relying on implicit `claude -c` continuation behavior.
-
-#### Promote when
-
-Promote when maintainers want Claude sessions to reuse the bootstrap-once flow now that Codex and Gemini app-server contexts have the baseline delivery planner.
-
-#### Depends on
-
-`[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session` (landed)
 
 ### [84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Replace reset replay with compact session memory
 
@@ -224,7 +211,6 @@ No parked user-facing cards right now.
 ## Context Notes
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
-- `Delivery: Auto-push published session branches after each turn` should reuse the persisted published upstream state, keep unpublished sessions on the manual publish path, and preserve visible failure context when a background sync push does not succeed.
 - `Guidance: Rotate page-specific header hints` should keep hint selection page-aware, preserve update-status visibility in the top bar, and use injectable time/randomness so minute-based rotation can be tested without real sleeps.
 - `Protocol: Track explicit Claude session identity for one-time bootstrap reuse` should land before the broader compact-resume follow-up so Claude sessions stop paying the full bootstrap cost on every turn.
 - Roadmap entries stay user-facing; implementation validation and documentation belong in each step's `#### Tests` and `#### Docs` sections instead of as standalone backlog cards.
