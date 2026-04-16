@@ -919,7 +919,7 @@ fn start_published_branch_auto_push(
 
 /// Runs one detached auto-push for a previously published session branch and
 /// reports its state through the app event pipeline.
-async fn run_published_branch_auto_push(
+pub(super) async fn run_published_branch_auto_push(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     db: Database,
     folder: PathBuf,

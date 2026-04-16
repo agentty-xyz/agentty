@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT provider_conversation_id AS \"value: _\"\nFROM session\nWHERE id = ?\n",
+  "query": "SELECT reasoning_level FROM session WHERE id = ?",
   "describe": {
     "columns": [
       {
-        "name": "value: _",
+        "name": "reasoning_level",
         "ordinal": 0,
         "type_info": "Text"
       }
@@ -16,5 +16,5 @@
       true
     ]
   },
-  "hash": "96cb7d5ca5e133149452314cce8fba7dd58c5cffd65c0d30a7471a5f89c74778"
+  "hash": "84274328e9a4f9c0e97e35c372fb9c98c30ed1321da6006d95a8f8e2dd64c1f1"
 }

@@ -218,11 +218,6 @@ struct OptionalI64ValueRow {
     value: Option<i64>,
 }
 
-/// Row returned when loading an optional string scalar value.
-struct OptionalStringValueRow {
-    value: Option<String>,
-}
-
 /// Row returned when loading the persisted instruction bootstrap marker for
 /// one session.
 #[derive(sqlx::FromRow)]
@@ -1392,6 +1387,26 @@ WHERE id = ?
         Ok(())
     }
 
+    /// Returns the persisted upstream reference for a published session
+    /// branch, when present.
+    ///
+    /// # Errors
+    /// Returns an error if the lookup query fails.
+    pub async fn load_session_published_upstream_ref(
+        &self,
+        id: &str,
+    ) -> Result<Option<String>, DbError> {
+        let value = sqlx::query_scalar!(
+            r"SELECT published_upstream_ref FROM session WHERE id = ?",
+            id
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+
+        Ok(value)
+    }
+
     /// Updates the persisted forge review-request linkage for a session.
     ///
     /// Passing `None` deletes the linked `session_review_request` row. Local
@@ -1550,19 +1565,15 @@ WHERE id = ?
         &self,
         id: &str,
     ) -> Result<Option<String>, DbError> {
-        let row = sqlx::query_as!(
-            OptionalStringValueRow,
-            r#"
-SELECT provider_conversation_id AS "value: _"
-FROM session
-WHERE id = ?
-"#,
+        let value = sqlx::query_scalar!(
+            r"SELECT provider_conversation_id FROM session WHERE id = ?",
             id
         )
         .fetch_optional(&self.pool)
-        .await?;
+        .await?
+        .flatten();
 
-        Ok(row.and_then(|row| row.value))
+        Ok(value)
     }
 
     /// Returns the persisted app-server instruction bootstrap marker for a
@@ -1894,21 +1905,15 @@ WHERE id = ?
         &self,
         session_id: &str,
     ) -> Result<Option<ReasoningLevel>, DbError> {
-        let row = sqlx::query_as!(
-            OptionalStringValueRow,
-            r#"
-SELECT reasoning_level AS "value: _"
-FROM session
-WHERE id = ?
-"#,
+        let value = sqlx::query_scalar!(
+            r"SELECT reasoning_level FROM session WHERE id = ?",
             session_id
         )
         .fetch_optional(&self.pool)
-        .await?;
+        .await?
+        .flatten();
 
-        Ok(row
-            .and_then(|row| row.value)
-            .and_then(|value| value.parse::<ReasoningLevel>().ok()))
+        Ok(value.and_then(|value| value.parse::<ReasoningLevel>().ok()))
     }
 
     /// Loads the persisted summary text associated with one session.
@@ -3387,6 +3392,80 @@ WHERE model = ?
             Some("origin/agentty/session-a")
         );
         assert_eq!(cleared_row.published_upstream_ref, None);
+    }
+
+    #[tokio::test]
+    async fn test_load_session_published_upstream_ref_returns_stored_value() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-load", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        database
+            .update_session_published_upstream_ref(
+                "session-load",
+                Some("origin/agentty/session-load"),
+            )
+            .await
+            .expect("failed to set published upstream ref");
+
+        // Act
+        let loaded_ref = database
+            .load_session_published_upstream_ref("session-load")
+            .await
+            .expect("failed to load published upstream ref");
+
+        // Assert
+        assert_eq!(loaded_ref.as_deref(), Some("origin/agentty/session-load"));
+    }
+
+    #[tokio::test]
+    async fn test_load_session_published_upstream_ref_returns_none_when_unset() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-unset", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+
+        // Act
+        let loaded_ref = database
+            .load_session_published_upstream_ref("session-unset")
+            .await
+            .expect("failed to load published upstream ref");
+
+        // Assert
+        assert_eq!(loaded_ref, None);
+    }
+
+    #[tokio::test]
+    async fn test_load_session_published_upstream_ref_returns_none_for_missing_session() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+
+        // Act
+        let loaded_ref = database
+            .load_session_published_upstream_ref("nonexistent")
+            .await
+            .expect("failed to load published upstream ref");
+
+        // Assert
+        assert_eq!(loaded_ref, None);
     }
 
     #[tokio::test]

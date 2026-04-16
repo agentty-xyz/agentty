@@ -18,7 +18,7 @@ use crate::app::assist::{
 use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
-use crate::domain::session::Status;
+use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::agent;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::Database;
@@ -92,6 +92,19 @@ struct RebaseTaskInput {
     output: Arc<Mutex<String>>,
     session_model: AgentModel,
     status: Arc<Mutex<Status>>,
+}
+
+/// Bundled context for finalizing one rebase task.
+struct FinalizeRebaseInput<'a> {
+    app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    clock: &'a dyn Clock,
+    db: &'a Database,
+    folder: &'a Path,
+    git_client: &'a Arc<dyn GitClient>,
+    id: &'a str,
+    output: &'a Arc<Mutex<String>>,
+    rebase_result: Result<String, SessionError>,
+    status: &'a Arc<Mutex<Status>>,
 }
 
 /// Input context for assisted conflict resolution during `sync main`.
@@ -1158,15 +1171,17 @@ impl SessionManager {
         }
         .await;
 
-        Self::finalize_rebase_task(
+        Self::finalize_rebase_task(FinalizeRebaseInput {
+            app_event_tx: &app_event_tx,
+            clock: clock.as_ref(),
+            db: &db,
+            folder: &folder,
+            git_client: &git_client,
+            id: &id,
+            output: &output,
             rebase_result,
-            clock.as_ref(),
-            &output,
-            &db,
-            &app_event_tx,
-            &id,
-            &status,
-        )
+            status: &status,
+        })
         .await;
     }
 
@@ -1263,16 +1278,21 @@ impl SessionManager {
     /// session lifecycle state.
     ///
     /// Successful rebases request an immediate git-status refresh so footer
-    /// branch stats do not wait for the periodic poller.
-    async fn finalize_rebase_task(
-        rebase_result: Result<String, SessionError>,
-        clock: &dyn Clock,
-        output: &Arc<Mutex<String>>,
-        db: &Database,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        id: &str,
-        status: &Arc<Mutex<Status>>,
-    ) {
+    /// branch stats do not wait for the periodic poller, and trigger an
+    /// auto-push when the session has a previously published upstream branch.
+    async fn finalize_rebase_task(input: FinalizeRebaseInput<'_>) {
+        let FinalizeRebaseInput {
+            app_event_tx,
+            clock,
+            db,
+            folder,
+            git_client,
+            id,
+            output,
+            rebase_result,
+            status,
+        } = input;
+
         match rebase_result {
             Ok(message) => {
                 let rebase_message = format!("\n[Rebase] {message}\n");
@@ -1285,6 +1305,16 @@ impl SessionManager {
                 )
                 .await;
                 SessionTaskService::request_git_status_refresh(app_event_tx);
+
+                Self::start_auto_push_after_rebase(
+                    db,
+                    app_event_tx,
+                    folder,
+                    git_client,
+                    output,
+                    id,
+                )
+                .await;
             }
             Err(error) => {
                 let rebase_error = format!("\n[Rebase Error] {error}\n");
@@ -1303,6 +1333,56 @@ impl SessionManager {
         let _ =
             SessionTaskService::update_status(status, clock, db, app_event_tx, id, Status::Review)
                 .await;
+    }
+
+    /// Starts a detached auto-push task when the rebased session has a
+    /// previously published upstream branch.
+    async fn start_auto_push_after_rebase(
+        db: &Database,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        folder: &Path,
+        git_client: &Arc<dyn GitClient>,
+        output: &Arc<Mutex<String>>,
+        session_id: &str,
+    ) {
+        let published_upstream_ref = db
+            .load_session_published_upstream_ref(session_id)
+            .await
+            .ok()
+            .flatten();
+
+        let Some(published_upstream_ref) = published_upstream_ref else {
+            return;
+        };
+
+        let sync_operation_id = uuid::Uuid::new_v4().to_string();
+
+        let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
+            session_id: session_id.to_string(),
+            sync_operation_id: sync_operation_id.clone(),
+            sync_status: PublishedBranchSyncStatus::InProgress,
+        });
+
+        let app_event_tx = app_event_tx.clone();
+        let db = db.clone();
+        let folder = folder.to_path_buf();
+        let git_client = Arc::clone(git_client);
+        let output = Arc::clone(output);
+        let session_id = session_id.to_string();
+
+        tokio::spawn(async move {
+            super::worker::run_published_branch_auto_push(
+                app_event_tx,
+                db,
+                folder,
+                git_client,
+                output,
+                session_id,
+                sync_operation_id,
+                published_upstream_ref,
+            )
+            .await;
+        });
     }
 
     /// Updates the persisted session title from the canonical commit message.
@@ -3188,5 +3268,148 @@ mod tests {
         assert_eq!(fingerprint_a, fingerprint_b);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    /// Verifies that a successful rebase triggers an auto-push when the session
+    /// has a previously published upstream branch.
+    async fn test_finalize_rebase_task_triggers_auto_push_for_published_branch() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "sess-rebase",
+            "gemini-3-flash-preview",
+            "main",
+            "Rebasing",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        db.update_session_published_upstream_ref("sess-rebase", Some("origin/agentty/sess-rebase"))
+            .await
+            .expect("failed to set published upstream ref");
+
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let folder = temp_dir.path().join("sess-rebase");
+        let output = Arc::new(Mutex::new(String::new()));
+        let status = Arc::new(Mutex::new(Status::Rebasing));
+
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch()
+            .once()
+            .withf(|session_folder, remote_branch_name| {
+                session_folder.ends_with("sess-rebase")
+                    && remote_branch_name == "agentty/sess-rebase"
+            })
+            .returning(|_, _| Box::pin(async { Ok("origin/agentty/sess-rebase".to_string()) }));
+        let git_client: Arc<dyn GitClient> = Arc::new(mock_git_client);
+
+        // Act
+        SessionManager::finalize_rebase_task(FinalizeRebaseInput {
+            app_event_tx: &app_event_tx,
+            clock: &crate::app::session::RealClock,
+            db: &db,
+            folder: &folder,
+            git_client: &git_client,
+            id: "sess-rebase",
+            output: &output,
+            rebase_result: Ok("Successfully rebased agentty/sess-rebase onto main".to_string()),
+            status: &status,
+        })
+        .await;
+
+        // Assert — collect sync events emitted by the auto-push task.
+        let sync_events = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated {
+                    session_id,
+                    sync_operation_id,
+                    sync_status,
+                } = event
+                {
+                    sync_events.push((session_id, sync_operation_id, sync_status));
+                }
+            }
+
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for sync events");
+
+        assert_eq!(sync_events[0].0, "sess-rebase");
+        assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
+        assert_eq!(sync_events[1].0, "sess-rebase");
+        assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Idle);
+        assert_eq!(sync_events[0].1, sync_events[1].1);
+
+        let output_text = output.lock().expect("output lock poisoned").clone();
+        assert!(output_text.contains("[Rebase] Successfully rebased"));
+    }
+
+    #[tokio::test]
+    /// Verifies that a successful rebase does not trigger auto-push when the
+    /// session has no published upstream branch.
+    async fn test_finalize_rebase_task_skips_auto_push_without_published_branch() {
+        // Arrange
+        let db = Database::open_in_memory().await.expect("failed to open db");
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "sess-no-push",
+            "gemini-3-flash-preview",
+            "main",
+            "Rebasing",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let folder = temp_dir.path().join("sess-no-push");
+        let output = Arc::new(Mutex::new(String::new()));
+        let status = Arc::new(Mutex::new(Status::Rebasing));
+        let git_client: Arc<dyn GitClient> = Arc::new(git::MockGitClient::new());
+
+        // Act
+        SessionManager::finalize_rebase_task(FinalizeRebaseInput {
+            app_event_tx: &app_event_tx,
+            clock: &crate::app::session::RealClock,
+            db: &db,
+            folder: &folder,
+            git_client: &git_client,
+            id: "sess-no-push",
+            output: &output,
+            rebase_result: Ok("Successfully rebased agentty/sess-no-push onto main".to_string()),
+            status: &status,
+        })
+        .await;
+
+        // Assert — no PublishedBranchSyncUpdated events should be emitted.
+        // Drain remaining events and check that none are sync events.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let mut sync_event_count = 0;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }) {
+                sync_event_count += 1;
+            }
+        }
+        assert_eq!(
+            sync_event_count, 0,
+            "should not emit sync events without published branch"
+        );
+
+        let output_text = output.lock().expect("output lock poisoned").clone();
+        assert!(output_text.contains("[Rebase] Successfully rebased"));
     }
 }

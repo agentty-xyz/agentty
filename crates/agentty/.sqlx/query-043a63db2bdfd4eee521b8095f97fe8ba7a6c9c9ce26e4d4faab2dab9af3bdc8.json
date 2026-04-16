@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT reasoning_level AS \"value: _\"\nFROM session\nWHERE id = ?\n",
+  "query": "SELECT published_upstream_ref FROM session WHERE id = ?",
   "describe": {
     "columns": [
       {
-        "name": "value: _",
+        "name": "published_upstream_ref",
         "ordinal": 0,
         "type_info": "Text"
       }
@@ -16,5 +16,5 @@
       true
     ]
   },
-  "hash": "e34e8aae91717dac073cd0b2cae2218e6fb6a94821ad826bf3b66ab822e06dfa"
+  "hash": "043a63db2bdfd4eee521b8095f97fe8ba7a6c9c9ce26e4d4faab2dab9af3bdc8"
 }
