@@ -103,5 +103,6 @@ fn quit_confirm_dismiss_returns() {
                     "Quit dialog should be dismissed after Esc"
                 );
             },
-        );
+        )
+        .expect("feature test failed");
 }

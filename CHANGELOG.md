@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.5] - 2026-04-15
+
+### Added
+
+- Add Gemini `--acp` command invocations with cached app-session identifiers.
+- Add session-output status updates for post-turn published-branch auto-pushes.
+
+### Changed
+
+- Delay draft-session worktree creation until the staged bundle starts so the branch is based on the latest local base branch.
+- Split branch publishing onto `p` and forge review-request publishing onto `Shift+P`, with the same optional custom branch-name flow.
+
+### Fixed
+
+- Improve directory fuzzy matching in agent prompt path lookups.
+- Hide stale focused-review output after merge and stabilize auto-review startup timing.
+
+### Removed
+
+- Remove the session deletion confirmation flow.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.7.4] - 2026-04-13
 
 ### Added

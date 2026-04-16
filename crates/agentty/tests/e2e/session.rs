@@ -303,31 +303,39 @@ fn session_list_jk_navigation() -> E2eResult {
                 );
 
                 // Extract text from the two opened-session captures.
-                let opened_after_j_frame = common::frame_from_capture(&report.captures[1]);
-                let opened_after_k_frame = common::frame_from_capture(&report.captures[2]);
+                let session_after_down_navigation_frame =
+                    common::frame_from_capture(&report.captures[1]);
+                let session_after_up_navigation_frame =
+                    common::frame_from_capture(&report.captures[2]);
 
-                let after_j_full =
-                    Region::full(opened_after_j_frame.cols(), opened_after_j_frame.rows());
-                let after_k_full =
-                    Region::full(opened_after_k_frame.cols(), opened_after_k_frame.rows());
+                let down_navigation_full = Region::full(
+                    session_after_down_navigation_frame.cols(),
+                    session_after_down_navigation_frame.rows(),
+                );
+                let up_navigation_full = Region::full(
+                    session_after_up_navigation_frame.cols(),
+                    session_after_up_navigation_frame.rows(),
+                );
 
-                let after_j_text = opened_after_j_frame.text_in_region(&after_j_full);
-                let after_k_text = opened_after_k_frame.text_in_region(&after_k_full);
+                let down_navigation_text =
+                    session_after_down_navigation_frame.text_in_region(&down_navigation_full);
+                let up_navigation_text =
+                    session_after_up_navigation_frame.text_in_region(&up_navigation_full);
 
                 // Each opened view must contain one of the session prompts.
                 assert!(
-                    after_j_text.contains("alpha") || after_j_text.contains("beta"),
+                    down_navigation_text.contains("alpha") || down_navigation_text.contains("beta"),
                     "Session opened after j must contain alpha or beta"
                 );
                 assert!(
-                    after_k_text.contains("alpha") || after_k_text.contains("beta"),
+                    up_navigation_text.contains("alpha") || up_navigation_text.contains("beta"),
                     "Session opened after k must contain alpha or beta"
                 );
 
                 // j and k must open different sessions.
                 assert_ne!(
-                    after_j_text.contains("alpha"),
-                    after_k_text.contains("alpha"),
+                    down_navigation_text.contains("alpha"),
+                    up_navigation_text.contains("alpha"),
                     "j and k must open different sessions"
                 );
             },

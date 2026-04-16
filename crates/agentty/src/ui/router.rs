@@ -9,7 +9,9 @@ use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
-use crate::ui::overlay::{SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext};
+use crate::ui::overlay::{
+    HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
+};
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, page};
 
@@ -215,12 +217,14 @@ fn render_list_or_overlay_mode(
         } => overlay::render_help(
             f,
             area,
-            help_context,
-            *scroll_offset,
-            shared.list_background(),
-            aux.markdown_render_cache,
-            aux.session_progress_messages,
-            aux.wall_clock_unix_seconds,
+            HelpOverlayRenderContext {
+                help_context,
+                list_background: shared.list_background(),
+                markdown_render_cache: aux.markdown_render_cache,
+                scroll_offset: *scroll_offset,
+                session_progress_messages: aux.session_progress_messages,
+                wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
+            },
         ),
         AppMode::View { .. }
         | AppMode::Prompt { .. }

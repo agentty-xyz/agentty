@@ -38,14 +38,16 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                 assertion::assert_text_in_region(frame, "Open Commands", &full);
             },
-        );
+        )
+        .expect("feature test failed");
 }
 
 /// Verify that `j` and `k` navigate through settings rows.
 ///
 /// Opens the Settings tab and presses `j` multiple times to move the
-/// selection highlight down, then `k` to move back up. Captures
-/// intermediate states to show the navigation in the GIF.
+/// selection down, then `k` to move back up. The test confirms the
+/// selected row by pressing `Enter` after each navigation step and
+/// observing which model value changes in the table.
 #[test]
 fn settings_jk_navigation() {
     // Arrange, Act, Assert
@@ -70,8 +72,14 @@ fn settings_jk_navigation() {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled("moved_down", "Selection moved down two rows")
                     .press_key("k")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("moved_up", "Selection moved back up one row")
@@ -87,20 +95,19 @@ fn settings_jk_navigation() {
                 );
 
                 let initial_frame = common::frame_from_capture(&report.captures[0]);
-                assertion::assert_span_is_highlighted(&initial_frame, "Default Reasoning Level");
+                assertion::assert_match_count(&initial_frame, "gemini-3-flash-preview", 0);
+                assertion::assert_match_count(&initial_frame, "gemini-3.1-pro-preview", 3);
 
                 let moved_down_frame = common::frame_from_capture(&report.captures[1]);
-                assertion::assert_span_is_highlighted(&moved_down_frame, "Default Fast Model");
-                assertion::assert_span_is_not_highlighted(
-                    &moved_down_frame,
-                    "Default Reasoning Level",
-                );
+                assertion::assert_match_count(&moved_down_frame, "gemini-3-flash-preview", 1);
+                assertion::assert_match_count(&moved_down_frame, "gemini-3.1-pro-preview", 2);
 
                 let moved_up_frame = common::frame_from_capture(&report.captures[2]);
-                assertion::assert_span_is_highlighted(&moved_up_frame, "Default Smart Model");
-                assertion::assert_span_is_not_highlighted(&moved_up_frame, "Default Fast Model");
+                assertion::assert_match_count(&moved_up_frame, "gemini-3-flash-preview", 2);
+                assertion::assert_match_count(&moved_up_frame, "gemini-3.1-pro-preview", 1);
             },
-        );
+        )
+        .expect("feature test failed");
 }
 
 /// Verify that `Enter` cycles a selector setting value.
@@ -149,7 +156,8 @@ fn settings_enter_cycles_value() {
                 let after_full = Region::full(after_frame.cols(), after_frame.rows());
                 assertion::assert_text_in_region(&after_frame, "xhigh", &after_full);
             },
-        );
+        )
+        .expect("feature test failed");
 }
 
 /// Verify that the help overlay on the Settings tab shows settings-specific
@@ -180,5 +188,6 @@ fn settings_help_shows_edit_hint() {
                 assertion::assert_text_in_region(frame, "Keybindings", &full);
                 assertion::assert_text_in_region(frame, "edit", &full);
             },
-        );
+        )
+        .expect("feature test failed");
 }

@@ -33,5 +33,6 @@ fn projects_page_shows_cwd() {
                 assertion::assert_text_in_region(frame, "Agentty", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
             },
-        );
+        )
+        .expect("feature test failed");
 }

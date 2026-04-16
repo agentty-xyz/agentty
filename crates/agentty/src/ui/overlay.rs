@@ -60,6 +60,22 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     pub(crate) wall_clock_unix_seconds: i64,
 }
 
+/// Borrowed parameters for rendering the help overlay and its background page.
+pub(crate) struct HelpOverlayRenderContext<'a> {
+    /// Help overlay content and the background page to restore behind it.
+    pub(crate) help_context: &'a HelpContext,
+    /// Shared tab-list state rendered behind list-backed help overlays.
+    pub(crate) list_background: ListBackgroundRenderContext<'a>,
+    /// Shared markdown cache reused by restored background pages.
+    pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Help overlay vertical scroll position.
+    pub(crate) scroll_offset: u16,
+    /// Session progress messages keyed by session id.
+    pub(crate) session_progress_messages: &'a HashMap<String, String>,
+    /// Render-time clock used for deterministic timers.
+    pub(crate) wall_clock_unix_seconds: i64,
+}
+
 /// Renders the list background and generic confirmation overlay.
 pub(crate) fn render_confirmation_overlay(
     f: &mut Frame,
@@ -186,16 +202,16 @@ pub(crate) fn sync_popup_message(
 }
 
 /// Renders help overlay above the context-specific background page.
-pub(crate) fn render_help(
-    f: &mut Frame,
-    area: Rect,
-    help_context: &HelpContext,
-    scroll_offset: u16,
-    list_background: ListBackgroundRenderContext<'_>,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
-    session_progress_messages: &HashMap<String, String>,
-    wall_clock_unix_seconds: i64,
-) {
+pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderContext<'_>) {
+    let HelpOverlayRenderContext {
+        help_context,
+        list_background,
+        markdown_render_cache,
+        scroll_offset,
+        session_progress_messages,
+        wall_clock_unix_seconds,
+    } = context;
+
     render_help_background(
         f,
         area,

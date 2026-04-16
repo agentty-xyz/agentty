@@ -80,9 +80,7 @@ impl MarkdownRenderCache {
                 && entry.content_len == content_len
                 && entry.width == width
         })?;
-        let Some(entry) = entries.remove(entry_index) else {
-            return None;
-        };
+        let entry = entries.remove(entry_index)?;
         let lines = entry.lines.clone();
         entries.push_front(entry);
 

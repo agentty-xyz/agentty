@@ -35,7 +35,8 @@ fn stats_tab_shows_heatmap_and_tokens() {
                 assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
                 assertion::assert_text_in_region(frame, "TokenStats", &full);
             },
-        );
+        )
+        .expect("feature test failed");
 }
 
 /// Verify that the Stats tab shows the summary line with session
@@ -66,7 +67,8 @@ fn stats_footer_shows_summary() {
                     &full,
                 );
             },
-        );
+        )
+        .expect("feature test failed");
 }
 
 /// Verify that the Stats tab help overlay shows stats-specific keybindings.
@@ -95,5 +97,6 @@ fn stats_help_shows_keybindings() {
                 assertion::assert_text_in_region(frame, "Keybindings", &full);
                 assertion::assert_text_in_region(frame, "quit", &full);
             },
-        );
+        )
+        .expect("feature test failed");
 }
