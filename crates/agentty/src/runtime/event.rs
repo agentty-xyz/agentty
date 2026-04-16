@@ -417,7 +417,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         let session_id = "session-1".to_string();
-        app.sessions.sessions.push(Session {
+        app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

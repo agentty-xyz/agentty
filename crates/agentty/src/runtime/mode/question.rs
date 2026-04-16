@@ -1005,7 +1005,7 @@ mod tests {
 
         let mut app = new_test_app().await;
         let session_id = "session-review-check";
-        app.sessions.sessions.push(Session {
+        app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -1076,7 +1076,7 @@ mod tests {
 
         let mut app = new_test_app().await;
         let session_id = "session-handle-review";
-        app.sessions.sessions.push(Session {
+        app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
@@ -2614,7 +2614,7 @@ mod tests {
         // Set up a session with a real temp dir (no git repo, so diff will
         // produce an error message — which counts as non-empty content).
         let session_dir = tempdir().expect("failed to create session dir");
-        app.sessions.sessions.push(Session {
+        app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),

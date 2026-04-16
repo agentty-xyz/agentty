@@ -942,6 +942,7 @@ impl App {
             None
         });
         let session_git_statuses = self.sessions.session_git_statuses().clone();
+        let session_index_by_id = self.sessions.state().session_index_by_id().clone();
         let session_worktree_availability = self.sessions.session_worktree_availability().clone();
         let follow_up_task_positions = self.sessions.state().follow_up_task_positions.clone();
         let active_prompt_outputs = self.sessions.active_prompt_outputs().clone();
@@ -976,6 +977,7 @@ impl App {
                 active_prompt_outputs: &active_prompt_outputs,
                 follow_up_task_positions: &follow_up_task_positions,
                 session_git_statuses: &session_git_statuses,
+                session_index_by_id: &session_index_by_id,
                 session_progress_messages: &session_progress_messages,
                 session_worktree_availability: &session_worktree_availability,
                 settings,
@@ -3201,8 +3203,8 @@ mod tests {
         let mut done_session = test_session(PathBuf::from("/tmp/session-done"));
         done_session.id = "session-2".to_string();
         done_session.status = Status::Done;
-        app.sessions.sessions.push(review_session);
-        app.sessions.sessions.push(done_session);
+        app.sessions.push_session(review_session);
+        app.sessions.push_session(done_session);
 
         // Act
         let targets = App::session_git_status_targets(&app.sessions);
@@ -3628,7 +3630,7 @@ mod tests {
 
         // Act
         app.settings.open_command = open_command.to_string();
-        app.sessions.sessions.push(test_session(session_folder));
+        app.sessions.push_session(test_session(session_folder));
         app.sessions.table_state.select(Some(0));
 
         // Assert
@@ -4344,8 +4346,7 @@ mod tests {
         let mut app = new_test_app_with_tmux_client(Arc::new(mock_tmux_client)).await;
         app.settings.open_command = "npm run dev".to_string();
         app.sessions
-            .sessions
-            .push(test_session(missing_session_folder));
+            .push_session(test_session(missing_session_folder));
         app.sessions.table_state.select(Some(0));
 
         // Act
@@ -4879,8 +4880,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-git-status")));
+            .push_session(test_session(PathBuf::from("/tmp/session-git-status")));
 
         // Act
         app.apply_app_events(AppEvent::GitStatusUpdated {
@@ -4966,8 +4966,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-question-view")));
+            .push_session(test_session(PathBuf::from("/tmp/session-question-view")));
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
@@ -5055,8 +5054,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-summary-view")));
+            .push_session(test_session(PathBuf::from("/tmp/session-summary-view")));
         let expected_summary = serde_json::to_string(&AgentResponseSummary {
             turn: "- Added structured protocol summary fields.".to_string(),
             session: "- Session output now renders persisted summary separately.".to_string(),
@@ -5093,8 +5091,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-follow-up-view")));
+            .push_session(test_session(PathBuf::from("/tmp/session-follow-up-view")));
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
@@ -5132,8 +5129,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-branch-sync-view")));
+            .push_session(test_session(PathBuf::from("/tmp/session-branch-sync-view")));
 
         // Act
         app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
@@ -5169,7 +5165,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         let event_sender = app.services.event_sender();
-        app.sessions.sessions.push(test_session(PathBuf::from(
+        app.sessions.push_session(test_session(PathBuf::from(
             "/tmp/session-branch-sync-success",
         )));
 
@@ -5206,7 +5202,7 @@ mod tests {
         session.questions = vec![QuestionItem::new("Old question?")];
         session.stats.input_tokens = 5;
         session.stats.output_tokens = 8;
-        app.sessions.sessions.push(session);
+        app.sessions.push_session(session);
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
@@ -5243,8 +5239,7 @@ mod tests {
         let expected_hash = diff_content_hash(diff_text);
 
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-auto-review-sync")));
+            .push_session(test_session(PathBuf::from("/tmp/session-auto-review-sync")));
         app.sessions.sessions[0].status = Status::InProgress;
         app.sessions.handles.insert(
             session_id.to_string(),
@@ -5308,8 +5303,7 @@ mod tests {
         let expected_hash = diff_content_hash(diff_text);
 
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-already-review")));
+            .push_session(test_session(PathBuf::from("/tmp/session-already-review")));
         // Simulate sync_from_handles() having already updated the snapshot
         // to `Review` in a prior render tick.
         app.sessions.sessions[0].status = Status::Review;
@@ -5352,8 +5346,7 @@ mod tests {
         let mut app = new_test_app().await;
         let event_sender = app.services.event_sender();
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-batched-turns")));
+            .push_session(test_session(PathBuf::from("/tmp/session-batched-turns")));
 
         let first_turn = test_turn_applied_state(
             vec![QuestionItem::new("First question?")],
@@ -5425,8 +5418,8 @@ mod tests {
         let mut sibling_session = test_session(PathBuf::from("/tmp/sibling-session"));
         sibling_session.id = "session-2".to_string();
         sibling_session.title = Some("Sibling session".to_string());
-        app.sessions.sessions.push(source_session);
-        app.sessions.sessions.push(sibling_session);
+        app.sessions.push_session(source_session);
+        app.sessions.push_session(sibling_session);
 
         // Act
         app.launch_or_open_selected_follow_up_task("session-1")
@@ -5458,7 +5451,7 @@ mod tests {
             position: 0,
             text: "Open the sibling session.".to_string(),
         }];
-        app.sessions.sessions.push(source_session);
+        app.sessions.push_session(source_session);
 
         // Act
         let result = app
@@ -5485,8 +5478,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-done-view")));
+            .push_session(test_session(PathBuf::from("/tmp/session-done-view")));
         app.sessions.handles.insert(
             "session-1".to_string(),
             SessionHandles::new("Merge finished".to_string(), Status::Done),
@@ -5553,7 +5545,7 @@ mod tests {
         let session_folder = base_path.join("session-1");
         let mut viewed_session = test_session(session_folder);
         viewed_session.status = Status::Merging;
-        app.sessions.sessions.push(viewed_session);
+        app.sessions.push_session(viewed_session);
         app.sessions.handles.insert(
             "session-1".to_string(),
             SessionHandles::new("Merging".to_string(), Status::Merging),
@@ -6143,7 +6135,7 @@ mod tests {
         let mut session = test_session(PathBuf::from("/tmp/session-review-cache"));
         session.id = session_id.to_string();
         session.status = Status::AgentReview;
-        app.sessions.sessions.push(session);
+        app.sessions.push_session(session);
         app.sessions.handles.insert(
             session_id.to_string(),
             SessionHandles::new(String::new(), Status::AgentReview),
@@ -6241,7 +6233,7 @@ mod tests {
         let mut session = test_session(PathBuf::from("/tmp/session-review-progress"));
         session.id = session_id.to_string();
         session.status = Status::InProgress;
-        app.sessions.sessions.push(session);
+        app.sessions.push_session(session);
         app.sessions.handles.insert(
             session_id.to_string(),
             SessionHandles::new(String::new(), Status::InProgress),
@@ -6280,8 +6272,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-1";
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-cache-clear")));
+            .push_session(test_session(PathBuf::from("/tmp/session-cache-clear")));
         app.sessions.sessions[0].status = Status::InProgress;
         app.review_cache.insert(
             session_id.to_string(),
@@ -6305,8 +6296,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-1";
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-hash-skip")));
+            .push_session(test_session(PathBuf::from("/tmp/session-hash-skip")));
         app.sessions.sessions[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
@@ -6344,8 +6334,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-1";
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-loading-skip")));
+            .push_session(test_session(PathBuf::from("/tmp/session-loading-skip")));
         app.sessions.sessions[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
@@ -6380,8 +6369,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-1";
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-hash-start")));
+            .push_session(test_session(PathBuf::from("/tmp/session-hash-start")));
         app.sessions.sessions[0].status = Status::Review;
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
@@ -6410,8 +6398,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
-            .sessions
-            .push(test_session(PathBuf::from("/tmp/session-delete-cache")));
+            .push_session(test_session(PathBuf::from("/tmp/session-delete-cache")));
         app.sessions.table_state.select(Some(0));
         let session_id = app.sessions.sessions[0].id.clone();
         app.review_cache.insert(
@@ -6597,7 +6584,7 @@ mod tests {
         let mut sync_session = test_session(session_folder);
         sync_session.status = Status::Review;
         sync_session.published_upstream_ref = Some("origin/agentty/session-1".to_string());
-        app.sessions.sessions.push(sync_session);
+        app.sessions.push_session(sync_session);
 
         let restore_view = ConfirmationViewMode {
             done_session_output_mode: DoneSessionOutputMode::Summary,

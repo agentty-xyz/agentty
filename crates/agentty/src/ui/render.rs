@@ -57,6 +57,8 @@ pub struct RenderContext<'a> {
     /// Latest session-branch ahead/behind snapshots keyed by session id,
     /// including both base-branch and tracked-remote comparisons.
     pub session_git_statuses: &'a HashMap<String, SessionGitStatus>,
+    /// Cached session list positions keyed by stable session id.
+    pub session_index_by_id: &'a HashMap<String, usize>,
     /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<String, String>,
     /// Whether each rendered session currently has a materialized worktree on
@@ -108,6 +110,8 @@ struct FooterBarRenderContext<'a> {
     project: ProjectFooterContext<'a>,
     /// Latest session-branch ahead/behind snapshots keyed by session id.
     session_git_statuses: &'a HashMap<String, SessionGitStatus>,
+    /// Cached session list positions keyed by stable session id.
+    session_index_by_id: &'a HashMap<String, usize>,
     /// Session rows available for resolving the active footer session.
     sessions: &'a [Session],
 }
@@ -147,6 +151,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
                 working_dir: context.working_dir,
             },
             session_git_statuses: context.session_git_statuses,
+            session_index_by_id: context.session_index_by_id,
             sessions: context.sessions,
         },
     );
@@ -170,6 +175,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         mode,
         project,
         session_git_statuses,
+        session_index_by_id,
         sessions,
     } = context;
     let session_id = match mode {
@@ -199,11 +205,9 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         } => Some(session_id.as_str()),
         _ => None,
     };
-    let session_for_footer = session_id.and_then(|session_identifier| {
-        sessions
-            .iter()
-            .find(|session| session.id == session_identifier)
-    });
+    let session_for_footer = session_id
+        .and_then(|session_identifier| session_index_by_id.get(session_identifier).copied())
+        .and_then(|session_index| sessions.get(session_index));
 
     let (
         footer_dir,
@@ -297,6 +301,15 @@ mod tests {
             .collect()
     }
 
+    /// Builds a deterministic session-id lookup map for footer render tests.
+    fn session_index_by_id(sessions: &[Session]) -> HashMap<String, usize> {
+        sessions
+            .iter()
+            .enumerate()
+            .map(|(session_index, session)| (session.id.clone(), session_index))
+            .collect()
+    }
+
     #[test]
     fn render_footer_bar_prefers_session_folder_and_branch_for_view_mode() {
         // Arrange
@@ -312,6 +325,7 @@ mod tests {
             scroll_offset: None,
         };
         let sessions = vec![session];
+        let session_index_by_id = session_index_by_id(&sessions);
 
         // Act
         terminal
@@ -328,6 +342,7 @@ mod tests {
                             working_dir: Path::new("/tmp/workspace-root"),
                         },
                         session_git_statuses: &HashMap::new(),
+                        session_index_by_id: &session_index_by_id,
                         sessions: &sessions,
                     },
                 );
@@ -356,6 +371,7 @@ mod tests {
             scroll_offset: None,
         };
         let sessions = vec![session];
+        let session_index_by_id = session_index_by_id(&sessions);
 
         // Act
         terminal
@@ -372,6 +388,7 @@ mod tests {
                             working_dir: Path::new("/tmp/workspace-root"),
                         },
                         session_git_statuses: &HashMap::new(),
+                        session_index_by_id: &session_index_by_id,
                         sessions: &sessions,
                     },
                 );
@@ -405,6 +422,7 @@ mod tests {
             title: "Branch pushed".to_string(),
         };
         let sessions = vec![session];
+        let session_index_by_id = session_index_by_id(&sessions);
 
         // Act
         terminal
@@ -421,6 +439,7 @@ mod tests {
                             working_dir: Path::new("/tmp/workspace-root"),
                         },
                         session_git_statuses: &HashMap::new(),
+                        session_index_by_id: &session_index_by_id,
                         sessions: &sessions,
                     },
                 );
@@ -440,6 +459,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mode = AppMode::List;
         let sessions = Vec::new();
+        let session_index_by_id = session_index_by_id(&sessions);
         let working_dir = Path::new("/tmp/current-workspace");
         let git_branch = Some("feature/test-render");
         let git_status = Some((0, 0));
@@ -459,6 +479,7 @@ mod tests {
                             working_dir,
                         },
                         session_git_statuses: &HashMap::new(),
+                        session_index_by_id: &session_index_by_id,
                         sessions: &sessions,
                     },
                 );
@@ -487,6 +508,7 @@ mod tests {
             scroll_offset: None,
         };
         let sessions = vec![session];
+        let session_index_by_id = session_index_by_id(&sessions);
         let session_git_statuses = HashMap::from([(
             session_id.to_string(),
             SessionGitStatus {
@@ -510,6 +532,7 @@ mod tests {
                             working_dir: Path::new("/tmp/workspace-root"),
                         },
                         session_git_statuses: &session_git_statuses,
+                        session_index_by_id: &session_index_by_id,
                         sessions: &sessions,
                     },
                 );
@@ -538,6 +561,7 @@ mod tests {
             scroll_offset: None,
         };
         let sessions = vec![session];
+        let session_index_by_id = session_index_by_id(&sessions);
         let session_git_statuses = HashMap::from([(
             session_id.to_string(),
             SessionGitStatus {
@@ -561,6 +585,7 @@ mod tests {
                             working_dir: Path::new("/tmp/workspace-root"),
                         },
                         session_git_statuses: &session_git_statuses,
+                        session_index_by_id: &session_index_by_id,
                         sessions: &sessions,
                     },
                 );

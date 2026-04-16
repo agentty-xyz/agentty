@@ -884,10 +884,7 @@ impl SessionManager {
 
     /// Resolves a stable session identifier to the current list index.
     pub fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
-        self.state
-            .sessions
-            .iter()
-            .position(|session| session.id == session_id)
+        self.state.session_index_for_id(session_id)
     }
 
     /// Publishes a review-ready session branch and creates or refreshes the
@@ -1052,7 +1049,7 @@ impl SessionManager {
             return None;
         }
 
-        let session = self.state.sessions.remove(selected_index);
+        let session = self.remove_session_at(selected_index)?;
         self.state.handles.remove(&session.id);
         self.remove_session_worktree_availability(&session.id);
         self.abort_title_generation_task(&session.id);

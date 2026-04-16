@@ -24,6 +24,8 @@ pub struct SessionState {
     pub handles: HashMap<String, SessionHandles>,
     /// Cached worktree-directory availability keyed by session id.
     pub(crate) session_worktree_availability: HashMap<String, bool>,
+    /// Cached session list positions keyed by stable session id.
+    pub(crate) session_index_by_id: HashMap<String, usize>,
     pub sessions: Vec<Session>,
     pub table_state: TableState,
     pub(crate) clock: Arc<dyn Clock>,
@@ -48,32 +50,83 @@ impl SessionState {
     ) -> Self {
         let _state_created_at = clock.now_system_time();
         let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
-
-        Self {
+        let mut state = Self {
             follow_up_task_positions: HashMap::new(),
             handles,
             session_worktree_availability: HashMap::new(),
-            sessions,
+            session_index_by_id: HashMap::new(),
+            sessions: Vec::new(),
             table_state,
             clock,
             refresh_deadline,
             row_count,
             session_git_statuses: HashMap::new(),
             updated_at_max,
+        };
+
+        for session in sessions {
+            state.push_session(session);
         }
+
+        state
+    }
+
+    /// Returns the current list position for one stable session identifier.
+    pub fn session_index_for_id(&self, session_id: &str) -> Option<usize> {
+        self.session_index_by_id.get(session_id).copied()
+    }
+
+    /// Returns one immutable session snapshot by identifier.
+    pub fn session_for_id(&self, session_id: &str) -> Option<&Session> {
+        self.session_index_for_id(session_id)
+            .and_then(|session_index| self.sessions.get(session_index))
+    }
+
+    /// Returns the cached session-id lookup map used by render and workflow
+    /// code.
+    pub(crate) fn session_index_by_id(&self) -> &HashMap<String, usize> {
+        &self.session_index_by_id
+    }
+
+    /// Replaces the full session snapshot list and rebuilds the cached
+    /// identifier index in one step.
+    pub(crate) fn replace_sessions(&mut self, sessions: Vec<Session>) {
+        self.session_index_by_id = Self::build_session_index_by_id(&sessions);
+        self.sessions = sessions;
+    }
+
+    /// Appends one session snapshot and records its new stable identifier
+    /// lookup entry.
+    pub(crate) fn push_session(&mut self, session: Session) {
+        let session_index = self.sessions.len();
+        self.session_index_by_id
+            .insert(session.id.clone(), session_index);
+        self.sessions.push(session);
+    }
+
+    /// Removes one session snapshot by list index and rebuilds the cached
+    /// identifier index when removal succeeds.
+    pub(crate) fn remove_session_at(&mut self, session_index: usize) -> Option<Session> {
+        if session_index >= self.sessions.len() {
+            return None;
+        }
+
+        let session = self.sessions.remove(session_index);
+        self.rebuild_session_index_by_id();
+
+        Some(session)
     }
 
     /// Copies current values from one runtime handle into its `Session`
     /// snapshot.
     pub fn sync_session_from_handle(&mut self, session_id: &str) {
+        let Some(session_index) = self.session_index_for_id(session_id) else {
+            return;
+        };
         let Some(session_handles) = self.handles.get(session_id) else {
             return;
         };
-        let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.sessions.get_mut(session_index) else {
             return;
         };
 
@@ -101,11 +154,10 @@ impl SessionState {
         deleted_lines: u64,
         session_size: SessionSize,
     ) {
-        let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session_index) = self.session_index_for_id(session_id) else {
+            return;
+        };
+        let Some(session) = self.sessions.get_mut(session_index) else {
             return;
         };
 
@@ -116,10 +168,7 @@ impl SessionState {
 
     /// Returns the currently selected follow-up task position for one session.
     pub fn selected_follow_up_task_position(&self, session_id: &str) -> Option<usize> {
-        let session = self
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)?;
+        let session = self.session_for_id(session_id)?;
         if session.follow_up_tasks.is_empty() {
             return None;
         }
@@ -153,11 +202,7 @@ impl SessionState {
         position: usize,
         launched_session_id: Option<String>,
     ) {
-        let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.session_mut_for_id(session_id) else {
             return;
         };
 
@@ -282,11 +327,7 @@ impl SessionState {
     /// Advances the selected follow-up task for one session in the requested
     /// direction when at least one task exists.
     fn advance_follow_up_task_selection(&mut self, session_id: &str, move_forward: bool) {
-        let Some(session) = self
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.session_for_id(session_id) else {
             return;
         };
         let follow_up_task_count = session.follow_up_tasks.len();
@@ -307,6 +348,28 @@ impl SessionState {
         };
         self.follow_up_task_positions
             .insert(session_id.to_string(), next_position);
+    }
+
+    /// Returns one mutable session snapshot by identifier.
+    fn session_mut_for_id(&mut self, session_id: &str) -> Option<&mut Session> {
+        let session_index = self.session_index_by_id.get(session_id).copied()?;
+
+        self.sessions.get_mut(session_index)
+    }
+
+    /// Rebuilds the cached session-id lookup map from the current session
+    /// ordering.
+    fn rebuild_session_index_by_id(&mut self) {
+        self.session_index_by_id = Self::build_session_index_by_id(&self.sessions);
+    }
+
+    /// Builds a session-id lookup map from one ordered session slice.
+    fn build_session_index_by_id(sessions: &[Session]) -> HashMap<String, usize> {
+        sessions
+            .iter()
+            .enumerate()
+            .map(|(session_index, session)| (session.id.clone(), session_index))
+            .collect()
     }
 }
 
@@ -526,6 +589,157 @@ mod tests {
         assert_eq!(state.sessions[0].stats.added_lines, 12);
         assert_eq!(state.sessions[0].stats.deleted_lines, 4);
         assert_eq!(state.sessions[0].size, SessionSize::S);
+    }
+
+    #[test]
+    /// Verifies replacing the session list rebuilds identifier lookups.
+    fn replace_sessions_rebuilds_session_id_index() {
+        // Arrange
+        let initial_session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            draft_attachments: Vec::new(),
+            folder: std::env::temp_dir(),
+            follow_up_tasks: Vec::new(),
+            id: "session-1".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
+            is_draft: false,
+            model: AgentKind::Gemini.default_model(),
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            reasoning_level_override: None,
+            published_upstream_ref: None,
+            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Review,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let replacement_session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            draft_attachments: Vec::new(),
+            folder: std::env::temp_dir(),
+            follow_up_tasks: Vec::new(),
+            id: "session-2".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
+            is_draft: false,
+            model: AgentKind::Gemini.default_model(),
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            reasoning_level_override: None,
+            published_upstream_ref: None,
+            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Review,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let mut state = SessionState::new(
+            HashMap::new(),
+            vec![initial_session],
+            TableState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+
+        // Act
+        state.replace_sessions(vec![replacement_session]);
+
+        // Assert
+        assert_eq!(state.session_index_for_id("session-1"), None);
+        assert_eq!(state.session_index_for_id("session-2"), Some(0));
+    }
+
+    #[test]
+    /// Verifies removing a session keeps identifier lookups aligned with the
+    /// remaining list order.
+    fn remove_session_at_rebuilds_session_id_index() {
+        // Arrange
+        let first_session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            draft_attachments: Vec::new(),
+            folder: std::env::temp_dir(),
+            follow_up_tasks: Vec::new(),
+            id: "session-1".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
+            is_draft: false,
+            model: AgentKind::Gemini.default_model(),
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            reasoning_level_override: None,
+            published_upstream_ref: None,
+            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Review,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let second_session = Session {
+            base_branch: "main".to_string(),
+            created_at: 0,
+            draft_attachments: Vec::new(),
+            folder: std::env::temp_dir(),
+            follow_up_tasks: Vec::new(),
+            id: "session-2".to_string(),
+            in_progress_started_at: None,
+            in_progress_total_seconds: 0,
+            is_draft: false,
+            model: AgentKind::Gemini.default_model(),
+            output: String::new(),
+            project_name: "project".to_string(),
+            prompt: "prompt".to_string(),
+            reasoning_level_override: None,
+            published_upstream_ref: None,
+            published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
+            questions: Vec::new(),
+            review_request: None,
+            size: SessionSize::Xs,
+            stats: SessionStats::default(),
+            status: Status::Review,
+            summary: None,
+            title: None,
+            updated_at: 0,
+        };
+        let mut state = SessionState::new(
+            HashMap::new(),
+            vec![first_session, second_session],
+            TableState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+
+        // Act
+        let removed_session = state.remove_session_at(0);
+
+        // Assert
+        assert_eq!(
+            removed_session.map(|session| session.id),
+            Some("session-1".to_string())
+        );
+        assert_eq!(state.session_index_for_id("session-1"), None);
+        assert_eq!(state.session_index_for_id("session-2"), Some(0));
     }
 
     #[test]

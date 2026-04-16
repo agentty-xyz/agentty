@@ -115,7 +115,7 @@ impl SessionManager {
                 services.fs_client().as_ref(),
             )
             .await;
-        self.state.sessions = sessions;
+        self.state.replace_sessions(sessions);
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
         self.stats_activity = stats_activity;
