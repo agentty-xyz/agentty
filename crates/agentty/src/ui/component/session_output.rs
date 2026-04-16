@@ -10,7 +10,7 @@ use crate::domain::session::{
 };
 use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
-use crate::ui::markdown::render_markdown;
+use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::{Component, style, text_util};
 
@@ -29,6 +29,9 @@ pub struct SessionOutput<'a> {
     active_progress: Option<&'a str>,
     /// Selected panel content for the session output panel.
     done_session_output_mode: DoneSessionOutputMode,
+    /// Shared render cache that avoids re-parsing unchanged markdown each
+    /// frame.
+    markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
     review_status_message: Option<&'a str>,
     review_text: Option<&'a str>,
     scroll_offset: Option<u16>,
@@ -64,6 +67,7 @@ impl<'a> SessionOutput<'a> {
             active_prompt_output: None,
             active_progress: None,
             done_session_output_mode: DoneSessionOutputMode::Summary,
+            markdown_render_cache: None,
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
@@ -90,6 +94,14 @@ impl<'a> SessionOutput<'a> {
     #[must_use]
     pub fn done_session_output_mode(mut self, mode: DoneSessionOutputMode) -> Self {
         self.done_session_output_mode = mode;
+        self
+    }
+
+    /// Sets the shared markdown render cache used to avoid re-parsing
+    /// unchanged transcript content each frame.
+    #[must_use]
+    pub fn markdown_render_cache(mut self, cache: &'a markdown::MarkdownRenderCache) -> Self {
+        self.markdown_render_cache = Some(cache);
         self
     }
 
@@ -134,7 +146,7 @@ impl<'a> SessionOutput<'a> {
         context: SessionOutputLineContext<'_>,
     ) -> u16 {
         let output_area = Rect::new(0, 0, output_width, 0);
-        let lines = Self::output_lines(session, output_area, context);
+        let lines = Self::output_lines(session, output_area, context, None);
 
         u16::try_from(lines.len()).unwrap_or(u16::MAX)
     }
@@ -161,6 +173,7 @@ impl<'a> SessionOutput<'a> {
         session: &Session,
         output_area: Rect,
         context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) -> Vec<Line<'static>> {
         let SessionOutputLineContext {
             active_prompt_output,
@@ -182,9 +195,20 @@ impl<'a> SessionOutput<'a> {
             as usize;
         let (completed_turn_text, trailing_footer_text) =
             text_util::split_trailing_line_block(&completed_turn_text, TRANSCRIPT_FOOTER_PREFIXES);
-        let mut lines = render_markdown(completed_turn_text, inner_width);
+        let mut lines = Vec::new();
+        Self::append_markdown_lines(
+            &mut lines,
+            completed_turn_text,
+            inner_width,
+            markdown_render_cache,
+        );
         if Self::shows_summary_block(session.status, done_session_output_mode) {
-            Self::append_summary_lines(&mut lines, session.summary.as_deref(), inner_width);
+            Self::append_summary_lines(
+                &mut lines,
+                session.summary.as_deref(),
+                inner_width,
+                markdown_render_cache,
+            );
         }
         if Self::shows_follow_up_tasks() {
             Self::append_follow_up_task_lines(
@@ -192,12 +216,23 @@ impl<'a> SessionOutput<'a> {
                 &session.follow_up_tasks,
                 selected_follow_up_task_position,
                 inner_width,
+                markdown_render_cache,
             );
         }
-        Self::append_transcript_footer_lines(&mut lines, trailing_footer_text, inner_width);
-        Self::append_active_turn_lines(&mut lines, active_turn_text.as_deref(), inner_width);
+        Self::append_transcript_footer_lines(
+            &mut lines,
+            trailing_footer_text,
+            inner_width,
+            markdown_render_cache,
+        );
+        Self::append_active_turn_lines(
+            &mut lines,
+            active_turn_text.as_deref(),
+            inner_width,
+            markdown_render_cache,
+        );
         if Self::shows_review_lines(session.status) {
-            Self::append_review_lines(&mut lines, review_text, inner_width);
+            Self::append_review_lines(&mut lines, review_text, inner_width, markdown_render_cache);
         }
         Self::append_published_branch_sync_lines(&mut lines, session);
 
@@ -459,6 +494,7 @@ impl<'a> SessionOutput<'a> {
         lines: &mut Vec<Line<'static>>,
         review_text: Option<&str>,
         inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
         let review_markdown = review_text
             .map(str::trim)
@@ -469,7 +505,7 @@ impl<'a> SessionOutput<'a> {
             return;
         };
 
-        Self::append_markdown_lines(lines, &review_markdown, inner_width);
+        Self::append_markdown_lines(lines, &review_markdown, inner_width, markdown_render_cache);
     }
 
     /// Appends a rendered structured-summary section without mutating the
@@ -478,6 +514,7 @@ impl<'a> SessionOutput<'a> {
         lines: &mut Vec<Line<'static>>,
         summary_text: Option<&str>,
         inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
         let Some(summary_text) = summary_text else {
             return;
@@ -486,7 +523,12 @@ impl<'a> SessionOutput<'a> {
             return;
         }
 
-        Self::append_markdown_lines(lines, &Self::render_summary_text(summary_text), inner_width);
+        Self::append_markdown_lines(
+            lines,
+            &Self::render_summary_text(summary_text),
+            inner_width,
+            markdown_render_cache,
+        );
     }
 
     /// Appends a rendered follow-up-task section without mutating persisted
@@ -499,12 +541,18 @@ impl<'a> SessionOutput<'a> {
         follow_up_tasks: &[SessionFollowUpTask],
         selected_follow_up_task_position: Option<usize>,
         inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
         if follow_up_tasks.is_empty() {
             return;
         }
 
-        Self::append_markdown_lines(lines, &format!("## {FOLLOW_UP_TASK_HEADER}"), inner_width);
+        Self::append_markdown_lines(
+            lines,
+            &format!("## {FOLLOW_UP_TASK_HEADER}"),
+            inner_width,
+            markdown_render_cache,
+        );
         let selected_follow_up_task_position = Self::resolved_follow_up_task_position(
             follow_up_tasks,
             selected_follow_up_task_position,
@@ -522,12 +570,18 @@ impl<'a> SessionOutput<'a> {
         lines: &mut Vec<Line<'static>>,
         trailing_footer_text: Option<&str>,
         inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
         let Some(trailing_footer_text) = trailing_footer_text else {
             return;
         };
 
-        Self::append_markdown_lines(lines, trailing_footer_text, inner_width);
+        Self::append_markdown_lines(
+            lines,
+            trailing_footer_text,
+            inner_width,
+            markdown_render_cache,
+        );
     }
 
     /// Appends the currently active prompt-led transcript block after
@@ -536,6 +590,7 @@ impl<'a> SessionOutput<'a> {
         lines: &mut Vec<Line<'static>>,
         active_turn_text: Option<&str>,
         inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
         let Some(active_turn_text) = active_turn_text else {
             return;
@@ -544,13 +599,25 @@ impl<'a> SessionOutput<'a> {
             return;
         }
 
-        Self::append_markdown_lines(lines, active_turn_text, inner_width);
+        Self::append_markdown_lines(lines, active_turn_text, inner_width, markdown_render_cache);
     }
 
     /// Appends rendered markdown with one blank separator while trimming any
     /// existing trailing blank lines from `lines`.
-    fn append_markdown_lines(lines: &mut Vec<Line<'static>>, markdown: &str, inner_width: usize) {
-        let mut rendered_lines = render_markdown(markdown, inner_width);
+    ///
+    /// When a shared render cache is available, every appended markdown block
+    /// reuses it so transcript sections do not evict each other between
+    /// frames.
+    fn append_markdown_lines(
+        lines: &mut Vec<Line<'static>>,
+        markdown: &str,
+        inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) {
+        let mut rendered_lines = match markdown_render_cache {
+            Some(cache) => cache.render(markdown, inner_width),
+            None => render_markdown(markdown, inner_width),
+        };
         if rendered_lines.is_empty() {
             return;
         }
@@ -817,6 +884,7 @@ impl Component for SessionOutput<'_> {
                 review_text: self.review_text,
                 selected_follow_up_task_position: self.selected_follow_up_task_position,
             },
+            self.markdown_render_cache,
         );
         let final_scroll = self.final_scroll_offset(output_area, lines.len());
 
@@ -942,6 +1010,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -966,6 +1035,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -990,6 +1060,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1015,6 +1086,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1056,6 +1128,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1097,6 +1170,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1127,6 +1201,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, Some(0), None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1156,6 +1231,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1188,6 +1264,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Output, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1214,6 +1291,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1244,6 +1322,7 @@ mod tests {
                 active_prompt_output: Some("\n › add hello world\n\n"),
                 ..line_context(DoneSessionOutputMode::Summary, None, None, None, None)
             },
+            None,
         );
         let text = lines
             .iter()
@@ -1278,6 +1357,7 @@ mod tests {
                 active_prompt_output: Some(" › add hello world\n\n"),
                 ..line_context(DoneSessionOutputMode::Summary, None, None, None, None)
             },
+            None,
         );
         let text = lines
             .iter()
@@ -1314,6 +1394,7 @@ mod tests {
                 active_prompt_output: Some("\n › actual prompt\n\n"),
                 ..line_context(DoneSessionOutputMode::Summary, None, None, None, None)
             },
+            None,
         );
         let text = lines
             .iter()
@@ -1344,6 +1425,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1380,6 +1462,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1404,6 +1487,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let review_text = review_lines
             .iter()
@@ -1419,6 +1503,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let done_text = done_lines
             .iter()
@@ -1451,6 +1536,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Output, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1474,6 +1560,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Review, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1497,6 +1584,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Review, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1529,6 +1617,7 @@ mod tests {
                 Some(assisted_text),
                 None,
             ),
+            None,
         );
         let text = lines
             .iter()
@@ -1560,6 +1649,7 @@ mod tests {
                 Some(assisted_text),
                 None,
             ),
+            None,
         );
         let text = lines
             .iter()
@@ -1589,6 +1679,7 @@ mod tests {
                 None,
                 None,
             ),
+            None,
         );
         let text = lines
             .iter()
@@ -1619,6 +1710,7 @@ mod tests {
                 Some(assisted_text),
                 None,
             ),
+            None,
         );
         let text = lines
             .iter()
@@ -1654,6 +1746,7 @@ mod tests {
                 None,
                 None,
             ),
+            None,
         );
         let text = lines
             .iter()
@@ -1680,6 +1773,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()
@@ -1703,6 +1797,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
 
         // Assert
@@ -1735,6 +1830,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 6, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
 
         // Assert
@@ -1768,6 +1864,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
 
         // Assert
@@ -1787,6 +1884,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
 
         // Assert
@@ -1898,6 +1996,7 @@ mod tests {
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None, None),
+            None,
         );
         let text = lines
             .iter()

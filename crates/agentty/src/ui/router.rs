@@ -11,7 +11,7 @@ use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
 use crate::ui::overlay::{SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext};
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
-use crate::ui::{Component, Page, RenderContext, component, overlay, page};
+use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, page};
 
 /// Shared borrowed data required to render list-page backgrounds.
 pub(crate) struct ListBackgroundRenderContext<'a> {
@@ -74,6 +74,7 @@ struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<String, String>,
     default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
+    markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<String, String>,
@@ -91,6 +92,7 @@ struct PublishBranchOverlayContext<'a> {
     active_prompt_outputs: &'a HashMap<String, String>,
     default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
+    markdown_render_cache: &'a markdown::MarkdownRenderCache,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
     restore_view: &'a ConfirmationViewMode,
@@ -105,6 +107,7 @@ struct RouteAuxContext<'a> {
     active_prompt_outputs: &'a HashMap<String, String>,
     default_reasoning_level: ReasoningLevel,
     follow_up_task_positions: &'a HashMap<String, usize>,
+    markdown_render_cache: &'a markdown::MarkdownRenderCache,
     session_progress_messages: &'a HashMap<String, String>,
     session_worktree_availability: &'a HashMap<String, bool>,
     wall_clock_unix_seconds: i64,
@@ -118,6 +121,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         current_tab,
         has_tasks_tab,
+        markdown_render_cache,
         mode,
         project_table_state,
         projects,
@@ -153,6 +157,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         default_reasoning_level: shared.settings.reasoning_level,
         follow_up_task_positions,
+        markdown_render_cache,
         session_progress_messages,
         session_worktree_availability,
         wall_clock_unix_seconds,
@@ -213,6 +218,7 @@ fn render_list_or_overlay_mode(
             help_context,
             *scroll_offset,
             shared.list_background(),
+            aux.markdown_render_cache,
             aux.session_progress_messages,
             aux.wall_clock_unix_seconds,
         ),
@@ -262,6 +268,7 @@ fn render_confirmation_mode(
                 active_prompt_outputs: aux.active_prompt_outputs,
                 default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
+                markdown_render_cache: aux.markdown_render_cache,
                 restore_view: view_mode,
                 session_progress_messages: aux.session_progress_messages,
                 session_worktree_availability: aux.session_worktree_availability,
@@ -315,6 +322,7 @@ fn render_view_info_popup_mode(
                 .get(&restore_view.session_id)
                 .unwrap_or(&false),
             default_reasoning_level: aux.default_reasoning_level,
+            markdown_render_cache: aux.markdown_render_cache,
             is_loading: *is_loading,
             loading_label,
             message,
@@ -348,6 +356,8 @@ struct SessionOverlayRenderContext<'a> {
     default_reasoning_level: ReasoningLevel,
     /// Follow-up-task selection state keyed by session id.
     follow_up_task_positions: &'a HashMap<String, usize>,
+    /// Shared render cache for session transcript markdown.
+    markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Session view restored after the overlay closes.
     restore_view: &'a ConfirmationViewMode,
     /// Active progress messages keyed by session id.
@@ -377,6 +387,7 @@ fn render_session_overlay_background(
             active_prompt_outputs: context.active_prompt_outputs,
             default_reasoning_level: context.default_reasoning_level,
             follow_up_task_positions: context.follow_up_task_positions,
+            markdown_render_cache: context.markdown_render_cache,
             mode: &background_mode,
             session_id: &context.restore_view.session_id,
             session_progress_messages: context.session_progress_messages,
@@ -437,6 +448,7 @@ fn render_session_or_diff_mode(
                 active_prompt_outputs: aux.active_prompt_outputs,
                 default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
+                markdown_render_cache: aux.markdown_render_cache,
                 mode,
                 session_id,
                 session_progress_messages: aux.session_progress_messages,
@@ -457,6 +469,7 @@ fn render_session_or_diff_mode(
                 active_prompt_outputs: aux.active_prompt_outputs,
                 default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
+                markdown_render_cache: aux.markdown_render_cache,
                 restore_view,
                 session_progress_messages: aux.session_progress_messages,
                 session_worktree_availability: aux.session_worktree_availability,
@@ -480,6 +493,7 @@ fn render_session_or_diff_mode(
                 active_prompt_outputs: aux.active_prompt_outputs,
                 default_reasoning_level: aux.default_reasoning_level,
                 follow_up_task_positions: aux.follow_up_task_positions,
+                markdown_render_cache: aux.markdown_render_cache,
                 input,
                 locked_upstream_ref: locked_upstream_ref.as_deref(),
                 restore_view,
@@ -541,6 +555,7 @@ fn render_publish_branch_overlay(
         active_prompt_outputs,
         default_reasoning_level,
         follow_up_task_positions,
+        markdown_render_cache,
         input,
         locked_upstream_ref,
         restore_view,
@@ -555,6 +570,7 @@ fn render_publish_branch_overlay(
             active_prompt_outputs,
             default_reasoning_level,
             follow_up_task_positions,
+            markdown_render_cache,
             restore_view,
             session_progress_messages,
             session_worktree_availability,
@@ -577,6 +593,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         active_prompt_outputs,
         default_reasoning_level,
         follow_up_task_positions,
+        markdown_render_cache,
         mode,
         session_id,
         session_progress_messages,
@@ -601,6 +618,7 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         active_prompt_output,
         active_progress,
         default_reasoning_level,
+        markdown_render_cache,
         mode,
         scroll_offset,
         session_index,
@@ -765,6 +783,8 @@ mod tests {
             scroll_offset: None,
         };
         let progress_messages = HashMap::new();
+        let cache = markdown::MarkdownRenderCache::default();
+
         // Act
         terminal
             .draw(|frame| {
@@ -777,6 +797,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
+                        markdown_render_cache: &cache,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
@@ -805,6 +826,7 @@ mod tests {
         };
         let progress_messages = HashMap::new();
         let sessions = Vec::new();
+        let cache = markdown::MarkdownRenderCache::default();
 
         // Act
         terminal
@@ -820,6 +842,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
+                        markdown_render_cache: &cache,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
@@ -851,6 +874,8 @@ mod tests {
             scroll_offset: 0,
         };
         let progress_messages = HashMap::new();
+        let cache = markdown::MarkdownRenderCache::default();
+
         // Act
         terminal
             .draw(|frame| {
@@ -863,6 +888,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         follow_up_task_positions: &HashMap::new(),
+                        markdown_render_cache: &cache,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
@@ -897,6 +923,7 @@ mod tests {
             scroll_offset: None,
             session_id: session_id.to_string(),
         };
+        let cache = markdown::MarkdownRenderCache::default();
 
         // Act
         terminal
@@ -908,6 +935,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::High,
                         follow_up_task_positions: &HashMap::new(),
+                        markdown_render_cache: &cache,
                         restore_view: &view_mode,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),

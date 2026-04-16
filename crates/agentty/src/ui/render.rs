@@ -11,7 +11,7 @@ use crate::app::{SettingsManager, Tab, UpdateStatus};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
-use crate::ui::{component, router};
+use crate::ui::{component, markdown, router};
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -46,6 +46,8 @@ pub struct RenderContext<'a> {
     pub git_status: Option<(u32, u32)>,
     /// Newer stable version when one is available.
     pub latest_available_version: Option<&'a str>,
+    /// Shared render cache for session transcript markdown output.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current app mode and its transient state.
     pub mode: &'a AppMode,
     /// Table selection state for the projects list.

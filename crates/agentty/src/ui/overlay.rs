@@ -13,7 +13,7 @@ use crate::ui::state::app_mode::{
     AppMode, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
 };
 use crate::ui::style::palette;
-use crate::ui::{Component, Page, component, page};
+use crate::ui::{Component, Page, component, markdown, page};
 
 const OVERLAY_HORIZONTAL_PADDING: u16 = 2;
 const OVERLAY_VERTICAL_PADDING: u16 = 1;
@@ -40,6 +40,8 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     pub(crate) can_open_worktree: bool,
     /// Active project-scoped default reasoning level.
     pub(crate) default_reasoning_level: ReasoningLevel,
+    /// Shared markdown cache reused by the restored session background.
+    pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Whether the popup should render its loading indicator.
     pub(crate) is_loading: bool,
     /// Loading indicator label.
@@ -123,6 +125,7 @@ pub(crate) fn render_view_info_popup(
     let ViewInfoPopupRenderContext {
         can_open_worktree,
         default_reasoning_level,
+        markdown_render_cache,
         is_loading,
         loading_label,
         message,
@@ -145,6 +148,7 @@ pub(crate) fn render_view_info_popup(
             active_prompt_output: None,
             active_progress,
             default_reasoning_level,
+            markdown_render_cache,
             mode: &background_mode,
             scroll_offset: restore_view.scroll_offset,
             session_index,
@@ -188,6 +192,7 @@ pub(crate) fn render_help(
     help_context: &HelpContext,
     scroll_offset: u16,
     list_background: ListBackgroundRenderContext<'_>,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
     session_progress_messages: &HashMap<String, String>,
     wall_clock_unix_seconds: i64,
 ) {
@@ -196,6 +201,7 @@ pub(crate) fn render_help(
         area,
         help_context,
         list_background,
+        markdown_render_cache,
         session_progress_messages,
         wall_clock_unix_seconds,
     );
@@ -351,6 +357,7 @@ fn render_help_background(
     area: Rect,
     help_context: &HelpContext,
     list_background: ListBackgroundRenderContext<'_>,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
     session_progress_messages: &HashMap<String, String>,
     wall_clock_unix_seconds: i64,
 ) {
@@ -382,6 +389,7 @@ fn render_help_background(
                 active_prompt_output: None,
                 active_progress,
                 default_reasoning_level: list_background.settings.reasoning_level,
+                markdown_render_cache,
                 mode: &bg_mode,
                 scroll_offset,
                 session_index,

@@ -50,6 +50,7 @@ pub struct SessionChatPage<'a> {
     pub active_progress: Option<&'a str>,
     pub can_open_worktree: bool,
     pub default_reasoning_level: ReasoningLevel,
+    pub markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
     pub mode: &'a AppMode,
     pub selected_follow_up_task_position: Option<usize>,
     pub scroll_offset: Option<u16>,
@@ -68,6 +69,8 @@ pub struct SessionChatPageInput<'a> {
     pub active_progress: Option<&'a str>,
     /// Active project-scoped default reasoning level.
     pub default_reasoning_level: ReasoningLevel,
+    /// Shared render cache for session transcript markdown.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current UI mode that determines view, prompt, and question rendering.
     pub mode: &'a AppMode,
     /// Current vertical output scroll offset.
@@ -103,6 +106,7 @@ impl<'a> SessionChatPage<'a> {
             active_prompt_output,
             active_progress,
             default_reasoning_level,
+            markdown_render_cache,
             mode,
             scroll_offset,
             session_index,
@@ -115,6 +119,7 @@ impl<'a> SessionChatPage<'a> {
             active_progress,
             can_open_worktree: false,
             default_reasoning_level,
+            markdown_render_cache: Some(markdown_render_cache),
             mode,
             selected_follow_up_task_position: None,
             scroll_offset,
@@ -345,6 +350,9 @@ impl<'a> SessionChatPage<'a> {
 
         let mut output =
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
+        if let Some(cache) = self.markdown_render_cache {
+            output = output.markdown_render_cache(cache);
+        }
         output = output.active_prompt_output(self.active_prompt_output);
         output = output.review_status_message(self.review_status_message());
         output = output.review_text(self.review_text());
@@ -1037,12 +1045,19 @@ mod tests {
             active_prompt_output: None,
             active_progress: None,
             default_reasoning_level: ReasoningLevel::default(),
+            markdown_render_cache: test_markdown_render_cache(),
             mode,
             scroll_offset: None,
             session_index: 0,
             sessions: std::slice::from_ref(session),
             wall_clock_unix_seconds: 0,
         })
+    }
+
+    /// Returns a leaked markdown cache for test page builders that need a
+    /// stable borrow across the page lifetime.
+    fn test_markdown_render_cache() -> &'static markdown::MarkdownRenderCache {
+        Box::leak(Box::new(markdown::MarkdownRenderCache::default()))
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -1668,6 +1683,7 @@ mod tests {
             active_prompt_output: None,
             active_progress: None,
             default_reasoning_level: ReasoningLevel::default(),
+            markdown_render_cache: test_markdown_render_cache(),
             mode: &mode,
             scroll_offset: None,
             session_index: 0,
@@ -2078,6 +2094,7 @@ mod tests {
             active_prompt_output: None,
             active_progress: None,
             default_reasoning_level: ReasoningLevel::default(),
+            markdown_render_cache: test_markdown_render_cache(),
             mode: &mode,
             scroll_offset: None,
             session_index: 0,

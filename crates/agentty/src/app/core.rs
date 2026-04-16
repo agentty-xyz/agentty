@@ -62,6 +62,7 @@ use crate::infra::git::{GitClient, RealGitClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server, db};
 use crate::runtime::mode::{question, sync_blocked};
+use crate::ui::markdown;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationViewMode, DoneSessionOutputMode, QuestionFocus,
 };
@@ -707,6 +708,9 @@ pub struct App {
     session_progress_messages: HashMap<String, String>,
     /// Interacts with tmux panes for session-specific terminal workflows.
     tmux_client: Arc<dyn TmuxClient>,
+    /// Caches rendered markdown output for the session transcript panel so
+    /// unchanged content is not re-parsed on every frame.
+    markdown_render_cache: markdown::MarkdownRenderCache,
     /// Stores the current auto-update progress state when an update is running.
     update_status: Option<UpdateStatus>,
 }
@@ -858,6 +862,7 @@ impl App {
             event_rx,
             review_cache: HashMap::new(),
             latest_available_version: None,
+            markdown_render_cache: markdown::MarkdownRenderCache::default(),
             merge_queue: MergeQueue::default(),
             session_progress_messages: HashMap::new(),
             update_status: None,
@@ -960,6 +965,7 @@ impl App {
                 git_upstream_ref: git_upstream_ref.as_deref(),
                 git_status,
                 latest_available_version: latest_available_version.as_deref(),
+                markdown_render_cache: &self.markdown_render_cache,
                 update_status: update_status.as_ref(),
                 mode,
                 project_table_state,

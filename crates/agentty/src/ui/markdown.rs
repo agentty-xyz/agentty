@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::VecDeque;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
@@ -8,6 +11,108 @@ const USER_PROMPT_PREFIX: &str = " › ";
 const CLARIFICATION_HEADER: &str = "Clarifications:";
 const CLARIFICATION_PROMPT_PREFIX: &str = USER_PROMPT_PREFIX;
 const STATS_LABEL_WIDTH: usize = 22;
+/// Maximum number of distinct markdown blocks cached at once.
+const MARKDOWN_RENDER_CACHE_ENTRY_LIMIT: usize = 8;
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Cached result of a single `render_markdown` invocation.
+struct MarkdownRenderCacheEntry {
+    content_hash: u64,
+    content_len: usize,
+    lines: Vec<Line<'static>>,
+    width: usize,
+}
+
+/// Bounded LRU cache for `render_markdown` output.
+///
+/// Stores the most recent rendered `Vec<Line<'static>>` values keyed by a
+/// content fingerprint and target width. Keeping several entries avoids cache
+/// thrash when one frame renders transcript text alongside summary, review, or
+/// footer markdown blocks. Interior mutability via `RefCell` allows cache
+/// updates through shared references so the cache can be threaded through
+/// immutable render contexts without requiring `&mut` at every call site.
+pub struct MarkdownRenderCache {
+    entries: RefCell<VecDeque<MarkdownRenderCacheEntry>>,
+}
+
+impl Default for MarkdownRenderCache {
+    fn default() -> Self {
+        Self {
+            entries: RefCell::new(VecDeque::with_capacity(MARKDOWN_RENDER_CACHE_ENTRY_LIMIT)),
+        }
+    }
+}
+
+impl MarkdownRenderCache {
+    /// Returns cached rendered lines when the text hash and width match,
+    /// otherwise renders fresh and updates the cache.
+    pub fn render(&self, text: &str, width: usize) -> Vec<Line<'static>> {
+        let content_hash = Self::hash_text(text);
+        let content_len = text.len();
+        if let Some(lines) = self.cached_lines(content_hash, content_len, width) {
+            return lines;
+        }
+
+        let lines = render_markdown(text, width);
+
+        self.store_entry(MarkdownRenderCacheEntry {
+            content_hash,
+            content_len,
+            lines: lines.clone(),
+            width,
+        });
+
+        lines
+    }
+
+    /// Returns cached lines for a matching entry and promotes it to the
+    /// front of the LRU queue.
+    fn cached_lines(
+        &self,
+        content_hash: u64,
+        content_len: usize,
+        width: usize,
+    ) -> Option<Vec<Line<'static>>> {
+        let mut entries = self.entries.borrow_mut();
+        let entry_index = entries.iter().position(|entry| {
+            entry.content_hash == content_hash
+                && entry.content_len == content_len
+                && entry.width == width
+        })?;
+        let Some(entry) = entries.remove(entry_index) else {
+            return None;
+        };
+        let lines = entry.lines.clone();
+        entries.push_front(entry);
+
+        Some(lines)
+    }
+
+    /// Stores one freshly rendered entry and evicts the oldest item when the
+    /// cache reaches capacity.
+    fn store_entry(&self, entry: MarkdownRenderCacheEntry) {
+        let mut entries = self.entries.borrow_mut();
+        entries.push_front(entry);
+
+        while entries.len() > MARKDOWN_RENDER_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
+    }
+
+    /// Computes a fast non-cryptographic content hash for cache key
+    /// comparison.
+    fn hash_text(text: &str) -> u64 {
+        let mut hash = FNV_OFFSET_BASIS;
+
+        for byte in text.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+
+        hash
+    }
+}
 
 #[derive(Clone, Copy)]
 enum BlockState {
@@ -1550,5 +1655,47 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].to_string(), "-----");
         assert_eq!(lines[0].spans[0].style, horizontal_rule_style());
+    }
+
+    #[test]
+    fn test_markdown_render_cache_retains_multiple_entries() {
+        // Arrange
+        let cache = MarkdownRenderCache::default();
+
+        // Act
+        let first_lines = cache.render("# First", 24);
+        let second_lines = cache.render("# Second", 24);
+        let cached_first_lines = cache.render("# First", 24);
+
+        // Assert
+        assert_eq!(first_lines, cached_first_lines);
+        assert_eq!(second_lines, render_markdown("# Second", 24));
+        assert_eq!(cache.entries.borrow().len(), 2);
+    }
+
+    #[test]
+    fn test_markdown_render_cache_evicts_least_recently_used_entry() {
+        // Arrange
+        let cache = MarkdownRenderCache::default();
+
+        // Act
+        for index in 0..MARKDOWN_RENDER_CACHE_ENTRY_LIMIT {
+            let markdown = format!("# Entry {index}");
+            cache.render(&markdown, 24);
+        }
+        cache.render("# Entry 0", 24);
+        cache.render("# Overflow", 24);
+
+        // Assert
+        let cached_hashes = cache
+            .entries
+            .borrow()
+            .iter()
+            .map(|entry| entry.content_hash)
+            .collect::<Vec<_>>();
+        assert_eq!(cached_hashes.len(), MARKDOWN_RENDER_CACHE_ENTRY_LIMIT);
+        assert!(cached_hashes.contains(&MarkdownRenderCache::hash_text("# Entry 0")));
+        assert!(!cached_hashes.contains(&MarkdownRenderCache::hash_text("# Entry 1")));
+        assert!(cached_hashes.contains(&MarkdownRenderCache::hash_text("# Overflow")));
     }
 }
