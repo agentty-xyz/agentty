@@ -97,7 +97,8 @@ also writes a machine-readable workspace summary to
   and agent-related enums.
 - `crates/agentty/src/domain/composer.rs`: Shared prompt-composer logic for
   slash-menu derivation, attachment placeholder tracking, prompt submission
-  draining, and image-token-aware deletion helpers.
+  draining, agent-facing `@path` normalization, and image-token-aware deletion
+  helpers.
 - `crates/agentty/src/domain/input.rs`: Input state management.
 - `crates/agentty/src/domain/permission.rs`: `PermissionMode` and permission
   logic.

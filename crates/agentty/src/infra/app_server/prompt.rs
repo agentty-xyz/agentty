@@ -217,8 +217,9 @@ mod tests {
 
         // Assert
         let turn_prompt = result.expect("prompt rendering should succeed");
-        assert!(turn_prompt.text.contains("\"looked/up/src/main.rs\""));
+        assert!(turn_prompt.text.contains("\"src/main.rs\""));
         assert!(!turn_prompt.text.contains("@src/main.rs"));
+        assert!(!turn_prompt.text.contains("looked/up/"));
     }
 
     #[test]

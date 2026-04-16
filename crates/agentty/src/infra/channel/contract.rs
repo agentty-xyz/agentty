@@ -87,9 +87,9 @@ impl TurnPrompt {
 
     /// Returns the prompt text as it should be sent to an agent runtime.
     ///
-    /// User-entered `@path` lookups are rewritten to quoted `looked/up/path`
-    /// tokens for transport, while the persisted transcript continues to use
-    /// the original raw prompt text.
+    /// User-entered `@path` lookups are rewritten to quoted path tokens for
+    /// transport, while the persisted transcript continues to use the original
+    /// raw prompt text.
     #[must_use]
     pub fn agent_text(&self) -> String {
         composer::render_prompt_text_for_agent(&self.text)
@@ -508,10 +508,7 @@ mod tests {
         let transcript_text = prompt.transcript_text();
 
         // Assert
-        assert_eq!(
-            agent_text,
-            "Review \"looked/up/src/main.rs\" and person@example.com"
-        );
+        assert_eq!(agent_text, "Review \"src/main.rs\" and person@example.com");
         assert_eq!(
             transcript_text,
             "Review @src/main.rs and person@example.com"

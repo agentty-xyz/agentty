@@ -588,9 +588,9 @@ pub fn drain_prompt_submission(
 /// Rewrites user-entered `@` lookups into quoted agent-facing path tokens.
 ///
 /// File and directory lookups like `@path/to/file` are rewritten to
-/// `"looked/up/path/to/file"`. Non-lookup uses of `@`, including email-like
-/// tokens and lone `@`, are preserved so the UI and persisted transcript can
-/// continue storing the original user input unchanged.
+/// `"path/to/file"`. Non-lookup uses of `@`, including email-like tokens and
+/// lone `@`, are preserved so the UI and persisted transcript can continue
+/// storing the original user input unchanged.
 #[must_use]
 pub fn render_prompt_text_for_agent(text: &str) -> String {
     let characters = text.chars().collect::<Vec<char>>();
@@ -622,7 +622,6 @@ pub fn render_prompt_text_for_agent(text: &str) -> String {
         }
 
         output.push('"');
-        output.push_str("looked/up/");
         output.extend(characters[index + 1..scan_index].iter());
         output.push('"');
         index = scan_index;
@@ -1214,7 +1213,26 @@ mod tests {
         // Assert
         assert_eq!(
             rendered_text,
-            "Check \"looked/up/src/main.rs\" and (\"looked/up/docs/guide.md\")"
+            "Check \"src/main.rs\" and (\"docs/guide.md\")"
+        );
+    }
+
+    /// Ensures prompt preparation does not special-case literal `looked/up/`
+    /// text beyond ordinary `@` lookup quoting.
+    #[test]
+    fn test_render_prompt_text_for_agent_preserves_literal_looked_up_paths() {
+        // Arrange
+        let prompt_text = "Check looked/up/README.md, @looked/up/Cargo.toml, \
+                           \"looked/up/src/main.rs\", or `looked/up/lib.rs`";
+
+        // Act
+        let rendered_text = render_prompt_text_for_agent(prompt_text);
+
+        // Assert
+        assert_eq!(
+            rendered_text,
+            "Check looked/up/README.md, \"looked/up/Cargo.toml\", \"looked/up/src/main.rs\", or \
+             `looked/up/lib.rs`"
         );
     }
 

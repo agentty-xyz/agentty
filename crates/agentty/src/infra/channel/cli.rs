@@ -482,7 +482,7 @@ mod tests {
         let build_request = build_command_request(&request, &prompt_text);
 
         // Assert
-        assert_eq!(build_request.prompt, "Review \"looked/up/src/main.rs\"");
+        assert_eq!(build_request.prompt, "Review \"src/main.rs\"");
     }
 
     #[tokio::test]
