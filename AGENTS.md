@@ -25,6 +25,26 @@ TUI tool to manage agents.
 - **Review**: Users review changes using the Diff view (`d` key in chat) which shows the output of `git diff` in the session's worktree.
 - **Output**: Agent `stdout` and `stderr` are captured in parallel using `tokio` tasks to ensure prompts and errors are visible.
 
+## Product-vs-Repository Prompt Scope
+
+Agentty is developed with Agentty, so prompts often describe developer workflows
+that should become Agentty product behavior rather than instructions to operate on
+this repository's current session.
+
+- Treat workflow prompts about branches, worktrees, commits, reviews, sessions,
+  agent prompts, or agent behavior as requirements for Agentty's user-facing
+  functionality by default.
+- Apply those prompts to the projects that Agentty manages for its users, not to
+  the local Agentty development checkout, unless the user explicitly names this
+  repository, this worktree, or the current branch/session.
+- If a prompt could require a mutating action against the local repository, first
+  reinterpret it as a product requirement. Ask for clarification only when the
+  requested scope still remains ambiguous after that reinterpretation.
+- Example: `make sure main branch is always up-to-date` means Agentty should
+  provide behavior that keeps users' project `main` branches current for managed
+  workflows; it does not mean this repository's local `main` branch should be
+  updated.
+
 ## Rust Project Style Guide
 
 - **Dependency Management:** ALL dependencies (including `dev-dependencies` and `build-dependencies`) must be defined in the root `Cargo.toml` under `[workspace.dependencies]`.
