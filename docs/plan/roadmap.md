@@ -12,12 +12,14 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
+| Header guidance hints | The top status bar only shows the Agentty version and update state, so it cannot surface page-specific usage hints yet. | Missing |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 
 ## Active Streams
 
 - `Delivery`: project-level landing strategy, published-branch freshness, and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
+- `Guidance`: page-specific in-app hints that help users discover common workflows without expanding footer help.
 - `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
 
@@ -147,12 +149,42 @@ All E2E tests in `crates/agentty/tests/e2e/` use the declarative `FeatureTest` b
 
 - [ ] No user-facing doc changes needed — this is an internal test infrastructure migration.
 
+### [6d7f8942-fb29-4f19-b8d2-92a8a3f75d31] Guidance: Rotate page-specific header hints
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+The status bar already owns the persistent top-of-screen Agentty identity, and the session list plus session chat now have enough visible workflow depth that rotating page-specific hints can improve discoverability without adding more footer noise.
+
+#### Usable outcome
+
+Users see a page-aware hint in the top status bar for the sessions list and session chat, and the visible hint changes once per minute while preserving version and update-status visibility.
+
+#### Substeps
+
+- [ ] **Wire hint state through the shared header.** Update `crates/agentty/src/ui/component/status_bar.rs`, `crates/agentty/src/ui/render.rs`, and `crates/agentty/src/ui/router.rs` so the top status bar accepts page-scoped hint text, keeps `Agentty <VERSION>` and update-state messaging visible, and uses the existing `wall_clock_unix_seconds` render clock to select a stable one-minute hint window.
+- [ ] **Define first-pass page hint sets.** Add the sessions-list and session-chat hint sources through `crates/agentty/src/ui/page/session_list.rs` and `crates/agentty/src/ui/page/session_chat.rs`, keeping page-specific copy near the owning page while routing only the selected hint text through the shared header.
+- [ ] **Make rotation testable and deterministic.** Add a small injected or pure helper for minute-bucket selection, using deterministic randomness seeded from page identity plus the minute bucket so tests can verify rotation behavior without real sleeps or flaky global RNG state.
+
+#### Tests
+
+- [ ] Add or extend unit coverage in `crates/agentty/src/ui/component/status_bar.rs`, `crates/agentty/src/ui/render.rs`, `crates/agentty/src/ui/router.rs`, `crates/agentty/src/ui/page/session_list.rs`, and `crates/agentty/src/ui/page/session_chat.rs` for page-specific hint selection, update-status coexistence, truncation/alignment, and deterministic minute-based rotation.
+- [ ] Add `FeatureTest`-based E2E coverage in `crates/agentty/tests/e2e/session.rs` and shared helpers in `crates/agentty/tests/e2e/common.rs` so the sessions list and session chat visibly render their own header hints.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to describe the rotating page-specific header hints where they affect visible session-list and session-chat guidance.
+
 ## Ready Now Execution Order
 
 ```mermaid
 flowchart TD
     R1["[17a9e2ba] Delivery: project commit strategy"] --> R2["[45f1c32f] Delivery: auto-push published branches"]
     R3["[a7e41b3c] Quality: draft and prompt feature tests"] --> R4["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
+    R5["[6d7f8942] Guidance: rotating page hints"]
 ```
 
 ## Queued Next
@@ -193,6 +225,7 @@ No parked user-facing cards right now.
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
 - `Delivery: Auto-push published session branches after each turn` should reuse the persisted published upstream state, keep unpublished sessions on the manual publish path, and preserve visible failure context when a background sync push does not succeed.
+- `Guidance: Rotate page-specific header hints` should keep hint selection page-aware, preserve update-status visibility in the top bar, and use injectable time/randomness so minute-based rotation can be tested without real sleeps.
 - `Protocol: Track explicit Claude session identity for one-time bootstrap reuse` should land before the broader compact-resume follow-up so Claude sessions stop paying the full bootstrap cost on every turn.
 - Roadmap entries stay user-facing; implementation validation and documentation belong in each step's `#### Tests` and `#### Docs` sections instead of as standalone backlog cards.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.
