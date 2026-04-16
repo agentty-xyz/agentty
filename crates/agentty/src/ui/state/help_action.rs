@@ -102,7 +102,6 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
 /// actions.
 pub(crate) fn session_list_actions(
     can_cancel_selected_session: bool,
-    can_delete_selected_session: bool,
     can_open_selected_session: bool,
 ) -> Vec<HelpAction> {
     let mut actions = list_base_actions();
@@ -116,10 +115,6 @@ pub(crate) fn session_list_actions(
         "Shift+A",
         "Start draft session",
     ));
-
-    if can_delete_selected_session {
-        actions.push(HelpAction::new("delete", "d", "Delete session"));
-    }
 
     if can_cancel_selected_session {
         actions.push(HelpAction::new("cancel", "c", "Cancel session"));
@@ -634,7 +629,7 @@ mod tests {
     fn test_session_list_actions_include_new_session_shortcut() {
         // Arrange
         // Act
-        let actions = session_list_actions(false, false, false);
+        let actions = session_list_actions(false, false);
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "a"));
@@ -645,7 +640,7 @@ mod tests {
     fn test_session_list_actions_hide_enter_without_openable_session() {
         // Arrange
         // Act
-        let actions = session_list_actions(false, false, false);
+        let actions = session_list_actions(false, false);
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Enter"));

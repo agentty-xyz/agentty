@@ -319,48 +319,6 @@ fn session_list_jk_navigation() {
     common::save_feature_gif(&scenario, &report, &env, "session_navigation");
 }
 
-/// Verify that pressing `d` on a selected session opens a delete
-/// confirmation dialog and pressing `y` deletes the session.
-#[test]
-fn session_delete_with_confirmation() {
-    // Arrange
-    let temp = tempfile::TempDir::new().expect("failed to create temp dir");
-    let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
-    env.init_git().expect("failed to init git");
-
-    let scenario = Scenario::new("delete_confirmation")
-        .compose(&common::wait_for_agentty_startup())
-        .compose(&common::switch_to_tab("Sessions"))
-        .compose(&common::create_session_and_return_to_list())
-        .viewing_pause_ms(1500)
-        // Press d to open delete confirmation.
-        .press_key("d")
-        .wait_for_stable_frame(300, 3000)
-        .viewing_pause_ms(1500)
-        .capture_labeled("confirm_dialog", "Delete confirmation dialog")
-        // Press y to confirm deletion.
-        .press_key("y")
-        .wait_for_stable_frame(500, 10000)
-        .viewing_pause_ms(1500)
-        .capture_labeled("after_delete", "Sessions list after deletion");
-
-    // Act
-    let (frame, report) = scenario
-        .run_with_proof(env.builder())
-        .expect("scenario execution failed");
-
-    // Assert — confirmation dialog is visible in intermediate capture.
-    let dialog_frame = common::frame_from_capture(&report.captures[0]);
-    let dialog_full = Region::full(dialog_frame.cols(), dialog_frame.rows());
-    assertion::assert_text_in_region(&dialog_frame, "Confirm Delete", &dialog_full);
-
-    // Assert — session is deleted, empty state visible.
-    let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(&frame, "No sessions", &full);
-
-    common::save_feature_gif(&scenario, &report, &env, "session_delete");
-}
-
 /// Verify that typed text appears in the prompt input.
 #[test]
 fn prompt_typing_shows_text() {

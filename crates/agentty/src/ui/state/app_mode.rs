@@ -35,8 +35,6 @@ impl DoneSessionOutputMode {
 pub enum ConfirmationIntent {
     /// Confirms quitting the application.
     Quit,
-    /// Confirms deleting a selected session.
-    DeleteSession,
     /// Confirms canceling a selected review session.
     CancelSession,
     /// Confirms queueing merge for the active view session.

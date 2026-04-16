@@ -379,9 +379,6 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
 
             Ok(EventResult::Quit)
         }
-        ConfirmationIntent::DeleteSession => {
-            handle_delete_confirmation(app, confirmation_session_id).await
-        }
         ConfirmationIntent::CancelSession => {
             handle_cancel_session_confirmation(app, confirmation_session_id).await
         }
@@ -392,24 +389,6 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             handle_regenerate_review_confirmation(app, confirmation_session_id, restore_view).await
         }
     }
-}
-
-/// Deletes the confirmed session, when still present, and returns to list
-/// mode.
-async fn handle_delete_confirmation(
-    app: &mut App,
-    confirmation_session_id: Option<String>,
-) -> io::Result<EventResult> {
-    app.mode = AppMode::List;
-
-    if let Some(session_id) = confirmation_session_id
-        && let Some(session_index) = app.session_index_for_id(&session_id)
-    {
-        app.sessions.table_state.select(Some(session_index));
-        app.delete_selected_session().await;
-    }
-
-    Ok(EventResult::Continue)
 }
 
 /// Cancels the confirmed review session, when still present, and returns to
@@ -740,33 +719,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_confirmation_decision_confirm_deletes_session_when_context_exists() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
-        let session_id = app
-            .create_session()
-            .await
-            .expect("failed to create session");
-        app.mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::DeleteSession,
-            confirmation_message: "Delete session \"test\"?".to_string(),
-            confirmation_title: "Confirm Delete".to_string(),
-            restore_view: None,
-            session_id: Some(session_id),
-            selected_confirmation_index: 0,
-        };
-
-        // Act
-        let event_result =
-            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
-
-        // Assert
-        assert!(matches!(event_result, Ok(EventResult::Continue)));
-        assert!(matches!(app.mode, AppMode::List));
-        assert!(app.sessions.sessions.is_empty());
-    }
-
-    #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_returns_to_list() {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
@@ -786,25 +738,6 @@ mod tests {
         // Assert
         assert!(matches!(event_result, Ok(EventResult::Continue)));
         assert!(matches!(app.mode, AppMode::List));
-    }
-
-    #[test]
-    fn test_confirmation_cancel_mode_returns_list_for_delete_confirmation() {
-        // Arrange
-        let mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::DeleteSession,
-            confirmation_message: "Delete session?".to_string(),
-            confirmation_title: "Confirm Delete".to_string(),
-            restore_view: None,
-            session_id: Some("session-id".to_string()),
-            selected_confirmation_index: 0,
-        };
-
-        // Act
-        let cancel_mode = confirmation_cancel_mode(&mode);
-
-        // Assert
-        assert!(matches!(cancel_mode, AppMode::List));
     }
 
     #[tokio::test]

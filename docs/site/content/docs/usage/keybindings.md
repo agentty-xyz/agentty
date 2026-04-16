@@ -19,7 +19,6 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | `a` | Start new session |
 | `Shift+A` | Start draft session |
 | `s` | Sync |
-| `d` | Delete session |
 | `c` | Cancel session (confirmation popup) |
 | `Enter` | Open session |
 | `j` / `k` | Navigate sessions |

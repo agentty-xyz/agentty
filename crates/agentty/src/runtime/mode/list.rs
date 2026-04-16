@@ -77,21 +77,6 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             app.reset_task_roadmap_scroll();
         }
         KeyCode::Enter => return handle_enter_key(app).await,
-        KeyCode::Char('d') if app.tabs.current() == Tab::Sessions => {
-            let selected_session = app
-                .selected_session()
-                .map(|session| (session.id.clone(), inline_text(session.display_title())));
-            if let Some((session_id, session_title)) = selected_session {
-                app.mode = AppMode::Confirmation {
-                    confirmation_intent: ConfirmationIntent::DeleteSession,
-                    confirmation_message: format!("Delete session \"{session_title}\"?"),
-                    confirmation_title: "Confirm Delete".to_string(),
-                    restore_view: None,
-                    session_id: Some(session_id),
-                    selected_confirmation_index: DEFAULT_OPTION_INDEX,
-                };
-            }
-        }
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
             let selected_session = app.selected_session().and_then(|session| {
                 session
@@ -294,7 +279,6 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     let is_sessions_tab = app.tabs.current() == Tab::Sessions;
     let selected_session = app.selected_session();
-    let can_delete_selected_session = is_sessions_tab && selected_session.is_some();
     let can_cancel_selected_session = is_sessions_tab
         && selected_session.is_some_and(|session| session.status.allows_review_actions());
     let can_open_selected_session = is_sessions_tab
@@ -304,11 +288,7 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
             .selected()
             .and_then(|selected_index| app.sessions.sessions.get(selected_index))
             .is_some();
-    session_list_actions(
-        can_cancel_selected_session,
-        can_delete_selected_session,
-        can_open_selected_session,
-    )
+    session_list_actions(can_cancel_selected_session, can_open_selected_session)
 }
 
 /// Creates a new session and opens prompt mode.
@@ -1234,67 +1214,6 @@ mod tests {
 
         // Assert
         assert_eq!(app.task_roadmap_scroll_offset(), 0);
-    }
-    #[tokio::test]
-    async fn test_handle_delete_key_opens_delete_confirmation() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
-        let expected_session_id = app
-            .create_session()
-            .await
-            .expect("failed to create session");
-        let expected_session_title = app.sessions.sessions[0].display_title().to_string();
-        app.tabs.set(Tab::Sessions);
-        app.sessions.table_state.select(Some(0));
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert!(matches!(
-            app.mode,
-            AppMode::Confirmation {
-                confirmation_intent: ConfirmationIntent::DeleteSession,
-                ref confirmation_message,
-                ref confirmation_title,
-                restore_view: None,
-                session_id: Some(ref mode_session_id),
-                selected_confirmation_index: DEFAULT_OPTION_INDEX,
-            } if mode_session_id == &expected_session_id
-                && confirmation_title == "Confirm Delete"
-                && confirmation_message == &format!("Delete session \"{expected_session_title}\"?")
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_handle_delete_key_without_selection_does_nothing() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
-        let _session_id = app
-            .create_session()
-            .await
-            .expect("failed to create session");
-        app.sessions.table_state.select(None);
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]
