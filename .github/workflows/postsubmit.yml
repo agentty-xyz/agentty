@@ -19,11 +19,17 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Setup `uv`
+        uses: astral-sh/setup-uv@v8
+
+      - name: Install `pre-commit`
+        run: uv tool install pre-commit
 
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -38,9 +44,11 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Test
+      - name: Generate coverage report
+        run: uv tool run pre-commit run coverage-lcov --all-files --hook-stage manual
+
+      - name: Summarize coverage
         run: |
-          cargo llvm-cov --workspace --lcov --output-path coverage.lcov --locked -- --test-threads=1
           # Summarize LCOV totals in the GitHub Actions run summary.
           awk '
             BEGIN {

@@ -63,6 +63,27 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [manual]
+      - id: test-workspace
+        name: cargo test workspace
+        description: Run the full workspace test suite with a shared-host thread budget.
+        entry: >-
+          bash -lc 'test_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)";
+          test_threads=$((test_threads / 2));
+          if [ "$test_threads" -lt 1 ]; then test_threads=1; fi;
+          if [ "$test_threads" -gt 4 ]; then test_threads=4; fi;
+          cargo test -q -- --test-threads="$test_threads"'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-agentty-e2e
+        name: cargo test agentty e2e
+        description: Run the PTY-driven `agentty` end-to-end feature suite.
+        entry: cargo test -q -p agentty --test e2e -- --test-threads=1
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: coverage
         name: coverage
         description: Verify workspace coverage meets ratchet thresholds.
@@ -71,12 +92,28 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [manual]
+      - id: coverage-lcov
+        name: coverage lcov
+        description: Generate the workspace LCOV report for CI upload.
+        entry: cargo llvm-cov --workspace --lcov --output-path coverage.lcov --locked
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: cargo-shear
         name: cargo-shear
         description: Check for unused dependencies.
         entry: cargo shear
         language: system
         types: [rust]
+        pass_filenames: false
+        stages: [manual]
+      - id: zola-check
+        name: zola check
+        description: Verify the docs site builds without broken links.
+        entry: zola --root docs/site check
+        language: system
+        always_run: true
         pass_filenames: false
         stages: [manual]
       - id: check-migrations

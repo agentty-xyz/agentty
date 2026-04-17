@@ -1,0 +1,39 @@
+name: Presubmit
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup `uv`
+        uses: astral-sh/setup-uv@v8
+
+      - name: Install `pre-commit`
+        run: uv tool install pre-commit
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Default validation hooks
+        run: uv tool run pre-commit run --all-files
+
+      - name: Strict lint
+        run: uv tool run pre-commit run clippy --all-files --hook-stage manual
+
+      - name: Full test suite
+        run: uv tool run pre-commit run test-workspace --all-files --hook-stage manual

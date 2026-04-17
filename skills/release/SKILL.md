@@ -22,11 +22,14 @@ This skill guides you through the process of releasing a new version of the proj
 1. **Version Bump**
 
    - Update the `version` field in the root `Cargo.toml`.
-   - Verify `Cargo.lock` is updated (e.g., run `cargo check` to trigger update).
+   - Verify `Cargo.lock` is updated with `pre-commit run cargo-check --all-files`.
 
 1. **Verification**
 
-   - Run tests: `cargo test -q`.
+   - Run the final validation hooks from `.pre-commit-config.yaml`:
+     - `pre-commit run --all-files`
+     - `pre-commit run clippy --all-files --hook-stage manual`
+     - `pre-commit run test-workspace --all-files --hook-stage manual`
 
 1. **Documentation Review**
 
@@ -36,7 +39,7 @@ This skill guides you through the process of releasing a new version of the proj
      - `docs/site/content/docs/agents/backends.md` — agent backends and models.
      - `docs/site/content/docs/usage/workflow.md` — session lifecycle and workflow.
      - `docs/site/content/docs/usage/keybindings.md` — keybindings.
-   - Run `zola check --root docs/site` to verify no broken internal links.
+   - Run `pre-commit run zola-check --all-files --hook-stage manual` to verify no broken internal links.
 
 1. **Changelog**
 

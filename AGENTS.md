@@ -180,24 +180,21 @@ final quality bar.
 Use these while iterating on a change:
 
 1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual`
-1. **Compile:** `cargo check -q --all-targets --all-features`
-1. **Focused Tests:** Run focused tests while iterating when they exercise the touched code paths.
+1. **Compile:** `pre-commit run cargo-check --all-files`
+1. **Focused Tests:** Run the narrowest matching hook from `.pre-commit-config.yaml` when one exists (for example `pre-commit run test-agentty-e2e --all-files --hook-stage manual`).
 
 ### Final Local Validation
+
+`.pre-commit-config.yaml` is the executable source of truth for repository
+validation commands. Keep agent workflows and CI invoking hook IDs from that
+file instead of re-encoding cargo or Zola commands elsewhere.
 
 Run this sequence before handoff, commit, or opening a review:
 
 1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
 1. **Validate:** `pre-commit run --all-files`
 1. **Lint:** `pre-commit run clippy --all-files --hook-stage manual`
-1. **Test:** Run `cargo test -q` with a shared-host thread budget so multiple agents can validate at once without oversubscribing the machine:
-   ```sh
-   test_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
-   test_threads=$((test_threads / 2))
-   if [ "$test_threads" -lt 1 ]; then test_threads=1; fi
-   if [ "$test_threads" -gt 4 ]; then test_threads=4; fi
-   cargo test -q -- --test-threads="$test_threads"
-   ```
+1. **Test:** `pre-commit run test-workspace --all-files --hook-stage manual`
 
 Focused tests are allowed during development, but they do not replace the final
 full-suite run.
@@ -206,13 +203,15 @@ full-suite run.
 
 Use these slower hygiene checks in CI or when making broader changes:
 
-1. **Coverage:** `pre-commit run coverage --all-files --hook-stage manual`
+1. **Coverage Summary:** `pre-commit run coverage --all-files --hook-stage manual`
+1. **Coverage Upload:** `pre-commit run coverage-lcov --all-files --hook-stage manual`
+1. **Docs Site:** `pre-commit run zola-check --all-files --hook-stage manual`
 1. **Dependency Hygiene:** `pre-commit run cargo-shear --all-files --hook-stage manual`
 
 The manual-stage autofix hooks apply formatting and fixable clippy lints. The
-default validation command keeps feedback relatively fast, while the
-manual-stage strict hooks keep slower lint and hygiene checks available when
-needed.
+default validation command keeps feedback relatively fast, while the explicit
+manual-stage hooks keep slower lint, test, docs, and coverage checks available
+through the same hook catalog.
 
 ### Test Failure Protocol
 
