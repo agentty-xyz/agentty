@@ -249,6 +249,12 @@ This means `session.output` stays the durable transcript, while summary,
 follow-up tasks, and focused review are layered on during render instead of
 being appended back into that transcript string.
 
+`App` owns one shared `MarkdownRenderCache` and threads it through
+`RenderContext`, the router, overlay restore state, and `SessionChatPage` so
+repeated transcript blocks can reuse rendered markdown between frames. Changes
+in this area should keep caches bounded and avoid introducing separate
+layout-only render passes that bypass the shared cache.
+
 ### Render Path
 
 The exact session-chat render path is:

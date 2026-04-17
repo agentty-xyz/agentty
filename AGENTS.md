@@ -170,6 +170,12 @@ The project uses `tokio` as its async runtime. The binary entry point uses `#[to
 - **No `features = ["full"]`:** Always specify individual tokio features.
 - **No `tokio::sync::Mutex` for sync-only guards:** Only use it when the critical section contains `.await`.
 
+### UI Render Hot Paths
+
+- In per-frame UI paths (`App::draw()`, `ui::render()`, and page/component `render()` helpers), avoid cloning large `String`, `Vec`, or `HashMap` values just to satisfy borrow scopes. Prefer borrow splitting, small frame snapshots, or other designs that keep render inputs shared.
+- When adding cached derived UI data (markdown lines, diff layout, lookup maps, wrapped text), keep the cache bounded and document the cache key plus invalidation trigger in code comments or docstrings.
+- If a layout/count helper and the final paint path need the same expensive derived data, route both through the same cache or shared snapshot instead of recomputing the full render twice per frame.
+
 ## Quality Gates
 
 Use a tiered validation flow so local iteration stays fast without lowering the
