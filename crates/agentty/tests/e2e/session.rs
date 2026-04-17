@@ -54,6 +54,16 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds one draft-session lookup target file into the temporary project.
+fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::write(
+        env.workdir.join("draft_lookup_target.txt"),
+        "draft lookup target\n",
+    )?;
+
+    Ok(())
+}
+
 /// Verify that the Sessions tab shows an empty-state message when no
 /// sessions exist.
 ///
@@ -154,6 +164,46 @@ fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "No sessions", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that draft-session prompt mode can open `@` file lookup suggestions
+/// before the deferred worktree exists.
+#[test]
+fn draft_session_at_lookup() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("draft_session_at_lookup")
+        .with_git()
+        .setup(seed_draft_at_lookup_project)
+        .zola(
+            "Draft session @ lookup",
+            "Browse project files with `@` before a draft session materializes its worktree.",
+            121,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .viewing_pause_ms(1500)
+                    .write_text("A")
+                    .wait_for_text("Enter: stage draft", 3000)
+                    .viewing_pause_ms(1000)
+                    .write_text("@draft_lookup")
+                    .wait_for_text("draft_lookup_target.txt", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "draft_at_lookup",
+                        "Draft-session prompt mode with an active @ lookup",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "draft_lookup_target.txt", &full);
+                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
             },
         )?;
 

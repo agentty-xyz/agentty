@@ -46,14 +46,14 @@ pub(crate) fn sync_action(
     }
 }
 
-/// Starts asynchronous loading of `@`-mention entries for one session.
+/// Starts asynchronous loading of `@`-mention entries for one composer root.
 pub(crate) fn start_loading_entries(
     event_tx: mpsc::UnboundedSender<AppEvent>,
-    session_folder: PathBuf,
+    lookup_root: PathBuf,
     session_id: String,
 ) {
     tokio::spawn(async move {
-        let entries = tokio::task::spawn_blocking(move || file_index::list_files(&session_folder))
+        let entries = tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root))
             .await
             .unwrap_or_default();
 
@@ -63,6 +63,23 @@ pub(crate) fn start_loading_entries(
             session_id,
         });
     });
+}
+
+/// Returns the directory that should back one active `@`-mention lookup.
+///
+/// Materialized sessions index their worktree folder. Unstarted draft sessions
+/// have no worktree yet, so the active project working directory is used until
+/// the deferred worktree exists.
+pub(crate) fn lookup_root(
+    project_working_dir: PathBuf,
+    session_folder: Option<PathBuf>,
+    has_session_folder: bool,
+) -> PathBuf {
+    if has_session_folder && let Some(session_folder) = session_folder {
+        return session_folder;
+    }
+
+    project_working_dir
 }
 
 /// Clears one visible `@`-mention dropdown state.
@@ -191,5 +208,31 @@ mod tests {
                 text: "@src/ ".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_lookup_root_prefers_materialized_session_folder() {
+        // Arrange
+        let project_working_dir = PathBuf::from("/project");
+        let session_folder = PathBuf::from("/project/.agentty/session");
+
+        // Act
+        let lookup_root = lookup_root(project_working_dir, Some(session_folder.clone()), true);
+
+        // Assert
+        assert_eq!(lookup_root, session_folder);
+    }
+
+    #[test]
+    fn test_lookup_root_falls_back_to_project_working_dir_without_session_folder() {
+        // Arrange
+        let project_working_dir = PathBuf::from("/project");
+        let session_folder = PathBuf::from("/project/.agentty/session");
+
+        // Act
+        let lookup_root = lookup_root(project_working_dir.clone(), Some(session_folder), false);
+
+        // Assert
+        assert_eq!(lookup_root, project_working_dir);
     }
 }

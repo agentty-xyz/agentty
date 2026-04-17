@@ -188,7 +188,9 @@ each `Enter` as one ordered draft message, show the staged bundle in session
 view, keep the `o` shortcut hidden until a worktree exists, and start only
 after you press `s`. The draft worktree is created at that start step so the
 branch is based on the latest local base-branch state instead of the moment
-the draft session was first created.
+the draft session was first created. Until that deferred worktree exists,
+prompt `@` lookup suggestions index the active project root so file search
+still works while you stage the draft bundle.
 
 ### Typical Transitions
 

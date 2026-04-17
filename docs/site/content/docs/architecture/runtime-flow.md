@@ -721,8 +721,10 @@ Detached/background execution paths and their trigger conditions:
 - Spawn site: `runtime/mode/prompt::activate_at_mention` and
   `runtime/mode/question::activate_question_at_mention`
 - Emits or writes: `AppEvent::AtMentionEntriesLoaded`
-- What it does: Lists session files via `spawn_blocking` and updates mention
-  picker entries for the active composer.
+- What it does: Lists session files via `spawn_blocking`, falling back to the
+  active project working directory when an unstarted draft session has not yet
+  materialized its worktree, and updates mention picker entries for the active
+  composer.
 
 ### Background session-size refresh
 

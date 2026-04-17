@@ -1142,19 +1142,32 @@ fn handle_prompt_char(app: &mut App, character: char) {
 
 /// Starts asynchronous loading of at-mention file entries for the prompt
 /// session.
+///
+/// Draft sessions in `New` state defer worktree creation, so their composer
+/// indexes the active project working directory until the session folder is
+/// materialized.
 fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
-    let session_folder = app
+    let lookup_root = app
         .sessions
         .sessions
         .get(prompt_context.session_index)
         .map_or_else(
             || app.working_dir().to_path_buf(),
-            |session| session.folder.clone(),
+            |session| {
+                let session_folder = session.folder.clone();
+                let has_session_folder = app.services.fs_client().is_dir(session_folder.clone());
+
+                at_mention::lookup_root(
+                    app.working_dir().to_path_buf(),
+                    Some(session_folder),
+                    has_session_folder,
+                )
+            },
         );
     let session_id = prompt_context.session_id.clone();
     let event_tx = app.services.event_sender();
 
-    at_mention::start_loading_entries(event_tx, session_folder, session_id);
+    at_mention::start_loading_entries(event_tx, lookup_root, session_id);
 
     if let AppMode::Prompt {
         at_mention_state, ..
@@ -2552,6 +2565,40 @@ mod tests {
         } = &app.mode
         {
             assert!(at_mention_state.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_char_loads_at_mention_entries_from_project_root_for_draft_session()
+    {
+        // Arrange
+        let (mut app, base_dir) = new_test_draft_prompt_app("", None).await;
+        let expected_path = "draft_lookup_target.txt";
+        std::fs::write(base_dir.path().join(expected_path), "draft")
+            .expect("failed to write project file");
+        assert!(!app.sessions.sessions[0].folder.exists());
+
+        // Act
+        handle_prompt_char(&mut app, '@');
+        let next_event =
+            tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
+                .await
+                .expect("at-mention event should arrive")
+                .expect("at-mention event channel closed unexpectedly");
+
+        // Assert
+        match next_event {
+            crate::app::AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id,
+            } => {
+                assert_eq!(session_id, app.sessions.sessions[0].id.as_str());
+                assert!(entries.contains(&FileEntry {
+                    is_dir: false,
+                    path: expected_path.to_string(),
+                }));
+            }
+            _ => unreachable!("expected at-mention entries event"),
         }
     }
 

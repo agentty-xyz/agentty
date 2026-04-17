@@ -632,19 +632,28 @@ fn sync_question_at_mention_state(app: &mut App) {
 /// Starts asynchronous loading of file entries for the question-mode
 /// at-mention dropdown.
 fn activate_question_at_mention(app: &mut App, session_id: &str) {
-    let session_folder = app
+    let lookup_root = app
         .sessions
         .sessions
         .iter()
         .find(|session| session.id == session_id)
         .map_or_else(
             || app.working_dir().to_path_buf(),
-            |session| session.folder.clone(),
+            |session| {
+                let session_folder = session.folder.clone();
+                let has_session_folder = app.services.fs_client().is_dir(session_folder.clone());
+
+                at_mention::lookup_root(
+                    app.working_dir().to_path_buf(),
+                    Some(session_folder),
+                    has_session_folder,
+                )
+            },
         );
     let owned_session_id = session_id.to_string();
     let event_tx = app.services.event_sender();
 
-    at_mention::start_loading_entries(event_tx, session_folder, owned_session_id);
+    at_mention::start_loading_entries(event_tx, lookup_root, owned_session_id);
 
     if let AppMode::Question {
         at_mention_state, ..
