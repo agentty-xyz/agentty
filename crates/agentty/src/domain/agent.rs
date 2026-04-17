@@ -23,6 +23,8 @@ pub enum AgentModel {
     Gpt54,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
     Gpt53CodexSpark,
+    /// Claude Opus model backed by `claude-opus-4-7`.
+    ClaudeOpus47,
     /// Claude Opus model backed by `claude-opus-4-6`.
     ClaudeOpus46,
     /// Claude Sonnet model backed by `claude-sonnet-4-6`.
@@ -63,6 +65,7 @@ impl AgentModel {
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54 => "gpt-5.4",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
+            Self::ClaudeOpus47 => "claude-opus-4-7",
             Self::ClaudeOpus46 => "claude-opus-4-6",
             Self::ClaudeSonnet46 => "claude-sonnet-4-6",
             Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
@@ -74,9 +77,10 @@ impl AgentModel {
         match self {
             Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt54 | Self::Gpt53CodexSpark => AgentKind::Codex,
-            Self::ClaudeOpus46 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
-                AgentKind::Claude
-            }
+            Self::ClaudeOpus47
+            | Self::ClaudeOpus46
+            | Self::ClaudeSonnet46
+            | Self::ClaudeHaiku4520251001 => AgentKind::Claude,
         }
     }
 }
@@ -164,7 +168,7 @@ impl ReasoningLevel {
 
     /// Returns the Claude `--effort` value for this level.
     ///
-    /// Maps `XHigh` to `"max"`, which is only supported on `claude-opus-4-6`.
+    /// Maps `XHigh` to `"max"`, which is only supported on Opus-tier models.
     /// The Claude CLI enforces this restriction and will surface an error for
     /// other models.
     pub fn claude(self) -> &'static str {
@@ -210,6 +214,7 @@ impl FromStr for AgentModel {
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.4" => Ok(Self::Gpt54),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
+            "claude-opus-4-7" => Ok(Self::ClaudeOpus47),
             "claude-opus-4-6" => Ok(Self::ClaudeOpus46),
             "claude-sonnet-4-6" => Ok(Self::ClaudeSonnet46),
             "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
@@ -229,7 +234,8 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gpt54 => "Latest Codex model for coding quality.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
-            Self::ClaudeOpus46 => "Top-tier Claude model for complex tasks.",
+            Self::ClaudeOpus47 => "Latest Claude Opus model for complex tasks.",
+            Self::ClaudeOpus46 => "Previous-generation Claude Opus model.",
             Self::ClaudeSonnet46 => "Balanced Claude model for quality and latency.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
         }
@@ -244,7 +250,7 @@ impl AgentKind {
     pub fn default_model(self) -> AgentModel {
         match self {
             Self::Gemini => AgentModel::Gemini31ProPreview,
-            Self::Claude => AgentModel::ClaudeOpus46,
+            Self::Claude => AgentModel::ClaudeOpus47,
             Self::Codex => AgentModel::Gpt54,
         }
     }
@@ -265,6 +271,7 @@ impl AgentKind {
             AgentModel::Gemini3FlashPreview,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
+            AgentModel::ClaudeOpus47,
             AgentModel::ClaudeOpus46,
             AgentModel::ClaudeSonnet46,
             AgentModel::ClaudeHaiku4520251001,

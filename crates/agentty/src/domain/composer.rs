@@ -1036,7 +1036,7 @@ mod tests {
         // Assert
         assert_eq!(
             selection,
-            Some(PromptSuggestionSelection::Model(AgentModel::ClaudeOpus46))
+            Some(PromptSuggestionSelection::Model(AgentModel::ClaudeOpus47))
         );
     }
 
