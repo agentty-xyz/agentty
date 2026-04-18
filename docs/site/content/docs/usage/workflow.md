@@ -70,7 +70,8 @@ Session statuses and what you can do in each state:
 Settings values are stored per active project. Switching projects reloads that
 project's `Default Reasoning Level`, `Default Smart Model` mode (explicit model or
 `Last used model as default`), `Default Fast Model`, `Default Review Model`,
-`Coauthored by Agentty` toggle, and `Open Commands`.
+`Coauthored by Agentty` toggle, and `Open Commands`. New projects default the
+coauthor toggle to disabled until you enable it.
 
 When a session enters **Review**, Agentty starts generating the focused review
 in the background. While that review-assist job is running, the session

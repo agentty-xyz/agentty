@@ -143,6 +143,9 @@ pub struct SettingsManager {
     editing_text_row: Option<SettingRow>,
     /// Whether generated session commit messages append the Agentty coauthor
     /// trailer for the active project.
+    ///
+    /// New projects start with this disabled until the user explicitly enables
+    /// it.
     include_coauthored_by_agentty: bool,
     open_command_input: Option<InputState>,
     /// Active project identifier that owns these persisted settings.
@@ -183,7 +186,7 @@ impl SettingsManager {
             services,
             Some(project_id),
             SettingName::IncludeCoauthoredByAgentty,
-            true,
+            false,
         )
         .await;
         let use_last_used_model_as_default = load_project_bool_setting(
@@ -900,7 +903,7 @@ mod tests {
             table_state,
             available_agent_kinds: AgentKind::ALL.to_vec(),
             editing_text_row: None,
-            include_coauthored_by_agentty: true,
+            include_coauthored_by_agentty: false,
             open_command_input: None,
             project_id: 1,
             use_last_used_model_as_default: false,
@@ -1171,7 +1174,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settings_manager_new_defaults_invalid_coauthor_flag_to_true() {
+    async fn settings_manager_new_defaults_invalid_coauthor_flag_to_false() {
         // Arrange
         let (services, project_id) = test_services().await;
         services
@@ -1188,7 +1191,7 @@ mod tests {
         let manager = SettingsManager::new(&services, project_id).await;
 
         // Assert
-        assert!(manager.include_coauthored_by_agentty);
+        assert!(!manager.include_coauthored_by_agentty);
     }
 
     #[test]
@@ -1503,14 +1506,14 @@ mod tests {
         manager.handle_enter(&services).await;
 
         // Assert
-        assert!(!manager.include_coauthored_by_agentty);
+        assert!(manager.include_coauthored_by_agentty);
         assert_eq!(
             services
                 .db()
                 .get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
                 .await
                 .expect("failed to load coauthor setting"),
-            Some("false".to_string())
+            Some("true".to_string())
         );
     }
 

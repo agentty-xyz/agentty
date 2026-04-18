@@ -168,12 +168,15 @@ impl SessionTaskService {
 
     /// Loads the project-scoped toggle that controls whether generated session
     /// commit messages include the Agentty coauthor trailer.
+    ///
+    /// New projects default this toggle to disabled until a valid persisted
+    /// boolean overrides it.
     pub(crate) async fn load_include_coauthored_by_agentty_setting(
         db: &Database,
         session_id: &str,
     ) -> bool {
         let Some(project_id) = db.load_session_project_id(session_id).await.ok().flatten() else {
-            return true;
+            return false;
         };
 
         db.get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
@@ -181,7 +184,7 @@ impl SessionTaskService {
             .ok()
             .flatten()
             .and_then(|setting_value| setting_value.parse::<bool>().ok())
-            .unwrap_or(true)
+            .unwrap_or(false)
     }
 
     /// Loads the model used by auto-commit utility prompts for one session.
@@ -1249,6 +1252,57 @@ mod tests {
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
         assert!(output_text.contains("[Commit] No changes to commit."));
+    }
+
+    #[tokio::test]
+    /// Verifies the coauthor trailer setting defaults to disabled when the
+    /// project has not persisted a value yet.
+    async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+
+        // Act
+        let include_coauthored_by_agentty =
+            SessionTaskService::load_include_coauthored_by_agentty_setting(&database, "session-id")
+                .await;
+
+        // Assert
+        assert!(!include_coauthored_by_agentty);
+    }
+
+    #[tokio::test]
+    /// Verifies the coauthor trailer setting defaults to disabled when the
+    /// stored value cannot be parsed as a boolean.
+    async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
+        let project_id = database
+            .load_session_project_id("session-id")
+            .await
+            .expect("failed to load session project id")
+            .expect("session should have project id");
+        database
+            .upsert_project_setting(
+                project_id,
+                SettingName::IncludeCoauthoredByAgentty,
+                "invalid-bool",
+            )
+            .await
+            .expect("failed to persist invalid coauthor flag");
+
+        // Act
+        let include_coauthored_by_agentty =
+            SessionTaskService::load_include_coauthored_by_agentty_setting(&database, "session-id")
+                .await;
+
+        // Assert
+        assert!(!include_coauthored_by_agentty);
     }
 
     #[tokio::test]

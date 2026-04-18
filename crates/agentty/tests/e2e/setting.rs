@@ -55,7 +55,8 @@ SET value = excluded.value
 ///
 /// Navigates to the Settings tab and asserts that the settings table
 /// appears with expected row labels including "Reasoning Level" and
-/// "Open Commands".
+/// "Open Commands". It also verifies the Agentty coauthor trailer starts
+/// disabled for new projects.
 #[test]
 fn settings_tab_shows_content() {
     // Arrange, Act, Assert
@@ -81,6 +82,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Settings", &full);
                 assertion::assert_text_in_region(frame, "Default Reasoning Level", &full);
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+                assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Open Commands", &full);
             },
         )
