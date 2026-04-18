@@ -73,7 +73,6 @@ struct ViewSessionSnapshot {
     can_sync_review_request: bool,
     can_open_worktree: bool,
     follow_up_task_action: Option<FollowUpTaskAction>,
-    publish_branch_action: Option<PublishBranchAction>,
     publish_pull_request_action: Option<PublishBranchAction>,
     session_state: ViewSessionState,
     session_status: Status,
@@ -303,20 +302,9 @@ async fn handle_workflow_view_key(
         {
             let _ = show_diff_for_view_session(app, view_context).await;
         }
-        KeyCode::Char('p')
-            if key.modifiers == event::KeyModifiers::NONE
-                && view_session_snapshot.publish_branch_action.is_some() =>
-        {
-            let Some(publish_branch_action) = view_session_snapshot.publish_branch_action else {
-                return Some(true);
-            };
-            open_publish_branch_input(app, view_context, publish_branch_action);
-
-            return Some(false);
-        }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'p')
-                && key.modifiers == event::KeyModifiers::SHIFT
+                && !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.publish_pull_request_action.is_some() =>
         {
             let Some(publish_pull_request_action) =
@@ -475,10 +463,6 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         can_sync_review_request: session.can_sync_review_request(),
         can_open_worktree,
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
-        publish_branch_action: session
-            .status
-            .allows_review_actions()
-            .then_some(PublishBranchAction::Push),
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
         session_status,
@@ -2223,7 +2207,6 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: true,
             follow_up_task_action: None,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
             session_status: Status::Review,
@@ -2621,7 +2604,6 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: false,
             follow_up_task_action: None,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
             session_status: Status::Done,
@@ -2733,7 +2715,6 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: true,
             follow_up_task_action: None,
-            publish_branch_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
             session_status: Status::Review,
@@ -2776,7 +2757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_view_key_p_opens_branch_publish_input() {
+    async fn test_handle_view_key_p_opens_review_request_publish_input() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.mode = AppMode::View {
@@ -2793,7 +2774,6 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: true,
             follow_up_task_action: None,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
             session_status: Status::Review,
@@ -2821,7 +2801,7 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::PublishBranchInput {
-                publish_branch_action: PublishBranchAction::Push,
+                publish_branch_action: PublishBranchAction::PublishPullRequest,
                 ref restore_view,
                 ..
             } if restore_view.session_id == session_id
@@ -2846,7 +2826,6 @@ mod tests {
             can_sync_review_request: false,
             can_open_worktree: true,
             follow_up_task_action: None,
-            publish_branch_action: Some(PublishBranchAction::Push),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
             session_status: Status::Review,
@@ -2917,7 +2896,6 @@ mod tests {
                 can_sync_review_request: false,
                 can_open_worktree: false,
                 follow_up_task_action: None,
-                publish_branch_action: None,
                 publish_pull_request_action: None,
                 session_state: ViewSessionState::Done,
                 session_status: Status::Done,
