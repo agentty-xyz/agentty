@@ -942,6 +942,7 @@ impl App {
             None
         });
         let session_git_statuses = self.sessions.session_git_statuses().clone();
+        let session_branch_names = self.sessions.session_branch_names().clone();
         let session_index_by_id = self.sessions.state().session_index_by_id().clone();
         let session_worktree_availability = self.sessions.session_worktree_availability().clone();
         let follow_up_task_positions = self.sessions.state().follow_up_task_positions.clone();
@@ -976,6 +977,7 @@ impl App {
                 task_roadmap_scroll_offset: self.task_roadmap_scroll_offset,
                 active_prompt_outputs: &active_prompt_outputs,
                 follow_up_task_positions: &follow_up_task_positions,
+                session_branch_names: &session_branch_names,
                 session_git_statuses: &session_git_statuses,
                 session_index_by_id: &session_index_by_id,
                 session_progress_messages: &session_progress_messages,
@@ -1730,7 +1732,9 @@ impl App {
             .filter(|session| !matches!(session.status, Status::Canceled | Status::Done))
             .map(|session| task::SessionGitStatusTarget {
                 base_branch: session.base_branch.clone(),
-                branch_name: session::session_branch(&session.id),
+                branch_name: sessions
+                    .session_branch_name(&session.id)
+                    .map_or_else(|| session::session_branch(&session.id), str::to_string),
                 session_id: session.id.clone(),
             })
             .collect()
@@ -3215,6 +3219,31 @@ mod tests {
             vec![task::SessionGitStatusTarget {
                 base_branch: "main".to_string(),
                 branch_name: "wt/session-".to_string(),
+                session_id: "session-1".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn session_git_status_targets_use_detected_session_branch_name_when_available() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let review_session = test_session(PathBuf::from("/tmp/session-review"));
+        app.sessions.push_session(review_session);
+        app.sessions.replace_session_branch_names(HashMap::from([(
+            "session-1".to_string(),
+            "agentty/session-".to_string(),
+        )]));
+
+        // Act
+        let targets = App::session_git_status_targets(&app.sessions);
+
+        // Assert
+        assert_eq!(
+            targets,
+            vec![task::SessionGitStatusTarget {
+                base_branch: "main".to_string(),
+                branch_name: "agentty/session-".to_string(),
                 session_id: "session-1".to_string(),
             }]
         );

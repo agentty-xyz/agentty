@@ -222,6 +222,7 @@ impl AppStartup {
             stats_activity,
         );
         session_manager.replace_session_worktree_availability(session_worktree_availability);
+        session_manager.refresh_session_branch_names().await;
 
         session_manager
     }

@@ -118,6 +118,7 @@ impl SessionManager {
         self.state.replace_sessions(sessions);
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
+        self.refresh_session_branch_names().await;
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);
@@ -129,6 +130,7 @@ impl SessionManager {
             .collect();
         self.state
             .retain_follow_up_task_positions(&active_session_ids);
+        self.state.retain_session_branch_names(&active_session_ids);
         self.state.retain_session_git_statuses(&active_session_ids);
         self.worker_service_mut()
             .retain_active_workers(&active_session_ids);

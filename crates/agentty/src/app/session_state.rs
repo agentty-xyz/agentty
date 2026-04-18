@@ -22,6 +22,8 @@ pub struct SessionState {
     /// affordances.
     pub(crate) follow_up_task_positions: HashMap<String, usize>,
     pub handles: HashMap<String, SessionHandles>,
+    /// Cached detected branch names keyed by session id.
+    pub(crate) session_branch_names: HashMap<String, String>,
     /// Cached worktree-directory availability keyed by session id.
     pub(crate) session_worktree_availability: HashMap<String, bool>,
     /// Cached session list positions keyed by stable session id.
@@ -53,6 +55,7 @@ impl SessionState {
         let mut state = Self {
             follow_up_task_positions: HashMap::new(),
             handles,
+            session_branch_names: HashMap::new(),
             session_worktree_availability: HashMap::new(),
             session_index_by_id: HashMap::new(),
             sessions: Vec::new(),
@@ -235,6 +238,15 @@ impl SessionState {
         self.session_worktree_availability = session_worktree_availability;
     }
 
+    /// Replaces cached detected session branch names with one fresh reload
+    /// result.
+    pub(crate) fn replace_session_branch_names(
+        &mut self,
+        session_branch_names: HashMap<String, String>,
+    ) {
+        self.session_branch_names = session_branch_names;
+    }
+
     /// Updates cached worktree availability for one session after a lifecycle
     /// transition materializes or removes its worktree.
     pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
@@ -245,6 +257,13 @@ impl SessionState {
     /// Drops cached worktree availability for one removed session.
     pub(crate) fn remove_session_worktree_availability(&mut self, session_id: &str) {
         self.session_worktree_availability.remove(session_id);
+    }
+
+    /// Drops cached branch-name entries for sessions that are no longer active
+    /// in memory.
+    pub(crate) fn retain_session_branch_names(&mut self, active_session_ids: &HashSet<String>) {
+        self.session_branch_names
+            .retain(|session_id, _| active_session_ids.contains(session_id));
     }
 
     /// Drops cached git-status entries for sessions that are no longer active

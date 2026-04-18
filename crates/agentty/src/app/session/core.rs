@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::widgets::TableState;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::workflow::merge::SessionMergeService;
 pub(crate) use super::workflow::merge::{SyncMainOutcome, SyncSessionStartError};
@@ -470,6 +470,28 @@ impl SessionManager {
         &self.state.session_worktree_availability
     }
 
+    /// Replaces cached detected session branch names from the latest reload.
+    pub(crate) fn replace_session_branch_names(
+        &mut self,
+        session_branch_names: HashMap<String, String>,
+    ) {
+        self.state
+            .replace_session_branch_names(session_branch_names);
+    }
+
+    /// Returns cached detected branch names keyed by session id.
+    pub(crate) fn session_branch_names(&self) -> &HashMap<String, String> {
+        &self.state.session_branch_names
+    }
+
+    /// Returns the cached or derived branch name for one session.
+    pub(crate) fn session_branch_name(&self, session_id: &str) -> Option<&str> {
+        self.state
+            .session_branch_names
+            .get(session_id)
+            .map(String::as_str)
+    }
+
     /// Updates cached worktree availability for one session after its
     /// lifecycle materializes or removes the worktree.
     pub(crate) fn set_session_worktree_available(&mut self, session_id: &str, is_available: bool) {
@@ -480,6 +502,55 @@ impl SessionManager {
     /// Drops cached worktree availability for one removed session.
     pub(crate) fn remove_session_worktree_availability(&mut self, session_id: &str) {
         self.state.remove_session_worktree_availability(session_id);
+    }
+
+    /// Refreshes cached branch names for all currently loaded sessions by
+    /// detecting each worktree `HEAD` and falling back to the derived default
+    /// session branch when detection is unavailable.
+    ///
+    /// Branch detection runs concurrently so startup and session refresh do
+    /// not pay one subprocess round trip per session in series.
+    pub(crate) async fn refresh_session_branch_names(&mut self) {
+        let session_inputs = self
+            .state
+            .sessions
+            .iter()
+            .map(|session| {
+                let session_id = session.id.clone();
+                let default_branch_name = session_branch(&session_id);
+
+                (session_id, session.folder.clone(), default_branch_name)
+            })
+            .collect::<Vec<_>>();
+        let mut session_branch_names = session_inputs
+            .iter()
+            .map(|(session_id, _, default_branch_name)| {
+                (session_id.clone(), default_branch_name.clone())
+            })
+            .collect::<HashMap<_, _>>();
+        let mut branch_detection_tasks = JoinSet::new();
+
+        for (session_id, session_folder, default_branch_name) in session_inputs {
+            let git_client = Arc::clone(&self.git_client);
+            branch_detection_tasks.spawn(async move {
+                let branch_name = git_client
+                    .detect_git_info(session_folder)
+                    .await
+                    .unwrap_or(default_branch_name);
+
+                (session_id, branch_name)
+            });
+        }
+
+        while let Some(branch_detection_result) = branch_detection_tasks.join_next().await {
+            let Ok((session_id, branch_name)) = branch_detection_result else {
+                continue;
+            };
+
+            session_branch_names.insert(session_id, branch_name);
+        }
+
+        self.replace_session_branch_names(session_branch_names);
     }
 
     /// Returns the selected follow-up task position for one session.
@@ -601,6 +672,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use tempfile::tempdir;
+    use tokio::sync::Barrier;
 
     use super::*;
     use crate::app::{App, SyncSessionStartError, Tab};
@@ -689,12 +761,21 @@ mod tests {
         mock
     }
 
+    /// Allows branch detection calls to fall back to derived session branch
+    /// names in tests that do not care about exact detected refs.
+    fn allow_detect_git_info(mock: &mut git::MockGitClient) {
+        mock.expect_detect_git_info()
+            .times(0..)
+            .returning(|_| Box::pin(async { None }));
+    }
+
     /// Builds a merge-focused mock git client for no-op merge scenarios.
     fn create_mock_git_client_for_successful_noop_merges(
         expected_merge_count: usize,
         repo_root: PathBuf,
     ) -> git::MockGitClient {
         let mut mock = git::MockGitClient::new();
+        allow_detect_git_info(&mut mock);
         mock.expect_find_git_repo_root()
             .times(expected_merge_count)
             .returning(move |_| {
@@ -3437,6 +3518,7 @@ mod tests {
         let mut app = new_test_app_with_git_and_db(dir.path(), db).await;
         let repo_root = dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
+        allow_detect_git_info(&mut mock_git_client);
         mock_git_client
             .expect_find_git_repo_root()
             .times(0..)
@@ -3576,6 +3658,7 @@ mod tests {
         let mut app = new_test_app_with_git(dir.path()).await;
         let repo_root = dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
+        allow_detect_git_info(&mut mock_git_client);
         mock_git_client
             .expect_find_git_repo_root()
             .times(0..)
@@ -3784,6 +3867,7 @@ mod tests {
         .await;
         let repo_root = dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
+        allow_detect_git_info(&mut mock_git_client);
         mock_git_client
             .expect_find_git_repo_root()
             .times(1)
@@ -4067,6 +4151,7 @@ mod tests {
         let mut app = new_test_app_with_git(dir.path()).await;
         let repo_root = dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
+        allow_detect_git_info(&mut mock_git_client);
         mock_git_client
             .expect_find_git_repo_root()
             .times(0..)
@@ -4140,6 +4225,7 @@ mod tests {
         let mut app = new_test_app_with_git(dir.path()).await;
         let repo_root = dir.path().to_path_buf();
         let mut mock_git_client = git::MockGitClient::new();
+        allow_detect_git_info(&mut mock_git_client);
         mock_git_client
             .expect_find_git_repo_root()
             .times(1)
@@ -4862,6 +4948,54 @@ mod tests {
 
         // Assert
         assert_eq!(branch, "wt/a1b2c3d4");
+    }
+
+    #[tokio::test]
+    async fn test_refresh_session_branch_names_runs_detection_concurrently() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app(dir.path().to_path_buf()).await;
+        add_manual_session(&mut app, dir.path(), "alpha001", "First");
+        add_manual_session(&mut app, dir.path(), "bravo002", "Second");
+        let barrier = Arc::new(Barrier::new(2));
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .times(2)
+            .returning({
+                let barrier = Arc::clone(&barrier);
+                move |_| {
+                    let barrier = Arc::clone(&barrier);
+
+                    Box::pin(async move {
+                        barrier.wait().await;
+
+                        None
+                    })
+                }
+            });
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        let refresh_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            app.sessions.refresh_session_branch_names(),
+        )
+        .await;
+
+        // Assert
+        assert!(
+            refresh_result.is_ok(),
+            "branch refresh should complete without serially blocking"
+        );
+        assert_eq!(
+            app.sessions.session_branch_name("alpha001"),
+            Some("wt/alpha001")
+        );
+        assert_eq!(
+            app.sessions.session_branch_name("bravo002"),
+            Some("wt/bravo002")
+        );
     }
 
     // -- remote_branch_name_from_upstream_ref tests --------------------------
