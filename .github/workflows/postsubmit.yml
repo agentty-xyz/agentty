@@ -28,8 +28,8 @@ jobs:
       - name: Setup `uv`
         uses: astral-sh/setup-uv@v8.1.0
 
-      - name: Install `pre-commit`
-        run: uv tool install pre-commit
+      - name: Install `prek`
+        run: uv tool install prek
 
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -45,7 +45,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Generate coverage report
-        run: uv tool run pre-commit run coverage-lcov --all-files --hook-stage manual
+        run: uv tool run prek run coverage-lcov --all-files --hook-stage manual
 
       - name: Summarize coverage
         run: |

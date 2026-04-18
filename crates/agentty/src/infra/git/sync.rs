@@ -40,8 +40,8 @@ pub enum PullRebaseResult {
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
 /// * `commit_message` - Message for the commit
-/// * `no_verify` - When `true`, skips pre-commit and commit-msg hooks
-///   (`--no-verify`)
+/// * `no_verify` - When `true`, skips configured git hooks such as
+///   `prek`-managed `pre-commit` and `commit-msg` hooks (`--no-verify`)
 ///
 /// # Returns
 /// Ok(()) on success.
@@ -75,8 +75,8 @@ pub async fn commit_all(
 /// * `commit_message` - Message that identifies the session commit
 /// * `message_strategy` - Whether amends replace or reuse the existing `HEAD`
 ///   message
-/// * `no_verify` - When `true`, skips pre-commit and commit-msg hooks
-///   (`--no-verify`)
+/// * `no_verify` - When `true`, skips configured git hooks such as
+///   `prek`-managed `pre-commit` and `commit-msg` hooks (`--no-verify`)
 ///
 /// # Returns
 /// Ok(()) on success.

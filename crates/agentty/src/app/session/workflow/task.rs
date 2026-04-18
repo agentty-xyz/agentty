@@ -262,9 +262,9 @@ impl SessionTaskService {
     /// Commits all worktree changes and returns the current `HEAD` short hash.
     ///
     /// Pass `no_verify` to skip commit hooks (used in tests for deterministic
-    /// execution without pre-commit setup). The model used for commit-message
-    /// generation is resolved from the session's auto-commit settings before
-    /// the git commit is attempted.
+    /// execution without local `prek` hook setup). The model used for
+    /// commit-message generation is resolved from the session's auto-commit
+    /// settings before the git commit is attempted.
     ///
     /// # Errors
     /// Returns an error if commit-message generation, staging/commit, or

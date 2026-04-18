@@ -46,7 +46,7 @@ Documentation for installation and workflows is available at [agentty.xyz/docs](
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and contribution guidance.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for `prek`-based development checks and contribution guidance.
 
 ## License
 

@@ -20,8 +20,8 @@ jobs:
       - name: Setup `uv`
         uses: astral-sh/setup-uv@v8.1.0
 
-      - name: Install `pre-commit`
-        run: uv tool install pre-commit
+      - name: Install `prek`
+        run: uv tool install prek
 
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -30,10 +30,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Default validation hooks
-        run: uv tool run pre-commit run --all-files
+        run: uv tool run prek run --all-files
 
       - name: Strict lint
-        run: uv tool run pre-commit run clippy --all-files --hook-stage manual
+        run: uv tool run prek run clippy --all-files --hook-stage manual
 
       - name: Full test suite
-        run: uv tool run pre-commit run test-workspace --all-files --hook-stage manual
+        run: uv tool run prek run test-workspace --all-files --hook-stage manual

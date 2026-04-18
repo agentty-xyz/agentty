@@ -185,22 +185,23 @@ final quality bar.
 
 Use these while iterating on a change:
 
-1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual`
-1. **Compile:** `pre-commit run cargo-check --all-files`
-1. **Focused Tests:** Run the narrowest matching hook from `.pre-commit-config.yaml` when one exists (for example `pre-commit run test-agentty-e2e --all-files --hook-stage manual`).
+1. **Autofix:** `prek run rustfmt-fix --all-files --hook-stage manual`
+1. **Compile:** `prek run cargo-check --all-files`
+1. **Focused Tests:** Run the narrowest matching hook from the `prek` hook catalog when one exists (for example `prek run test-agentty-e2e --all-files --hook-stage manual`).
 
 ### Final Local Validation
 
-`.pre-commit-config.yaml` is the executable source of truth for repository
-validation commands. Keep agent workflows and CI invoking hook IDs from that
-file instead of re-encoding cargo or Zola commands elsewhere.
+`prek` runs the repository hook catalog from `.pre-commit-config.yaml`, which is
+the executable source of truth for validation commands. Keep agent workflows
+and CI invoking hook IDs from that file instead of re-encoding cargo or Zola
+commands elsewhere.
 
 Run this sequence before handoff, commit, or opening a review:
 
-1. **Autofix:** `pre-commit run rustfmt-fix --all-files --hook-stage manual && pre-commit run clippy-fix --all-files --hook-stage manual`
-1. **Validate:** `pre-commit run --all-files`
-1. **Lint:** `pre-commit run clippy --all-files --hook-stage manual`
-1. **Test:** `pre-commit run test-workspace --all-files --hook-stage manual`
+1. **Autofix:** `prek run rustfmt-fix --all-files --hook-stage manual && prek run clippy-fix --all-files --hook-stage manual`
+1. **Validate:** `prek run --all-files`
+1. **Lint:** `prek run clippy --all-files --hook-stage manual`
+1. **Test:** `prek run test-workspace --all-files --hook-stage manual`
 
 Focused tests are allowed during development, but they do not replace the final
 full-suite run.
@@ -209,10 +210,10 @@ full-suite run.
 
 Use these slower hygiene checks in CI or when making broader changes:
 
-1. **Coverage Summary:** `pre-commit run coverage --all-files --hook-stage manual`
-1. **Coverage Upload:** `pre-commit run coverage-lcov --all-files --hook-stage manual`
-1. **Docs Site:** `pre-commit run zola-check --all-files --hook-stage manual`
-1. **Dependency Hygiene:** `pre-commit run cargo-shear --all-files --hook-stage manual`
+1. **Coverage Summary:** `prek run coverage --all-files --hook-stage manual`
+1. **Coverage Upload:** `prek run coverage-lcov --all-files --hook-stage manual`
+1. **Docs Site:** `prek run zola-check --all-files --hook-stage manual`
+1. **Dependency Hygiene:** `prek run cargo-shear --all-files --hook-stage manual`
 
 The manual-stage autofix hooks apply formatting and fixable clippy lints. The
 default validation command keeps feedback relatively fast, while the explicit
@@ -274,7 +275,7 @@ Update architecture docs whenever you change:
 
 - For all commit preparation and commit message work, use `skills/git-commit/SKILL.md`.
 - **Tagging:** Always use the `v` prefix for version tags (e.g., `v0.1.0`).
-- **Never bypass pre-commit hooks:** Do not use `--no-verify`, `--no-gpg-sign`, or any other flag that skips or disables pre-commit hooks. If a hook fails, investigate and fix the underlying issue instead of bypassing it.
+- **Never bypass `prek`-managed hooks:** Do not use `--no-verify`, `--no-gpg-sign`, or any other flag that skips or disables git hooks managed by `prek`. If a hook fails, investigate and fix the underlying issue instead of bypassing it.
 
 ## Release Automation
 

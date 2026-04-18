@@ -27,5 +27,5 @@ Use this skill when preparing or creating commits.
 
 1. **Apply repository-specific commit rules**
 
-   - Never use `--no-verify` with git commands to bypass `pre-commit` hooks.
+   - Never use `--no-verify` with git commands to bypass `prek`-managed hooks.
    - Do not add `Co-Authored-By` trailers or AI attribution to commit messages.

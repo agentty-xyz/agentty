@@ -129,15 +129,15 @@ The `features.html` template auto-discovers all pages in `content/features/` sor
 
 ```sh
 # Run the full E2E suite to check for regressions.
-pre-commit run test-agentty-e2e --all-files --hook-stage manual
+prek run test-agentty-e2e --all-files --hook-stage manual
 
 # Validate the Zola site builds with the new feature page.
-pre-commit run zola-check --all-files --hook-stage manual
+prek run zola-check --all-files --hook-stage manual
 ```
 
 The GIF is generated only when VHS is installed. On machines without VHS the test still runs and asserts correctly — GIF generation is gracefully skipped.
 
-Run `pre-commit run zola-check --all-files --hook-stage manual` after the test to catch broken frontmatter or template integration before the page reaches CI. This requires Zola to be installed locally — if unavailable, CI catches it via the `pages.yml` workflow.
+Run `prek run zola-check --all-files --hook-stage manual` after the test to catch broken frontmatter or template integration before the page reaches CI. This requires Zola to be installed locally — if unavailable, CI catches it via the `pages.yml` workflow.
 
 ## Legacy Pattern
 
@@ -179,5 +179,5 @@ When using the legacy pattern, create the Zola page manually at `docs/site/conte
 - [ ] `.zola(...)` is set with a clear title, description, and appropriate weight.
 - [ ] Test includes `// Arrange`, `// Act`, and `// Assert` comments (or combined `// Arrange, Act, Assert` for declarative builders).
 - [ ] Assertions verify visible UI text or state, not internal implementation details.
-- [ ] E2E feature suite passes with `pre-commit run test-agentty-e2e --all-files --hook-stage manual`.
-- [ ] Zola site validates with `pre-commit run zola-check --all-files --hook-stage manual` (when `.zola(...)` is used).
+- [ ] E2E feature suite passes with `prek run test-agentty-e2e --all-files --hook-stage manual`.
+- [ ] Zola site validates with `prek run zola-check --all-files --hook-stage manual` (when `.zola(...)` is used).

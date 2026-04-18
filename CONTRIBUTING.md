@@ -21,10 +21,11 @@ https://docs.astral.sh/uv/getting-started/installation/
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Install `pre-commit`
+### Install `prek`
 
 ```sh
-uv tool install pre-commit
+uv tool install prek
+prek install -f
 ```
 
 ### Install `cargo-llvm-cov`
@@ -50,13 +51,14 @@ zola build --root docs/site
 Run the following checks before opening a pull request:
 
 ```sh
-pre-commit run rustfmt-fix --all-files --hook-stage manual
-pre-commit run clippy-fix --all-files --hook-stage manual
-pre-commit run --all-files
-cargo test -q
+prek run rustfmt-fix --all-files --hook-stage manual
+prek run clippy-fix --all-files --hook-stage manual
+prek run --all-files
+prek run clippy --all-files --hook-stage manual
+prek run test-workspace --all-files --hook-stage manual
 ```
 
-`pre-commit run --all-files` now includes the workspace coverage ratchet via
+`prek run --all-files` now includes the workspace coverage ratchet via
 `cargo llvm-cov --workspace --summary-only --fail-under-lines 89 --fail-under-functions 86`.
 
 ## Roadmap Maintenance

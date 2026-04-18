@@ -53,7 +53,7 @@ pub async fn squash_merge_diff(
 /// This function:
 /// 1. Verifies the repository is already on the target branch
 /// 2. Performs `git merge --squash` from the source branch
-/// 3. Commits the squashed changes (skipping pre-commit hooks)
+/// 3. Commits the squashed changes (skipping configured commit hooks)
 ///
 /// The caller is responsible for ensuring `repo_path` is already checked out
 /// on `target_branch`. Switching branches here would disrupt the user's
