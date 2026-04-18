@@ -7,16 +7,14 @@ Published session branches stay in sync automatically after later completed turn
 
 ## Installation
 
-### npm
+### npm (recommended)
 
 ```sh
 npm install -g agentty
 ```
 
 <details>
-<summary>`npx`</summary>
-
-Run without installing:
+<summary>`npx` (run without installing)</summary>
 
 ```sh
 npx agentty
