@@ -24,17 +24,17 @@
             <!-- Negative bottom margin pulls tabs down so their bottom border overlaps
                  the panel's top border, creating a seamless visual connection -->
             <div class="install-tabs">
-                <button class="install-tab is-active"
+                <button class="install-tab is-active" data-cmd="npm install -g agentty">npm</button>
+                <button class="install-tab" data-cmd="npx agentty">npx</button>
+                <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
+                <button class="install-tab"
                         data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh">
                     sh
                 </button>
-                <button class="install-tab" data-cmd="cargo install agentty">cargo</button>
-                <button class="install-tab" data-cmd="npm install -g agentty">npm</button>
-                <button class="install-tab" data-cmd="npx agentty">npx</button>
             </div>
             <div class="install-command">
                 <span class="install-prompt">$</span>
-                <code class="install-cmd-text">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh</code>
+                <code class="install-cmd-text">npm install -g agentty</code>
                 <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
             </div>
         </div>

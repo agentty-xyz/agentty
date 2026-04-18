@@ -7,31 +7,40 @@ Published session branches stay in sync automatically after later completed turn
 
 ## Installation
 
-### Shell
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
-```
-
-### Cargo
-
-```sh
-cargo install agentty
-```
-
 ### npm
 
 ```sh
 npm install -g agentty
 ```
 
-### npx
+<details>
+<summary>`npx`</summary>
 
 Run without installing:
 
 ```sh
 npx agentty
 ```
+
+</details>
+
+<details>
+<summary>Shell</summary>
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
+```
+
+</details>
+
+<details>
+<summary>Cargo</summary>
+
+```sh
+cargo install agentty
+```
+
+</details>
 
 ## Usage
 

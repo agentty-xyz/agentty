@@ -14,18 +14,6 @@ weight = 1
 <a id="installation-options"></a>
 Use one of these installation options:
 
-### Shell installer
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
-```
-
-### Cargo
-
-```bash
-cargo install agentty
-```
-
 ### npm (global)
 
 ```bash
@@ -36,6 +24,18 @@ npm install -g agentty
 
 ```bash
 npx agentty
+```
+
+### Shell installer
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
+```
+
+### Cargo
+
+```bash
+cargo install agentty
 ```
 
 ## Start a Session
