@@ -4,7 +4,7 @@ use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 
-use crate::app::{App, SessionStatsUsage};
+use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
@@ -682,6 +682,16 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
     };
 
     match selection {
+        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/apply")) => {
+            if let AppMode::Prompt {
+                input, slash_state, ..
+            } = &mut app.mode
+            {
+                input.take_text();
+                slash_state.reset();
+            }
+            handle_apply_command(app, prompt_context).await;
+        }
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/stats")) => {
             if let AppMode::Prompt {
                 input, slash_state, ..
@@ -809,6 +819,20 @@ fn prompt_review_text(app: &App) -> Option<String> {
     }
 }
 
+/// Drops the preserved focused-review text and status message held in prompt
+/// mode so a subsequent cancel cannot restore invalidated review content.
+fn clear_prompt_review_state(app: &mut App) {
+    if let AppMode::Prompt {
+        review_status_message,
+        review_text,
+        ..
+    } = &mut app.mode
+    {
+        *review_status_message = None;
+        *review_text = None;
+    }
+}
+
 async fn append_output_for_session(app: &App, session_id: &str, output: &str) {
     app.append_output_for_session(session_id, output).await;
 }
@@ -845,6 +869,150 @@ async fn cleanup_prompt_attachment_state(app: &mut App) {
     };
 
     app.cleanup_prompt_attachment_files(&prompt).await;
+}
+
+/// Handles `/apply` by extracting suggestions from the focused review and
+/// submitting them as a prompt to the agent.
+///
+/// Only runs when the session is in `Status::Review` and a `Ready` review is
+/// cached for it so stale or in-flight reviews are not applied. The cached
+/// review's diff hash is revalidated against the live worktree diff so a
+/// review that no longer matches the current files is rejected instead of
+/// submitted as stale instructions.
+///
+/// Composer attachments are preserved across all early-return validation
+/// paths and only cleaned up at the submission boundary, so a rejected
+/// attempt leaves the user's pasted images intact for the next action.
+///
+/// When the cached review fails the stale-hash guard, the preserved
+/// `review_text` and `review_status_message` held in `AppMode::Prompt` are
+/// cleared so a subsequent cancel cannot restore the invalidated review back
+/// into the session view.
+async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
+    let Some((session_status, session_folder, base_branch)) =
+        app.session_at(prompt_context.session_index).map(|session| {
+            (
+                session.status,
+                session.folder.clone(),
+                session.base_branch.clone(),
+            )
+        })
+    else {
+        return;
+    };
+
+    if session_status != crate::domain::session::Status::Review {
+        append_prompt_status_line(
+            app,
+            &prompt_context.session_id,
+            "Apply",
+            "Apply is only available after a focused review completes (session status must be \
+             Review).",
+        )
+        .await;
+
+        return;
+    }
+
+    let (cached_hash, cached_text) = if let Some(ReviewCacheEntry::Ready { diff_hash, text }) =
+        app.review_cache.get(&prompt_context.session_id)
+    {
+        (*diff_hash, text.clone())
+    } else {
+        append_prompt_status_line(
+            app,
+            &prompt_context.session_id,
+            "Apply",
+            "No actionable suggestions available. Run a focused review first (f key).",
+        )
+        .await;
+
+        return;
+    };
+
+    let current_diff = match app
+        .services
+        .git_client()
+        .diff(session_folder, base_branch)
+        .await
+    {
+        Ok(diff) => diff,
+        Err(err) => {
+            append_prompt_status_line(
+                app,
+                &prompt_context.session_id,
+                "Apply",
+                &format!(
+                    "Failed to read worktree diff: {err}. Review cache preserved; try /apply \
+                     again."
+                ),
+            )
+            .await;
+
+            return;
+        }
+    };
+    let current_hash = diff_content_hash(&current_diff);
+
+    if current_hash != cached_hash {
+        app.review_cache.remove(&prompt_context.session_id);
+        clear_prompt_review_state(app);
+        append_prompt_status_line(
+            app,
+            &prompt_context.session_id,
+            "Apply",
+            "Review is stale; the worktree changed since it was generated. Run focused review \
+             again (f key).",
+        )
+        .await;
+
+        return;
+    }
+
+    let Some(suggestions) = extract_review_suggestions(&cached_text) else {
+        append_prompt_status_line(
+            app,
+            &prompt_context.session_id,
+            "Apply",
+            "No actionable suggestions found in the current review.",
+        )
+        .await;
+
+        return;
+    };
+
+    let prompt = TurnPrompt::from_text(format!(
+        "Apply the following review suggestions:\n\n{suggestions}"
+    ));
+
+    cleanup_prompt_attachment_state(app).await;
+    app.review_cache.remove(&prompt_context.session_id);
+    app.reply(&prompt_context.session_id, prompt).await;
+
+    app.mode = AppMode::View {
+        done_session_output_mode: DoneSessionOutputMode::Summary,
+        review_status_message: None,
+        review_text: None,
+        session_id: prompt_context.session_id.clone(),
+        scroll_offset: None,
+    };
+}
+
+/// Extracts the `### Suggestions` section content from focused review
+/// markdown, returning `None` when suggestions are absent or empty.
+fn extract_review_suggestions(review_text: &str) -> Option<String> {
+    let suggestions_header = "### Suggestions";
+    let header_start = review_text.find(suggestions_header)?;
+    let content_start = header_start + suggestions_header.len();
+    let content = &review_text[content_start..];
+    let section_end = content.find("\n### ").unwrap_or(content.len());
+    let suggestions = content[..section_end].trim();
+
+    if suggestions.is_empty() || suggestions == "- None" {
+        return None;
+    }
+
+    Some(suggestions.to_string())
 }
 
 /// Handles `/stats` by loading stats through the app layer and appending the
@@ -1264,6 +1432,35 @@ mod tests {
         ))
     }
 
+    /// Replaces the app-level git client with a caller-provided mock by
+    /// rebuilding `AppServices` through its public constructor, preserving
+    /// the remaining shared dependencies.
+    fn install_mock_git_client(app: &mut App, mock_git_client: crate::infra::git::MockGitClient) {
+        let mock_git_client: std::sync::Arc<dyn crate::infra::git::GitClient> =
+            std::sync::Arc::new(mock_git_client);
+        let base_path = app.services.base_path().to_path_buf();
+        let db = app.services.db().clone();
+        let event_sender = app.services.event_sender();
+        let available_agent_kinds = app.services.available_agent_kinds();
+        let app_server_client_override = app.services.app_server_client_override();
+        let fs_client = app.services.fs_client();
+        let review_request_client = app.services.review_request_client();
+
+        app.services = crate::app::AppServices::new(
+            base_path,
+            app.services.clock(),
+            db,
+            event_sender,
+            crate::app::AppServiceDeps {
+                app_server_client_override,
+                available_agent_kinds,
+                fs_client,
+                git_client: mock_git_client,
+                review_request_client,
+            },
+        );
+    }
+
     fn setup_test_git_repo(path: &Path) {
         Command::new("git")
             .args(["init"])
@@ -1635,7 +1832,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/model", "/reasoning", "/stats"]);
+        assert_eq!(commands, vec!["/apply", "/model", "/reasoning", "/stats"]);
     }
 
     #[test]
@@ -2960,5 +3157,300 @@ mod tests {
         // Assert
         assert!(result.contains("Tokens Usage"));
         assert!(result.contains("No token usage recorded."));
+    }
+
+    #[test]
+    fn test_extract_review_suggestions_returns_suggestions_content() {
+        // Arrange
+        let review_text = "\
+## Review
+
+### Project Impact
+
+- Adds a new endpoint for user preferences.
+
+### Suggestions
+
+- Add input validation for the `max_items` parameter at `api/handler.rs:42`.
+- Consider adding rate limiting to the new endpoint.";
+
+        // Act
+        let suggestions = extract_review_suggestions(review_text);
+
+        // Assert
+        assert_eq!(
+            suggestions,
+            Some(
+                "- Add input validation for the `max_items` parameter at `api/handler.rs:42`.\n- \
+                 Consider adding rate limiting to the new endpoint."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_extract_review_suggestions_returns_none_for_no_suggestions() {
+        // Arrange
+        let review_text = "\
+## Review
+
+### Project Impact
+
+- Minor refactoring.
+
+### Suggestions
+
+- None";
+
+        // Act
+        let suggestions = extract_review_suggestions(review_text);
+
+        // Assert
+        assert_eq!(suggestions, None);
+    }
+
+    #[test]
+    fn test_extract_review_suggestions_returns_none_when_section_missing() {
+        // Arrange
+        let review_text = "\
+## Review
+
+### Project Impact
+
+- All looks good.";
+
+        // Act
+        let suggestions = extract_review_suggestions(review_text);
+
+        // Assert
+        assert_eq!(suggestions, None);
+    }
+
+    #[test]
+    fn test_extract_review_suggestions_stops_at_next_heading() {
+        // Arrange
+        let review_text = "\
+### Suggestions
+
+- Fix the typo in `README.md:10`.
+
+### Additional Notes
+
+- Great work overall.";
+
+        // Act
+        let suggestions = extract_review_suggestions(review_text);
+
+        // Assert
+        assert_eq!(
+            suggestions,
+            Some("- Fix the typo in `README.md:10`.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_review_suggestions_returns_none_for_empty_section() {
+        // Arrange
+        let review_text = "\
+### Suggestions
+
+### Project Impact
+
+- None";
+
+        // Act
+        let suggestions = extract_review_suggestions(review_text);
+
+        // Assert
+        assert_eq!(suggestions, None);
+    }
+
+    #[tokio::test]
+    async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.review_cache.insert(
+            session_id.clone(),
+            crate::app::ReviewCacheEntry::Ready {
+                diff_hash: 0,
+                text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
+            },
+        );
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_apply_command(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        assert!(app.review_cache.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn test_handle_apply_command_rejects_without_cached_review() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_apply_command(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_handle_apply_command_invalidates_cache_when_diff_hash_mismatches() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.review_cache.insert(
+            session_id.clone(),
+            crate::app::ReviewCacheEntry::Ready {
+                diff_hash: u64::MAX,
+                text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
+            },
+        );
+        if let AppMode::Prompt {
+            review_status_message,
+            review_text,
+            ..
+        } = &mut app.mode
+        {
+            *review_status_message = Some("stale status".to_string());
+            *review_text = Some("## Review\n### Suggestions\n- Fix the typo.".to_string());
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_apply_command(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(!app.review_cache.contains_key(&session_id));
+        let AppMode::Prompt {
+            review_status_message,
+            review_text,
+            ..
+        } = &app.mode
+        else {
+            unreachable!("expected AppMode::Prompt after stale-hash bail-out");
+        };
+        assert!(
+            review_status_message.is_none(),
+            "stale review status must be cleared so cancel cannot restore it",
+        );
+        assert!(
+            review_text.is_none(),
+            "stale review text must be cleared so cancel cannot restore it",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_apply_command_submits_suggestions_when_diff_hash_matches() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions[0].id.clone();
+        let folder = app.sessions.sessions[0].folder.clone();
+        let base_branch = app.sessions.sessions[0].base_branch.clone();
+        let current_diff = app
+            .services
+            .git_client()
+            .diff(folder, base_branch)
+            .await
+            .unwrap_or_default();
+        let current_hash = crate::app::diff_content_hash(&current_diff);
+        app.review_cache.insert(
+            session_id.clone(),
+            crate::app::ReviewCacheEntry::Ready {
+                diff_hash: current_hash,
+                text: "## Review\n### Suggestions\n- Fix the typo in `README.md`.".to_string(),
+            },
+        );
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_apply_command(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(!app.review_cache.contains_key(&session_id));
+        assert!(matches!(app.mode, AppMode::View { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_handle_apply_command_preserves_cache_on_git_diff_error() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.review_cache.insert(
+            session_id.clone(),
+            crate::app::ReviewCacheEntry::Ready {
+                diff_hash: 42,
+                text: "## Review\n### Suggestions\n- Fix the typo in `README.md`.".to_string(),
+            },
+        );
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client.expect_diff().returning(|_, _| {
+            Box::pin(async {
+                Err(crate::infra::git::GitError::OutputParse(
+                    "simulated git failure".to_string(),
+                ))
+            })
+        });
+        install_mock_git_client(&mut app, mock_git_client);
+
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_apply_command(&mut app, &prompt_context).await;
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::Prompt { .. }));
+        assert!(
+            matches!(
+                app.review_cache.get(&session_id),
+                Some(crate::app::ReviewCacheEntry::Ready { diff_hash: 42, .. }),
+            ),
+            "cached review must survive a transient git diff error",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_preserves_attachments_when_apply_bails_out() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        if let AppMode::Prompt {
+            attachment_state, ..
+        } = &mut app.mode
+        {
+            attachment_state
+                .attachments
+                .push(crate::domain::composer::PromptAttachment::new(
+                    1,
+                    std::path::PathBuf::from("/tmp/nonexistent-test-attachment.png"),
+                ));
+        }
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        let AppMode::Prompt {
+            attachment_state, ..
+        } = &app.mode
+        else {
+            unreachable!("expected AppMode::Prompt after /apply bail-out");
+        };
+        assert_eq!(
+            attachment_state.attachments.len(),
+            1,
+            "attachments must survive validation failure so the user keeps their pasted files",
+        );
     }
 }

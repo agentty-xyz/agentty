@@ -320,6 +320,7 @@ inserted:
 
 | Command | Description |
 |---------|-------------|
+| `/apply` | Apply the focused review suggestions to the codebase by sending them to the agent as a prompt. Requires a completed focused review (`f` key). |
 | `/model` | Switch the model for the current session using only locally available backend CLIs. |
 | `/reasoning` | Override the reasoning level for the current session, with the current effective level preselected from settings or any existing session override. |
 | `/stats` | Show token usage statistics for the session. |

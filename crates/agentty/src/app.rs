@@ -30,6 +30,8 @@ pub use project::ProjectManager;
 pub(crate) use review::{
     ReviewCacheEntry, diff_content_hash, is_review_loading_status_message, review_loading_message,
 };
+#[cfg(test)]
+pub(crate) use service::AppServiceDeps;
 pub use service::AppServices;
 pub use session::{SessionError, SessionManager};
 #[cfg(test)]

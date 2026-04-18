@@ -819,6 +819,7 @@ fn resolve_model_stage_agent(
 /// Returns the fixed description text for one slash command label.
 fn command_description(command: &str) -> &'static str {
     match command {
+        "/apply" => "Apply review suggestions to the codebase.",
         "/model" => "Choose an agent and model for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
         "/stats" => "Check session stats.",
@@ -829,7 +830,7 @@ fn command_description(command: &str) -> &'static str {
 /// Returns all slash commands whose prefixes match the current input.
 fn prompt_slash_commands(input: &str) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
-    let mut commands = vec!["/model", "/reasoning", "/stats"];
+    let mut commands = vec!["/apply", "/model", "/reasoning", "/stats"];
     commands.retain(|command| command.starts_with(&lowered));
 
     commands
@@ -1259,5 +1260,28 @@ mod tests {
 
         // Assert
         assert_eq!(delete_range, Some((0, 11)));
+    }
+
+    #[test]
+    fn test_slash_suggestion_list_includes_apply_command() {
+        // Arrange
+        let composer = PromptComposerState::with_input_and_history(
+            InputState::with_text("/a".to_string()),
+            AgentKind::ALL.to_vec(),
+            Vec::new(),
+        );
+
+        // Act
+        let suggestion_list = composer
+            .slash_suggestion_list(AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(suggestion_list.items.len(), 1);
+        assert_eq!(suggestion_list.items[0].label, "/apply");
+        assert_eq!(
+            suggestion_list.items[0].detail.as_deref(),
+            Some("Apply review suggestions to the codebase.")
+        );
     }
 }

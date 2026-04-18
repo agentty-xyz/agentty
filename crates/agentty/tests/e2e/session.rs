@@ -373,6 +373,59 @@ fn review_request_sync_runs_in_background() -> E2eResult {
     Ok(())
 }
 
+/// Verify that typing `/apply` in a review-ready session surfaces the
+/// slash-command suggestion and, when submitted without a cached focused
+/// review, shows the `Run a focused review first (f key)` guidance.
+#[test]
+fn apply_slash_command_guides_user_when_no_focused_review_cached() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("apply_slash_command_no_review")
+        .with_git()
+        .setup(seed_review_ready_session)
+        .zola(
+            "Apply slash command",
+            "Submit `/apply` in a review-ready session and see guidance to run focused review \
+             first.",
+            42,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .sleep(std::time::Duration::from_secs(1))
+                    .press_key("/")
+                    .wait_for_text("/apply", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "apply_suggestion_visible",
+                        "Slash command suggestion list shows /apply",
+                    )
+                    .write_text("apply")
+                    .wait_for_stable_frame(300, 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Run a focused review first", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "apply_guidance_shown",
+                        "Session transcript shows focused-review guidance after /apply",
+                    )
+            },
+            |frame, report| {
+                let suggestion_frame = common::frame_from_capture(&report.captures[0]);
+                let suggestion_full =
+                    Region::full(suggestion_frame.cols(), suggestion_frame.rows());
+                assertion::assert_text_in_region(&suggestion_frame, "/apply", &suggestion_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Run a focused review first", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that `j` and `k` navigate the session list and that `Enter`
 /// opens the currently selected session.
 ///
