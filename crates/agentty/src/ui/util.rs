@@ -18,10 +18,12 @@ pub use crate::ui::diff_util::{
     wrap_diff_content,
 };
 pub use crate::ui::layout::{
-    CHAT_INPUT_MAX_VISIBLE_LINES, calculate_input_height, calculate_input_viewport,
-    centered_content_rect, centered_horizontal_layout, compute_input_layout,
-    first_table_column_width, input_cursor_position, move_input_cursor_down, move_input_cursor_up,
-    placeholder_cursor_position, question_panel_layout, suggestion_dropdown_height,
+    CHAT_INPUT_MAX_VISIBLE_LINES, QuestionPanelAreas, bottom_pinned_scroll_offset,
+    calculate_input_height, calculate_input_viewport, centered_content_rect,
+    centered_horizontal_layout, compute_input_layout, first_table_column_width,
+    input_cursor_position, move_input_cursor_down, move_input_cursor_up, overlay_area_above,
+    panel_inner_width, placeholder_cursor_position, question_options_height, question_panel_areas,
+    question_panel_layout, question_panel_reserved_height, suggestion_dropdown_height,
 };
 pub(crate) use crate::ui::task_roadmap::{roadmap_task_lines, roadmap_task_max_scroll_offset};
 pub use crate::ui::text_util::{

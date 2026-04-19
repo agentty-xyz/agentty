@@ -18,8 +18,8 @@ use crate::ui::state::prompt::{
 };
 use crate::ui::util::{
     calculate_input_height, format_duration_compact, format_token_count, inline_text,
-    question_panel_layout, suggestion_dropdown_height, truncate_spans_with_ellipsis,
-    truncate_with_ellipsis, wrap_lines,
+    overlay_area_above, question_panel_areas, question_panel_reserved_height,
+    suggestion_dropdown_height, truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines,
 };
 use crate::ui::{Component, Page, markdown, style};
 
@@ -482,25 +482,15 @@ impl<'a> SessionChatPage<'a> {
                 .map(|item| item.options.as_slice())
                 .unwrap_or_default();
             let is_free_text_mode = selected_option_index.is_none();
-            let options_height = question_options_height(options, area.height.saturating_sub(1));
             let input_text = if is_free_text_mode { input.text() } else { "" };
-
-            let layout_available_height =
-                area.height.saturating_sub(1).saturating_sub(options_height);
-            let panel_layout = question_panel_layout(
+            return question_panel_reserved_height(
                 area.width,
-                layout_available_height,
+                area.height.saturating_sub(1),
                 question,
                 input_text,
+                options.len(),
                 CHAT_INPUT_MAX_PANEL_HEIGHT,
             );
-
-            return panel_layout
-                .question_height
-                .saturating_add(options_height)
-                .saturating_add(panel_layout.spacer_height)
-                .saturating_add(panel_layout.input_height)
-                .saturating_add(panel_layout.help_height);
         }
 
         1
@@ -709,32 +699,18 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         .map(|item| item.options.as_slice())
         .unwrap_or_default();
     let is_free_text_mode = selected_option_index.is_none();
-
-    let options_height = question_options_height(options, bottom_area.height);
-
-    let layout_available_height = bottom_area.height.saturating_sub(options_height);
     let input_text = if is_free_text_mode { input.text() } else { "" };
-    let panel_layout = question_panel_layout(
-        bottom_area.width,
-        layout_available_height,
+    let panel_areas = question_panel_areas(
+        bottom_area,
         question,
         input_text,
+        options.len(),
         CHAT_INPUT_MAX_PANEL_HEIGHT,
     );
 
-    let chunks = Layout::default()
-        .constraints([
-            Constraint::Length(panel_layout.question_height),
-            Constraint::Length(options_height),
-            Constraint::Length(panel_layout.spacer_height),
-            Constraint::Length(panel_layout.input_height),
-            Constraint::Length(panel_layout.help_height),
-        ])
-        .split(bottom_area);
-
     let is_chat_focused = focus == QuestionFocus::Chat;
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
-    if panel_layout.question_height > 0 {
+    if panel_areas.question_area.height > 0 {
         let title_color = if is_chat_focused {
             style::palette::TEXT_MUTED
         } else {
@@ -758,13 +734,13 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
                 .map(|line| line.style(Style::default().fg(text_color))),
         );
         let question_para = Paragraph::new(lines);
-        f.render_widget(question_para, chunks[0]);
+        f.render_widget(question_para, panel_areas.question_area);
     }
 
-    if options_height > 0 {
+    if panel_areas.options_area.height > 0 {
         render_question_options(
             f,
-            chunks[1],
+            panel_areas.options_area,
             options,
             selected_option_index,
             is_chat_focused,
@@ -780,7 +756,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         ("", 0)
     };
     let input_placeholder = "Type answer (Enter: send, Esc: end turn)";
-    let available_above = usize::from(chunks[3].y.saturating_sub(bottom_area.y));
+    let available_above = usize::from(panel_areas.input_area.y.saturating_sub(bottom_area.y));
     let at_mention_max_visible = available_above
         .saturating_sub(2)
         .clamp(1, AT_MENTION_DEFAULT_MAX_VISIBLE);
@@ -799,12 +775,17 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
     let chat_input = ChatInput::new("Answer", display_text, display_cursor)
         .placeholder(input_placeholder)
         .active(is_free_text_mode && !is_chat_focused);
-    if panel_layout.input_height > 0 {
-        chat_input.render(f, chunks[3]);
+    if panel_areas.input_area.height > 0 {
+        chat_input.render(f, panel_areas.input_area);
     }
 
-    render_question_at_mention_overlay(f, bottom_area, chunks[3], at_mention_menu);
-    render_question_help_footer(f, chunks[4], panel_layout.help_height, focus);
+    render_question_at_mention_overlay(f, bottom_area, panel_areas.input_area, at_mention_menu);
+    render_question_help_footer(
+        f,
+        panel_areas.help_area,
+        panel_areas.help_area.height,
+        focus,
+    );
 }
 
 /// Renders the question-mode help footer with context-aware action hints.
@@ -855,18 +836,11 @@ fn render_question_at_mention_overlay(
     };
 
     let dropdown_height = suggestion_dropdown_height(menu.items.len());
-    let available_above = input_area.y.saturating_sub(bottom_area.y);
-    let clamped_height = dropdown_height.min(available_above);
+    let Some(dropdown_area) = overlay_area_above(bottom_area, input_area, dropdown_height) else {
+        return;
+    };
 
-    if clamped_height > 0 {
-        let dropdown_area = Rect::new(
-            input_area.x,
-            input_area.y.saturating_sub(clamped_height),
-            input_area.width,
-            clamped_height,
-        );
-        ChatInput::render_suggestion_dropdown(f, dropdown_area, &menu);
-    }
+    ChatInput::render_suggestion_dropdown(f, dropdown_area, &menu);
 }
 
 /// Default maximum number of at-mention dropdown entries visible at once.
@@ -926,22 +900,6 @@ fn build_at_mention_suggestion_list_with_capacity(
         selected_index: display_index,
         title: "Files (\u{2191}\u{2193} move, Enter select, Esc dismiss)".to_string(),
     })
-}
-
-/// Returns the total height for the question options section.
-///
-/// Includes the header line and predefined options. Returns zero when there
-/// are no predefined options. The height is independent of the current
-/// input mode so the layout stays stable during mode transitions.
-fn question_options_height(options: &[String], max_height: u16) -> u16 {
-    if options.is_empty() {
-        return 0;
-    }
-
-    u16::try_from(options.len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(1) // +1 header
-        .min(max_height)
 }
 
 /// Renders the answer option list for the active question.
@@ -1813,21 +1771,14 @@ mod tests {
         };
         let page = test_session_chat_page(&session, &mode);
         let area = Rect::new(0, 0, 120, 30);
-        let options_height = question_options_height(&[], area.height.saturating_sub(1));
-        let layout_available = area.height.saturating_sub(1).saturating_sub(options_height);
-        let panel_layout = question_panel_layout(
+        let expected_height = question_panel_reserved_height(
             area.width,
-            layout_available,
+            area.height.saturating_sub(1),
             &question,
             answer,
+            0,
             CHAT_INPUT_MAX_PANEL_HEIGHT,
         );
-        let expected_height = panel_layout
-            .question_height
-            .saturating_add(options_height)
-            .saturating_add(panel_layout.spacer_height)
-            .saturating_add(panel_layout.input_height)
-            .saturating_add(panel_layout.help_height);
 
         // Act
         let bottom_height = page.bottom_height(area);
@@ -1889,21 +1840,14 @@ mod tests {
         let bottom_height = page.bottom_height(area);
 
         // Assert — options_height = 2 options + 1 header = 3
-        let options_height: u16 = 3;
-        let layout_available = area.height.saturating_sub(1).saturating_sub(options_height);
-        let panel_layout = question_panel_layout(
+        let expected = question_panel_reserved_height(
             area.width,
-            layout_available,
+            area.height.saturating_sub(1),
             "Continue?",
             "",
+            2,
             CHAT_INPUT_MAX_PANEL_HEIGHT,
         );
-        let expected = panel_layout
-            .question_height
-            .saturating_add(options_height)
-            .saturating_add(panel_layout.spacer_height)
-            .saturating_add(panel_layout.input_height)
-            .saturating_add(panel_layout.help_height);
         assert_eq!(bottom_height, expected);
         assert!(
             bottom_height > 3,
@@ -2168,15 +2112,14 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let bottom_height = page.bottom_height(area);
         let bottom_top = 1 + height.saturating_sub(2).saturating_sub(bottom_height);
-        let panel_layout = question_panel_layout(
-            width.saturating_sub(2),
-            bottom_height,
+        let panel_areas = question_panel_areas(
+            Rect::new(1, bottom_top, width.saturating_sub(2), bottom_height),
             &question,
             "typed answer",
+            0,
             CHAT_INPUT_MAX_PANEL_HEIGHT,
         );
-        let options_height = question_options_height(&[], bottom_height);
-        let spacer_row = bottom_top + panel_layout.question_height + options_height;
+        let spacer_row = panel_areas.spacer_area.y;
         let spacer_text = buffer_row_text(terminal.backend().buffer(), spacer_row, width);
         assert!(spacer_text.trim().is_empty());
     }

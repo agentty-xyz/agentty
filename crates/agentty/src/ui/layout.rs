@@ -1,6 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Borders;
 
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
 use crate::ui::text_util;
@@ -23,10 +24,29 @@ const CHAT_INPUT_IMAGE_TOKEN_COLOR: Color = Color::Yellow;
 /// Height allocation for question mode's prompt, answer input, and footer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuestionPanelLayout {
+    /// Height reserved for the trailing help footer row.
     pub help_height: u16,
+    /// Height reserved for the bordered answer input widget.
     pub input_height: u16,
+    /// Height reserved for the question title and wrapped question text.
     pub question_height: u16,
+    /// Height reserved for the blank spacer between question and input.
     pub spacer_height: u16,
+}
+
+/// Concrete sub-areas used to paint the question-mode bottom panel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuestionPanelAreas {
+    /// Area used for the footer help text row.
+    pub help_area: Rect,
+    /// Area used for the bordered answer input widget.
+    pub input_area: Rect,
+    /// Area used for the predefined answer options.
+    pub options_area: Rect,
+    /// Area used for the question title and wrapped question text.
+    pub question_area: Rect,
+    /// Area used for the blank spacer between question text and input.
+    pub spacer_area: Rect,
 }
 
 /// Split an area into a centered content column with side gutters.
@@ -121,6 +141,89 @@ pub fn question_panel_layout(
     }
 }
 
+/// Returns the total height reserved for a question-mode bottom panel.
+///
+/// The caller supplies the maximum panel height budget; this helper accounts
+/// for question text, predefined options, the answer input, spacer, and help
+/// footer using the same allocation logic used during rendering.
+pub fn question_panel_reserved_height(
+    width: u16,
+    available_height: u16,
+    question: &str,
+    input: &str,
+    option_count: usize,
+    max_input_panel_height: u16,
+) -> u16 {
+    let options_height = question_options_height(option_count, available_height);
+    let panel_layout = question_panel_layout(
+        width,
+        available_height.saturating_sub(options_height),
+        question,
+        input,
+        max_input_panel_height,
+    );
+
+    panel_layout
+        .question_height
+        .saturating_add(options_height)
+        .saturating_add(panel_layout.spacer_height)
+        .saturating_add(panel_layout.input_height)
+        .saturating_add(panel_layout.help_height)
+}
+
+/// Splits an already reserved question-mode bottom area into paintable rows.
+///
+/// The returned rectangles mirror [`question_panel_reserved_height`] so render
+/// code can consume precomputed geometry instead of repeating the area math.
+pub fn question_panel_areas(
+    area: Rect,
+    question: &str,
+    input: &str,
+    option_count: usize,
+    max_input_panel_height: u16,
+) -> QuestionPanelAreas {
+    let options_height = question_options_height(option_count, area.height);
+    let panel_layout = question_panel_layout(
+        area.width,
+        area.height.saturating_sub(options_height),
+        question,
+        input,
+        max_input_panel_height,
+    );
+    let chunks = Layout::default()
+        .constraints([
+            Constraint::Length(panel_layout.question_height),
+            Constraint::Length(options_height),
+            Constraint::Length(panel_layout.spacer_height),
+            Constraint::Length(panel_layout.input_height),
+            Constraint::Length(panel_layout.help_height),
+        ])
+        .split(area);
+
+    QuestionPanelAreas {
+        help_area: chunks[4],
+        input_area: chunks[3],
+        options_area: chunks[1],
+        question_area: chunks[0],
+        spacer_area: chunks[2],
+    }
+}
+
+/// Returns the total height for a question-mode options section.
+///
+/// The section contains one header row plus one row per predefined option and
+/// clamps to `max_height` so callers can preserve space for surrounding UI.
+pub fn question_options_height(option_count: usize, max_height: u16) -> u16 {
+    if option_count == 0 {
+        return 0;
+    }
+
+    u16::try_from(option_count)
+        .unwrap_or(u16::MAX)
+        .saturating_add(1)
+        .min(max_height)
+}
+
 /// Compute chat input lines and the cursor position for rendering.
 ///
 /// The first line starts with the visible prompt prefix (` › `). Continuation
@@ -173,6 +276,71 @@ pub fn calculate_input_viewport(
     let cursor_row = clamped_cursor_y.saturating_sub(scroll_offset);
 
     (scroll_offset, cursor_row)
+}
+
+/// Returns an overlay rectangle directly above `anchor_area` when one fits.
+///
+/// The overlay is clamped to the vertical space available inside
+/// `container_area` and preserves the anchor width and horizontal origin.
+pub fn overlay_area_above(
+    container_area: Rect,
+    anchor_area: Rect,
+    desired_height: u16,
+) -> Option<Rect> {
+    let available_above = anchor_area.y.saturating_sub(container_area.y);
+    let clamped_height = desired_height.min(available_above);
+    if clamped_height == 0 {
+        return None;
+    }
+
+    Some(Rect::new(
+        anchor_area.x,
+        anchor_area.y.saturating_sub(clamped_height),
+        anchor_area.width,
+        clamped_height,
+    ))
+}
+
+/// Returns the inner text width of a bordered panel area.
+///
+/// Horizontal space consumed by left and right borders is excluded from the
+/// result so markdown wrapping and other width-based rendering stay aligned
+/// with the actual drawable region.
+pub fn panel_inner_width(area: Rect, borders: Borders) -> usize {
+    let left_border_width = u16::from(borders.intersects(Borders::LEFT));
+    let right_border_width = u16::from(borders.intersects(Borders::RIGHT));
+
+    usize::from(
+        area.width
+            .saturating_sub(left_border_width)
+            .saturating_sub(right_border_width),
+    )
+}
+
+/// Returns the bottom-pinned scroll offset for a bordered panel.
+///
+/// When `scroll_offset` is already set, that explicit value wins. Otherwise
+/// the content is scrolled just enough to keep the newest lines visible within
+/// the panel's inner height after top and bottom borders are removed.
+pub fn bottom_pinned_scroll_offset(
+    area: Rect,
+    borders: Borders,
+    line_count: usize,
+    scroll_offset: Option<u16>,
+) -> u16 {
+    if let Some(scroll_offset) = scroll_offset {
+        return scroll_offset;
+    }
+
+    let top_border_height = u16::from(borders.intersects(Borders::TOP));
+    let bottom_border_height = u16::from(borders.intersects(Borders::BOTTOM));
+    let inner_height = usize::from(
+        area.height
+            .saturating_sub(top_border_height)
+            .saturating_sub(bottom_border_height),
+    );
+
+    u16::try_from(line_count.saturating_sub(inner_height)).unwrap_or(u16::MAX)
 }
 
 /// Calculates the cursor position for an empty chat input with placeholder
@@ -605,6 +773,45 @@ mod tests {
     }
 
     #[test]
+    fn test_question_panel_reserved_height_includes_options_and_input_rows() {
+        // Arrange
+        let question = "Continue?";
+        let input = "";
+
+        // Act
+        let reserved_height = question_panel_reserved_height(40, 12, question, input, 2, 10);
+
+        // Assert
+        assert_eq!(reserved_height, 10);
+    }
+
+    #[test]
+    fn test_question_panel_areas_assign_expected_rows() {
+        // Arrange
+        let area = Rect::new(4, 10, 40, 10);
+        let question = "Continue?";
+        let input = "";
+
+        // Act
+        let panel_areas = question_panel_areas(area, question, input, 2, 10);
+
+        // Assert
+        assert_eq!(panel_areas.question_area, Rect::new(4, 10, 40, 2));
+        assert_eq!(panel_areas.options_area, Rect::new(4, 12, 40, 3));
+        assert_eq!(panel_areas.spacer_area, Rect::new(4, 15, 40, 1));
+        assert_eq!(panel_areas.input_area, Rect::new(4, 16, 40, 3));
+        assert_eq!(panel_areas.help_area, Rect::new(4, 19, 40, 1));
+    }
+
+    #[test]
+    fn test_question_options_height_adds_header_and_clamps() {
+        // Arrange & Act & Assert
+        assert_eq!(question_options_height(0, 10), 0);
+        assert_eq!(question_options_height(2, 10), 3);
+        assert_eq!(question_options_height(5, 3), 3);
+    }
+
+    #[test]
     fn test_calculate_input_viewport_without_scroll() {
         // Arrange
         let total_line_count = 4;
@@ -650,6 +857,70 @@ mod tests {
         // Assert
         assert_eq!(scroll_offset, 1);
         assert_eq!(cursor_row, 1);
+    }
+
+    #[test]
+    fn test_overlay_area_above_clamps_to_available_height() {
+        // Arrange
+        let container_area = Rect::new(0, 5, 30, 12);
+        let anchor_area = Rect::new(2, 9, 20, 3);
+
+        // Act
+        let overlay_area = overlay_area_above(container_area, anchor_area, 6);
+
+        // Assert
+        assert_eq!(overlay_area, Some(Rect::new(2, 5, 20, 4)));
+    }
+
+    #[test]
+    fn test_overlay_area_above_returns_none_without_space() {
+        // Arrange
+        let container_area = Rect::new(0, 5, 30, 12);
+        let anchor_area = Rect::new(2, 5, 20, 3);
+
+        // Act
+        let overlay_area = overlay_area_above(container_area, anchor_area, 2);
+
+        // Assert
+        assert_eq!(overlay_area, None);
+    }
+
+    #[test]
+    fn test_panel_inner_width_excludes_horizontal_borders() {
+        // Arrange
+        let area = Rect::new(0, 0, 10, 5);
+
+        // Act
+        let inner_width = panel_inner_width(area, Borders::LEFT | Borders::RIGHT);
+
+        // Assert
+        assert_eq!(inner_width, 8);
+    }
+
+    #[test]
+    fn test_bottom_pinned_scroll_offset_uses_inner_height() {
+        // Arrange
+        let area = Rect::new(0, 0, 20, 5);
+
+        // Act
+        let scroll_offset =
+            bottom_pinned_scroll_offset(area, Borders::TOP | Borders::BOTTOM, 6, None);
+
+        // Assert
+        assert_eq!(scroll_offset, 3);
+    }
+
+    #[test]
+    fn test_bottom_pinned_scroll_offset_preserves_explicit_value() {
+        // Arrange
+        let area = Rect::new(0, 0, 20, 5);
+
+        // Act
+        let scroll_offset =
+            bottom_pinned_scroll_offset(area, Borders::TOP | Borders::BOTTOM, 6, Some(2));
+
+        // Assert
+        assert_eq!(scroll_offset, 2);
     }
 
     #[test]

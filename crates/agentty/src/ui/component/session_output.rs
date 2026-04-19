@@ -12,6 +12,7 @@ use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
+use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::{Component, style, text_util};
 
 const USER_PROMPT_PREFIX: &str = " › ";
@@ -188,10 +189,7 @@ impl<'a> SessionOutput<'a> {
             Self::transcript_sections(status, &output_text, active_prompt_output);
         let completed_turn_text = Self::output_text_with_spaced_user_input(completed_turn_text);
         let active_turn_text = active_turn_text.map(Self::output_text_with_spaced_user_input);
-        let inner_width = output_area
-            .width
-            .saturating_sub(Self::output_horizontal_border_width())
-            as usize;
+        let inner_width = panel_inner_width(output_area, Self::output_panel_borders());
         let (completed_turn_text, trailing_footer_text) =
             text_util::split_trailing_line_block(&completed_turn_text, TRANSCRIPT_FOOTER_PREFIXES);
         let mut lines = Vec::new();
@@ -317,15 +315,6 @@ impl<'a> SessionOutput<'a> {
             &output_text[..active_prompt_start],
             Some(&output_text[active_prompt_start..]),
         )
-    }
-
-    /// Returns horizontal width consumed by the output panel border.
-    fn output_horizontal_border_width() -> u16 {
-        let output_panel_borders = Self::output_panel_borders();
-        let left_border_width = u16::from(output_panel_borders.intersects(Borders::LEFT));
-        let right_border_width = u16::from(output_panel_borders.intersects(Borders::RIGHT));
-
-        left_border_width + right_border_width
     }
 
     /// Returns borders used for the session output panel.
@@ -853,16 +842,6 @@ impl<'a> SessionOutput<'a> {
             PublishedBranchSyncStatus::Succeeded => style::palette::SUCCESS,
         }
     }
-
-    fn final_scroll_offset(&self, output_area: Rect, line_count: usize) -> u16 {
-        if let Some(scroll_offset) = self.scroll_offset {
-            return scroll_offset;
-        }
-
-        let inner_height = output_area.height.saturating_sub(2) as usize;
-
-        u16::try_from(line_count.saturating_sub(inner_height)).unwrap_or(u16::MAX)
-    }
 }
 
 impl Component for SessionOutput<'_> {
@@ -885,7 +864,12 @@ impl Component for SessionOutput<'_> {
             },
             self.markdown_render_cache,
         );
-        let final_scroll = self.final_scroll_offset(output_area, lines.len());
+        let final_scroll = bottom_pinned_scroll_offset(
+            output_area,
+            Self::output_panel_borders(),
+            lines.len(),
+            self.scroll_offset,
+        );
 
         let paragraph = Paragraph::new(lines)
             .block(
@@ -1822,7 +1806,10 @@ mod tests {
         assert_eq!(prompt_line.to_string().trim_end(), " › /model gemini");
         assert_eq!(
             prompt_line.width(),
-            80 - usize::from(SessionOutput::output_horizontal_border_width())
+            panel_inner_width(
+                Rect::new(0, 0, 80, 5),
+                SessionOutput::output_panel_borders()
+            )
         );
         assert_eq!(prompt_line.spans[0].style.fg, Some(style::palette::ACCENT));
         assert!(
@@ -1855,13 +1842,16 @@ mod tests {
     }
 
     #[test]
-    fn test_output_horizontal_border_width_is_zero_without_vertical_borders() {
+    fn test_output_panel_borders_leave_full_inner_width_without_vertical_edges() {
         // Arrange & Act
-        let horizontal_border_width = SessionOutput::output_horizontal_border_width();
+        let inner_width = panel_inner_width(
+            Rect::new(0, 0, 80, 5),
+            SessionOutput::output_panel_borders(),
+        );
         let output_panel_borders = SessionOutput::output_panel_borders();
 
         // Assert
-        assert_eq!(horizontal_border_width, 0);
+        assert_eq!(inner_width, 80);
         assert!(!output_panel_borders.intersects(Borders::LEFT));
         assert!(!output_panel_borders.intersects(Borders::RIGHT));
     }
