@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{DailyActivity, ReviewRequest, SessionFollowUpTask, SessionStats};
@@ -37,9 +37,10 @@ pub const DB_FILE: &str = "agentty.db";
 
 /// Maximum number of pooled `SQLite` connections for the on-disk database.
 ///
-/// A value greater than `1` allows read operations to continue while
-/// background writers flush session output.
-pub const DB_POOL_MAX_CONNECTIONS: u32 = 10;
+/// `SQLite` still serializes writes in WAL mode, so the pool stays small and
+/// biased toward a handful of concurrent readers instead of a large number of
+/// queued writer contenders.
+pub const DB_POOL_MAX_CONNECTIONS: u32 = 4;
 
 /// Thin wrapper around a `SQLite` connection pool providing query methods.
 #[derive(Clone)]
@@ -413,8 +414,9 @@ impl SessionReviewRequestJoinRow {
 impl Database {
     /// Opens the `SQLite` database and runs embedded migrations.
     ///
-    /// Uses up to `DB_POOL_MAX_CONNECTIONS` pooled connections so UI reads do
-    /// not serialize behind frequent background writes.
+    /// Uses up to `DB_POOL_MAX_CONNECTIONS` pooled connections so UI reads can
+    /// stay responsive without oversizing the `SQLite` pool beyond what WAL
+    /// can use effectively.
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created, the database cannot
@@ -428,6 +430,7 @@ impl Database {
             .filename(db_path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new()
@@ -2058,7 +2061,8 @@ impl Database {
     /// Opens an in-memory `SQLite` database and runs migrations.
     ///
     /// This is primarily used by tests and any ephemeral workflows that need
-    /// an isolated database instance.
+    /// an isolated database instance while keeping the same durability and
+    /// foreign-key settings as the on-disk database.
     ///
     /// # Errors
     /// Returns an error if the database connection or migrations fail.
@@ -2066,6 +2070,7 @@ impl Database {
         let options = SqliteConnectOptions::new()
             .filename(":memory:")
             .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new()
@@ -4199,6 +4204,50 @@ WHERE model = ?
             matches!(result, Err(DbError::Io(_))),
             "expected DbError::Io variant"
         );
+    }
+
+    #[tokio::test]
+    async fn open_configures_small_wal_pool_and_normal_synchronous_mode() {
+        // Arrange
+        let temp = tempdir().expect("failed to create temp directory");
+        let db_path = temp.path().join("agentty.db");
+
+        // Act
+        let database = Database::open(&db_path)
+            .await
+            .expect("failed to open database");
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode;")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load journal mode pragma");
+        let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous;")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load synchronous pragma");
+
+        // Assert
+        assert_eq!(
+            database.pool().options().get_max_connections(),
+            DB_POOL_MAX_CONNECTIONS
+        );
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(synchronous, 1, "expected PRAGMA synchronous = NORMAL");
+    }
+
+    #[tokio::test]
+    async fn open_in_memory_uses_single_connection_and_normal_synchronous_mode() {
+        // Arrange, Act
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory database");
+        let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous;")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load synchronous pragma");
+
+        // Assert
+        assert_eq!(database.pool().options().get_max_connections(), 1);
+        assert_eq!(synchronous, 1, "expected PRAGMA synchronous = NORMAL");
     }
 
     // NOTE: `DbError::Migration` is not directly tested because
