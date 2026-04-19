@@ -14,12 +14,13 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
 | Header guidance FYIs | The top status bar now rotates page-specific `FYI:` guidance for the sessions list and session chat once per minute while keeping version and update-state text visible. | Landed |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
+| Chained session workflow | Follow-up tasks can already launch sibling sessions, but each new session still starts from the active project base branch and published review requests always target that same base branch instead of another session branch. | Missing |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, follow-up tasks, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
 
 ## Active Streams
 
-- `Delivery`: project-level landing strategy and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
+- `Delivery`: project-level landing strategy, forge-aware review-request publishing, and chained-session delivery for review-ready sessions, including direct-merge vs. review-request expectations.
 - `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
 - `Session Output`: per-turn execution digests that summarize the commands, changed files, and skill activity users need to review directly in the chat transcript.
@@ -167,6 +168,20 @@ flowchart TD
 
 ## Queued Next
 
+### [8e074c6d-64ad-427f-9262-0769e68a8a2b] Delivery: Chain sessions for stacked review requests
+
+#### Outcome
+
+Review-ready sessions can launch a child session from the current session branch, keep the parent-child relationship visible in Agentty, and publish the child review request against the parent branch so stacked pull requests or merge requests stay ordered.
+
+#### Promote when
+
+Promote when `[17a9e2ba-0b7d-407d-9cd4-72807ef7bc1f] Delivery: Add project commit strategy selection` lands and the Delivery stream is ready for the next review-workflow outcome.
+
+#### Depends on
+
+`[17a9e2ba-0b7d-407d-9cd4-72807ef7bc1f] Delivery: Add project commit strategy selection`
+
 ### [b5ff4c83-3af4-4df4-905f-80fd7e8f9d49] Session Output: Capture Claude turn activity
 
 #### Outcome
@@ -216,6 +231,7 @@ No parked user-facing cards right now.
 ## Context Notes
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
+- `Delivery: Chain sessions for stacked review requests` should build on the existing follow-up-task sibling-session flow, persist session lineage, and let review-request publishing target the parent session branch instead of always targeting the project base branch.
 - `Protocol: Replace reset replay with compact session memory` should stay restart-specific, preserve the first-turn bootstrap prompt, and reuse the already-compact steady-state follow-up path instead of inventing another session-memory format.
 - `Session Output: Define turn activity storage and protocol base` should introduce the shared DB and protocol shape plus git-derived changed-file CRUD classification once so the Claude, Gemini, and Codex capture cards all target the same stored summary contract.
 - `Session Output` provider capture cards should map Claude, Gemini, and Codex activity surfaces into that shared contract instead of inventing provider-specific transcript formats.
