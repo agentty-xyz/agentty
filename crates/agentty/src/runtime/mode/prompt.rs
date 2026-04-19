@@ -1357,6 +1357,28 @@ mod tests {
         new_test_prompt_app_with_session_mode(input_text, at_mention_state, true).await
     }
 
+    /// Waits until the app emits an `AtMentionEntriesLoaded` event and skips
+    /// unrelated background events produced during startup.
+    async fn wait_for_at_mention_entries_event(app: &mut App) -> crate::app::AppEvent {
+        let timeout = std::time::Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now() + timeout;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let next_event = tokio::time::timeout(remaining, app.next_app_event())
+                .await
+                .expect("at-mention event should arrive")
+                .expect("at-mention event channel closed unexpectedly");
+
+            if matches!(
+                next_event,
+                crate::app::AppEvent::AtMentionEntriesLoaded { .. }
+            ) {
+                return next_event;
+            }
+        }
+    }
+
     #[test]
     fn test_is_plain_char_key_for_plain_character() {
         // Arrange
@@ -2580,11 +2602,7 @@ mod tests {
 
         // Act
         handle_prompt_char(&mut app, '@');
-        let next_event =
-            tokio::time::timeout(std::time::Duration::from_secs(1), app.next_app_event())
-                .await
-                .expect("at-mention event should arrive")
-                .expect("at-mention event channel closed unexpectedly");
+        let next_event = wait_for_at_mention_entries_event(&mut app).await;
 
         // Assert
         match next_event {

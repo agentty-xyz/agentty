@@ -61,7 +61,7 @@ use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::git::{GitClient, RealGitClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server, db};
-use crate::runtime::mode::{question, sync_blocked};
+use crate::runtime::mode::{at_mention, question, sync_blocked};
 use crate::ui::markdown;
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationViewMode, DoneSessionOutputMode, QuestionFocus,
@@ -1388,7 +1388,8 @@ impl App {
         Ok(())
     }
 
-    /// Deletes the selected session and schedules list refresh.
+    /// Deletes the selected session, clears transient review and `@`-mention
+    /// state for that session, and schedules list refresh.
     pub async fn delete_selected_session(&mut self) {
         let session_id = self.selected_session().map(|session| session.id.clone());
         self.sessions
@@ -1396,6 +1397,7 @@ impl App {
             .await;
 
         if let Some(session_id) = session_id {
+            at_mention::clear_pending_load(&session_id);
             self.review_cache.remove(&session_id);
         }
 
@@ -1404,7 +1406,8 @@ impl App {
     }
 
     /// Deletes the selected session while deferring worktree filesystem cleanup
-    /// to a background task.
+    /// to a background task, and clears transient review and `@`-mention
+    /// state for that session.
     pub async fn delete_selected_session_deferred_cleanup(&mut self) {
         let session_id = self.selected_session().map(|session| session.id.clone());
         self.sessions
@@ -1412,6 +1415,7 @@ impl App {
             .await;
 
         if let Some(session_id) = session_id {
+            at_mention::clear_pending_load(&session_id);
             self.review_cache.remove(&session_id);
         }
 

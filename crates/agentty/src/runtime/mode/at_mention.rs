@@ -1,11 +1,24 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::app::AppEvent;
 use crate::domain::input::InputState;
 use crate::infra::file_index::{self, FileEntry};
 use crate::ui::state::prompt::PromptAtMentionState;
+
+/// Delay applied before a fresh `@`-mention filesystem walk starts.
+const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
+/// Monotonic counter used to distinguish stale and current load tasks.
+static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+/// Per-session debounced file-index tasks keyed by session identifier.
+static PENDING_AT_MENTION_LOADS: LazyLock<Mutex<HashMap<String, PendingAtMentionLoad>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Describes how one mode should update its visible `@`-mention state after an
 /// input edit or cursor move.
@@ -30,6 +43,14 @@ pub(crate) struct AtMentionSelection {
     pub at_start: usize,
 }
 
+/// Tracks one debounced background file-index load for a session.
+struct PendingAtMentionLoad {
+    /// Background task that sleeps, walks, and publishes the latest entries.
+    handle: JoinHandle<()>,
+    /// Monotonic identifier used to ignore stale completions.
+    request_id: u64,
+}
+
 /// Returns the next `@`-mention sync action for one input buffer and dropdown
 /// state pair.
 pub(crate) fn sync_action(
@@ -52,7 +73,12 @@ pub(crate) fn start_loading_entries(
     lookup_root: PathBuf,
     session_id: String,
 ) {
-    tokio::spawn(async move {
+    let request_id = NEXT_AT_MENTION_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let tracked_session_id = session_id.clone();
+    let task_session_id = session_id.clone();
+    let handle = tokio::spawn(async move {
+        tokio::time::sleep(AT_MENTION_LOAD_DEBOUNCE).await;
+
         let entries = tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root))
             .await
             .unwrap_or_default();
@@ -62,7 +88,42 @@ pub(crate) fn start_loading_entries(
             entries,
             session_id,
         });
+
+        finish_pending_load(&task_session_id, request_id);
     });
+
+    track_pending_load(tracked_session_id, request_id, handle);
+}
+
+/// Aborts and removes any pending debounced load for one session.
+pub(crate) fn clear_pending_load(session_id: &str) {
+    if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
+        && let Some(pending_load) = pending_loads.remove(session_id)
+    {
+        pending_load.handle.abort();
+    }
+}
+
+/// Stores the latest pending load task for one session and aborts any stale
+/// debounced predecessor.
+fn track_pending_load(session_id: String, request_id: u64, handle: JoinHandle<()>) {
+    if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
+        && let Some(previous_task) =
+            pending_loads.insert(session_id, PendingAtMentionLoad { handle, request_id })
+    {
+        previous_task.handle.abort();
+    }
+}
+
+/// Clears a pending task entry when the completing request is still current.
+fn finish_pending_load(session_id: &str, request_id: u64) {
+    if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
+        && pending_loads
+            .get(session_id)
+            .is_some_and(|task| task.request_id == request_id)
+    {
+        pending_loads.remove(session_id);
+    }
 }
 
 /// Returns the directory that should back one active `@`-mention lookup.
@@ -149,6 +210,8 @@ fn format_mention_text(entry: &FileEntry) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
 
     #[test]
@@ -234,5 +297,71 @@ mod tests {
 
         // Assert
         assert_eq!(lookup_root, project_working_dir);
+    }
+
+    #[tokio::test]
+    async fn test_start_loading_entries_aborts_stale_debounced_loads() {
+        // Arrange
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let event_session_id = "session-1".to_string();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        std::fs::write(temp_dir.path().join("first.txt"), "").expect("write first file");
+
+        start_loading_entries(
+            event_tx.clone(),
+            temp_dir.path().to_path_buf(),
+            event_session_id.clone(),
+        );
+
+        std::fs::write(temp_dir.path().join("second.txt"), "").expect("write second file");
+
+        // Act
+        start_loading_entries(
+            event_tx,
+            temp_dir.path().to_path_buf(),
+            event_session_id.clone(),
+        );
+        let next_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("at-mention event should arrive")
+            .expect("event channel should stay open");
+
+        // Assert
+        match next_event {
+            AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id,
+            } => {
+                assert_eq!(session_id, event_session_id);
+                assert!(entries.iter().any(|entry| entry.path == "second.txt"));
+            }
+            _ => unreachable!("expected at-mention entries event"),
+        }
+
+        let extra_event = tokio::time::timeout(Duration::from_millis(250), event_rx.recv()).await;
+        assert!(!matches!(
+            extra_event,
+            Ok(Some(AppEvent::AtMentionEntriesLoaded { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_clear_pending_load_aborts_pending_task_for_session() {
+        // Arrange
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let session_id = "session-1".to_string();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+
+        start_loading_entries(event_tx, temp_dir.path().to_path_buf(), session_id.clone());
+
+        // Act
+        clear_pending_load(&session_id);
+
+        // Assert
+        let next_event = tokio::time::timeout(Duration::from_millis(250), event_rx.recv()).await;
+        assert!(!matches!(
+            next_event,
+            Ok(Some(AppEvent::AtMentionEntriesLoaded { .. }))
+        ));
     }
 }
