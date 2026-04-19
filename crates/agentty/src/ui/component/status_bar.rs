@@ -5,21 +5,26 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::UpdateStatus;
+use crate::ui::page::fyi;
 use crate::ui::{Component, style};
 
 /// Top status bar showing current version, update progress, and availability.
-pub struct StatusBar {
+pub struct StatusBar<'a> {
     current_version: String,
     latest_available_version: Option<String>,
+    page_fyis: Option<&'a [&'static str]>,
+    fyi_rotation_index: u64,
     update_status: Option<UpdateStatus>,
 }
 
-impl StatusBar {
+impl<'a> StatusBar<'a> {
     /// Creates a status bar with the current version.
     pub fn new(current_version: String) -> Self {
         Self {
             current_version,
             latest_available_version: None,
+            page_fyis: None,
+            fyi_rotation_index: 0,
             update_status: None,
         }
     }
@@ -28,6 +33,22 @@ impl StatusBar {
     #[must_use]
     pub fn latest_available_version(mut self, version: Option<String>) -> Self {
         self.latest_available_version = version;
+        self
+    }
+
+    /// Sets the page-scoped FYI messages available for rotation in the top
+    /// status bar.
+    #[must_use]
+    pub fn page_fyis(mut self, page_fyis: Option<&'a [&'static str]>) -> Self {
+        self.page_fyis = page_fyis;
+        self
+    }
+
+    /// Sets the absolute one-minute FYI rotation slot used to select the
+    /// visible page-scoped message.
+    #[must_use]
+    pub fn fyi_rotation_index(mut self, fyi_rotation_index: u64) -> Self {
+        self.fyi_rotation_index = fyi_rotation_index;
         self
     }
 
@@ -54,9 +75,16 @@ impl StatusBar {
             Some(UpdateStatus::Failed { .. }) | None => None,
         }
     }
+
+    /// Returns the currently visible page-scoped FYI message, when available.
+    fn page_fyi_text(&self) -> Option<&str> {
+        let page_fyis = self.page_fyis?;
+
+        fyi::rotating_message(page_fyis, self.fyi_rotation_index)
+    }
 }
 
-impl Component for StatusBar {
+impl Component for StatusBar<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let mut version_spans = vec![Span::styled(
             format!(" Agentty {}", self.current_version),
@@ -84,6 +112,14 @@ impl Component for StatusBar {
             ));
         }
 
+        if let Some(page_fyi_text) = self.page_fyi_text() {
+            version_spans.push(Span::raw(" | "));
+            version_spans.push(Span::styled(
+                format!("FYI: {page_fyi_text}"),
+                Style::default().fg(style::palette::TEXT_MUTED),
+            ));
+        }
+
         let status_bar = Paragraph::new(Line::from(version_spans)).style(
             Style::default()
                 .bg(style::palette::SURFACE)
@@ -96,6 +132,7 @@ impl Component for StatusBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::page;
 
     /// Flattens a test backend buffer into plain text for assertions.
     fn buffer_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
@@ -145,6 +182,28 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("Agentty v0.1.12"));
         assert!(!text.contains("version available update"));
+    }
+
+    #[test]
+    fn test_status_bar_render_shows_rotating_page_fyi_prefix() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let status_bar = StatusBar::new("v0.1.12".to_string())
+            .page_fyis(Some(page::fyi::session_list_messages()))
+            .fyi_rotation_index(1);
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Component::render(&status_bar, frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(&terminal);
+        assert!(text.contains("FYI: Agentty refreshes PR statuses every minute."));
     }
 
     #[test]
@@ -216,6 +275,34 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("Updated to v0.1.13"));
         assert!(text.contains("restart to use new version"));
+    }
+
+    #[test]
+    fn test_status_bar_render_keeps_update_state_visible_with_page_fyi() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(180, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let status_bar = StatusBar::new("v0.1.12".to_string())
+            .page_fyis(Some(page::fyi::session_chat_messages()))
+            .fyi_rotation_index(0)
+            .update_status(Some(UpdateStatus::Complete {
+                version: "v0.1.13".to_string(),
+            }));
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Component::render(&status_bar, frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Updated to v0.1.13"));
+        assert!(text.contains(
+            "FYI: Press ? to inspect the shortcuts available for the current session state."
+        ));
     }
 
     #[test]

@@ -949,6 +949,8 @@ impl App {
         let update_status = self.update_status().cloned();
         let wall_clock_unix_seconds =
             session::unix_timestamp_from_system_time(self.sessions.state().clock.now_system_time());
+        let status_bar_fyi_rotation_index =
+            u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let projects = self.projects.project_items().to_vec();
         let mode = &self.mode;
         let project_table_state = self.projects.project_table_state_mut();
@@ -983,6 +985,7 @@ impl App {
                 settings,
                 stats_activity,
                 sessions,
+                status_bar_fyi_rotation_index,
                 table_state,
                 working_dir: &working_dir,
                 wall_clock_unix_seconds,

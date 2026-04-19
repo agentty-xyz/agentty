@@ -11,7 +11,7 @@ use crate::app::{SettingsManager, Tab, UpdateStatus};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
-use crate::ui::{component, markdown, router};
+use crate::ui::{component, markdown, page, router};
 
 /// A trait for UI pages that enforces a standard rendering interface.
 pub trait Page {
@@ -82,6 +82,8 @@ pub struct RenderContext<'a> {
     pub table_state: &'a mut TableState,
     /// Background auto-update progress state for the status bar.
     pub update_status: Option<&'a UpdateStatus>,
+    /// Absolute one-minute rotation slot used for page-scoped status-bar FYIs.
+    pub status_bar_fyi_rotation_index: u64,
     /// Current wall-clock time expressed as Unix seconds for deterministic
     /// render-time timers.
     pub wall_clock_unix_seconds: i64,
@@ -141,6 +143,11 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
                 .latest_available_version
                 .map(std::string::ToString::to_string),
         )
+        .page_fyis(page::fyi::current_page_messages(
+            context.current_tab,
+            context.mode,
+        ))
+        .fyi_rotation_index(context.status_bar_fyi_rotation_index)
         .update_status(context.update_status.cloned())
         .render(f, status_bar_area);
     render_footer_bar(

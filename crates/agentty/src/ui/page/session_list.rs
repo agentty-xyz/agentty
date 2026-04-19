@@ -536,6 +536,39 @@ mod tests {
     }
 
     #[test]
+    fn test_status_bar_fyi_rotates_between_session_list_messages() {
+        // Arrange
+
+        // Act
+        let first_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_list_messages(),
+            0,
+        );
+        let second_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_list_messages(),
+            1,
+        );
+        let wrapped_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_list_messages(),
+            3,
+        );
+
+        // Assert
+        assert_eq!(
+            first_message,
+            Some("Press Enter to open the selected session.")
+        );
+        assert_eq!(
+            second_message,
+            Some("Agentty refreshes PR statuses every minute.")
+        );
+        assert_eq!(
+            wrapped_message,
+            Some("Agentty refreshes PR statuses every minute.")
+        );
+    }
+
+    #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
         // Arrange
         let highlight_symbol = ROW_HIGHLIGHT_SYMBOL;

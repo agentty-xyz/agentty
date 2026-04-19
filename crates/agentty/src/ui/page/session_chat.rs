@@ -1027,6 +1027,39 @@ mod tests {
     }
 
     #[test]
+    fn test_status_bar_fyi_rotates_between_session_chat_messages() {
+        // Arrange
+
+        // Act
+        let first_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_chat_messages(),
+            0,
+        );
+        let second_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_chat_messages(),
+            1,
+        );
+        let wrapped_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_chat_messages(),
+            2,
+        );
+
+        // Assert
+        assert_eq!(
+            first_message,
+            Some("Press ? to inspect the shortcuts available for the current session state.")
+        );
+        assert_eq!(
+            second_message,
+            Some("Press / to open slash commands without typing into the composer first.")
+        );
+        assert_eq!(
+            wrapped_message,
+            Some("Press ? to inspect the shortcuts available for the current session state.")
+        );
+    }
+
+    #[test]
     /// Shows the launch shortcut in the footer when follow-up tasks exist but
     /// the UI has not stored an explicit task selection yet.
     fn test_view_help_text_defaults_first_follow_up_task_to_launch_action() {

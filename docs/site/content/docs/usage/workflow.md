@@ -40,6 +40,10 @@ The grouped **Sessions** tab also shows that same cumulative active-work timer
 in its own `Timer` column, so in-progress rows keep ticking live there while
 completed sessions retain their frozen total.
 
+The top status bar keeps the current version and update status visible, and it
+also rotates short page-scoped `FYI:` messages once per minute while you are in
+the **Sessions** list or a session chat view.
+
 The footer always shows the active directory. When the current branch tracks an
 upstream, the footer branch badge renders `local -> remote`, for example
 `main -> origin/main`. When you open an active session, the footer switches to

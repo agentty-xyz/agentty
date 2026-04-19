@@ -12,7 +12,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
-| Header guidance FYIs | The top status bar only shows the Agentty version and update state, so it cannot surface page-specific `FYI: ` guidance for the current page yet. | Missing |
+| Header guidance FYIs | The top status bar now rotates page-specific `FYI:` guidance for the sessions list and session chat once per minute while keeping version and update-state text visible. | Landed |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, follow-up tasks, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
@@ -20,7 +20,6 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 ## Active Streams
 
 - `Delivery`: project-level landing strategy and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
-- `Guidance`: page-specific in-app FYIs that help users discover common workflows without expanding footer help.
 - `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
 - `Session Output`: per-turn execution digests that summarize the commands, changed files, and skill activity users need to review directly in the chat transcript.
@@ -123,7 +122,7 @@ All E2E tests in `crates/agentty/tests/e2e/` use the declarative `FeatureTest` b
 
 - [ ] No user-facing doc changes needed — this is an internal test infrastructure migration.
 
-### [6d7f8942-fb29-4f19-b8d2-92a8a3f75d31] Guidance: Rotate page-specific header FYIs
+### [84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Replace reset replay with compact session memory
 
 #### Assignee
 
@@ -131,25 +130,30 @@ All E2E tests in `crates/agentty/tests/e2e/` use the declarative `FeatureTest` b
 
 #### Why now
 
-The top status bar still behaves like a static version banner, so Agentty misses a low-friction place to surface page-aware workflow guidance while users move between the sessions list and session chat.
+Codex and Gemini follow-up turns already reuse a compact reminder after the
+first bootstrap, but provider restarts still force a heavier replay path and
+Claude continues to resend the full wrapper when native session identity is not
+carried across reconnects.
 
 #### Usable outcome
 
-The top status bar rotates page-specific FYIs for the sessions list and session chat, each prefixed with `FYI: ` while still preserving version text and update-state visibility.
+Restarted provider sessions resend a compact structured session-memory summary
+of constraints, open questions, and touched files instead of replaying the full
+transcript whenever a runtime loses native context.
 
 #### Substeps
 
-- [ ] **Add a page-aware FYI contract to the status bar render path.** Update `crates/agentty/src/ui/render.rs`, `crates/agentty/src/ui/component/status_bar.rs`, and `crates/agentty/src/app/core.rs` so the top bar can accept one optional page-scoped FYI plus any rotation timing input without dropping the existing version and update-status messaging.
-- [ ] **Define the first rotating FYI sets for list and chat views.** Update `crates/agentty/src/ui/page/session_list.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and any shared guidance helpers they use so the sessions list and session chat each expose short page-specific FYIs, and render them with the literal `FYI: ` prefix instead of `Hint: `.
-- [ ] **Keep rotation deterministic and scoped to the active page.** Update the touched UI state or runtime plumbing so the active page picks from its own FYI set on the planned one-minute cadence, while unrelated pages and update-progress states continue to render without stale cross-page guidance.
+- [ ] **Define one restart-safe session-memory summary contract.** Update the touched prompt templates and protocol builders in `crates/agentty/src/infra/agent/template/`, `crates/agentty/src/infra/agent/protocol/`, and related prompt-shaping code so restart flows can serialize a compact summary of constraints, open questions, and touched files without replaying the full transcript.
+- [ ] **Route restart and resume flows through the compact memory path.** Update the touched provider and app-server resume plumbing in `crates/agentty/src/infra/agent/`, `crates/agentty/src/infra/app_server/`, and any related session wiring so restarts reuse the compact session-memory summary while the first-turn bootstrap rules stay unchanged.
+- [ ] **Adopt the compact path for Claude without regressing existing follow-up behavior.** Update the touched Claude session wiring and resume coverage so Claude no longer resends the full wrapper after a reset, and keep the already-compact Codex and Gemini follow-up behavior aligned with the shared restart contract.
 
 #### Tests
 
-- [ ] Add or extend coverage in `crates/agentty/src/ui/component/status_bar.rs`, `crates/agentty/src/ui/render.rs`, `crates/agentty/src/ui/page/session_list.rs`, and `crates/agentty/src/ui/page/session_chat.rs` for FYI prefix rendering, page-aware selection, one-minute rotation, and coexistence with version-update status text.
+- [ ] Add or extend coverage in the touched `crates/agentty/src/infra/agent/`, `crates/agentty/src/infra/app_server/`, and protocol-template tests for session-memory serialization, restart-triggered prompt selection, and Claude resume flows that now avoid full-transcript replay.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to describe the rotating header FYIs and the first sessions-list and session-chat guidance they surface.
+- [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/agents/backends.md`, and `docs/site/content/docs/architecture/runtime-flow.md` to describe compact restart memory, the resume path it affects, and the provider behavior changes for restarted sessions.
 
 ### [eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage and protocol base
 
@@ -185,25 +189,11 @@ Completed turns persist one shared activity-summary record and can print a stabl
 flowchart TD
     R1["[17a9e2ba] Delivery: project commit strategy"]
     R2["[a7e41b3c] Quality: draft and prompt feature tests"] --> R3["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
-    R4["[6d7f8942] Guidance: header FYIs"]
+    R4["[84aa58cc] Protocol: compact reset memory"]
     R5["[eff3638c] Session Output: turn activity base"]
 ```
 
 ## Queued Next
-
-### [84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Replace reset replay with compact session memory
-
-#### Outcome
-
-Restarted provider sessions resend a structured session-memory summary of constraints, open questions, and touched files instead of replaying the full transcript whenever a runtime loses native context.
-
-#### Promote when
-
-Promote when the compact app-server follow-up path proves stable enough that restart-specific replay size becomes the next protocol bottleneck.
-
-#### Depends on
-
-`[d9307a06] Protocol: Bootstrap direct agent instructions once per app-server session` (landed)
 
 ### [b5ff4c83-3af4-4df4-905f-80fd7e8f9d49] Session Output: Capture Claude turn activity
 
@@ -254,7 +244,7 @@ No parked user-facing cards right now.
 ## Context Notes
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
-- `Guidance: Rotate page-specific header FYIs` should keep the top bar page-aware, rotate only within the active page's message set, and preserve version plus update-status visibility while it adds `FYI: ` guidance.
+- `Protocol: Replace reset replay with compact session memory` should stay restart-specific, preserve the first-turn bootstrap prompt, and reuse the already-compact steady-state follow-up path instead of inventing another session-memory format.
 - `Session Output: Define turn activity storage and protocol base` should introduce the shared DB and protocol shape plus git-derived changed-file CRUD classification once so the Claude, Gemini, and Codex capture cards all target the same stored summary contract.
 - `Session Output` provider capture cards should map Claude, Gemini, and Codex activity surfaces into that shared contract instead of inventing provider-specific transcript formats.
 - Roadmap entries stay user-facing; implementation validation and documentation belong in each step's `#### Tests` and `#### Docs` sections instead of as standalone backlog cards.

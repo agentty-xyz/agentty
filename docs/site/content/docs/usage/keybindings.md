@@ -25,6 +25,10 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | `Tab` | Switch tab |
 | `?` | Help |
 
+The rotating status-bar `FYI:` messages on the **Sessions** list currently
+surface `Enter` for opening the selected session and remind you that Agentty
+refreshes PR statuses every minute.
+
 ## Project List
 
 | Key | Action |
@@ -133,6 +137,9 @@ Additional notes:
 - **Review**: Runs in read-only review mode. It can use internet lookup
   and non-editing verification commands, but it should not edit files or
   mutate git/workspace state.
+
+The rotating status-bar `FYI:` messages in session chat currently surface `?`
+for session-specific help and `/` for opening slash commands immediately.
 
 ## Publish Popup
 
