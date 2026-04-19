@@ -12,7 +12,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Model availability scoping | Agentty now requires at least one locally runnable backend CLI at startup, `/model` and Settings filter model choices to runnable backends, and unavailable stored defaults fall back to the first available backend default. | Landed |
 | Draft session workflow | `Shift+A` now creates explicit draft sessions that persist ordered staged draft messages, while `a` keeps the immediate-start first-prompt flow. | Landed |
 | Session activity timing | `session` persists cumulative `InProgress` timing fields, and both chat and the grouped session list now show the same cumulative active-work timer. | Landed |
-| Header guidance hints | The top status bar only shows the Agentty version and update state, so it cannot surface page-specific usage hints yet. | Missing |
+| Header guidance FYIs | The top status bar only shows the Agentty version and update state, so it cannot surface page-specific `FYI: ` guidance for the current page yet. | Missing |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, follow-up tasks, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
@@ -20,7 +20,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 ## Active Streams
 
 - `Delivery`: project-level landing strategy and forge-aware review-request publishing for review-ready sessions, including direct-merge vs. review-request expectations.
-- `Guidance`: page-specific in-app hints that help users discover common workflows without expanding footer help.
+- `Guidance`: page-specific in-app FYIs that help users discover common workflows without expanding footer help.
 - `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
 - `Session Output`: per-turn execution digests that summarize the commands, changed files, and skill activity users need to review directly in the chat transcript.
@@ -123,7 +123,7 @@ All E2E tests in `crates/agentty/tests/e2e/` use the declarative `FeatureTest` b
 
 - [ ] No user-facing doc changes needed — this is an internal test infrastructure migration.
 
-### [8d03ed45-0f91-4d1d-b761-2d74f7027ef7] Protocol: Track explicit Claude session identity for one-time bootstrap reuse
+### [6d7f8942-fb29-4f19-b8d2-92a8a3f75d31] Guidance: Rotate page-specific header FYIs
 
 #### Assignee
 
@@ -131,25 +131,25 @@ All E2E tests in `crates/agentty/tests/e2e/` use the declarative `FeatureTest` b
 
 #### Why now
 
-Codex and Gemini already avoid re-sending the full protocol wrapper on every follow-up turn, so Claude is now the remaining provider that still pays that repeated prompt cost because its resumed session identity is not explicit.
+The top status bar still behaves like a static version banner, so Agentty misses a low-friction place to surface page-aware workflow guidance while users move between the sessions list and session chat.
 
 #### Usable outcome
 
-Claude-backed sessions persist one explicit provider session identifier, letting later turns reuse the compact reminder path whenever Claude resumes the same live session and only falling back to full bootstrap replay when that context is actually gone.
+The top status bar rotates page-specific FYIs for the sessions list and session chat, each prefixed with `FYI: ` while still preserving version text and update-state visibility.
 
 #### Substeps
 
-- [ ] **Capture and persist Claude resume identity from successful turns.** Update `crates/agentty/src/infra/channel/cli.rs`, `crates/agentty/src/infra/channel/contract.rs`, and `crates/agentty/src/app/session/workflow/worker.rs` so Claude turn results surface one normalized provider session identifier and store the matching instruction-bootstrap marker after successful session turns instead of treating all Claude resumes as identity-less.
-- [ ] **Reuse the compact reminder when Claude resumes the same live session.** Update `crates/agentty/src/infra/agent/claude.rs`, `crates/agentty/src/infra/agent/instruction.rs`, and `crates/agentty/src/infra/agent/prompt.rs` so Claude resume turns choose `DeltaOnly` when the persisted bootstrap marker still matches the active Claude session identity, while first turns and one-shot prompts keep the full bootstrap path.
-- [ ] **Preserve replay fallback when Claude context changes or resets.** Update `crates/agentty/src/app/session/workflow/lifecycle.rs`, `crates/agentty/src/infra/agent/submission.rs`, and related Claude/session resume plumbing so cleared or replaced Claude session identity still forces the existing full bootstrap plus transcript replay behavior instead of reusing stale prompt state.
+- [ ] **Add a page-aware FYI contract to the status bar render path.** Update `crates/agentty/src/ui/render.rs`, `crates/agentty/src/ui/component/status_bar.rs`, and `crates/agentty/src/app/core.rs` so the top bar can accept one optional page-scoped FYI plus any rotation timing input without dropping the existing version and update-status messaging.
+- [ ] **Define the first rotating FYI sets for list and chat views.** Update `crates/agentty/src/ui/page/session_list.rs`, `crates/agentty/src/ui/page/session_chat.rs`, and any shared guidance helpers they use so the sessions list and session chat each expose short page-specific FYIs, and render them with the literal `FYI: ` prefix instead of `Hint: `.
+- [ ] **Keep rotation deterministic and scoped to the active page.** Update the touched UI state or runtime plumbing so the active page picks from its own FYI set on the planned one-minute cadence, while unrelated pages and update-progress states continue to render without stale cross-page guidance.
 
 #### Tests
 
-- [ ] Add or extend coverage in `crates/agentty/src/infra/channel/cli.rs`, `crates/agentty/src/infra/agent/claude.rs`, `crates/agentty/src/infra/agent/instruction.rs`, and `crates/agentty/src/app/session/workflow/worker.rs` for Claude session-identity extraction, persisted bootstrap-marker reuse, compact reminder selection on matching resumes, and replay fallback after identity loss or change.
+- [ ] Add or extend coverage in `crates/agentty/src/ui/component/status_bar.rs`, `crates/agentty/src/ui/render.rs`, `crates/agentty/src/ui/page/session_list.rs`, and `crates/agentty/src/ui/page/session_chat.rs` for FYI prefix rendering, page-aware selection, one-minute rotation, and coexistence with version-update status text.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/agents/backends.md` and `docs/site/content/docs/architecture/runtime-flow.md` to describe Claude's explicit session identity, its compact-reminder reuse behavior, and the conditions that still trigger full bootstrap replay.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to describe the rotating header FYIs and the first sessions-list and session-chat guidance they surface.
 
 ### [eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage and protocol base
 
@@ -159,7 +159,7 @@ Claude-backed sessions persist one explicit provider session identifier, letting
 
 #### Why now
 
-The Claude session-identity slice closes one protocol gap, and the next workflow bottleneck is that users still cannot review a stable per-turn record of commands, skills, and changed-file CRUD without reading raw stream noise or opening the diff.
+Review-ready workflows and header guidance still leave one transcript gap: users cannot review a stable per-turn record of commands, skills, and changed-file CRUD without reading raw stream noise or opening the diff.
 
 #### Usable outcome
 
@@ -185,25 +185,11 @@ Completed turns persist one shared activity-summary record and can print a stabl
 flowchart TD
     R1["[17a9e2ba] Delivery: project commit strategy"]
     R2["[a7e41b3c] Quality: draft and prompt feature tests"] --> R3["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
-    R4["[8d03ed45] Protocol: Claude session identity"]
+    R4["[6d7f8942] Guidance: header FYIs"]
     R5["[eff3638c] Session Output: turn activity base"]
 ```
 
 ## Queued Next
-
-### [6d7f8942-fb29-4f19-b8d2-92a8a3f75d31] Guidance: Rotate page-specific header hints
-
-#### Outcome
-
-Users see page-aware hints in the top status bar for the sessions list and session chat, with one-minute rotation that keeps version and update-state visibility intact.
-
-#### Promote when
-
-Promote when the current delivery, protocol, and session-output base slices are stable enough that header-level discoverability becomes the next visible workflow improvement.
-
-#### Depends on
-
-None
 
 ### [84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Replace reset replay with compact session memory
 
@@ -268,9 +254,8 @@ No parked user-facing cards right now.
 ## Context Notes
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
-- `Protocol: Track explicit Claude session identity for one-time bootstrap reuse` should land before the broader compact-resume follow-up so Claude sessions stop paying the full bootstrap cost on every turn.
+- `Guidance: Rotate page-specific header FYIs` should keep the top bar page-aware, rotate only within the active page's message set, and preserve version plus update-status visibility while it adds `FYI: ` guidance.
 - `Session Output: Define turn activity storage and protocol base` should introduce the shared DB and protocol shape plus git-derived changed-file CRUD classification once so the Claude, Gemini, and Codex capture cards all target the same stored summary contract.
-- `Guidance: Rotate page-specific header hints` remains queued behind the more immediate delivery, protocol, and session-output workflow slices, but it should keep hint selection page-aware and preserve update-status visibility when it returns to `Ready Now`.
 - `Session Output` provider capture cards should map Claude, Gemini, and Codex activity surfaces into that shared contract instead of inventing provider-specific transcript formats.
 - Roadmap entries stay user-facing; implementation validation and documentation belong in each step's `#### Tests` and `#### Docs` sections instead of as standalone backlog cards.
 - Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work to `Ready Now`.
