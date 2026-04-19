@@ -11,6 +11,7 @@
 
 mod common;
 mod confirmation;
+mod demo;
 mod navigation;
 mod project;
 mod session;
