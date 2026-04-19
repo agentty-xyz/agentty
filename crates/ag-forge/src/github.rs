@@ -206,8 +206,8 @@ impl GitHubReviewRequestAdapter {
 
 /// Builds the `gh auth status` command for one GitHub host.
 fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
-    ForgeCommand::new(
-        "gh",
+    github_command(
+        remote,
         vec![
             "auth".to_string(),
             "status".to_string(),
@@ -215,14 +215,12 @@ fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
             remote.host.clone(),
         ],
     )
-    .with_environment("CLICOLOR", "0")
-    .with_environment("NO_COLOR", "1")
 }
 
 /// Builds the `gh api` lookup command for `source_branch`.
 fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
-    ForgeCommand::new(
-        "gh",
+    github_command(
+        remote,
         vec![
             "api".to_string(),
             "--hostname".to_string(),
@@ -242,17 +240,17 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
             "per_page=1".to_string(),
         ],
     )
-    .with_environment("CLICOLOR", "0")
-    .with_environment("NO_COLOR", "1")
 }
 
 /// Builds the `gh pr create` command for `input`.
 ///
 /// GitHub pull requests default to draft so session-published review requests
 /// do not appear ready for merge before the user chooses to mark them ready.
+/// When a session worktree is available, the command runs there so `gh` does
+/// not inherit a stale process cwd and fail when it shells out to `git`.
 fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> ForgeCommand {
-    ForgeCommand::new(
-        "gh",
+    github_command(
+        remote,
         vec![
             "pr".to_string(),
             "create".to_string(),
@@ -269,14 +267,12 @@ fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> For
             input.body.clone().unwrap_or_default(),
         ],
     )
-    .with_environment("CLICOLOR", "0")
-    .with_environment("NO_COLOR", "1")
 }
 
 /// Builds the `gh pr view` command for one pull-request number.
 fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
-    ForgeCommand::new(
-        "gh",
+    github_command(
+        remote,
         vec![
             "pr".to_string(),
             "view".to_string(),
@@ -289,8 +285,15 @@ fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand
                 .to_string(),
         ],
     )
-    .with_environment("CLICOLOR", "0")
-    .with_environment("NO_COLOR", "1")
+}
+
+/// Builds one base `gh` command with deterministic color settings and the
+/// optional session worktree for repository-aware git fallback commands.
+fn github_command(remote: &ForgeRemote, arguments: Vec<String>) -> ForgeCommand {
+    ForgeCommand::new("gh", arguments)
+        .with_environment("CLICOLOR", "0")
+        .with_environment("NO_COLOR", "1")
+        .with_optional_working_directory(remote.command_working_directory.clone())
 }
 
 /// Parses one optional display id from a GitHub pull-request lookup response.
@@ -422,6 +425,7 @@ impl GitHubViewResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use mockall::Sequence;
@@ -589,6 +593,43 @@ mod tests {
                 .arguments
                 .iter()
                 .any(|argument| argument == "--draft")
+        );
+    }
+
+    #[test]
+    fn github_commands_use_remote_working_directory_for_git_context() {
+        // Arrange
+        let remote =
+            github_remote().with_command_working_directory(PathBuf::from("/tmp/session-worktree"));
+        let input = CreateReviewRequestInput {
+            body: Some("Implements the provider adapters.".to_string()),
+            source_branch: "feature/forge".to_string(),
+            target_branch: "main".to_string(),
+            title: "Add forge review support".to_string(),
+        };
+
+        // Act
+        let auth_command = auth_status_command(&remote);
+        let lookup_command = lookup_command(&remote, "feature/forge");
+        let create_command = create_command(&remote, &input);
+        let view_command = view_command(&remote, "42");
+
+        // Assert
+        assert_eq!(
+            auth_command.working_directory,
+            Some(PathBuf::from("/tmp/session-worktree"))
+        );
+        assert_eq!(
+            lookup_command.working_directory,
+            Some(PathBuf::from("/tmp/session-worktree"))
+        );
+        assert_eq!(
+            create_command.working_directory,
+            Some(PathBuf::from("/tmp/session-worktree"))
+        );
+        assert_eq!(
+            view_command.working_directory,
+            Some(PathBuf::from("/tmp/session-worktree"))
         );
     }
 
