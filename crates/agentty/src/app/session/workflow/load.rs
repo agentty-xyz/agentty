@@ -168,13 +168,14 @@ impl SessionManager {
     }
 
     /// Computes diff-derived session size and line-count totals from one
-    /// worktree folder.
+    /// worktree folder using the injected filesystem boundary.
     pub(crate) async fn session_diff_stats_for_folder(
+        fs_client: &dyn FsClient,
         git_client: &dyn GitClient,
         folder: &Path,
         base_branch: &str,
     ) -> (SessionSize, u64, u64) {
-        if !folder.is_dir() {
+        if !fs_client.is_dir(folder.to_path_buf()) {
             return (SessionSize::Xs, 0, 0);
         }
 

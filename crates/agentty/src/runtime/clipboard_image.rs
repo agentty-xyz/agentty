@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use arboard::Clipboard;
-use image::{ExtendedColorType, ImageFormat};
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 
 use crate::app::{self, session};
+use crate::infra::fs::{self, FsClient};
 
 /// Typed error returned by clipboard image capture and persistence operations.
 ///
@@ -45,8 +47,8 @@ pub(crate) enum ClipboardError {
     Persist {
         /// Human-readable operation label.
         context: &'static str,
-        /// Underlying I/O error.
-        source: std::io::Error,
+        /// Underlying filesystem-boundary error.
+        source: fs::FsError,
     },
 
     /// The image encoding or buffer-save operation failed.
@@ -55,7 +57,7 @@ pub(crate) enum ClipboardError {
 
     /// The persisted image path could not be resolved to an absolute path.
     #[error("Failed to resolve pasted image path: {0}")]
-    PathResolve(std::io::Error),
+    PathResolve(fs::FsError),
 
     /// The session identifier is empty.
     #[error("Session id is missing for clipboard image temp storage")]
@@ -82,58 +84,21 @@ pub(crate) struct PersistedClipboardImage {
 ///
 /// # Errors
 /// Returns a [`ClipboardError`] when clipboard access fails, the clipboard
-/// does not expose an image payload, or the PNG cannot be written.
+/// does not expose an image payload, or the PNG cannot be persisted through
+/// the filesystem boundary.
 pub(crate) async fn persist_clipboard_image(
     session_id: &str,
     attachment_number: usize,
+    fs_client: &dyn FsClient,
 ) -> Result<PersistedClipboardImage, ClipboardError> {
-    let session_id = session_id.to_string();
+    let image_output_path = build_clipboard_image_path(session_id, attachment_number)?;
+    let clipboard_payload = read_clipboard_payload().await?;
 
-    tokio::task::spawn_blocking(move || {
-        let image_output_path = build_clipboard_image_path(&session_id, attachment_number)?;
-        let mut clipboard = Clipboard::new().map_err(|error| ClipboardError::Unavailable {
-            reason: error.to_string(),
-        })?;
+    persist_clipboard_payload(fs_client, &image_output_path, clipboard_payload).await?;
 
-        if let Ok(image_data) = clipboard.get_image() {
-            std::fs::create_dir_all(
-                image_output_path
-                    .parent()
-                    .ok_or(ClipboardError::MissingDirectory)?,
-            )
-            .map_err(|source| ClipboardError::Persist {
-                context: "Failed to create clipboard image directory",
-                source,
-            })?;
-
-            image::save_buffer_with_format(
-                &image_output_path,
-                image_data.bytes.as_ref(),
-                u32::try_from(image_data.width)
-                    .map_err(|_| ClipboardError::DimensionOverflow { dimension: "width" })?,
-                u32::try_from(image_data.height).map_err(|_| {
-                    ClipboardError::DimensionOverflow {
-                        dimension: "height",
-                    }
-                })?,
-                ExtendedColorType::Rgba8,
-                ImageFormat::Png,
-            )
-            .map_err(ClipboardError::ImageEncode)?;
-
-            Ok(PersistedClipboardImage {
-                local_image_path: canonicalize_persisted_image_path(&image_output_path)?,
-            })
-        } else {
-            try_copy_png_path_from_clipboard_text(&mut clipboard, &image_output_path)?;
-
-            Ok(PersistedClipboardImage {
-                local_image_path: canonicalize_persisted_image_path(&image_output_path)?,
-            })
-        }
+    Ok(PersistedClipboardImage {
+        local_image_path: canonicalize_persisted_image_path(fs_client, &image_output_path).await?,
     })
-    .await
-    .map_err(ClipboardError::TaskJoin)?
 }
 
 /// Normalizes one [`ClipboardError`] into short prompt-mode status text.
@@ -221,12 +186,8 @@ fn session_temp_directory_name(session_id: &str) -> Result<&str, ClipboardError>
 /// path.
 ///
 /// # Errors
-/// Returns an error when clipboard text is unavailable, is not a PNG path, or
-/// the file copy fails.
-fn try_copy_png_path_from_clipboard_text(
-    clipboard: &mut Clipboard,
-    image_output_path: &Path,
-) -> Result<(), ClipboardError> {
+/// Returns an error when clipboard text is unavailable or is not a PNG path.
+fn clipboard_png_path_from_text(clipboard: &mut Clipboard) -> Result<PathBuf, ClipboardError> {
     let clipboard_text = clipboard.get_text().map_err(|_| ClipboardError::NoImage)?;
     let source_image_path = PathBuf::from(clipboard_text.trim());
 
@@ -238,27 +199,36 @@ fn try_copy_png_path_from_clipboard_text(
         return Err(ClipboardError::NoImage);
     }
 
-    if !source_image_path.is_file() {
-        return Err(ClipboardError::PngPathNotFound);
-    }
+    Ok(source_image_path)
+}
 
-    std::fs::create_dir_all(
-        image_output_path
-            .parent()
-            .ok_or(ClipboardError::MissingDirectory)?,
-    )
-    .map_err(|source| ClipboardError::Persist {
-        context: "Failed to create clipboard image directory",
-        source,
-    })?;
-    std::fs::copy(&source_image_path, image_output_path).map_err(|source| {
-        ClipboardError::Persist {
-            context: "Failed to copy clipboard PNG file",
-            source,
+/// Reads one clipboard image payload on a blocking thread.
+///
+/// # Errors
+/// Returns an error when clipboard access fails, image encoding fails, or the
+/// clipboard does not contain image data or a PNG file path.
+async fn read_clipboard_payload() -> Result<ClipboardPayload, ClipboardError> {
+    tokio::task::spawn_blocking(move || {
+        let mut clipboard = Clipboard::new().map_err(|error| ClipboardError::Unavailable {
+            reason: error.to_string(),
+        })?;
+
+        if let Ok(image_data) = clipboard.get_image() {
+            let encoded_png = encode_clipboard_image_to_png(
+                image_data.bytes.as_ref(),
+                image_data.width,
+                image_data.height,
+            )?;
+
+            Ok(ClipboardPayload::EncodedPng(encoded_png))
+        } else {
+            Ok(ClipboardPayload::ExistingPngPath(
+                clipboard_png_path_from_text(&mut clipboard)?,
+            ))
         }
-    })?;
-
-    Ok(())
+    })
+    .await
+    .map_err(ClipboardError::TaskJoin)?
 }
 
 /// Resolves one persisted image path to the exact absolute filesystem path
@@ -267,13 +237,106 @@ fn try_copy_png_path_from_clipboard_text(
 /// # Errors
 /// Returns [`ClipboardError::PathResolve`] when the persisted file cannot be
 /// resolved from disk.
-fn canonicalize_persisted_image_path(image_output_path: &Path) -> Result<PathBuf, ClipboardError> {
-    std::fs::canonicalize(image_output_path).map_err(ClipboardError::PathResolve)
+async fn canonicalize_persisted_image_path(
+    fs_client: &dyn FsClient,
+    image_output_path: &Path,
+) -> Result<PathBuf, ClipboardError> {
+    fs_client
+        .canonicalize(image_output_path.to_path_buf())
+        .await
+        .map_err(ClipboardError::PathResolve)
+}
+
+/// Clipboard image payload extracted on the blocking clipboard thread.
+enum ClipboardPayload {
+    /// Raw image bytes already encoded into PNG format.
+    EncodedPng(Vec<u8>),
+    /// Existing PNG file path referenced by clipboard text.
+    ExistingPngPath(PathBuf),
+}
+
+/// Encodes one clipboard image buffer into PNG bytes.
+///
+/// # Errors
+/// Returns an error when either image dimension exceeds the `u32` range or
+/// the PNG encoder fails.
+fn encode_clipboard_image_to_png(
+    image_bytes: &[u8],
+    width: usize,
+    height: usize,
+) -> Result<Vec<u8>, ClipboardError> {
+    let image_width = u32::try_from(width)
+        .map_err(|_| ClipboardError::DimensionOverflow { dimension: "width" })?;
+    let image_height = u32::try_from(height).map_err(|_| ClipboardError::DimensionOverflow {
+        dimension: "height",
+    })?;
+    let mut encoded_png = Vec::new();
+
+    PngEncoder::new(&mut encoded_png)
+        .write_image(
+            image_bytes,
+            image_width,
+            image_height,
+            ExtendedColorType::Rgba8,
+        )
+        .map_err(ClipboardError::ImageEncode)?;
+
+    Ok(encoded_png)
+}
+
+/// Persists one clipboard payload through the injected filesystem boundary.
+///
+/// # Errors
+/// Returns an error when directory creation, file reads or writes, or PNG-path
+/// validation fails.
+async fn persist_clipboard_payload(
+    fs_client: &dyn FsClient,
+    image_output_path: &Path,
+    clipboard_payload: ClipboardPayload,
+) -> Result<(), ClipboardError> {
+    let image_directory = image_output_path
+        .parent()
+        .ok_or(ClipboardError::MissingDirectory)?
+        .to_path_buf();
+
+    fs_client
+        .create_dir_all(image_directory)
+        .await
+        .map_err(|source| ClipboardError::Persist {
+            context: "Failed to create clipboard image directory",
+            source,
+        })?;
+
+    let image_bytes = match clipboard_payload {
+        ClipboardPayload::EncodedPng(encoded_png) => encoded_png,
+        ClipboardPayload::ExistingPngPath(source_image_path) => {
+            if !fs_client.is_file(source_image_path.clone()) {
+                return Err(ClipboardError::PngPathNotFound);
+            }
+
+            fs_client
+                .read_file(source_image_path)
+                .await
+                .map_err(|source| ClipboardError::Persist {
+                    context: "Failed to read clipboard PNG file",
+                    source,
+                })?
+        }
+    };
+
+    fs_client
+        .write_file(image_output_path.to_path_buf(), image_bytes)
+        .await
+        .map_err(|source| ClipboardError::Persist {
+            context: "Failed to write pasted image PNG",
+            source,
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::fs;
 
     struct FixedClock {
         system_time: std::time::SystemTime,
@@ -358,22 +421,111 @@ mod tests {
         assert!(matches!(result, Err(ClipboardError::EmptySessionId)));
     }
 
-    #[test]
-    fn test_canonicalize_persisted_image_path_returns_absolute_file_path() {
+    #[tokio::test]
+    async fn test_canonicalize_persisted_image_path_returns_absolute_file_path() {
         // Arrange
         let temp_dir = tempfile::tempdir().expect("temp dir should exist");
         let image_path = temp_dir.path().join("image.png");
         std::fs::write(&image_path, b"png").expect("image file should be written");
+        let fs_client = fs::RealFsClient;
 
         // Act
-        let canonicalized_path =
-            canonicalize_persisted_image_path(&image_path).expect("image path should canonicalize");
+        let canonicalized_path = canonicalize_persisted_image_path(&fs_client, &image_path)
+            .await
+            .expect("image path should canonicalize");
 
         // Assert
         assert_eq!(
             canonicalized_path,
             std::fs::canonicalize(&image_path).expect("std canonicalize should succeed")
         );
+    }
+
+    /// Verifies clipboard payload persistence writes encoded PNG bytes through
+    /// the filesystem boundary.
+    #[tokio::test]
+    async fn test_persist_clipboard_payload_writes_png_bytes_with_fs_client() {
+        // Arrange
+        let image_output_path = PathBuf::from("/tmp/agentty/image.png");
+        let expected_directory = image_output_path
+            .parent()
+            .expect("image path should have a parent")
+            .to_path_buf();
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client
+            .expect_create_dir_all()
+            .once()
+            .returning(move |path| {
+                let expected_directory = expected_directory.clone();
+                Box::pin(async move {
+                    assert_eq!(path, expected_directory);
+
+                    Ok(())
+                })
+            });
+        let expected_write_path = image_output_path.clone();
+        fs_client
+            .expect_write_file()
+            .once()
+            .returning(move |path, contents| {
+                let image_output_path = expected_write_path.clone();
+                Box::pin(async move {
+                    assert_eq!(path, image_output_path);
+                    assert_eq!(contents, b"png-bytes");
+
+                    Ok(())
+                })
+            });
+
+        // Act
+        let result = persist_clipboard_payload(
+            &fs_client,
+            image_output_path.as_path(),
+            ClipboardPayload::EncodedPng(b"png-bytes".to_vec()),
+        )
+        .await;
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    /// Verifies clipboard payload persistence rejects missing PNG source paths
+    /// before attempting a filesystem read.
+    #[tokio::test]
+    async fn test_persist_clipboard_payload_rejects_missing_png_source_path() {
+        // Arrange
+        let image_output_path = PathBuf::from("/tmp/agentty/image.png");
+        let source_image_path = PathBuf::from("/tmp/source.png");
+        let expected_directory = image_output_path
+            .parent()
+            .expect("image path should have a parent")
+            .to_path_buf();
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client
+            .expect_create_dir_all()
+            .once()
+            .returning(move |path| {
+                let expected_directory = expected_directory.clone();
+                Box::pin(async move {
+                    assert_eq!(path, expected_directory);
+
+                    Ok(())
+                })
+            });
+        fs_client.expect_is_file().once().returning(|_| false);
+        fs_client.expect_read_file().times(0);
+        fs_client.expect_write_file().times(0);
+
+        // Act
+        let result = persist_clipboard_payload(
+            &fs_client,
+            image_output_path.as_path(),
+            ClipboardPayload::ExistingPngPath(source_image_path),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Err(ClipboardError::PngPathNotFound)));
     }
 
     #[test]

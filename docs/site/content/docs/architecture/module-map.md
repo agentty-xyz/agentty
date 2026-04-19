@@ -189,6 +189,9 @@ also writes a machine-readable workspace summary to
   spawn wiring for piped stdin or stdout runtimes.
 - `crates/agentty/src/infra/file_index.rs`: Gitignore-aware file indexing and
   fuzzy filtering for `@` mentions in prompts.
+- `crates/agentty/src/infra/project_discovery.rs`: `ProjectDiscoveryClient`
+  trait plus the home-directory git-repository scan used by startup catalog
+  refresh without leaking directory walking into `app/`.
 - `crates/agentty/src/infra/tmux.rs`: `TmuxClient` trait and tmux subprocess
   adapter used by `App` worktree-open orchestration.
 - `crates/agentty/src/infra/version.rs`: Version checking infrastructure.

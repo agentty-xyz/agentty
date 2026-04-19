@@ -191,7 +191,8 @@ impl SessionManager {
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
-        if folder.exists() {
+        let fs_client = services.fs_client();
+        if fs_client.exists(folder.clone()) {
             return Err(SessionError::Workflow(format!(
                 "Session folder {session_id} already exists"
             )));
@@ -2242,6 +2243,10 @@ mod tests {
             .times(0..)
             .returning(|_| Box::pin(async { Ok(()) }));
         mock_fs_client
+            .expect_exists()
+            .times(0..)
+            .returning(|path| path.exists());
+        mock_fs_client
             .expect_is_dir()
             .times(0..)
             .returning(|path| path.is_dir());
@@ -2595,6 +2600,10 @@ mod tests {
             .expect_remove_file()
             .times(0..)
             .returning(|_| Box::pin(async { Ok(()) }));
+        mock_fs_client
+            .expect_exists()
+            .times(0..)
+            .returning(|path| path.exists());
         mock_fs_client
             .expect_is_dir()
             .times(0..)

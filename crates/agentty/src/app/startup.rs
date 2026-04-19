@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ignore::WalkBuilder;
 use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
@@ -18,13 +17,8 @@ use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::infra::db::Database;
 use crate::infra::fs::FsClient;
 use crate::infra::git::{GitClient, detect_git_info};
+use crate::infra::project_discovery::ProjectDiscoveryClient;
 use crate::ui::page::session_list::preferred_initial_session_index;
-
-/// Maximum directory depth to scan under the user home for git repositories.
-pub(crate) const HOME_PROJECT_SCAN_MAX_DEPTH: usize = 5;
-
-/// Maximum number of repositories discovered from one home-directory scan.
-pub(crate) const HOME_PROJECT_SCAN_MAX_RESULTS: usize = 200;
 
 /// Startup project context resolved before the first render.
 pub(crate) struct StartupProjectContext {
@@ -104,6 +98,7 @@ impl AppStartup {
         db: &Database,
         fs_client: &dyn FsClient,
         git_client: &Arc<dyn GitClient>,
+        project_discovery_client: &dyn ProjectDiscoveryClient,
         working_dir: &Path,
         git_branch: Option<String>,
         current_project_id: i64,
@@ -159,7 +154,7 @@ impl AppStartup {
                     startup_working_dir.display()
                 ))
             })?;
-        Self::refresh_project_catalog_on_startup(db).await;
+        Self::refresh_project_catalog_on_startup(db, project_discovery_client).await;
 
         let project_items = Self::load_project_items(db, fs_client).await;
         let active_project_name =
@@ -287,23 +282,29 @@ impl AppStartup {
         .collect()
     }
 
-    /// Refreshes the persisted project catalog from the user home directory.
-    pub(crate) async fn refresh_project_catalog_on_startup(db: &Database) {
+    /// Refreshes the persisted project catalog from the user home directory
+    /// through the injected project-discovery boundary.
+    pub(crate) async fn refresh_project_catalog_on_startup(
+        db: &Database,
+        project_discovery_client: &dyn ProjectDiscoveryClient,
+    ) {
         let session_worktree_root = super::core::agentty_home().join(AGENTTY_WT_DIR);
         let home_directory = dirs::home_dir();
 
         Self::load_projects_from_home_directory(
             db,
+            project_discovery_client,
             session_worktree_root.as_path(),
             home_directory.as_deref(),
         )
         .await;
     }
 
-    /// Discovers git repositories under the user home directory and persists
-    /// them.
+    /// Discovers git repositories under the user home directory through the
+    /// injected project-discovery boundary and persists them.
     pub(crate) async fn load_projects_from_home_directory(
         db: &Database,
+        project_discovery_client: &dyn ProjectDiscoveryClient,
         session_worktree_root: &Path,
         home_directory: Option<&Path>,
     ) {
@@ -311,14 +312,9 @@ impl AppStartup {
             return;
         };
 
-        let session_worktree_root = session_worktree_root.to_path_buf();
-        let Ok(discovered_project_paths) = tokio::task::spawn_blocking(move || {
-            Self::discover_home_project_paths(
-                home_directory.as_path(),
-                session_worktree_root.as_path(),
-            )
-        })
-        .await
+        let Ok(discovered_project_paths) = project_discovery_client
+            .discover_home_project_paths(home_directory, session_worktree_root.to_path_buf())
+            .await
         else {
             return;
         };
@@ -334,55 +330,18 @@ impl AppStartup {
     }
 
     /// Returns git repository roots discovered under the user home directory.
+    ///
+    /// Tests call through the real project-discovery implementation so app
+    /// orchestration no longer owns raw filesystem walking logic.
+    #[cfg(test)]
     pub(crate) fn discover_home_project_paths(
         home_directory: &Path,
         session_worktree_root: &Path,
     ) -> Vec<PathBuf> {
-        let mut discovered_project_paths = Vec::new();
-
-        let mut walker_builder = WalkBuilder::new(home_directory);
-        walker_builder
-            .max_depth(Some(HOME_PROJECT_SCAN_MAX_DEPTH))
-            .hidden(true)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .parents(true)
-            .ignore(true);
-        let walker = walker_builder.build();
-
-        for directory_entry in walker.flatten() {
-            let Some(file_type) = directory_entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() {
-                continue;
-            }
-
-            let directory_path = directory_entry.path();
-            if directory_path == home_directory {
-                continue;
-            }
-            if Self::is_session_worktree_project_path(
-                directory_path.to_string_lossy().as_ref(),
-                session_worktree_root,
-            ) {
-                continue;
-            }
-            if !directory_path.join(".git").exists() {
-                continue;
-            }
-
-            discovered_project_paths.push(directory_path.to_path_buf());
-            if discovered_project_paths.len() >= HOME_PROJECT_SCAN_MAX_RESULTS {
-                break;
-            }
-        }
-
-        discovered_project_paths.sort();
-        discovered_project_paths.dedup();
-
-        discovered_project_paths
+        crate::infra::project_discovery::discover_home_project_paths(
+            home_directory,
+            session_worktree_root,
+        )
     }
 
     /// Returns whether a persisted project path points to an agentty worktree.

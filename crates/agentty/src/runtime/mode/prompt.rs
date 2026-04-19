@@ -593,8 +593,12 @@ async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext
         _ => return,
     };
 
-    match clipboard_image::persist_clipboard_image(&prompt_context.session_id, attachment_number)
-        .await
+    match clipboard_image::persist_clipboard_image(
+        &prompt_context.session_id,
+        attachment_number,
+        app.services.fs_client().as_ref(),
+    )
+    .await
     {
         Ok(persisted_image) => {
             insert_pasted_image_placeholder(app, persisted_image.local_image_path);

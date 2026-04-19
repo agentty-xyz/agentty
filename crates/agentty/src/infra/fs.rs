@@ -57,6 +57,16 @@ pub trait FsClient: Send + Sync {
     /// than the file already being absent.
     fn remove_file(&self, path: PathBuf) -> FsFuture<Result<(), FsError>>;
 
+    /// Resolves `path` to its canonical absolute filesystem location.
+    ///
+    /// # Errors
+    /// Returns an error when path resolution fails.
+    fn canonicalize(&self, path: PathBuf) -> FsFuture<Result<PathBuf, FsError>>;
+
+    /// Returns whether `path` currently resolves to an existing filesystem
+    /// entry of any kind.
+    fn exists(&self, path: PathBuf) -> bool;
+
     /// Returns whether `path` currently resolves to an existing directory.
     fn is_dir(&self, path: PathBuf) -> bool;
 
@@ -96,6 +106,14 @@ impl FsClient for RealFsClient {
                 Err(error) => Err(FsError::from(error)),
             }
         })
+    }
+
+    fn canonicalize(&self, path: PathBuf) -> FsFuture<Result<PathBuf, FsError>> {
+        Box::pin(async move { tokio::fs::canonicalize(path).await.map_err(FsError::from) })
+    }
+
+    fn exists(&self, path: PathBuf) -> bool {
+        path.exists()
     }
 
     fn is_dir(&self, path: PathBuf) -> bool {
@@ -174,5 +192,47 @@ mod tests {
         // Assert
         assert!(file_exists);
         assert!(!directory_exists);
+    }
+
+    /// Verifies `RealFsClient::canonicalize()` resolves files to absolute
+    /// paths through the async filesystem boundary.
+    #[tokio::test]
+    async fn test_real_fs_client_canonicalize_returns_absolute_file_path() {
+        // Arrange
+        let temp_dir = tempdir().expect("create temp dir");
+        let file_path = temp_dir.path().join("example.txt");
+        tokio::fs::write(&file_path, b"hello world")
+            .await
+            .expect("write file");
+        let fs_client = RealFsClient;
+
+        // Act
+        let canonicalized_path = fs_client
+            .canonicalize(file_path.clone())
+            .await
+            .expect("canonicalize file");
+
+        // Assert
+        assert_eq!(
+            canonicalized_path,
+            std::fs::canonicalize(file_path).expect("std canonicalize should succeed")
+        );
+    }
+
+    /// Verifies `RealFsClient::exists()` reports any existing filesystem
+    /// entry, including directories.
+    #[tokio::test]
+    async fn test_real_fs_client_exists_returns_true_for_directories() {
+        // Arrange
+        let temp_dir = tempdir().expect("create temp dir");
+        let fs_client = RealFsClient;
+
+        // Act
+        let directory_exists = fs_client.exists(temp_dir.path().to_path_buf());
+        let missing_path_exists = fs_client.exists(temp_dir.path().join("missing"));
+
+        // Assert
+        assert!(directory_exists);
+        assert!(!missing_path_exists);
     }
 }

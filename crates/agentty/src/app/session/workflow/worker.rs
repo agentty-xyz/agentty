@@ -447,6 +447,7 @@ impl SessionWorkerService {
         if let Some((session_size, added_lines, deleted_lines)) =
             SessionTaskService::refresh_persisted_session_diff_stats(
                 &context.db,
+                context.fs_client.as_ref(),
                 context.git_client.as_ref(),
                 &context.session_id,
                 &context.folder,
@@ -1224,6 +1225,15 @@ mod tests {
     use crate::infra::fs;
     use crate::infra::git::MockGitClient;
 
+    /// Builds one filesystem mock that treats every probed path as an
+    /// existing directory.
+    fn mock_fs_client_with_existing_directories() -> fs::MockFsClient {
+        let mut fs_client = fs::MockFsClient::new();
+        fs_client.expect_is_dir().times(0..).returning(|_| true);
+
+        fs_client
+    }
+
     #[test]
     /// Ensures session start requests map to `start_prompt` and session
     /// resume requests map to `reply` in persisted operation labels.
@@ -1478,7 +1488,7 @@ mod tests {
             clock: Arc::new(crate::app::session::RealClock),
             db,
             folder: base_dir.path().to_path_buf(),
-            fs_client: Arc::new(fs::MockFsClient::new()),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
             session_id: "sess1".to_string(),
@@ -1581,7 +1591,7 @@ mod tests {
             clock: Arc::new(crate::app::session::RealClock),
             db,
             folder: base_dir.path().to_path_buf(),
-            fs_client: Arc::new(fs::MockFsClient::new()),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
             session_id: "sess1".to_string(),

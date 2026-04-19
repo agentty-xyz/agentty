@@ -18,6 +18,7 @@ use crate::domain::session::{SessionSize, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::agent;
 use crate::infra::db::Database;
+use crate::infra::fs::FsClient;
 use crate::infra::git::{self as git, GitClient};
 
 const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
@@ -81,6 +82,7 @@ impl SessionTaskService {
     /// base-branch lookup and persistence both succeed.
     pub(crate) async fn refresh_persisted_session_diff_stats(
         db: &Database,
+        fs_client: &dyn FsClient,
         git_client: &dyn GitClient,
         session_id: &str,
         folder: &Path,
@@ -92,7 +94,13 @@ impl SessionTaskService {
             .flatten()?;
 
         let (computed_size, added_lines, deleted_lines) =
-            SessionManager::session_diff_stats_for_folder(git_client, folder, &base_branch).await;
+            SessionManager::session_diff_stats_for_folder(
+                fs_client,
+                git_client,
+                folder,
+                &base_branch,
+            )
+            .await;
         db.update_session_diff_stats(
             added_lines,
             deleted_lines,

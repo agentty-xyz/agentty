@@ -31,6 +31,9 @@ Application-layer workflows and orchestration.
   - A low-frequency metadata poll remains as a safety fallback.
 - Recovery model:
   - Operation state is persisted so interrupted work can be reconciled on startup.
+- Boundary model:
+  - Keep production filesystem discovery and path probes out of `app/`.
+  - Route directory walking, `exists` or `is_dir` checks for external paths, and similar host-filesystem lookups through infra traits instead of calling `std::fs`, `tokio::fs`, or `Path` helpers directly from app orchestration.
 
 ## Docs Sync
 

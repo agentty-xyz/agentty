@@ -17,6 +17,8 @@ pub mod fs;
 pub mod git;
 /// Process-management utilities for agent subprocess lifecycle.
 pub(crate) mod process;
+/// Startup project-discovery boundary for home-directory repository scans.
+pub mod project_discovery;
 mod project_repository;
 mod setting_repository;
 /// Tmux process boundary used by app orchestration.

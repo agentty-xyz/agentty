@@ -59,6 +59,7 @@ use crate::infra::db::Database;
 use crate::infra::file_index::FileEntry;
 use crate::infra::fs::{FsClient, RealFsClient};
 use crate::infra::git::{GitClient, RealGitClient};
+use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server, db};
 use crate::runtime::mode::{at_mention, question, sync_blocked};
@@ -591,6 +592,7 @@ pub(crate) struct AppClients {
     app_server_client_override: Option<Arc<dyn app_server::AppServerClient>>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     review_request_client: Arc<dyn ReviewRequestClient>,
     sync_main_runner: Arc<dyn SyncMainRunner>,
     tmux_client: Arc<dyn TmuxClient>,
@@ -605,6 +607,7 @@ impl AppClients {
             app_server_client_override: None,
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
+            project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             sync_main_runner: Arc::new(TokioSyncMainRunner),
             tmux_client: Arc::new(RealTmuxClient),
@@ -777,6 +780,7 @@ impl App {
             &db,
             clients.fs_client.as_ref(),
             &clients.git_client,
+            clients.project_discovery_client.as_ref(),
             working_dir.as_path(),
             git_branch,
             current_project_id,
@@ -2808,11 +2812,17 @@ impl App {
     #[cfg(test)]
     async fn load_projects_from_home_directory(
         db: &Database,
+        project_discovery_client: &dyn ProjectDiscoveryClient,
         session_worktree_root: &Path,
         home_directory: Option<&Path>,
     ) {
-        AppStartup::load_projects_from_home_directory(db, session_worktree_root, home_directory)
-            .await;
+        AppStartup::load_projects_from_home_directory(
+            db,
+            project_discovery_client,
+            session_worktree_root,
+            home_directory,
+        )
+        .await;
     }
 
     /// Returns git repository roots discovered under the user home directory.
@@ -2899,7 +2909,6 @@ mod tests {
     use super::*;
     use crate::app::branch_publish::BranchPublishTaskSuccess;
     use crate::app::review::ReviewUpdate;
-    use crate::app::startup::HOME_PROJECT_SCAN_MAX_RESULTS;
     use crate::app::{diff_content_hash, review_loading_message};
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
@@ -2911,6 +2920,9 @@ mod tests {
     use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
     use crate::infra::db::Database;
     use crate::infra::file_index::FileEntry;
+    use crate::infra::project_discovery::{
+        HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient,
+    };
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
     use crate::ui::state::app_mode::{ConfirmationViewMode, DoneSessionOutputMode};
 
@@ -5964,6 +5976,7 @@ mod tests {
         // Act
         App::load_projects_from_home_directory(
             &database,
+            &RealProjectDiscoveryClient,
             session_worktree_root.as_path(),
             Some(home_directory.path()),
         )

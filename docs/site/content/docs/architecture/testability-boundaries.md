@@ -23,7 +23,7 @@ The traits below are mocked with `mockall`. Most use
 | `ReviewRequestClient` | `crates/ag-forge/src/client.rs` | GitHub review-request detection and `gh` orchestration boundary. |
 | `ForgeCommandRunner` | `crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to unit-test the GitHub review-request adapter without a live `gh` binary. |
 | `GitClient` | `infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push, pull, and ahead/behind comparisons for both upstream-tracking and session-vs-base-branch status). |
-| `FsClient` | `infra/fs.rs` | Async filesystem operations used by app orchestration, including non-blocking file reads plus session worktree cleanup and prompt-image temp file and directory removal. |
+| `FsClient` | `infra/fs.rs` | Async filesystem operations and path probes used by app or runtime orchestration, including non-blocking file reads, existence checks, canonicalization, session worktree cleanup, and prompt-image temp file or directory removal. |
 | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and dispatching open commands. |
 | `TmuxCommandRunner` | `infra/tmux.rs` | Internal tmux command boundary that keeps multi-command `send-keys` flows deterministic in unit tests. |
 | `AgentChannel` | `infra/channel.rs` | Provider-agnostic turn execution (session init, run turn, shutdown). |
@@ -37,6 +37,7 @@ The traits below are mocked with `mockall`. Most use
 | `Sleeper` | `lib.rs` | Wall-clock sleep boundary used by retry/polling flows such as git rebase assistance. |
 | `UpdateRunner` | `infra/version.rs` | npm install command execution for background auto-updates. |
 | `VersionCommandRunner` | `infra/version.rs` | npm/curl command execution for update checks. |
+| `ProjectDiscoveryClient` | `infra/project_discovery.rs` | Home-directory repository discovery used by startup catalog refresh without walking the real filesystem from `app/`. |
 | `GitCommandRunner` | `infra/git/rebase.rs` | Rebase command invocation boundary for conflict/retry tests. |
 | `SyncAssistClient` | `app/session/workflow/merge.rs` | Sync-rebase assistance execution boundary. |
 | `AppServerClient` retry helpers | `infra/app_server/retry.rs` | Shared restart-and-replay orchestration for provider runtimes without duplicating lifecycle policy in each provider. |
@@ -88,6 +89,11 @@ injectable trait boundaries and `mockall`-based tests over flaky end-to-end
 shell-heavy tests. Add a narrower internal command-runner boundary when a
 public orchestration trait still needs deterministic coverage of subprocess
 sequencing or retry behavior.
+
+Apply the same rule to filesystem discovery and path probes in `app/` and
+`runtime/`: route directory walking, `exists` checks, `canonicalize`, and file
+copy or persistence helpers through an infra boundary instead of calling
+`std::fs` or `Path` helpers directly from orchestration code.
 
 Use the same pattern for time access in `app/` and `runtime/`: if orchestration
 logic needs `Instant::now()` or `SystemTime::now()`, route that call through
