@@ -18,6 +18,11 @@ This skill guides you through the process of releasing a new version of the proj
 
    - Always ask the user which version bump to apply: `major`, `minor`, or `patch`.
    - Do not update versions until the user confirms one of these options.
+   - Use the current repository release pattern when advising:
+     - Prefer `patch` by default for fixes, small UX improvements, refactors, docs updates, model/config changes, and other incremental work within the current `0.y` line.
+     - Use `minor` for milestone cuts: new top-level workflows, pages, modes, or cross-cutting runtime/protocol changes that feel like a new product phase.
+     - Treat this as a pragmatic pre-`1.0` policy. The changelog history shows patch releases may still include additive features or removals while the project remains below `1.0.0`.
+   - If the user wants a conservative release recommendation and the change is not clearly milestone-sized, recommend `patch`.
 
 1. **Version Bump**
 
@@ -64,6 +69,7 @@ This skill guides you through the process of releasing a new version of the proj
 
    - Create a git tag **with the 'v' prefix**: `git tag vX.Y.Z`.
    - **Important:** The release workflow depends on the `v` prefix (e.g., `v0.1.4`).
+   - Pre-release suffixes are also supported by the release automation when needed (for example `vX.Y.Z-rc.1`), but normal stable releases should use plain `vX.Y.Z`.
 
 1. **Push**
 

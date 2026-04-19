@@ -52,6 +52,13 @@ agentty --no-update  # Launch without automatic updates
 
 Documentation for installation and workflows is available at [agentty.xyz/docs](https://agentty.xyz/docs/).
 
+> [!WARNING]
+> Agentty is in active development. While releases follow Semantic Versioning, the
+> current `0.y.z` series may still introduce breaking changes between releases as
+> workflows, integrations, and safeguards evolve. Always review and verify the
+> changes Agentty proposes or applies in your repositories before you rely on
+> them.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for `prek`-based development checks and contribution guidance.
