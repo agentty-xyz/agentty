@@ -165,6 +165,44 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
     Ok(())
 }
 
+/// Verify that pressing `Shift+A` opens draft-session staging with explicit
+/// draft guidance before any message is staged.
+#[test]
+fn draft_session_creation_opens_staging_mode() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("draft_session_creation")
+        .with_git()
+        .zola(
+            "Draft session creation",
+            "Create a draft session that clearly starts in local staging mode before the bundle \
+             runs.",
+            31,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .viewing_pause_ms(1500)
+                    .write_text("A")
+                    .wait_for_text("Draft Session", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "draft_session_prompt_mode",
+                        "Draft-session prompt mode immediately after creation",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Draft Session", &full);
+                assertion::assert_text_in_region(frame, "No draft messages staged yet.", &full);
+                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that pressing `Esc` in an empty prompt for a new non-draft
 /// session deletes it and returns to the empty Sessions list.
 #[test]

@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -16,8 +18,12 @@ use crate::ui::{Component, style, text_util};
 const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
-const DRAFT_PREVIEW_HEADER: &str = "## Staged Drafts [Preview]";
-const DRAFT_PREVIEW_NOTE: &str = "Press `s` in session view to start the staged bundle.";
+const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
+const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
+                                        first draft locally, then press `s` in session view to \
+                                        start the bundle.";
+const DRAFT_PREVIEW_STAGED_NOTE: &str =
+    "Draft messages stay local until you press `s` in session view to start the staged bundle.";
 const TRANSCRIPT_FOOTER_PREFIXES: &[&str] = &["[Commit]", "[Commit Error]"];
 
 /// Session chat output panel renderer.
@@ -320,11 +326,13 @@ impl<'a> SessionOutput<'a> {
     /// status and done-session display mode.
     ///
     /// Summary markdown is shown only for `Done` sessions after it has been
-    /// persisted. Active and canceled sessions render transcript output only.
+    /// persisted. New draft sessions render staged-draft guidance before
+    /// their first live turn starts. Active and canceled sessions otherwise
+    /// render transcript output only.
     fn output_text(session: &Session, done_session_output_mode: DoneSessionOutputMode) -> String {
         match session.status {
-            Status::New if session.is_draft_session() && session.has_staged_drafts() => {
-                return Self::render_staged_draft_preview(session);
+            Status::New if session.is_draft_session() => {
+                return Self::render_draft_session_preview(session);
             }
             Status::Done if done_session_output_mode == DoneSessionOutputMode::Summary => {
                 return Self::render_summary_text(Self::session_summary_text(session));
@@ -346,12 +354,17 @@ impl<'a> SessionOutput<'a> {
         session.output.clone()
     }
 
-    /// Renders the locally staged draft bundle shown while a draft session
-    /// remains in `New`.
-    fn render_staged_draft_preview(session: &Session) -> String {
-        let mut output = format!("{DRAFT_PREVIEW_HEADER}\n\n{DRAFT_PREVIEW_NOTE}\n\n");
+    /// Renders the staged-draft guidance shown while a draft session remains
+    /// in `New`.
+    fn render_draft_session_preview(session: &Session) -> String {
+        let mut output = String::from(DRAFT_PREVIEW_HEADER);
 
-        output.push_str(&Self::staged_draft_transcript_block(&session.prompt));
+        if session.has_staged_drafts() {
+            let _ = write!(output, "\n\n{DRAFT_PREVIEW_STAGED_NOTE}\n\n");
+            output.push_str(&Self::staged_draft_transcript_block(&session.prompt));
+        } else {
+            let _ = write!(output, "\n\n{DRAFT_PREVIEW_EMPTY_NOTE}\n");
+        }
 
         output
     }
@@ -942,10 +955,35 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(text.contains("Staged Drafts [Preview]"));
-        assert!(text.contains("Press s in session view to start the staged bundle."));
+        assert!(text.contains("Draft Session"));
+        assert!(text.contains("Draft messages stay local until you press s in session view"));
         assert!(text.contains("First draft"));
         assert!(text.contains("Second draft"));
+    }
+
+    #[test]
+    fn test_output_lines_render_empty_draft_preview_for_new_session() {
+        // Arrange
+        let mut session = session_fixture();
+        session.is_draft = true;
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(DoneSessionOutputMode::Summary, None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Draft Session"));
+        assert!(text.contains("No draft messages staged yet."));
+        assert!(text.contains("Use Enter to stage the first draft locally"));
     }
 
     #[test]

@@ -183,13 +183,15 @@ session straight to **Done**.
 From the **Sessions** tab, press `a` to create a regular session or `Shift+A`
 to create a draft session. Regular sessions keep the fast path: type the first
 prompt and press `Enter` to start the agent immediately. Draft sessions stage
-each `Enter` as one ordered draft message, show the staged bundle in session
-view, keep the `o` shortcut hidden until a worktree exists, and start only
-after you press `s`. The draft worktree is created at that start step so the
-branch is based on the latest local base-branch state instead of the moment
-the draft session was first created. Until that deferred worktree exists,
-prompt `@` lookup suggestions index the active project root so file search
-still works while you stage the draft bundle.
+each `Enter` as one ordered draft message, immediately show a
+`Draft Session` guidance block in session view, keep the `o`
+shortcut hidden until a worktree exists, and start only after you press `s`.
+Once drafts are staged, the same panel previews the staged bundle before
+launch. The draft worktree is created at that start step so the branch is
+based on the latest local base-branch state instead of the moment the draft
+session was first created. Until that deferred worktree exists, prompt `@`
+lookup suggestions index the active project root so file search still works
+while you stage the draft bundle.
 If you decide not to start that staged bundle, return to the **Sessions** list
 and press `c` to cancel the still-unstarted draft session directly.
 
