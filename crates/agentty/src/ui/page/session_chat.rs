@@ -1013,9 +1013,13 @@ mod tests {
             crate::ui::page::fyi::session_chat_messages(),
             3,
         );
-        let wrapped_message = crate::ui::page::fyi::rotating_message(
+        let fifth_message = crate::ui::page::fyi::rotating_message(
             crate::ui::page::fyi::session_chat_messages(),
             4,
+        );
+        let wrapped_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_chat_messages(),
+            5,
         );
 
         // Assert
@@ -1034,6 +1038,10 @@ mod tests {
         assert_eq!(
             fourth_message,
             Some("Press f to open or regenerate focused review output on demand.")
+        );
+        assert_eq!(
+            fifth_message,
+            Some("Type /apply after focused review completes to apply its suggestions.")
         );
         assert_eq!(
             wrapped_message,

@@ -25,6 +25,8 @@ const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter
 const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
 const TRANSCRIPT_FOOTER_PREFIXES: &[&str] = &["[Commit]", "[Commit Error]"];
+const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
+const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str = "### Suggestions (type \"/apply\" to apply)";
 
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
@@ -458,6 +460,11 @@ impl<'a> SessionOutput<'a> {
 
     /// Appends focused-review output to the transcript when review text is
     /// available for the current session view.
+    ///
+    /// The `### Suggestions` header is annotated with a `(type "/apply" to
+    /// apply)` hint at render time so users discover the apply shortcut
+    /// without polluting the persisted review markdown consumed by
+    /// suggestion extraction.
     fn append_review_lines(
         lines: &mut Vec<Line<'static>>,
         review_text: Option<&str>,
@@ -467,13 +474,29 @@ impl<'a> SessionOutput<'a> {
         let review_markdown = review_text
             .map(str::trim)
             .filter(|review_text| !review_text.is_empty())
-            .map(str::to_string);
+            .map(Self::annotate_suggestions_header);
 
         let Some(review_markdown) = review_markdown else {
             return;
         };
 
         Self::append_markdown_lines(lines, &review_markdown, inner_width, markdown_render_cache);
+    }
+
+    /// Replaces the bare `### Suggestions` header line with a version that
+    /// includes the `(type "/apply" to apply)` discovery hint, leaving the
+    /// rest of the review markdown untouched.
+    fn annotate_suggestions_header(review_markdown: &str) -> String {
+        let mut annotated_lines = Vec::with_capacity(review_markdown.lines().count());
+        for line in review_markdown.lines() {
+            if line.trim_end() == REVIEW_SUGGESTIONS_HEADER {
+                annotated_lines.push(REVIEW_SUGGESTIONS_HEADER_WITH_HINT.to_string());
+            } else {
+                annotated_lines.push(line.to_string());
+            }
+        }
+
+        annotated_lines.join("\n")
     }
 
     /// Appends a rendered structured-summary section without mutating the
@@ -1772,5 +1795,31 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(!text.contains("Review - Header Session"));
+    }
+
+    #[test]
+    fn annotate_suggestions_header_appends_apply_hint_to_exact_header() {
+        // Arrange
+        let review_markdown = "## Review\n### Project Impact\n- None\n### Suggestions\n- Fix typo.";
+
+        // Act
+        let annotated = SessionOutput::annotate_suggestions_header(review_markdown);
+
+        // Assert
+        assert!(annotated.contains("### Suggestions (type \"/apply\" to apply)"));
+        assert!(!annotated.contains("### Suggestions\n"));
+        assert!(annotated.contains("- Fix typo."));
+    }
+
+    #[test]
+    fn annotate_suggestions_header_leaves_non_matching_lines_untouched() {
+        // Arrange
+        let review_markdown = "### Suggestions extra\n- keep as-is";
+
+        // Act
+        let annotated = SessionOutput::annotate_suggestions_header(review_markdown);
+
+        // Assert
+        assert_eq!(annotated, review_markdown);
     }
 }
