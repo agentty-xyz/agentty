@@ -43,10 +43,13 @@ fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
 /// code 0.
 ///
 /// Opens the quit dialog, presses `y`, and asserts that the PTY child
-/// process terminates successfully.
+/// process terminates successfully. The exit wait is intentionally longer
+/// than a regular PTY assertion because coverage builds and CI hosts can
+/// take extra time to unwind terminal cleanup on shutdown.
 #[test]
 fn quit_confirm_yes_exits() {
     // Arrange
+    let _test_guard = common::acquire_e2e_test_lock();
     let temp = tempfile::TempDir::new().expect("failed to create temp dir");
     let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
     let mut session = env.builder().spawn().expect("failed to spawn session");
@@ -64,7 +67,7 @@ fn quit_confirm_yes_exits() {
 
     // Assert — process should exit with code 0.
     let exited_successfully = session
-        .wait_for_exit(Duration::from_secs(5))
+        .wait_for_exit(Duration::from_secs(15))
         .expect("process did not exit within timeout");
 
     assert!(exited_successfully, "Process should exit with code 0");

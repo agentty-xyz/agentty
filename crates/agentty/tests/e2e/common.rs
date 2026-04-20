@@ -5,6 +5,7 @@
 //! page generation.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin;
@@ -108,6 +109,20 @@ impl BuilderEnv {
             Err(_) => self.stub_bin.to_string_lossy().into_owned(),
         }
     }
+}
+
+/// Acquire the global E2E test lock so PTY-driven tests do not overlap.
+///
+/// The real `agentty` binary uses shared terminal, process, and filesystem
+/// resources that become flaky when multiple PTY scenarios run in parallel
+/// under coverage or high-load CI jobs.
+pub(crate) fn acquire_e2e_test_lock() -> MutexGuard<'static, ()> {
+    static E2E_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    E2E_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("e2e test lock should not be poisoned")
 }
 
 /// Return the feature GIF output directory, creating it if needed.
@@ -294,6 +309,7 @@ impl FeatureTest {
         build_scenario: impl FnOnce(Scenario) -> Scenario,
         assert: impl FnOnce(&TerminalFrame, &ProofReport),
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let _test_guard = acquire_e2e_test_lock();
         let temp = tempfile::TempDir::new()?;
         let env = BuilderEnv::new(temp.path())?;
 
