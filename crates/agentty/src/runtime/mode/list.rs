@@ -692,7 +692,7 @@ mod tests {
             session.questions = expected_questions.clone();
         }
         app.review_cache.insert(
-            expected_session_id.clone(),
+            expected_session_id.clone().into(),
             crate::app::ReviewCacheEntry::Ready {
                 text: "Focused review".to_string(),
                 diff_hash: 42,
