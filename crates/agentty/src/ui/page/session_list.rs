@@ -449,7 +449,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -674,7 +675,7 @@ mod tests {
             .map(|row| match row {
                 SessionTableRow::GroupLabel(group) => group.label().to_string(),
                 SessionTableRow::EmptyGroupPlaceholder => GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionTableRow::Session(session) => session.id.clone(),
+                SessionTableRow::Session(session) => session.id.to_string(),
             })
             .collect::<Vec<_>>();
 
@@ -710,7 +711,7 @@ mod tests {
             .map(|row| match row {
                 SessionTableRow::GroupLabel(group) => group.label().to_string(),
                 SessionTableRow::EmptyGroupPlaceholder => GROUP_EMPTY_PLACEHOLDER.to_string(),
-                SessionTableRow::Session(session) => session.id.clone(),
+                SessionTableRow::Session(session) => session.id.to_string(),
             })
             .collect::<Vec<_>>();
 

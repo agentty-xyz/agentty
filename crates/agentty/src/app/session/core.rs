@@ -18,7 +18,8 @@ use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
-    DailyActivity, PublishedBranchSyncStatus, ReviewRequest, Session, SessionStats,
+    DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
+    SessionFollowUpTask, SessionId, SessionStats,
 };
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::git;
@@ -40,9 +41,11 @@ pub(crate) struct SessionDefaults {
 ///
 /// The worker computes this projection immediately after writing canonical turn
 /// metadata so the reducer can apply the same summary, clarification-question,
-/// and token-usage updates without waiting for a full reload.
+/// follow-up-task, and token-usage updates without waiting for a full reload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TurnAppliedState {
+    /// Persisted follow-up tasks for the latest completed turn.
+    pub(crate) follow_up_tasks: Vec<SessionFollowUpTask>,
     /// Persisted clarification questions for the latest completed turn.
     pub(crate) questions: Vec<QuestionItem>,
     /// Raw persisted summary payload, if the turn produced one.
@@ -54,11 +57,12 @@ pub(crate) struct TurnAppliedState {
 impl TurnAppliedState {
     /// Merges one newer reducer projection into this batched state.
     ///
-    /// Latest-turn fields (`questions`, `summary`) replace the previous
-    /// projection, while `token_usage_delta` accumulates so multiple
-    /// completed turns queued in one reducer tick do not undercount session
-    /// usage.
+    /// Latest-turn fields (`follow_up_tasks`, `questions`, `summary`) replace
+    /// the previous projection, while `token_usage_delta` accumulates so
+    /// multiple completed turns queued in one reducer tick do not undercount
+    /// session usage.
     pub(crate) fn merge_newer(&mut self, newer_turn_applied_state: Self) {
+        self.follow_up_tasks = newer_turn_applied_state.follow_up_tasks;
         self.questions = newer_turn_applied_state.questions;
         self.summary = newer_turn_applied_state.summary;
         self.token_usage_delta.input_tokens = self
@@ -96,15 +100,15 @@ impl Clock for RealClock {
 
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
-    pub(super) active_prompt_outputs: HashMap<String, String>,
+    pub(super) active_prompt_outputs: HashMap<SessionId, String>,
     pub(super) default_session_model: AgentModel,
     pub(super) git_client: Arc<dyn git::GitClient>,
     pub(super) merge_service: SessionMergeService,
-    pub(super) pending_history_replay: HashSet<String>,
-    pub(super) published_branch_sync_operations: HashMap<String, String>,
+    pub(super) pending_history_replay: HashSet<SessionId>,
+    pub(super) published_branch_sync_operations: HashMap<SessionId, String>,
     pub(super) state: SessionState,
     pub(super) stats_activity: Vec<DailyActivity>,
-    pub(super) title_generation_tasks: HashMap<String, TitleGenerationTask>,
+    pub(super) title_generation_tasks: HashMap<SessionId, TitleGenerationTask>,
     pub(super) worker_service: SessionWorkerService,
 }
 
@@ -159,7 +163,7 @@ impl SessionManager {
         }
 
         self.title_generation_tasks.insert(
-            session_id.to_string(),
+            SessionId::from(session_id),
             TitleGenerationTask {
                 generation,
                 join_handle: title_generation_task,
@@ -251,7 +255,7 @@ impl SessionManager {
 
     /// Returns the active prompt transcript block cached for sessions that are
     /// currently running a turn.
-    pub(crate) fn active_prompt_outputs(&self) -> &HashMap<String, String> {
+    pub(crate) fn active_prompt_outputs(&self) -> &HashMap<SessionId, String> {
         &self.active_prompt_outputs
     }
 
@@ -336,7 +340,7 @@ impl SessionManager {
         sync_operation_id: String,
     ) {
         self.published_branch_sync_operations
-            .insert(session_id.to_string(), sync_operation_id);
+            .insert(SessionId::from(session_id), sync_operation_id);
 
         if let Some(session) = self
             .state
@@ -392,6 +396,9 @@ impl SessionManager {
             return;
         };
 
+        session
+            .follow_up_tasks
+            .clone_from(&turn_applied_state.follow_up_tasks);
         session.questions.clone_from(&turn_applied_state.questions);
         session.summary.clone_from(&turn_applied_state.summary);
         session.stats.input_tokens = session
@@ -410,7 +417,7 @@ impl SessionManager {
     /// reparsing generic transcript markers.
     pub(crate) fn set_active_prompt_output(&mut self, session_id: &str, prompt_output: String) {
         self.active_prompt_outputs
-            .insert(session_id.to_string(), prompt_output);
+            .insert(SessionId::from(session_id), prompt_output);
     }
 
     /// Drops cached prompt transcript blocks for sessions that are no longer
@@ -437,14 +444,14 @@ impl SessionManager {
     /// background poll.
     pub(crate) fn replace_session_git_statuses(
         &mut self,
-        session_git_statuses: HashMap<String, SessionGitStatus>,
+        session_git_statuses: HashMap<SessionId, SessionGitStatus>,
     ) {
         self.state
             .replace_session_git_statuses(session_git_statuses);
     }
 
     /// Returns cached session git-status snapshots keyed by session id.
-    pub(crate) fn session_git_statuses(&self) -> &HashMap<String, SessionGitStatus> {
+    pub(crate) fn session_git_statuses(&self) -> &HashMap<SessionId, SessionGitStatus> {
         &self.state.session_git_statuses
     }
 
@@ -452,28 +459,28 @@ impl SessionManager {
     /// session reload.
     pub(crate) fn replace_session_worktree_availability(
         &mut self,
-        session_worktree_availability: HashMap<String, bool>,
+        session_worktree_availability: HashMap<SessionId, bool>,
     ) {
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
     }
 
     /// Returns cached worktree availability keyed by session id.
-    pub(crate) fn session_worktree_availability(&self) -> &HashMap<String, bool> {
+    pub(crate) fn session_worktree_availability(&self) -> &HashMap<SessionId, bool> {
         &self.state.session_worktree_availability
     }
 
     /// Replaces cached detected session branch names from the latest reload.
     pub(crate) fn replace_session_branch_names(
         &mut self,
-        session_branch_names: HashMap<String, String>,
+        session_branch_names: HashMap<SessionId, String>,
     ) {
         self.state
             .replace_session_branch_names(session_branch_names);
     }
 
     /// Returns cached detected branch names keyed by session id.
-    pub(crate) fn session_branch_names(&self) -> &HashMap<String, String> {
+    pub(crate) fn session_branch_names(&self) -> &HashMap<SessionId, String> {
         &self.state.session_branch_names
     }
 
@@ -544,6 +551,64 @@ impl SessionManager {
         }
 
         self.replace_session_branch_names(session_branch_names);
+    }
+
+    /// Returns the selected follow-up task position for one session.
+    pub(crate) fn selected_follow_up_task_position(&self, session_id: &str) -> Option<usize> {
+        self.state.selected_follow_up_task_position(session_id)
+    }
+
+    /// Returns the action currently available for the selected follow-up task
+    /// in one session.
+    pub(crate) fn selected_follow_up_task_action(
+        &self,
+        session_id: &str,
+    ) -> Option<FollowUpTaskAction> {
+        let position = self.selected_follow_up_task_position(session_id)?;
+        let session = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)?;
+
+        session
+            .follow_up_task(position)
+            .map(crate::domain::session::SessionFollowUpTask::action)
+    }
+
+    /// Returns whether one session has more than one follow-up task.
+    pub(crate) fn has_multiple_follow_up_tasks(&self, session_id: &str) -> bool {
+        self.state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.follow_up_tasks.len() > 1)
+    }
+
+    /// Advances the selected follow-up task to the next item for one session.
+    pub(crate) fn select_next_follow_up_task(&mut self, session_id: &str) {
+        self.state.select_next_follow_up_task(session_id);
+    }
+
+    /// Moves the selected follow-up task to the previous item for one
+    /// session.
+    pub(crate) fn select_previous_follow_up_task(&mut self, session_id: &str) {
+        self.state.select_previous_follow_up_task(session_id);
+    }
+
+    /// Sets the launched sibling-session link for the matching cached
+    /// follow-up task.
+    pub(crate) fn set_follow_up_task_launched_session_id(
+        &mut self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<SessionId>,
+    ) {
+        self.state.set_follow_up_task_launched_session_id(
+            session_id,
+            position,
+            launched_session_id,
+        );
     }
 }
 
@@ -1083,15 +1148,17 @@ mod tests {
         let folder = session_folder(base_path, id);
         let data_dir = folder.join(SESSION_DATA_DIR);
         std::fs::create_dir_all(&data_dir).expect("failed to create data dir");
-        app.sessions
-            .handles
-            .insert(id.to_string(), SessionHandles::new(String::new(), status));
+        app.sessions.handles.insert(
+            id.to_string().into(),
+            SessionHandles::new(String::new(), status),
+        );
         app.sessions.push_session(Session {
             base_branch: "main".to_string(),
             created_at: 0,
             draft_attachments: Vec::new(),
             folder,
-            id: id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -1124,7 +1191,7 @@ mod tests {
     ) -> SessionManager {
         let mut handles = HashMap::new();
         handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::Review),
         );
 
@@ -1135,7 +1202,8 @@ mod tests {
                 created_at: 0,
                 draft_attachments: Vec::new(),
                 folder: PathBuf::from(format!("/tmp/{session_id}")),
-                id: session_id.to_string(),
+                follow_up_tasks: Vec::new(),
+                id: session_id.into(),
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
@@ -1216,6 +1284,7 @@ mod tests {
         app.sessions.apply_turn_applied_state(
             "session-id",
             &TurnAppliedState {
+                follow_up_tasks: Vec::new(),
                 questions: Vec::new(),
                 summary: None,
                 token_usage_delta: SessionStats::default(),
@@ -1704,7 +1773,7 @@ mod tests {
 
         // Assert — blank session
         assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(session_id, app.sessions.sessions[0].id);
+        assert_eq!(app.sessions.sessions[0].id, session_id);
         assert!(app.sessions.sessions[0].prompt.is_empty());
         assert_eq!(app.sessions.sessions[0].title, None);
         assert_eq!(app.sessions.sessions[0].display_title(), "No title");
@@ -1760,7 +1829,7 @@ mod tests {
 
         // Assert
         assert_eq!(app.sessions.sessions.len(), 1);
-        assert_eq!(session_id, app.sessions.sessions[0].id);
+        assert_eq!(app.sessions.sessions[0].id, session_id);
         assert!(app.sessions.sessions[0].is_draft_session());
         assert_eq!(app.sessions.sessions[0].status, Status::New);
         assert!(!app.sessions.sessions[0].folder.exists());
@@ -2088,7 +2157,7 @@ mod tests {
         assert!(
             session_manager
                 .title_generation_tasks
-                .contains_key(&session_id)
+                .contains_key(session_id.as_str())
         );
     }
 
@@ -2123,7 +2192,7 @@ mod tests {
         assert!(
             session_manager
                 .title_generation_tasks
-                .contains_key(&session_id)
+                .contains_key(session_id.as_str())
         );
     }
 
@@ -2632,7 +2701,7 @@ mod tests {
             .await
             .expect("failed to backfill session activity from session rows");
         let working_dir = PathBuf::from("/tmp/test");
-        let mut handles: HashMap<String, SessionHandles> = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         let mut expected_activity_by_day: BTreeMap<i64, u32> = BTreeMap::new();
         for timestamp_seconds in [
             day_key_one * seconds_per_day + 10,
@@ -2695,7 +2764,7 @@ mod tests {
             .await
             .expect("failed to delete alpha000");
         let working_dir = PathBuf::from("/tmp/test");
-        let mut handles: HashMap<String, SessionHandles> = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
         // Act
         let fs_client = fs::RealFsClient;
@@ -3177,7 +3246,7 @@ mod tests {
         app.sessions
             .worker_service
             .test_agent_channels
-            .insert(session_id.clone(), Arc::new(mock_channel));
+            .insert(session_id.clone().into(), Arc::new(mock_channel));
         app.sessions
             .reply(&app.services, &session_id, "SpawnInit")
             .await;
@@ -3251,7 +3320,7 @@ mod tests {
             session.prompt = "Initial prompt".to_string();
             session.status = Status::Review;
         }
-        if let Some(handles) = app.sessions.handles.get(&session_id) {
+        if let Some(handles) = app.sessions.handles.get(session_id.as_str()) {
             if let Ok(mut output) = handles.output.lock() {
                 output.clone_from(&initial_output);
             }
@@ -3312,7 +3381,7 @@ mod tests {
         app.sessions
             .worker_service
             .test_agent_channels
-            .insert(session_id.clone(), Arc::new(mock_channel));
+            .insert(session_id.clone().into(), Arc::new(mock_channel));
 
         // Act — first reply after model switch: history should be replayed.
         app.sessions
@@ -4136,7 +4205,7 @@ mod tests {
             .await
             .expect("failed to create session");
         app.sessions.sessions[0].status = Status::Review;
-        if let Some(handles) = app.sessions.handles.get(&session_id)
+        if let Some(handles) = app.sessions.handles.get(session_id.as_str())
             && let Ok(mut session_status) = handles.status.lock()
         {
             *session_status = Status::Review;
@@ -4228,7 +4297,7 @@ mod tests {
             .expect("failed to create session");
         let session_folder = app.sessions.sessions[0].folder.clone();
         app.sessions.sessions[0].status = Status::Review;
-        if let Some(handles) = app.sessions.handles.get(&session_id)
+        if let Some(handles) = app.sessions.handles.get(session_id.as_str())
             && let Ok(mut session_status) = handles.status.lock()
         {
             *session_status = Status::Review;

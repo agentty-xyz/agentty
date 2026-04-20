@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::domain::session::Status;
+use crate::domain::session::{SessionId, Status};
 
 /// Queue progression outcome after applying a status update batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,8 +16,8 @@ pub(crate) enum MergeQueueProgress {
 /// Stores FIFO merge queue state and active merge tracking.
 #[derive(Default)]
 pub(crate) struct MergeQueue {
-    active_session_id: Option<String>,
-    queued_session_ids: VecDeque<String>,
+    active_session_id: Option<SessionId>,
+    queued_session_ids: VecDeque<SessionId>,
 }
 
 impl MergeQueue {
@@ -33,7 +33,7 @@ impl MergeQueue {
     }
 
     /// Adds one session to the end of the FIFO queue.
-    pub(crate) fn enqueue(&mut self, session_id: String) {
+    pub(crate) fn enqueue(&mut self, session_id: SessionId) {
         self.queued_session_ids.push_back(session_id);
     }
 
@@ -43,12 +43,12 @@ impl MergeQueue {
     }
 
     /// Pops the next queued session id from the queue head.
-    pub(crate) fn pop_next(&mut self) -> Option<String> {
+    pub(crate) fn pop_next(&mut self) -> Option<SessionId> {
         self.queued_session_ids.pop_front()
     }
 
     /// Marks a session id as the active merge.
-    pub(crate) fn set_active(&mut self, session_id: String) {
+    pub(crate) fn set_active(&mut self, session_id: SessionId) {
         self.active_session_id = Some(session_id);
     }
 
@@ -62,8 +62,8 @@ impl MergeQueue {
     pub(crate) fn progress_from_status_updates(
         &mut self,
         current_active_status: Option<Status>,
-        session_ids: &HashSet<String>,
-        previous_session_states: &HashMap<String, Status>,
+        session_ids: &HashSet<SessionId>,
+        previous_session_states: &HashMap<SessionId, Status>,
     ) -> MergeQueueProgress {
         let Some(active_session_id) = self.active_session_id.clone() else {
             return MergeQueueProgress::NoAction;
@@ -108,20 +108,20 @@ impl MergeQueue {
 mod tests {
     use super::*;
 
-    fn previous_states_for(session_id: &str, status: Status) -> HashMap<String, Status> {
-        HashMap::from([(session_id.to_string(), status)])
+    fn previous_states_for(session_id: &str, status: Status) -> HashMap<SessionId, Status> {
+        HashMap::from([(session_id.to_string().into(), status)])
     }
 
-    fn touched_session_ids(session_id: &str) -> HashSet<String> {
-        HashSet::from([session_id.to_string()])
+    fn touched_session_ids(session_id: &str) -> HashSet<SessionId> {
+        HashSet::from([session_id.into()])
     }
 
     #[test]
     fn test_is_queued_or_active() {
         // Arrange
         let mut queue = MergeQueue::default();
-        queue.enqueue("queued".to_string());
-        queue.set_active("active".to_string());
+        queue.enqueue("queued".into());
+        queue.set_active("active".into());
 
         // Act & Assert
         assert!(queue.is_queued_or_active("queued"));
@@ -133,8 +133,8 @@ mod tests {
     fn test_pop_next_follows_fifo_order() {
         // Arrange
         let mut queue = MergeQueue::default();
-        queue.enqueue("session-a".to_string());
-        queue.enqueue("session-b".to_string());
+        queue.enqueue("session-a".into());
+        queue.enqueue("session-b".into());
 
         // Act
         let first = queue.pop_next();
@@ -152,7 +152,7 @@ mod tests {
         // Arrange
         let session_id = "session-1";
         let mut queue = MergeQueue::default();
-        queue.set_active(session_id.to_string());
+        queue.set_active(session_id.to_string().into());
         let touched_ids = touched_session_ids(session_id);
         let previous_states = previous_states_for(session_id, Status::Merging);
 
@@ -170,7 +170,7 @@ mod tests {
         // Arrange
         let session_id = "session-1";
         let mut queue = MergeQueue::default();
-        queue.set_active(session_id.to_string());
+        queue.set_active(session_id.to_string().into());
         let touched_ids = touched_session_ids(session_id);
         let previous_states = previous_states_for(session_id, Status::Merging);
 
@@ -191,7 +191,7 @@ mod tests {
         // Arrange
         let session_id = "session-1";
         let mut queue = MergeQueue::default();
-        queue.set_active(session_id.to_string());
+        queue.set_active(session_id.to_string().into());
         let touched_ids = HashSet::new();
         let previous_states = HashMap::new();
 
@@ -208,7 +208,7 @@ mod tests {
         // Arrange
         let session_id = "session-1";
         let mut queue = MergeQueue::default();
-        queue.set_active(session_id.to_string());
+        queue.set_active(session_id.to_string().into());
         let touched_ids = HashSet::new();
         let previous_states = HashMap::new();
 
@@ -229,7 +229,7 @@ mod tests {
         // Arrange
         let session_id = "session-1";
         let mut queue = MergeQueue::default();
-        queue.set_active(session_id.to_string());
+        queue.set_active(session_id.to_string().into());
         let touched_ids = touched_session_ids(session_id);
         let previous_states = HashMap::new();
 

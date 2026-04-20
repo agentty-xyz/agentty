@@ -18,7 +18,7 @@ use crate::app::{
     AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, review_request, setting,
 };
 use crate::domain::agent::{AgentModel, ReasoningLevel};
-use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, Status};
+use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::channel::{AgentRequestKind, TurnPrompt, TurnPromptAttachment};
 use crate::infra::fs::FsClient;
@@ -40,14 +40,14 @@ struct BuildSessionCommandInput {
 }
 
 /// Intermediate values captured while preparing a session reply.
-type ReplyContext = (Option<String>, bool, String, Option<String>);
+type ReplyContext = (Option<String>, bool, SessionId, Option<String>);
 
 /// Cleanup payload for a deleted session's git and filesystem resources.
 struct DeletedSessionCleanup {
     branch_name: String,
     folder: PathBuf,
     has_git_branch: bool,
-    session_id: String,
+    session_id: SessionId,
     staged_draft_root: PathBuf,
     working_dir: PathBuf,
 }
@@ -62,7 +62,7 @@ struct SessionTitleGenerationPromptTemplate<'a> {
 /// Identifies one tracked draft-title generation task completion event.
 struct TitleGenerationTaskCompletion {
     generation: u64,
-    session_id: String,
+    session_id: SessionId,
 }
 
 impl SessionManager {
@@ -800,7 +800,7 @@ impl SessionManager {
         }
 
         services.emit_app_event(AppEvent::SessionModelUpdated {
-            session_id: session_id.to_string(),
+            session_id: SessionId::from(session_id),
             session_model,
         });
 
@@ -836,7 +836,7 @@ impl SessionManager {
 
         services.emit_app_event(AppEvent::SessionReasoningLevelUpdated {
             reasoning_level_override,
-            session_id: session_id.to_string(),
+            session_id: SessionId::from(session_id),
         });
 
         Ok(())
@@ -876,7 +876,7 @@ impl SessionManager {
     }
 
     /// Returns the session identifier for the given list index.
-    pub fn session_id_for_index(&self, session_index: usize) -> Option<String> {
+    pub fn session_id_for_index(&self, session_index: usize) -> Option<SessionId> {
         self.state
             .sessions
             .get(session_index)
@@ -1598,7 +1598,7 @@ impl SessionManager {
     ) -> tokio::task::JoinHandle<()> {
         let folder = folder.to_path_buf();
         let prompt = prompt.to_string();
-        let persisted_session_id = session_id.to_string();
+        let persisted_session_id = SessionId::from(session_id);
         let tracked_completion =
             tracked_generation.map(|generation| TitleGenerationTaskCompletion {
                 generation,
@@ -2130,7 +2130,7 @@ mod test_support {
                 ));
             self.worker_service
                 .test_agent_channels
-                .insert(session_id.to_string(), channel);
+                .insert(session_id.to_string().into(), channel);
             self.reply_impl(services, session_id, prompt, session_model)
                 .await;
         }
@@ -2192,7 +2192,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::from("/tmp/session"),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -2463,7 +2464,7 @@ mod tests {
             emitted_event,
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level_override: Some(ReasoningLevel::High),
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             }
         );
         assert!(event_rx.try_recv().is_err());
@@ -3292,7 +3293,7 @@ mod tests {
     /// tests.
     fn session_with_id(id: &str, status: Status) -> Session {
         let mut session = test_session("prompt", status, None, "");
-        session.id = id.to_string();
+        session.id = id.to_string().into();
 
         session
     }
@@ -3431,7 +3432,7 @@ mod tests {
             session_manager
                 .selected_session()
                 .map(|session| session.id.clone()),
-            Some("session-b".to_string())
+            Some("session-b".into())
         );
     }
 
@@ -3468,7 +3469,7 @@ mod tests {
         // Act / Assert
         assert_eq!(
             session_manager.session_id_for_index(0),
-            Some("session-a".to_string())
+            Some("session-a".into())
         );
         assert!(session_manager.session_id_for_index(1).is_none());
     }
@@ -3524,7 +3525,7 @@ mod tests {
         assert_eq!(
             emitted_event,
             AppEvent::SessionModelUpdated {
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
                 session_model: AgentModel::Gpt54,
             }
         );
@@ -3564,7 +3565,7 @@ mod tests {
         assert_eq!(
             emitted_event,
             AppEvent::SessionModelUpdated {
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
                 session_model: AgentModel::ClaudeSonnet46,
             }
         );

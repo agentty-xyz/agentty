@@ -6,6 +6,7 @@ use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash, review_loading_message};
+use crate::domain::session::SessionId;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, backend_err, mode};
 use crate::ui::state::app_mode::{
@@ -395,7 +396,7 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
 /// list mode.
 async fn handle_cancel_session_confirmation(
     app: &mut App,
-    confirmation_session_id: Option<String>,
+    confirmation_session_id: Option<SessionId>,
 ) -> io::Result<EventResult> {
     app.mode = AppMode::List;
 
@@ -410,7 +411,7 @@ async fn handle_cancel_session_confirmation(
 /// Restores view mode and attempts to add confirmed session to merge queue.
 async fn handle_merge_confirmation(
     app: &mut App,
-    confirmation_session_id: Option<String>,
+    confirmation_session_id: Option<SessionId>,
     restore_view: Option<ConfirmationViewMode>,
 ) -> io::Result<EventResult> {
     app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
@@ -429,7 +430,7 @@ async fn handle_merge_confirmation(
 /// session, then restores session view with the refreshed review state.
 async fn handle_regenerate_review_confirmation(
     app: &mut App,
-    confirmation_session_id: Option<String>,
+    confirmation_session_id: Option<SessionId>,
     restore_view: Option<ConfirmationViewMode>,
 ) -> io::Result<EventResult> {
     let Some(session_id) = confirmation_session_id else {
@@ -438,7 +439,7 @@ async fn handle_regenerate_review_confirmation(
         return Ok(EventResult::Continue);
     };
 
-    app.review_cache.remove(&session_id);
+    app.review_cache.remove(session_id.as_str());
 
     let session = app
         .sessions
@@ -486,7 +487,7 @@ async fn handle_regenerate_review_confirmation(
     app.review_cache
         .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
     app.start_review_assist(
-        &session_id,
+        session_id.as_str(),
         &session_folder,
         diff_hash,
         &diff,
@@ -675,7 +676,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(2),
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
             title: "Review request refreshed".to_string(),
         };
@@ -758,7 +759,7 @@ mod tests {
             confirmation_message: "Cancel session \"test\"?".to_string(),
             confirmation_title: "Confirm Cancel".to_string(),
             restore_view: None,
-            session_id: Some(session_id.clone()),
+            session_id: Some(session_id.clone().into()),
             selected_confirmation_index: 0,
         };
 
@@ -794,9 +795,9 @@ mod tests {
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Review output".to_string()),
                 scroll_offset: Some(6),
-                session_id: session_id.clone(),
+                session_id: session_id.clone().into(),
             }),
-            session_id: Some(session_id.clone()),
+            session_id: Some(session_id.clone().into()),
             selected_confirmation_index: 0,
         };
 
@@ -837,9 +838,9 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(2),
-                session_id: session_id.clone(),
+                session_id: session_id.clone().into(),
             }),
-            session_id: Some(session_id.clone()),
+            session_id: Some(session_id.clone().into()),
             selected_confirmation_index: 0,
         };
 
@@ -878,7 +879,7 @@ mod tests {
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(7),
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
         };
 
@@ -927,7 +928,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
-                session_id,
+                session_id: session_id.into(),
             },
         };
 
@@ -965,7 +966,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
         };
 
@@ -1007,7 +1008,7 @@ mod tests {
                     review_status_message: None,
                     review_text: None,
                     scroll_offset: None,
-                    session_id: "session-id".to_string(),
+                    session_id: "session-id".into(),
                 },
             };
             let modifiers = if character.is_ascii_uppercase() || character == '?' {
@@ -1048,7 +1049,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
         };
 
@@ -1081,7 +1082,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
         };
 
@@ -1140,7 +1141,7 @@ mod tests {
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(3),
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
             selected_command_index: 1,
         };
@@ -1179,7 +1180,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
             selected_command_index: 0,
         };
@@ -1213,7 +1214,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
             selected_command_index: 0,
         };
@@ -1247,7 +1248,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
             selected_command_index: 0,
         };
@@ -1299,7 +1300,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(2),
-                session_id: expected_session_id.clone(),
+                session_id: expected_session_id.clone().into(),
             },
             selected_command_index: 1,
         };
@@ -1336,7 +1337,7 @@ mod tests {
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(1),
-                session_id: "session-id".to_string(),
+                session_id: "session-id".into(),
             },
             selected_command_index: 1,
         };
@@ -1387,9 +1388,9 @@ mod tests {
                 review_status_message: None,
                 review_text: Some("Previous review".to_string()),
                 scroll_offset: Some(4),
-                session_id: session_id.clone(),
+                session_id: session_id.clone().into(),
             }),
-            session_id: Some(session_id.clone()),
+            session_id: Some(session_id.clone().into()),
             selected_confirmation_index: 1,
         };
 
@@ -1422,7 +1423,7 @@ mod tests {
         std::fs::write(session_folder.join("README.md"), "regenerate test\n")
             .expect("failed to write");
         app.review_cache.insert(
-            session_id.clone(),
+            session_id.clone().into(),
             ReviewCacheEntry::Ready {
                 text: "Old review".to_string(),
                 diff_hash: 99,
@@ -1437,9 +1438,9 @@ mod tests {
                 review_status_message: None,
                 review_text: Some("Old review".to_string()),
                 scroll_offset: None,
-                session_id: session_id.clone(),
+                session_id: session_id.clone().into(),
             }),
-            session_id: Some(session_id.clone()),
+            session_id: Some(session_id.clone().into()),
             selected_confirmation_index: 0,
         };
 
@@ -1459,7 +1460,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            app.review_cache.get(&session_id),
+            app.review_cache.get(session_id.as_str()),
             Some(ReviewCacheEntry::Loading { .. })
         ));
     }

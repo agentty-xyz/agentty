@@ -1572,7 +1572,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             slash_state: PromptSlashState::new(),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             input: InputState::with_text("line\n".repeat(80)),
             scroll_offset: None,
         };
@@ -1607,7 +1607,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             slash_state: PromptSlashState::new(),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             input: InputState::with_text("line\n".repeat(80)),
             scroll_offset: None,
         };
@@ -1632,7 +1632,7 @@ mod tests {
             review_status_message: None,
             review_text: Some("Focused review".to_string()),
             slash_state: PromptSlashState::new(),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             input: InputState::default(),
             scroll_offset: None,
         };
@@ -1653,7 +1653,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Focused review".to_string()),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem::new("Need tests?")],
             responses: Vec::new(),
             current_index: 0,
@@ -1782,7 +1782,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: question.clone(),
@@ -1820,7 +1820,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Need details?".to_string(),
@@ -1850,7 +1850,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
                 text: "Continue?".to_string(),
@@ -2077,7 +2077,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Need a detailed migration plan with rollback guidance?".to_string(),
@@ -2115,7 +2115,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: question.clone(),
@@ -2165,7 +2165,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
                 text: "Continue?".to_string(),
@@ -2206,7 +2206,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec![
                     "A".to_string(),

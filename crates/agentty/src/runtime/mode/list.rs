@@ -319,7 +319,7 @@ fn open_session_prompt(app: &mut App, session_id: String) {
         review_status_message: None,
         review_text: None,
         slash_state: app.prompt_slash_state(),
-        session_id,
+        session_id: session_id.into(),
         input: InputState::new(),
         scroll_offset: None,
     };
@@ -640,7 +640,7 @@ mod tests {
             .await
             .expect("failed to create session");
         app.review_cache.insert(
-            expected_session_id.clone(),
+            expected_session_id.clone().into(),
             crate::app::ReviewCacheEntry::Ready {
                 diff_hash: 7,
                 text: "Focused review".to_string(),

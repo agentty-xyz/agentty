@@ -8,7 +8,7 @@ use crate::app::SessionManager;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::{
     DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
-    SessionHandles, SessionSize, SessionStats, Status,
+    SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::infra::agent::protocol::QuestionItem;
 #[cfg(test)]
@@ -20,6 +20,7 @@ use crate::infra::git::GitClient;
 /// Precomputed fields needed to assemble one loaded session snapshot.
 struct LoadedSessionInput {
     draft_attachments: Vec<crate::infra::channel::TurnPromptAttachment>,
+    follow_up_tasks: Vec<SessionFollowUpTask>,
     folder: std::path::PathBuf,
     project_name: String,
     questions: Vec<QuestionItem>,
@@ -27,6 +28,7 @@ struct LoadedSessionInput {
     review_request: Option<ReviewRequest>,
     row: SessionRow,
     session_model: AgentModel,
+    session_id: SessionId,
     session_output: String,
     session_status: Status,
     size: SessionSize,
@@ -58,9 +60,9 @@ impl SessionManager {
         db: &AppRepositories,
         active_project_id: i64,
         working_dir: &Path,
-        handles: &mut HashMap<String, SessionHandles>,
+        handles: &mut HashMap<SessionId, SessionHandles>,
         fs_client: &dyn FsClient,
-    ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<String, bool>) {
+    ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>) {
         let project_name = working_dir
             .file_name()
             .and_then(|name| name.to_str())
@@ -71,17 +73,26 @@ impl SessionManager {
             .load_sessions_for_project(active_project_id)
             .await
             .unwrap_or_default();
+        let persisted_follow_up_tasks = db.load_session_follow_up_tasks().await.unwrap_or_default();
         let stats_activity = db.load_session_activity().await.unwrap_or_default();
         let mut sessions: Vec<Session> = Vec::new();
+        let mut follow_up_tasks_by_session = HashMap::<SessionId, Vec<_>>::new();
         let mut session_worktree_availability = HashMap::new();
 
+        for persisted_follow_up_task in persisted_follow_up_tasks {
+            follow_up_tasks_by_session
+                .entry(SessionId::from(persisted_follow_up_task.session_id.clone()))
+                .or_default()
+                .push(persisted_follow_up_task.into_session_follow_up_task());
+        }
         for row in db_rows {
-            let folder = session_folder(base, &row.id);
+            let session_id = SessionId::from(row.id.clone());
+            let folder = session_folder(base, &session_id);
             let persisted_status = row.status.parse::<Status>().unwrap_or(Status::Done);
             let persisted_size = row.size.parse::<SessionSize>().unwrap_or_default();
             let has_session_folder = fs_client.is_dir(folder.clone());
             let live_handle_status = handles
-                .get(&row.id)
+                .get(&session_id)
                 .and_then(|existing| existing.status.lock().ok().map(|status| *status));
 
             if should_skip_missing_folder_session(
@@ -92,11 +103,12 @@ impl SessionManager {
             ) {
                 continue;
             }
-            session_worktree_availability.insert(row.id.clone(), has_session_folder);
+            session_worktree_availability.insert(session_id.clone(), has_session_folder);
             let session_model = AgentModel::parse_persisted(&row.model)
                 .unwrap_or_else(|_| AgentKind::Gemini.default_model());
 
-            let (session_output, session_status) = if let Some(existing) = handles.get(&row.id) {
+            let (session_output, session_status) = if let Some(existing) = handles.get(&session_id)
+            {
                 let output_from_handle = existing
                     .output
                     .lock()
@@ -117,7 +129,7 @@ impl SessionManager {
                 (output_from_handle, merged_status)
             } else {
                 handles.insert(
-                    row.id.clone(),
+                    session_id.clone(),
                     SessionHandles::new(row.output.clone(), persisted_status),
                 );
 
@@ -126,7 +138,7 @@ impl SessionManager {
 
             let review_request = parse_review_request(&row);
             let draft_attachments =
-                draft::load_staged_draft_attachments(fs_client, base, &row.id).await;
+                draft::load_staged_draft_attachments(fs_client, base, &session_id).await;
             let questions = row
                 .questions
                 .as_deref()
@@ -136,8 +148,12 @@ impl SessionManager {
                 .reasoning_level_override
                 .as_deref()
                 .and_then(|value| value.parse::<ReasoningLevel>().ok());
+            let follow_up_tasks = follow_up_tasks_by_session
+                .remove(&session_id)
+                .unwrap_or_default();
             sessions.push(Self::build_loaded_session(LoadedSessionInput {
                 draft_attachments,
+                follow_up_tasks,
                 folder,
                 project_name: project_name.clone(),
                 questions,
@@ -145,6 +161,7 @@ impl SessionManager {
                 review_request,
                 row,
                 session_model,
+                session_id,
                 session_output,
                 session_status,
                 size: persisted_size,
@@ -187,7 +204,8 @@ impl SessionManager {
             created_at: input.row.created_at,
             draft_attachments: input.draft_attachments,
             folder: input.folder,
-            id: input.row.id,
+            follow_up_tasks: input.follow_up_tasks,
+            id: input.session_id,
             in_progress_started_at: input.row.in_progress_started_at,
             in_progress_total_seconds: input.row.in_progress_total_seconds,
             is_draft: input.row.is_draft,
@@ -374,11 +392,11 @@ mod tests {
         let session_dir = session_folder(base_path, session_id);
         let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
 
-        let mut handles = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         let live_output = "Live Output".to_string();
         let live_status = Status::Review;
         handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(live_output.clone(), live_status),
         );
 
@@ -450,7 +468,7 @@ mod tests {
         let base_path = Path::new("/virtual/session-base");
         let mock_fs_client =
             create_folder_lookup_mock(vec![session_folder(base_path, session_with_worktree_id)]);
-        let mut handles = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
         // Act
         let (_, _, session_worktree_availability) = SessionManager::load_sessions_with_fs_client(
@@ -504,9 +522,9 @@ mod tests {
         let session_dir = session_folder(base_path, session_id);
         let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
 
-        let mut handles = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new("Live Output".to_string(), Status::Review),
         );
 
@@ -557,9 +575,9 @@ mod tests {
         let session_dir = session_folder(base_path, session_id);
         let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
 
-        let mut handles = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
         handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new("output".to_string(), Status::Review),
         );
 
@@ -630,7 +648,7 @@ mod tests {
 
         let base_path = Path::new("/virtual/session-base");
         let mock_fs_client = create_folder_lookup_mock(Vec::new());
-        let mut handles = HashMap::new();
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
         // Act
         let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(

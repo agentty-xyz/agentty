@@ -8,7 +8,7 @@ use crate::app::{SettingsManager, Tab};
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
-use crate::domain::session::{DailyActivity, Session};
+use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
 };
@@ -73,13 +73,13 @@ impl RouteSharedContext<'_> {
 /// Borrowed inputs for rendering a session chat page.
 #[derive(Clone, Copy)]
 struct SessionChatRenderContext<'a> {
-    active_prompt_outputs: &'a HashMap<String, String>,
+    active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
     session_id: &'a str,
-    session_progress_messages: &'a HashMap<String, String>,
-    session_worktree_availability: &'a HashMap<String, bool>,
+    session_progress_messages: &'a HashMap<SessionId, String>,
+    session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
     scroll_offset: Option<u16>,
     wall_clock_unix_seconds: i64,
@@ -90,25 +90,25 @@ struct SessionChatRenderContext<'a> {
 #[derive(Clone, Copy)]
 struct PublishBranchOverlayContext<'a> {
     default_branch_name: &'a str,
-    active_prompt_outputs: &'a HashMap<String, String>,
+    active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
     restore_view: &'a ConfirmationViewMode,
-    session_progress_messages: &'a HashMap<String, String>,
-    session_worktree_availability: &'a HashMap<String, bool>,
+    session_progress_messages: &'a HashMap<SessionId, String>,
+    session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
 }
 
 /// Shared immutable routing inputs that are not part of list-background state.
 #[derive(Clone, Copy)]
 struct RouteAuxContext<'a> {
-    active_prompt_outputs: &'a HashMap<String, String>,
+    active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    session_progress_messages: &'a HashMap<String, String>,
-    session_worktree_availability: &'a HashMap<String, bool>,
+    session_progress_messages: &'a HashMap<SessionId, String>,
+    session_worktree_availability: &'a HashMap<SessionId, bool>,
     wall_clock_unix_seconds: i64,
 }
 
@@ -349,7 +349,7 @@ struct SessionConfirmationContext<'a> {
 #[derive(Clone, Copy)]
 struct SessionOverlayRenderContext<'a> {
     /// Exact prompt transcript blocks keyed by session id for active turns.
-    active_prompt_outputs: &'a HashMap<String, String>,
+    active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Active project-scoped default reasoning level.
     default_reasoning_level: ReasoningLevel,
     /// Shared render cache for session transcript markdown.
@@ -357,10 +357,10 @@ struct SessionOverlayRenderContext<'a> {
     /// Session view restored after the overlay closes.
     restore_view: &'a ConfirmationViewMode,
     /// Active progress messages keyed by session id.
-    session_progress_messages: &'a HashMap<String, String>,
+    session_progress_messages: &'a HashMap<SessionId, String>,
     /// Whether each background session currently has a materialized
     /// worktree, keyed by session id.
-    session_worktree_availability: &'a HashMap<String, bool>,
+    session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Session rows available for background rendering.
     sessions: &'a [Session],
     /// Render-time clock used for deterministic timers.
@@ -751,7 +751,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: None,
         };
         let progress_messages = HashMap::new();
@@ -792,7 +792,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             scroll_offset: None,
         };
         let progress_messages = HashMap::new();
@@ -840,7 +840,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: 0,
         };
         let progress_messages = HashMap::new();
@@ -890,7 +890,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
         };
         let cache = markdown::MarkdownRenderCache::default();
 

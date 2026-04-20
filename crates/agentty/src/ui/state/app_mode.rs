@@ -5,7 +5,7 @@ use super::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
 use crate::domain::input::InputState;
-use crate::domain::session::PublishBranchAction;
+use crate::domain::session::{PublishBranchAction, SessionId};
 use crate::infra::agent::protocol::QuestionItem;
 
 /// Selects the visible panel content for session view output.
@@ -51,7 +51,7 @@ pub struct ConfirmationViewMode {
     pub review_status_message: Option<String>,
     pub review_text: Option<String>,
     pub scroll_offset: Option<u16>,
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 impl ConfirmationViewMode {
@@ -91,7 +91,7 @@ pub struct QuestionModeSnapshot {
     pub responses: Vec<String>,
     pub scroll_offset: Option<u16>,
     pub selected_option_index: Option<usize>,
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 impl QuestionModeSnapshot {
@@ -135,7 +135,7 @@ pub enum AppMode {
         confirmation_title: String,
         /// View state to restore when dismissing merge confirmation.
         restore_view: Option<ConfirmationViewMode>,
-        session_id: Option<String>,
+        session_id: Option<SessionId>,
         selected_confirmation_index: usize,
     },
     /// Informational popup displayed for sync outcomes, including success and
@@ -211,7 +211,7 @@ pub enum AppMode {
         /// Slash-command selection state for the current prompt input.
         slash_state: PromptSlashState,
         /// Session whose prompt composer is currently active.
-        session_id: String,
+        session_id: SessionId,
         /// Editable prompt text, including inline attachment placeholders.
         input: InputState,
         /// Scroll position applied to the session transcript above the
@@ -226,7 +226,7 @@ pub enum AppMode {
         review_status_message: Option<String>,
         /// Agent-assisted review text for the active session.
         review_text: Option<String>,
-        session_id: String,
+        session_id: SessionId,
         scroll_offset: Option<u16>,
     },
     /// Focused diff view with file-tree navigation and independent scrolling.
@@ -241,7 +241,7 @@ pub enum AppMode {
         /// opened from question mode. `None` restores to `View` mode.
         restore_question: Option<QuestionModeSnapshot>,
         /// Session whose diff is currently visible.
-        session_id: String,
+        session_id: SessionId,
         /// Vertical offset inside the rendered diff panel.
         scroll_offset: u16,
     },
@@ -257,7 +257,7 @@ pub enum AppMode {
         /// question mode does not hide the latest assisted review block.
         review_text: Option<String>,
         /// Session receiving the follow-up clarification reply.
-        session_id: String,
+        session_id: SessionId,
         /// Ordered clarification prompts emitted by the model.
         questions: Vec<QuestionItem>,
         /// Collected user responses aligned to `questions`.
@@ -292,7 +292,7 @@ pub enum HelpContext {
         review_status_message: Option<String>,
         review_text: Option<String>,
         publish_pull_request_action: Option<PublishBranchAction>,
-        session_id: String,
+        session_id: SessionId,
         session_state: ViewSessionState,
         scroll_offset: Option<u16>,
     },
@@ -302,7 +302,7 @@ pub enum HelpContext {
         /// Preserved question-mode snapshot so the help→diff→exit path can
         /// still return to question mode when the diff was opened from there.
         restore_question: Option<QuestionModeSnapshot>,
-        session_id: String,
+        session_id: SessionId,
         scroll_offset: u16,
     },
 }
@@ -401,7 +401,7 @@ mod tests {
             review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
             review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(7),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
         };
 
         // Act
@@ -431,7 +431,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(2),
         };
@@ -460,7 +460,7 @@ mod tests {
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Ready".to_string()),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             session_state: ViewSessionState::InProgress,
             scroll_offset: Some(4),
         };
@@ -492,7 +492,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             session_state: ViewSessionState::Interactive,
             scroll_offset: None,
         };

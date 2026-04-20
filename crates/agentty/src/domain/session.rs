@@ -1,9 +1,14 @@
+use std::borrow::Borrow;
 use std::fmt;
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use ratatui::style::Color;
+use serde::de::{self, Deserializer};
+use serde::ser::Serializer;
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::agent::{AgentModel, ReasoningLevel};
@@ -12,6 +17,122 @@ use crate::infra::channel::TurnPromptAttachment;
 
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";
+
+/// Shared stable identifier for one session.
+///
+/// The app clones session identifiers heavily across maps, events, and worker
+/// tasks. Wrapping the identifier in `Arc<str>` keeps those clones to a cheap
+/// reference-count bump while still supporting borrowed `&str` lookups in
+/// `HashMap<SessionId, _>`.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SessionId(Arc<str>);
+
+impl SessionId {
+    /// Returns the session identifier as a string slice.
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<str> for SessionId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<Path> for SessionId {
+    fn as_ref(&self) -> &Path {
+        Path::new(self.as_str())
+    }
+}
+
+impl Borrow<str> for SessionId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Deref for SessionId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for SessionId {
+    fn from(value: &str) -> Self {
+        Self(Arc::<str>::from(value))
+    }
+}
+
+impl From<String> for SessionId {
+    fn from(value: String) -> Self {
+        Self(Arc::<str>::from(value))
+    }
+}
+
+impl From<Arc<str>> for SessionId {
+    fn from(value: Arc<str>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<SessionId> for String {
+    fn from(value: SessionId) -> Self {
+        value.as_str().to_string()
+    }
+}
+
+impl PartialEq<str> for SessionId {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for SessionId {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for SessionId {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&String> for SessionId {
+    fn eq(&self, other: &&String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Serialize for SessionId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)
+            .map(Self::from)
+            .map_err(de::Error::custom)
+    }
+}
 
 /// High-level lifecycle state for one session.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -252,6 +373,15 @@ pub enum PublishBranchAction {
     PublishPullRequest,
 }
 
+/// Launch action currently available for one persisted follow-up task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FollowUpTaskAction {
+    /// Starts a new sibling session from the selected task text.
+    Launch,
+    /// Opens the already launched sibling session linked to the task.
+    Open,
+}
+
 /// Auto-push state for one already-published session branch.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PublishedBranchSyncStatus {
@@ -313,6 +443,30 @@ pub struct DailyActivity {
     pub session_count: u32,
 }
 
+/// Persisted read-only follow-up task rendered alongside one session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionFollowUpTask {
+    /// Stable database identifier for the persisted follow-up task row.
+    pub id: i64,
+    /// Previously launched sibling session linked to this task, when one has
+    /// already been created.
+    pub launched_session_id: Option<SessionId>,
+    /// Stable display-order position persisted for this follow-up task.
+    pub position: usize,
+    /// User-visible task text emitted by the agent.
+    pub text: String,
+}
+
+impl SessionFollowUpTask {
+    /// Returns the action the session view should expose for this task.
+    pub fn action(&self) -> FollowUpTaskAction {
+        if self.launched_session_id.is_some() {
+            return FollowUpTaskAction::Open;
+        }
+
+        FollowUpTaskAction::Launch
+    }
+}
 /// In-memory snapshot of one persisted session row used by the UI and app
 /// orchestration layers.
 pub struct Session {
@@ -325,8 +479,10 @@ pub struct Session {
     pub draft_attachments: Vec<TurnPromptAttachment>,
     /// Planned or active worktree folder path for this session.
     pub folder: PathBuf,
+    /// Persisted read-only follow-up tasks emitted after the latest turn.
+    pub follow_up_tasks: Vec<SessionFollowUpTask>,
     /// Stable session identifier.
-    pub id: String,
+    pub id: SessionId,
     /// Unix timestamp when the current active-work interval started, if the
     /// session is presently accumulating `InProgress` time.
     pub in_progress_started_at: Option<i64>,
@@ -496,6 +652,13 @@ impl Session {
             .allows_review_actions()
             .then_some(PublishBranchAction::PublishPullRequest)
     }
+
+    /// Returns the follow-up task at `position`, when present.
+    pub fn follow_up_task(&self, position: usize) -> Option<&SessionFollowUpTask> {
+        self.follow_up_tasks
+            .iter()
+            .find(|task| task.position == position)
+    }
 }
 
 /// Shared runtime handles for one active session worker.
@@ -536,6 +699,8 @@ impl SessionHandles {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     /// Chainable builder that produces deterministic `Session` values for unit
@@ -556,7 +721,8 @@ pub(crate) mod tests {
                     created_at: 0,
                     draft_attachments: Vec::new(),
                     folder: PathBuf::new(),
-                    id: "session-id".to_string(),
+                    follow_up_tasks: Vec::new(),
+                    id: SessionId::from("session-id"),
                     in_progress_started_at: None,
                     in_progress_total_seconds: 0,
                     is_draft: false,
@@ -580,7 +746,7 @@ pub(crate) mod tests {
         }
 
         /// Overrides the stable session identifier.
-        pub(crate) fn id(mut self, id: impl Into<String>) -> Self {
+        pub(crate) fn id(mut self, id: impl Into<SessionId>) -> Self {
             self.session.id = id.into();
 
             self
@@ -717,6 +883,35 @@ pub(crate) mod tests {
 
         // Assert
         assert_eq!(displayed_status, "Queued");
+    }
+
+    #[test]
+    fn test_session_id_hash_map_borrowed_lookup() {
+        // Arrange
+        let session_id = SessionId::from("session-id");
+        let sessions = HashMap::from([(session_id, "ready")]);
+
+        // Act
+        let status = sessions.get("session-id");
+
+        // Assert
+        assert_eq!(status, Some(&"ready"));
+    }
+
+    #[test]
+    fn test_session_id_serde_serializes_as_plain_string() {
+        // Arrange
+        let session_id = SessionId::from("session-id");
+
+        // Act
+        let serialized_session_id =
+            serde_json::to_string(&session_id).expect("session id should serialize");
+        let deserialized_session_id: SessionId =
+            serde_json::from_str(&serialized_session_id).expect("session id should deserialize");
+
+        // Assert
+        assert_eq!(serialized_session_id, "\"session-id\"");
+        assert_eq!(deserialized_session_id, session_id);
     }
 
     #[test]
@@ -939,7 +1134,8 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -975,7 +1171,8 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -1011,7 +1208,8 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: Some(60),
             in_progress_total_seconds: 120,
             is_draft: false,
@@ -1047,7 +1245,8 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 180,
             is_draft: false,
@@ -1083,7 +1282,8 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: Some(120),
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -1119,7 +1319,8 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::new(),
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: Some(200),
             in_progress_total_seconds: 90,
             is_draft: false,

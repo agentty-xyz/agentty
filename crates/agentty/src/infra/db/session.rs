@@ -3,9 +3,10 @@
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
+use super::AppRepositories;
 use super::review::SessionReviewRequestRow;
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::session::SessionStats;
+use crate::domain::session::{SessionFollowUpTask, SessionId, SessionStats};
 use crate::infra::agent;
 use crate::infra::db::DbError;
 
@@ -57,6 +58,28 @@ pub struct SessionRow {
     pub updated_at: i64,
 }
 
+/// Row returned when loading one persisted `session_follow_up_task`.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub(crate) struct SessionFollowUpTaskRow {
+    pub id: i64,
+    pub launched_session_id: Option<String>,
+    pub position: i64,
+    pub session_id: String,
+    pub text: String,
+}
+
+impl SessionFollowUpTaskRow {
+    /// Converts one follow-up-task row into the domain snapshot used by the
+    /// UI.
+    pub(crate) fn into_session_follow_up_task(self) -> SessionFollowUpTask {
+        SessionFollowUpTask {
+            id: self.id,
+            launched_session_id: self.launched_session_id.map(SessionId::from),
+            position: usize::try_from(self.position).unwrap_or(usize::MAX),
+            text: self.text,
+        }
+    }
+}
 /// Session-focused persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -114,6 +137,10 @@ pub(crate) trait SessionRepository: Send + Sync {
     /// Loads all sessions ordered by most recent update for one project.
     async fn load_sessions_for_project(&self, project_id: i64) -> Result<Vec<SessionRow>, DbError>;
 
+    /// Loads all persisted session follow-up-task rows in stable display
+    /// order.
+    async fn load_session_follow_up_tasks(&self) -> Result<Vec<SessionFollowUpTaskRow>, DbError>;
+
     /// Loads lightweight session metadata used for cheap change detection.
     async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError>;
 
@@ -154,6 +181,13 @@ pub(crate) trait SessionRepository: Send + Sync {
     /// Replaces the full output for a session row.
     async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError>;
 
+    /// Replaces the persisted follow-up task list for one session.
+    async fn replace_session_follow_up_tasks(
+        &self,
+        session_id: &str,
+        follow_up_tasks: &[String],
+    ) -> Result<(), DbError>;
+
     /// Updates persisted diff-derived size and line-count fields for a
     /// session row.
     async fn update_session_diff_stats(
@@ -162,6 +196,15 @@ pub(crate) trait SessionRepository: Send + Sync {
         deleted_lines: u64,
         id: &str,
         size: &str,
+    ) -> Result<(), DbError>;
+
+    /// Updates the launched sibling-session link for one persisted follow-up
+    /// task.
+    async fn update_session_follow_up_task_launched_session_id(
+        &self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<String>,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted app-server instruction bootstrap marker for a
@@ -712,6 +755,29 @@ ORDER BY session.updated_at DESC, session.id
             .collect())
     }
 
+    async fn load_session_follow_up_tasks(&self) -> Result<Vec<SessionFollowUpTaskRow>, DbError> {
+        let rows = match sqlx::query_as::<_, SessionFollowUpTaskRow>(
+            r"
+SELECT id,
+       launched_session_id,
+       position,
+       session_id,
+       text
+FROM session_follow_up_task
+ORDER BY session_id, position, id
+",
+        )
+        .fetch_all(&self.0)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) if is_missing_follow_up_task_table(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+
+        Ok(rows)
+    }
+
     async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError> {
         let row = sqlx::query_as!(
             SessionMetadataRow,
@@ -899,6 +965,53 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn replace_session_follow_up_tasks(
+        &self,
+        session_id: &str,
+        follow_up_tasks: &[String],
+    ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+
+        let delete_result = sqlx::query(
+            r"
+DELETE FROM session_follow_up_task
+WHERE session_id = ?
+",
+        )
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await;
+        match delete_result {
+            Ok(_) => {}
+            Err(error) if is_missing_follow_up_task_table(&error) => {
+                transaction.rollback().await?;
+                return Ok(());
+            }
+            Err(error) => {
+                transaction.rollback().await?;
+                return Err(error.into());
+            }
+        }
+
+        for (position, follow_up_task) in follow_up_tasks.iter().enumerate() {
+            sqlx::query(
+                r"
+INSERT INTO session_follow_up_task (session_id, position, text)
+VALUES (?, ?, ?)
+",
+            )
+            .bind(session_id)
+            .bind(i64::try_from(position).unwrap_or(i64::MAX))
+            .bind(follow_up_task)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn update_session_diff_stats(
         &self,
         added_lines: u64,
@@ -929,6 +1042,34 @@ WHERE id = ?
         .bind(size)
         .execute(&self.0)
         .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_follow_up_task_launched_session_id(
+        &self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<String>,
+    ) -> Result<(), DbError> {
+        let update_result = sqlx::query(
+            r"
+UPDATE session_follow_up_task
+SET launched_session_id = ?
+WHERE session_id = ?
+  AND position = ?
+",
+        )
+        .bind(launched_session_id.as_deref())
+        .bind(session_id)
+        .bind(i64::try_from(position).unwrap_or(i64::MAX))
+        .execute(&self.0)
+        .await;
+        match update_result {
+            Ok(_) => {}
+            Err(error) if is_missing_follow_up_task_table(&error) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
 
         Ok(())
     }
@@ -1235,4 +1376,51 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     .await?;
 
     Ok(())
+}
+
+impl AppRepositories {
+    /// Loads all persisted follow-up-task rows in stable display order.
+    pub(crate) async fn load_session_follow_up_tasks(
+        &self,
+    ) -> Result<Vec<SessionFollowUpTaskRow>, DbError> {
+        self.session.load_session_follow_up_tasks().await
+    }
+
+    /// Updates the launched sibling-session link for one persisted follow-up
+    /// task.
+    pub(crate) async fn update_session_follow_up_task_launched_session_id(
+        &self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<&str>,
+    ) -> Result<(), DbError> {
+        self.session
+            .update_session_follow_up_task_launched_session_id(
+                session_id,
+                position,
+                launched_session_id.map(str::to_string),
+            )
+            .await
+    }
+
+    /// Replaces the persisted follow-up-task list for one session.
+    pub(crate) async fn replace_session_follow_up_tasks(
+        &self,
+        session_id: &str,
+        follow_up_tasks: &[String],
+    ) -> Result<(), DbError> {
+        self.session
+            .replace_session_follow_up_tasks(session_id, follow_up_tasks)
+            .await
+    }
+}
+
+/// Returns whether one `SQLx` error indicates the optional follow-up-task table
+/// is not available in the current database.
+fn is_missing_follow_up_task_table(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(database_error)
+            if database_error.message().contains("no such table: session_follow_up_task")
+    )
 }

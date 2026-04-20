@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::app::AppEvent;
 use crate::domain::input::InputState;
+use crate::domain::session::SessionId;
 use crate::infra::file_index::{self, FileEntry};
 use crate::ui::state::prompt::PromptAtMentionState;
 
@@ -17,7 +18,7 @@ const AT_MENTION_LOAD_DEBOUNCE: Duration = Duration::from_millis(75);
 /// Monotonic counter used to distinguish stale and current load tasks.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// Per-session debounced file-index tasks keyed by session identifier.
-static PENDING_AT_MENTION_LOADS: LazyLock<Mutex<HashMap<String, PendingAtMentionLoad>>> =
+static PENDING_AT_MENTION_LOADS: LazyLock<Mutex<HashMap<SessionId, PendingAtMentionLoad>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Describes how one mode should update its visible `@`-mention state after an
@@ -71,7 +72,7 @@ pub(crate) fn sync_action(
 pub(crate) fn start_loading_entries(
     event_tx: mpsc::UnboundedSender<AppEvent>,
     lookup_root: PathBuf,
-    session_id: String,
+    session_id: SessionId,
 ) {
     let request_id = NEXT_AT_MENTION_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let tracked_session_id = session_id.clone();
@@ -106,7 +107,7 @@ pub(crate) fn clear_pending_load(session_id: &str) {
 
 /// Stores the latest pending load task for one session and aborts any stale
 /// debounced predecessor.
-fn track_pending_load(session_id: String, request_id: u64, handle: JoinHandle<()>) {
+fn track_pending_load(session_id: SessionId, request_id: u64, handle: JoinHandle<()>) {
     if let Ok(mut pending_loads) = PENDING_AT_MENTION_LOADS.lock()
         && let Some(previous_task) =
             pending_loads.insert(session_id, PendingAtMentionLoad { handle, request_id })
@@ -310,7 +311,7 @@ mod tests {
         start_loading_entries(
             event_tx.clone(),
             temp_dir.path().to_path_buf(),
-            event_session_id.clone(),
+            event_session_id.clone().into(),
         );
 
         std::fs::write(temp_dir.path().join("second.txt"), "").expect("write second file");
@@ -319,7 +320,7 @@ mod tests {
         start_loading_entries(
             event_tx,
             temp_dir.path().to_path_buf(),
-            event_session_id.clone(),
+            event_session_id.clone().into(),
         );
         let next_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
@@ -352,7 +353,11 @@ mod tests {
         let session_id = "session-1".to_string();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-        start_loading_entries(event_tx, temp_dir.path().to_path_buf(), session_id.clone());
+        start_loading_entries(
+            event_tx,
+            temp_dir.path().to_path_buf(),
+            session_id.clone().into(),
+        );
 
         // Act
         clear_pending_load(&session_id);

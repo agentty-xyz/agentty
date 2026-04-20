@@ -327,7 +327,7 @@ mod tests {
             .build();
         app.sessions.push_session(session);
         app.sessions.handles.insert(
-            session_id.clone(),
+            session_id.clone().into(),
             SessionHandles::new(String::new(), Status::InProgress),
         );
 
@@ -335,7 +335,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Output,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.clone(),
+            session_id: session_id.clone().into(),
             scroll_offset: None,
         };
         if let Some(session) = app
@@ -346,7 +346,7 @@ mod tests {
         {
             session.status = Status::InProgress;
         }
-        if let Some(handles) = app.sessions.handles.get(&session_id) {
+        if let Some(handles) = app.sessions.handles.get(session_id.as_str()) {
             if let Ok(mut output) = handles.output.lock() {
                 output.push_str("synced output");
             }
@@ -355,7 +355,7 @@ mod tests {
             }
         }
         app.services.emit_app_event(AppEvent::SessionUpdated {
-            session_id: session_id.clone(),
+            session_id: session_id.clone().into(),
         });
 
         let mut main_loop_state = MainLoopState {

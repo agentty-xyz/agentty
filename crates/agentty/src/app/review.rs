@@ -12,7 +12,7 @@ use super::core::AppEvent;
 use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::AgentModel;
-use crate::domain::session::Status;
+use crate::domain::session::{SessionId, Status};
 use crate::infra::git::GitClient;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
@@ -111,7 +111,7 @@ pub(crate) fn review_loading_message(review_model: AgentModel) -> String {
 /// Returns the focused-review render state that should be restored for one
 /// session when reopening session view.
 pub(crate) fn review_view_state(
-    review_cache: &HashMap<String, ReviewCacheEntry>,
+    review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session_id: &str,
     review_model: AgentModel,
 ) -> (Option<String>, Option<String>) {
@@ -144,7 +144,7 @@ pub(crate) fn start_review_assist(
         diff_hash,
         review_diff: review_diff.to_string(),
         session_folder: session_folder.to_path_buf(),
-        session_id: session_id.to_string(),
+        session_id: SessionId::from(session_id),
         review_model,
         session_summary: session_summary.map(str::to_string),
     });
@@ -163,10 +163,10 @@ pub(crate) fn mark_session_agent_review(session_state: &mut SessionState, sessio
 
 /// Applies review assist updates for all sessions in one reducer batch.
 pub(crate) fn apply_review_updates(
-    review_cache: &mut HashMap<String, ReviewCacheEntry>,
+    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     mode: &mut AppMode,
     session_state: &mut SessionState,
-    review_updates: HashMap<String, ReviewUpdate>,
+    review_updates: HashMap<SessionId, ReviewUpdate>,
 ) {
     for (session_id, review_update) in review_updates {
         apply_review_update(
@@ -189,8 +189,8 @@ pub(crate) fn apply_review_updates(
 /// Sessions returning to `InProgress` clear their cached review immediately so
 /// the next completed diff triggers a fresh assist run.
 pub(crate) async fn auto_start_reviews(
-    review_cache: &mut HashMap<String, ReviewCacheEntry>,
-    session_ids: &HashSet<String>,
+    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
+    session_ids: &HashSet<SessionId>,
     session_state: &mut SessionState,
     git_client: Arc<dyn GitClient>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -262,7 +262,7 @@ pub(crate) async fn auto_start_reviews(
 
 /// Applies one review assist update to cache and active render state.
 fn apply_review_update(
-    review_cache: &mut HashMap<String, ReviewCacheEntry>,
+    review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     mode: &mut AppMode,
     session_state: &mut SessionState,
     session_id: &str,
@@ -278,7 +278,7 @@ fn apply_review_update(
     }
 
     review_cache.insert(
-        session_id.to_string(),
+        SessionId::from(session_id),
         ReviewCacheEntry::from_result(diff_hash, &result),
     );
     restore_session_review_status(session_state, session_id);
@@ -437,7 +437,7 @@ mod tests {
         // Arrange
         let mut review_cache = HashMap::new();
         review_cache.insert(
-            "session-id".to_string(),
+            "session-id".into(),
             ReviewCacheEntry::Loading { diff_hash: 7 },
         );
 

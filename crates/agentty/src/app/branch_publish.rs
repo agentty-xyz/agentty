@@ -7,7 +7,7 @@ use ag_forge as forge;
 
 use super::session::{self, Clock, unix_timestamp_from_system_time};
 use crate::app::review_request;
-use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, Status};
+use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
 use crate::infra::db;
 use crate::infra::git::GitClient;
 use crate::ui::state::app_mode::ConfirmationViewMode;
@@ -21,7 +21,7 @@ pub(crate) struct BranchPublishTaskSession {
     /// Session worktree used for git push and remote inspection.
     pub(crate) folder: PathBuf,
     /// Stable session identifier.
-    pub(crate) id: String,
+    pub(crate) id: SessionId,
     /// Persisted upstream reference from a previous push, when the session
     /// already tracks one.
     pub(crate) published_upstream_ref: Option<String>,
@@ -53,7 +53,7 @@ pub(crate) struct BranchPublishActionUpdate {
     /// Branch-publish task result routed through the reducer.
     pub(crate) result: BranchPublishTaskResult,
     /// Session id targeted by the completed action.
-    pub(crate) session_id: String,
+    pub(crate) session_id: SessionId,
 }
 
 /// Error payload shown inside the session-view info popup for branch-publish
@@ -859,7 +859,7 @@ mod tests {
         let branch_publish_session = BranchPublishTaskSession {
             base_branch: "main".to_string(),
             folder: session_folder.clone(),
-            id: "session-id".to_string(),
+            id: "session-id".into(),
             published_upstream_ref: None,
             review_request: None,
             status: Status::Review,

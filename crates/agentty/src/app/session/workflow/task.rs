@@ -14,7 +14,7 @@ use crate::app::assist::{
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{SessionSize, Status};
+use crate::domain::session::{SessionId, SessionSize, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::agent;
 use crate::infra::db::AppRepositories;
@@ -720,7 +720,7 @@ impl SessionTaskService {
         let _ = db
             .update_session_status_with_timing_at(id, &new.to_string(), timestamp_seconds)
             .await;
-        let session_id = id.to_string();
+        let session_id = SessionId::from(id);
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionUpdated { session_id });
         if Self::status_requires_full_refresh(new) {
@@ -746,7 +746,7 @@ impl SessionTaskService {
         let _ = db.append_session_output(id, message).await;
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionUpdated {
-            session_id: id.to_string(),
+            session_id: SessionId::from(id),
         });
     }
 
@@ -764,7 +764,7 @@ impl SessionTaskService {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = app_event_tx.send(AppEvent::SessionProgressUpdated {
             progress_message,
-            session_id: id.to_string(),
+            session_id: SessionId::from(id),
         });
     }
 

@@ -135,7 +135,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             scroll_offset: None,
         };
 
@@ -155,7 +155,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             scroll_offset: 0,
         };
 

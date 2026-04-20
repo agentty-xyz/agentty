@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
-use crate::domain::session::Status;
+use crate::domain::session::{SessionId, Status};
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPrompt;
 use crate::runtime::EventResult;
@@ -228,7 +228,7 @@ fn scroll_offset_up(scroll_offset: Option<u16>, metrics: QuestionViewMetrics, st
 }
 
 /// Extracts the `session_id` from the current question mode, if active.
-fn extract_question_session_id(app: &App) -> Option<String> {
+fn extract_question_session_id(app: &App) -> Option<SessionId> {
     if let AppMode::Question { session_id, .. } = &app.mode {
         Some(session_id.clone())
     } else {
@@ -272,7 +272,7 @@ async fn show_question_diff(app: &mut App, session_id: &str) {
         file_explorer_selected_index: 0,
         restore_question: snapshot,
         scroll_cache: None,
-        session_id: session_id.to_string(),
+        session_id: session_id.into(),
         scroll_offset: 0,
     };
 }
@@ -670,7 +670,7 @@ fn activate_question_at_mention(app: &mut App, session_id: &str) {
                 )
             },
         );
-    let owned_session_id = session_id.to_string();
+    let owned_session_id = SessionId::from(session_id);
     let event_tx = app.services.event_sender();
 
     at_mention::start_loading_entries(event_tx, lookup_root, owned_session_id);
@@ -813,7 +813,7 @@ async fn end_turn_no_answer(app: &mut App) {
         session.status = Status::Review;
     }
 
-    if let Some(handles) = app.sessions.handles.get(&session_id)
+    if let Some(handles) = app.sessions.handles.get(session_id.as_str())
         && let Ok(mut handle_status) = handles.status.lock()
     {
         *handle_status = Status::Review;
@@ -835,7 +835,7 @@ async fn end_turn_no_answer(app: &mut App) {
 fn store_question_response(
     app: &mut App,
     response: String,
-) -> Option<(String, Vec<QuestionItem>, Vec<String>)> {
+) -> Option<(SessionId, Vec<QuestionItem>, Vec<String>)> {
     let AppMode::Question {
         at_mention_state,
         current_index,
@@ -943,7 +943,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
                     options: vec!["Yes".to_string(), "No".to_string()],
@@ -988,7 +988,7 @@ mod tests {
         // turn and transition to View without sending a reply.
         let mut app = new_test_app().await;
         app.review_cache.insert(
-            "session-esc".to_string(),
+            "session-esc".into(),
             crate::app::ReviewCacheEntry::Ready {
                 text: "Focused review".to_string(),
                 diff_hash: 42,
@@ -998,7 +998,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-esc".to_string(),
+            session_id: "session-esc".into(),
             questions: vec![
                 QuestionItem {
                     options: vec!["Yes".to_string(), "No".to_string()],
@@ -1054,7 +1054,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::from("/tmp/test"),
-            id: session_id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -1078,7 +1079,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Q?".to_string(),
@@ -1126,7 +1127,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::from("/tmp/test"),
-            id: session_id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -1147,14 +1149,14 @@ mod tests {
             updated_at: 0,
         });
         app.sessions.handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::Question),
         );
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Q?".to_string(),
@@ -1217,7 +1219,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Q?".to_string(),
@@ -1262,7 +1264,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             questions: vec![QuestionItem {
                 options: vec!["Today".to_string(), "Tomorrow".to_string()],
                 text: "Need exact date?".to_string(),
@@ -1302,7 +1304,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec!["Default".to_string()],
                 text: "Question".to_string(),
@@ -1354,7 +1356,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: vec![
                     "Option A".to_string(),
@@ -1523,7 +1525,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
                     options: vec!["Yes".to_string(), "No".to_string()],
@@ -1784,7 +1786,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
                     options: vec!["Foo".to_string()],
@@ -2100,7 +2102,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Question?".to_string(),
@@ -2548,7 +2550,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             questions: vec![
                 QuestionItem {
                     options: vec!["Yes".to_string(), "No".to_string()],
@@ -2595,7 +2597,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-esc-chat".to_string(),
+            session_id: "session-esc-chat".into(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string()],
                 text: "Continue?".to_string(),
@@ -2636,7 +2638,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-esc-answer".to_string(),
+            session_id: "session-esc-answer".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Q?".to_string(),
@@ -2685,7 +2687,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: session_dir.path().to_path_buf(),
-            id: session_id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -2710,7 +2713,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             questions: vec![QuestionItem {
                 options: vec!["A".to_string()],
                 text: "Pick one".to_string(),

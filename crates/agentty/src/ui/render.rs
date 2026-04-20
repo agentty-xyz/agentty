@@ -9,7 +9,7 @@ use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{SettingsManager, Tab, UpdateStatus};
 use crate::domain::project::ProjectListItem;
-use crate::domain::session::{DailyActivity, Session};
+use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, markdown, page, router};
 
@@ -28,7 +28,7 @@ pub trait Component {
 /// Immutable data required to draw a single UI frame.
 pub struct RenderContext<'a> {
     /// Exact prompt transcript blocks keyed by session id for active turns.
-    pub active_prompt_outputs: &'a HashMap<String, String>,
+    pub active_prompt_outputs: &'a HashMap<SessionId, String>,
     /// Identifier of the currently active project.
     pub active_project_id: i64,
     /// Active top-level tab selection.
@@ -52,17 +52,17 @@ pub struct RenderContext<'a> {
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
     /// Detected session worktree branch names keyed by session id.
-    pub session_branch_names: &'a HashMap<String, String>,
+    pub session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id,
     /// including both base-branch and tracked-remote comparisons.
-    pub session_git_statuses: &'a HashMap<String, SessionGitStatus>,
+    pub session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
-    pub session_index_by_id: &'a HashMap<String, usize>,
+    pub session_index_by_id: &'a HashMap<SessionId, usize>,
     /// Background thinking messages keyed by session id.
-    pub session_progress_messages: &'a HashMap<String, String>,
+    pub session_progress_messages: &'a HashMap<SessionId, String>,
     /// Whether each rendered session currently has a materialized worktree on
     /// disk, keyed by session id.
-    pub session_worktree_availability: &'a HashMap<String, bool>,
+    pub session_worktree_availability: &'a HashMap<SessionId, bool>,
     /// Mutable project-scoped settings snapshot.
     pub settings: &'a mut SettingsManager,
     /// Daily session activity series used by the stats view.
@@ -110,11 +110,11 @@ struct FooterBarRenderContext<'a> {
     /// Project footer values used when the active mode is not session-scoped.
     project: ProjectFooterContext<'a>,
     /// Detected session worktree branch names keyed by session id.
-    session_branch_names: &'a HashMap<String, String>,
+    session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id.
-    session_git_statuses: &'a HashMap<String, SessionGitStatus>,
+    session_git_statuses: &'a HashMap<SessionId, SessionGitStatus>,
     /// Cached session list positions keyed by stable session id.
-    session_index_by_id: &'a HashMap<String, usize>,
+    session_index_by_id: &'a HashMap<SessionId, usize>,
     /// Session rows available for resolving the active footer session.
     sessions: &'a [Session],
 }
@@ -297,7 +297,7 @@ mod tests {
     }
 
     /// Builds a deterministic session-id lookup map for footer render tests.
-    fn session_index_by_id(sessions: &[Session]) -> HashMap<String, usize> {
+    fn session_index_by_id(sessions: &[Session]) -> HashMap<SessionId, usize> {
         sessions
             .iter()
             .enumerate()
@@ -316,7 +316,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: None,
         };
         let sessions = vec![session];
@@ -364,7 +364,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: None,
         };
         let sessions = vec![session];
@@ -416,7 +416,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
-                session_id: session_id.to_string(),
+                session_id: session_id.into(),
             },
             title: "Branch pushed".to_string(),
         };
@@ -507,14 +507,14 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: None,
         };
         let sessions = vec![session];
         let session_index_by_id = session_index_by_id(&sessions);
-        let session_branch_names = HashMap::new();
-        let session_git_statuses = HashMap::from([(
-            session_id.to_string(),
+        let session_branch_names: HashMap<SessionId, String> = HashMap::new();
+        let session_git_statuses: HashMap<SessionId, SessionGitStatus> = HashMap::from([(
+            session_id.to_string().into(),
             SessionGitStatus {
                 base_status: Some((3, 2)),
                 remote_status: Some((1, 4)),
@@ -562,14 +562,14 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: None,
         };
         let sessions = vec![session];
         let session_index_by_id = session_index_by_id(&sessions);
-        let session_branch_names = HashMap::new();
-        let session_git_statuses = HashMap::from([(
-            session_id.to_string(),
+        let session_branch_names: HashMap<SessionId, String> = HashMap::new();
+        let session_git_statuses: HashMap<SessionId, SessionGitStatus> = HashMap::from([(
+            session_id.to_string().into(),
             SessionGitStatus {
                 base_status: Some((5, 1)),
                 remote_status: None,
@@ -617,13 +617,13 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
             scroll_offset: None,
         };
         let sessions = vec![session];
         let session_index_by_id = session_index_by_id(&sessions);
-        let session_branch_names =
-            HashMap::from([(session_id.to_string(), "agentty/legacy".to_string())]);
+        let session_branch_names: HashMap<SessionId, String> =
+            HashMap::from([(session_id.to_string().into(), "agentty/legacy".to_string())]);
 
         // Act
         terminal

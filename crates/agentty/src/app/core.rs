@@ -51,7 +51,8 @@ use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::project::{Project, ProjectListItem};
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, Session, SessionSize, Status,
+    FollowUpTaskAction, PublishBranchAction, PublishedBranchSyncStatus, Session, SessionId,
+    SessionSize, Status,
 };
 use crate::infra::channel::TurnPrompt;
 use crate::infra::db::{AppRepositories, Database};
@@ -63,7 +64,9 @@ use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server, db};
 use crate::runtime::mode::{at_mention, question, sync_blocked};
 use crate::ui::markdown;
-use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
+use crate::ui::state::app_mode::{
+    AppMode, ConfirmationViewMode, DoneSessionOutputMode, QuestionFocus,
+};
 use crate::ui::state::prompt::PromptAtMentionState;
 use crate::{app, ui};
 
@@ -127,12 +130,12 @@ pub(crate) enum AppEvent {
     /// Indicates background-loaded prompt at-mention entries for one session.
     AtMentionEntriesLoaded {
         entries: Vec<FileEntry>,
-        session_id: String,
+        session_id: SessionId,
     },
     /// Indicates the latest project-branch and session-branch ahead/behind
     /// information from the git status worker.
     GitStatusUpdated {
-        session_statuses: HashMap<String, SessionGitStatus>,
+        session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     },
     /// Indicates whether a newer stable `agentty` release is available.
@@ -143,13 +146,13 @@ pub(crate) enum AppEvent {
     UpdateStatusChanged { update_status: UpdateStatus },
     /// Indicates a session model selection has been persisted.
     SessionModelUpdated {
-        session_id: String,
+        session_id: SessionId,
         session_model: AgentModel,
     },
     /// Indicates a session reasoning override selection has been persisted.
     SessionReasoningLevelUpdated {
         reasoning_level_override: Option<ReasoningLevel>,
-        session_id: String,
+        session_id: SessionId,
     },
     /// Requests a full session list refresh.
     RefreshSessions,
@@ -159,7 +162,7 @@ pub(crate) enum AppEvent {
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
-        session_id: String,
+        session_id: SessionId,
     },
     /// Indicates completion of a list-mode sync workflow.
     SyncMainCompleted {
@@ -170,69 +173,72 @@ pub(crate) enum AppEvent {
     SessionSizeUpdated {
         added_lines: u64,
         deleted_lines: u64,
-        session_id: String,
+        session_id: SessionId,
         session_size: SessionSize,
     },
     /// Indicates one tracked draft-title generation task reached a terminal
     /// outcome and can be pruned from in-memory task tracking.
-    SessionTitleGenerationFinished { generation: u64, session_id: String },
+    SessionTitleGenerationFinished {
+        generation: u64,
+        session_id: SessionId,
+    },
     /// Indicates completion of a session-view branch-publish action.
     BranchPublishActionCompleted {
         restore_view: ConfirmationViewMode,
         result: Box<BranchPublishTaskResult>,
-        session_id: String,
+        session_id: SessionId,
     },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
         diff_hash: u64,
         review_text: String,
-        session_id: String,
+        session_id: SessionId,
     },
     /// Indicates review assist failed for a session.
     ReviewPreparationFailed {
         diff_hash: u64,
         error: String,
-        session_id: String,
+        session_id: SessionId,
     },
     /// Indicates that a session handle snapshot changed in-memory.
-    SessionUpdated { session_id: String },
+    SessionUpdated { session_id: SessionId },
     /// Indicates that an agent turn completed and persisted one reducer-ready
     /// projection.
     AgentResponseReceived {
-        session_id: String,
+        session_id: SessionId,
         turn_applied_state: TurnAppliedState,
     },
     /// Indicates that one published session branch started or finished a
     /// background auto-push after a completed turn.
     PublishedBranchSyncUpdated {
-        session_id: String,
+        session_id: SessionId,
         sync_operation_id: String,
         sync_status: PublishedBranchSyncStatus,
     },
     /// Indicates completion of one background review-request status refresh.
     ReviewRequestStatusUpdated {
         result: Result<SyncReviewRequestTaskResult, String>,
-        session_id: String,
+        session_id: SessionId,
     },
 }
 
 /// Reduced representation of all app events currently queued for one tick.
 #[derive(Default)]
 struct AppEventBatch {
-    applied_turns: HashMap<String, TurnAppliedState>,
-    at_mention_entries_updates: HashMap<String, Vec<FileEntry>>,
+    applied_turns: HashMap<SessionId, TurnAppliedState>,
+    at_mention_entries_updates: HashMap<SessionId, Vec<FileEntry>>,
     branch_publish_action_update: Option<BranchPublishActionUpdate>,
     git_status_update: Option<GitStatusBatchUpdate>,
     latest_available_version_update: Option<LatestAvailableVersionUpdate>,
-    published_branch_sync_updates: Vec<(String, PublishedBranchSyncUpdate)>,
-    review_updates: HashMap<String, ReviewUpdate>,
-    session_git_status_updates: HashMap<String, SessionGitStatus>,
-    session_ids: HashSet<String>,
-    session_model_updates: HashMap<String, AgentModel>,
-    session_reasoning_level_updates: HashMap<String, Option<ReasoningLevel>>,
-    session_progress_updates: HashMap<String, Option<String>>,
-    session_size_updates: HashMap<String, (u64, u64, SessionSize)>,
-    session_title_generation_finished: HashMap<String, u64>,
+    published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
+    review_updates: HashMap<SessionId, ReviewUpdate>,
+    session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
+    session_ids: HashSet<SessionId>,
+    session_model_updates: HashMap<SessionId, AgentModel>,
+    session_reasoning_level_updates: HashMap<SessionId, Option<ReasoningLevel>>,
+    session_progress_updates: HashMap<SessionId, Option<String>>,
+    session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
+    session_title_generation_finished: HashMap<SessionId, u64>,
     should_refresh_git_status: bool,
     should_force_reload: bool,
     review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
@@ -371,7 +377,7 @@ impl AppEventBatch {
     /// Stores the latest git status event for this reducer batch.
     fn collect_git_status_updated(
         &mut self,
-        session_statuses: HashMap<String, SessionGitStatus>,
+        session_statuses: HashMap<SessionId, SessionGitStatus>,
         status: Option<(u32, u32)>,
     ) {
         self.git_status_update = Some(GitStatusBatchUpdate { status });
@@ -402,7 +408,7 @@ impl AppEventBatch {
         &mut self,
         restore_view: ConfirmationViewMode,
         result: BranchPublishTaskResult,
-        session_id: String,
+        session_id: SessionId,
     ) {
         if result.is_ok() {
             self.should_refresh_git_status = true;
@@ -416,7 +422,12 @@ impl AppEventBatch {
     }
 
     /// Stores a successful focused-review preparation result.
-    fn collect_review_prepared(&mut self, diff_hash: u64, review_text: String, session_id: String) {
+    fn collect_review_prepared(
+        &mut self,
+        diff_hash: u64,
+        review_text: String,
+        session_id: SessionId,
+    ) {
         self.review_updates.insert(
             session_id,
             ReviewUpdate {
@@ -431,7 +442,7 @@ impl AppEventBatch {
         &mut self,
         diff_hash: u64,
         error: String,
-        session_id: String,
+        session_id: SessionId,
     ) {
         self.review_updates.insert(
             session_id,
@@ -446,7 +457,7 @@ impl AppEventBatch {
     /// reducer application.
     fn collect_published_branch_sync_updated(
         &mut self,
-        session_id: String,
+        session_id: SessionId,
         sync_operation_id: String,
         sync_status: PublishedBranchSyncStatus,
     ) {
@@ -471,7 +482,7 @@ impl AppEventBatch {
     fn collect_review_request_status_updated(
         &mut self,
         result: Result<SyncReviewRequestTaskResult, String>,
-        session_id: String,
+        session_id: SessionId,
     ) {
         self.review_request_status_updates
             .push(ReviewRequestStatusUpdate { result, session_id });
@@ -487,7 +498,7 @@ impl AppEventBatch {
     /// for the same session.
     fn collect_agent_response_received(
         &mut self,
-        session_id: String,
+        session_id: SessionId,
         turn_applied_state: TurnAppliedState,
     ) {
         self.session_ids.insert(session_id.clone());
@@ -524,7 +535,7 @@ pub(crate) struct SyncReviewRequestTaskResult {
 /// application.
 struct ReviewRequestStatusUpdate {
     result: Result<SyncReviewRequestTaskResult, String>,
-    session_id: String,
+    session_id: SessionId,
 }
 
 /// Token-usage totals for one model used by the `/stats` prompt command.
@@ -670,7 +681,7 @@ pub struct App {
     pub tabs: TabManager,
     /// Caches generated focused review text per session so it survives
     /// mode switches and is ready when the user presses `f`.
-    pub(crate) review_cache: HashMap<String, ReviewCacheEntry>,
+    pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
     /// Owns project selection state, project metadata, and git status
     /// snapshots.
     pub(crate) projects: ProjectManager,
@@ -699,7 +710,7 @@ pub struct App {
     merge_queue: MergeQueue,
     /// Tracks per-session thinking text rendered while background work is
     /// active.
-    session_progress_messages: HashMap<String, String>,
+    session_progress_messages: HashMap<SessionId, String>,
     /// Interacts with tmux panes for session-specific terminal workflows.
     tmux_client: Arc<dyn TmuxClient>,
     /// Caches rendered markdown output for the session transcript panel so
@@ -1354,7 +1365,7 @@ impl App {
     }
 
     /// Returns session id by list index.
-    pub fn session_id_for_index(&self, session_index: usize) -> Option<String> {
+    pub fn session_id_for_index(&self, session_index: usize) -> Option<SessionId> {
         self.sessions.session_id_for_index(session_index)
     }
 
@@ -1368,6 +1379,70 @@ impl App {
         self.session_progress_messages
             .get(session_id)
             .map(std::string::String::as_str)
+    }
+
+    /// Returns the selected follow-up task action for one session, if that
+    /// session currently exposes follow-up tasks.
+    pub(crate) fn selected_follow_up_task_action(
+        &self,
+        session_id: &str,
+    ) -> Option<FollowUpTaskAction> {
+        self.sessions.selected_follow_up_task_action(session_id)
+    }
+
+    /// Returns whether one session has multiple follow-up tasks to cycle
+    /// through in session view.
+    pub(crate) fn has_multiple_follow_up_tasks(&self, session_id: &str) -> bool {
+        self.sessions.has_multiple_follow_up_tasks(session_id)
+    }
+
+    /// Moves the selected follow-up task forward within one session.
+    pub(crate) fn select_next_follow_up_task(&mut self, session_id: &str) {
+        self.sessions.select_next_follow_up_task(session_id);
+    }
+
+    /// Moves the selected follow-up task backward within one session.
+    pub(crate) fn select_previous_follow_up_task(&mut self, session_id: &str) {
+        self.sessions.select_previous_follow_up_task(session_id);
+    }
+
+    /// Launches the selected follow-up task into a sibling session or opens
+    /// the already launched sibling when one is linked.
+    ///
+    /// # Errors
+    /// Returns an error if creating or starting the sibling session fails, or
+    /// if persisting the launched-task link cannot be completed.
+    pub(crate) async fn launch_or_open_selected_follow_up_task(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), AppError> {
+        let Some((position, task_text, launched_session_id)) =
+            self.selected_follow_up_task_snapshot(session_id)
+        else {
+            return Ok(());
+        };
+
+        if let Some(launched_session_id) = launched_session_id {
+            if self.open_session_if_present(&launched_session_id) {
+                return Ok(());
+            }
+
+            self.set_follow_up_task_launched_session_id(session_id, position, None)
+                .await?;
+        }
+
+        let sibling_session_id = self.create_session().await?;
+        self.start_session(&sibling_session_id, TurnPrompt::from_text(task_text))
+            .await?;
+        self.set_follow_up_task_launched_session_id(
+            session_id,
+            position,
+            Some(sibling_session_id.clone().into()),
+        )
+        .await?;
+        self.open_session(&sibling_session_id);
+
+        Ok(())
     }
 
     /// Deletes the selected session, clears transient review and `@`-mention
@@ -1586,12 +1661,12 @@ impl App {
         self.validate_merge_request(session_id)?;
         if self.merge_queue.has_active() {
             self.mark_session_as_queued_for_merge(session_id).await?;
-            self.merge_queue.enqueue(session_id.to_string());
+            self.merge_queue.enqueue(SessionId::from(session_id));
 
             return Ok(());
         }
 
-        self.merge_queue.enqueue(session_id.to_string());
+        self.merge_queue.enqueue(SessionId::from(session_id));
 
         self.start_next_merge_from_queue(true).await
     }
@@ -1905,7 +1980,10 @@ impl App {
 
     /// Returns status snapshots for sessions touched before applying a
     /// reducer batch.
-    fn previous_session_states(&self, session_ids: &HashSet<String>) -> HashMap<String, Status> {
+    fn previous_session_states(
+        &self,
+        session_ids: &HashSet<SessionId>,
+    ) -> HashMap<SessionId, Status> {
         session_ids
             .iter()
             .filter_map(|session_id| {
@@ -1921,7 +1999,7 @@ impl App {
     /// Applies active progress message updates from one reducer batch.
     fn apply_session_progress_updates(
         &mut self,
-        session_progress_updates: HashMap<String, Option<String>>,
+        session_progress_updates: HashMap<SessionId, Option<String>>,
     ) {
         for (session_id, progress_message) in session_progress_updates {
             if let Some(progress_message) = progress_message {
@@ -1966,7 +2044,7 @@ impl App {
             self.mode = AppMode::Question {
                 at_mention_state: None,
                 selected_option_index: question::default_option_index(&questions, 0),
-                session_id: session_id.to_string(),
+                session_id: session_id.into(),
                 questions,
                 review_status_message,
                 review_text,
@@ -2096,6 +2174,115 @@ impl App {
         }
     }
 
+    /// Returns the currently selected follow-up task payload for one session.
+    fn selected_follow_up_task_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Option<(usize, String, Option<SessionId>)> {
+        let position = self.sessions.selected_follow_up_task_position(session_id)?;
+        let session = self
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)?;
+        let follow_up_task = session.follow_up_task(position)?;
+
+        Some((
+            follow_up_task.position,
+            follow_up_task.text.clone(),
+            follow_up_task.launched_session_id.clone(),
+        ))
+    }
+
+    /// Persists one launched sibling-session link and mirrors it into the
+    /// in-memory session snapshot.
+    ///
+    /// # Errors
+    /// Returns an error if the launched-session link cannot be persisted.
+    async fn set_follow_up_task_launched_session_id(
+        &mut self,
+        session_id: &str,
+        position: usize,
+        launched_session_id: Option<SessionId>,
+    ) -> Result<(), AppError> {
+        self.services
+            .db()
+            .update_session_follow_up_task_launched_session_id(
+                session_id,
+                position,
+                launched_session_id.as_deref(),
+            )
+            .await?;
+        self.sessions.set_follow_up_task_launched_session_id(
+            session_id,
+            position,
+            launched_session_id,
+        );
+
+        Ok(())
+    }
+
+    /// Opens one linked sibling session when it still exists in memory.
+    ///
+    /// Returns `true` when the target session was found and opened.
+    fn open_session_if_present(&mut self, target_session_id: &str) -> bool {
+        let Some(session_index) = self.session_index_for_id(target_session_id) else {
+            return false;
+        };
+        self.open_session_by_index(target_session_id, session_index);
+
+        true
+    }
+
+    /// Opens one session by id and preserves question mode for clarification
+    /// sessions.
+    fn open_session(&mut self, target_session_id: &str) {
+        let Some(session_index) = self.session_index_for_id(target_session_id) else {
+            return;
+        };
+        self.open_session_by_index(target_session_id, session_index);
+    }
+
+    /// Opens one session by list index and preserves question mode for
+    /// clarification sessions.
+    fn open_session_by_index(&mut self, target_session_id: &str, session_index: usize) {
+        self.sessions.table_state.select(Some(session_index));
+
+        let Some(session) = self.sessions.sessions.get(session_index) else {
+            return;
+        };
+        if session.status == Status::Question {
+            let questions = session.questions.clone();
+            let selected_option_index = question::default_option_index(&questions, 0);
+            let (review_status_message, review_text) = self.review_view_state(target_session_id);
+            self.mode = AppMode::Question {
+                at_mention_state: None,
+                session_id: SessionId::from(target_session_id),
+                questions,
+                review_status_message,
+                review_text,
+                responses: Vec::new(),
+                current_index: 0,
+                focus: QuestionFocus::Answer,
+                input: InputState::default(),
+                scroll_offset: None,
+                selected_option_index,
+            };
+
+            return;
+        }
+
+        let (review_status_message, review_text) = self.review_view_state(target_session_id);
+
+        self.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message,
+            review_text,
+            session_id: SessionId::from(target_session_id),
+            scroll_offset: None,
+        };
+    }
+
     /// Applies loaded at-mention entries to the currently focused prompt or
     /// question session, if the mention query is still active.
     fn apply_prompt_at_mention_entries(&mut self, session_id: &str, entries: Vec<FileEntry>) {
@@ -2137,7 +2324,7 @@ impl App {
     #[cfg(test)]
     fn apply_review_update(&mut self, session_id: &str, review_update: app::review::ReviewUpdate) {
         let mut review_updates = HashMap::new();
-        review_updates.insert(session_id.to_string(), review_update);
+        review_updates.insert(SessionId::from(session_id), review_update);
         apply_review_updates(
             &mut self.review_cache,
             &mut self.mode,
@@ -2148,7 +2335,7 @@ impl App {
 
     /// Starts focused review generation for sessions that just entered review.
     #[cfg(test)]
-    async fn auto_start_reviews(&mut self, session_ids: &HashSet<String>) {
+    async fn auto_start_reviews(&mut self, session_ids: &HashSet<SessionId>) {
         auto_start_reviews(
             &mut self.review_cache,
             session_ids,
@@ -2436,8 +2623,8 @@ impl App {
     /// `Merging` or disappears from the refreshed session list.
     async fn handle_merge_queue_progress(
         &mut self,
-        session_ids: &HashSet<String>,
-        previous_session_states: &HashMap<String, Status>,
+        session_ids: &HashSet<SessionId>,
+        previous_session_states: &HashMap<SessionId, Status>,
     ) {
         let current_status = self
             .merge_queue
@@ -2832,7 +3019,8 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::domain::session::{
         ForgeKind, PublishedBranchSyncStatus, ReviewRequestState, ReviewRequestSummary,
-        SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
+        SESSION_DATA_DIR, Session, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats,
+        Status,
     };
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
@@ -2874,7 +3062,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: session_folder,
-            id: "session-1".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-1".into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -2899,10 +3088,21 @@ mod tests {
     /// Builds one reducer-ready turn projection for tests.
     fn test_turn_applied_state(
         questions: Vec<QuestionItem>,
+        follow_up_tasks: Vec<&str>,
         summary: Option<AgentResponseSummary>,
         token_usage_delta: SessionStats,
     ) -> TurnAppliedState {
         TurnAppliedState {
+            follow_up_tasks: follow_up_tasks
+                .into_iter()
+                .enumerate()
+                .map(|(position, text)| SessionFollowUpTask {
+                    id: i64::try_from(position).unwrap_or(i64::MAX),
+                    launched_session_id: None,
+                    position,
+                    text: text.to_string(),
+                })
+                .collect(),
             questions,
             summary: summary.and_then(|summary| serde_json::to_string(&summary).ok()),
             token_usage_delta,
@@ -2917,7 +3117,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
         }
     }
 
@@ -3000,7 +3200,7 @@ mod tests {
         let mut app = new_test_app().await;
         let review_session = test_session(PathBuf::from("/tmp/session-review"));
         let mut done_session = test_session(PathBuf::from("/tmp/session-done"));
-        done_session.id = "session-2".to_string();
+        done_session.id = "session-2".into();
         done_session.status = Status::Done;
         app.sessions.push_session(review_session);
         app.sessions.push_session(done_session);
@@ -3014,7 +3214,7 @@ mod tests {
             vec![task::SessionGitStatusTarget {
                 base_branch: "main".to_string(),
                 branch_name: "wt/session-".to_string(),
-                session_id: "session-1".to_string(),
+                session_id: "session-1".into(),
             }]
         );
     }
@@ -3026,7 +3226,7 @@ mod tests {
         let review_session = test_session(PathBuf::from("/tmp/session-review"));
         app.sessions.push_session(review_session);
         app.sessions.replace_session_branch_names(HashMap::from([(
-            "session-1".to_string(),
+            SessionId::from("session-1"),
             "agentty/session-".to_string(),
         )]));
 
@@ -3039,7 +3239,7 @@ mod tests {
             vec![task::SessionGitStatusTarget {
                 base_branch: "main".to_string(),
                 branch_name: "agentty/session-".to_string(),
-                session_id: "session-1".to_string(),
+                session_id: "session-1".into(),
             }]
         );
     }
@@ -3469,7 +3669,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(2),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         };
 
         // Act
@@ -3861,7 +4061,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(1),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         };
 
         // Act
@@ -3878,7 +4078,7 @@ mod tests {
                 }),
                 upstream_reference: "origin/wt/session-1".to_string(),
             }),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         });
 
         // Assert
@@ -3920,7 +4120,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(1),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         };
         let review_request = crate::domain::session::ReviewRequest {
             last_refreshed_at: 55,
@@ -3938,7 +4138,7 @@ mod tests {
                 review_request: review_request.clone(),
                 upstream_reference: "origin/wt/session-1".to_string(),
             }),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         });
 
         // Assert
@@ -3981,7 +4181,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(2),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         };
         let review_request = crate::domain::session::ReviewRequest {
             last_refreshed_at: 77,
@@ -4005,7 +4205,7 @@ mod tests {
                 review_request,
                 upstream_reference: "origin/wt/session-1".to_string(),
             }),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         });
 
         // Assert
@@ -4365,11 +4565,11 @@ mod tests {
         // Act
         event_batch.collect_event(AppEvent::AtMentionEntriesLoaded {
             entries: first_entries,
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         });
         event_batch.collect_event(AppEvent::AtMentionEntriesLoaded {
             entries: second_entries.clone(),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         });
 
         // Assert
@@ -4393,6 +4593,7 @@ mod tests {
                 QuestionItem::new("Need branch?"),
                 QuestionItem::new("Need tests?"),
             ],
+            vec!["Document the batched reducer path."],
             Some(AgentResponseSummary {
                 session: "Session summary".to_string(),
                 turn: "Latest turn summary".to_string(),
@@ -4407,9 +4608,10 @@ mod tests {
 
         // Act
         event_batch.collect_event(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state: test_turn_applied_state(
                 vec![QuestionItem::new("Old question")],
+                vec!["Old follow-up task"],
                 Some(AgentResponseSummary {
                     session: "Old session summary".to_string(),
                     turn: "Old turn summary".to_string(),
@@ -4423,7 +4625,7 @@ mod tests {
             ),
         });
         event_batch.collect_event(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state: latest_turn.clone(),
         });
 
@@ -4432,6 +4634,15 @@ mod tests {
         assert_eq!(
             merged_turn.map(|turn| turn.questions.clone()),
             Some(latest_turn.questions.clone())
+        );
+        assert_eq!(
+            merged_turn.map(|turn| {
+                turn.follow_up_tasks
+                    .iter()
+                    .map(|task| task.text.clone())
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec!["Document the batched reducer path.".to_string()])
         );
         assert_eq!(
             merged_turn.and_then(|turn| turn.summary.as_deref()),
@@ -4482,59 +4693,61 @@ mod tests {
 
         // Act
         event_batch.collect_event(AppEvent::SessionModelUpdated {
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
             session_model: AgentModel::Gemini3FlashPreview,
         });
         event_batch.collect_event(AppEvent::SessionModelUpdated {
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
             session_model: AgentModel::Gemini31ProPreview,
         });
         event_batch.collect_event(AppEvent::SessionProgressUpdated {
             progress_message: Some("first".to_string()),
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::SessionProgressUpdated {
             progress_message: Some("second".to_string()),
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::SessionSizeUpdated {
             added_lines: 1,
             deleted_lines: 2,
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
             session_size: SessionSize::S,
         });
         event_batch.collect_event(AppEvent::SessionSizeUpdated {
             added_lines: 8,
             deleted_lines: 13,
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
             session_size: SessionSize::L,
         });
         event_batch.collect_event(AppEvent::SessionTitleGenerationFinished {
             generation: 1,
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::SessionTitleGenerationFinished {
             generation: 2,
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::SessionUpdated {
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::SessionUpdated {
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::AgentResponseReceived {
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
             turn_applied_state: test_turn_applied_state(
                 vec![QuestionItem::new("first question")],
+                Vec::new(),
                 None,
                 SessionStats::default(),
             ),
         });
         event_batch.collect_event(AppEvent::AgentResponseReceived {
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
             turn_applied_state: test_turn_applied_state(
                 vec![QuestionItem::new("second question")],
+                Vec::new(),
                 None,
                 SessionStats::default(),
             ),
@@ -4578,27 +4791,27 @@ mod tests {
         event_batch.collect_event(AppEvent::ReviewPrepared {
             diff_hash: 11,
             review_text: "first review".to_string(),
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::ReviewPreparationFailed {
             diff_hash: 12,
             error: "latest failure".to_string(),
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::ReviewPrepared {
             diff_hash: 21,
             review_text: "stable review".to_string(),
-            session_id: "session-b".to_string(),
+            session_id: "session-b".into(),
         });
         event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
             restore_view: test_confirmation_view_mode("session-a"),
             result: Box::new(Ok(test_pushed_branch_result("feature/first"))),
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         });
         event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
             restore_view: test_confirmation_view_mode("session-b"),
             result: Box::new(Ok(test_pushed_branch_result("feature/final"))),
-            session_id: "session-b".to_string(),
+            session_id: "session-b".into(),
         });
 
         // Assert
@@ -4621,7 +4834,7 @@ mod tests {
             Some(BranchPublishActionUpdate {
                 restore_view: test_confirmation_view_mode("session-b"),
                 result: Ok(test_pushed_branch_result("feature/final")),
-                session_id: "session-b".to_string(),
+                session_id: "session-b".into(),
             })
         );
         assert!(event_batch.should_refresh_git_status);
@@ -4694,7 +4907,7 @@ mod tests {
         // Act
         app.apply_app_events(AppEvent::GitStatusUpdated {
             session_statuses: HashMap::from([(
-                "session-1".to_string(),
+                SessionId::from("session-1"),
                 SessionGitStatus {
                     base_status: Some((4, 2)),
                     remote_status: Some((1, 0)),
@@ -4780,7 +4993,7 @@ mod tests {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Focused review".to_string()),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             scroll_offset: None,
         };
         let expected_questions = vec![
@@ -4804,13 +5017,14 @@ mod tests {
                     vec!["Yes".to_string(), "No".to_string()],
                 ),
             ],
+            Vec::new(),
             None,
             SessionStats::default(),
         );
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state,
         })
         .await;
@@ -4845,9 +5059,10 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state: test_turn_applied_state(
                 vec![QuestionItem::new("Need context?")],
+                Vec::new(),
                 None,
                 SessionStats::default(),
             ),
@@ -4874,8 +5089,9 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state: test_turn_applied_state(
+                Vec::new(),
                 Vec::new(),
                 Some(AgentResponseSummary {
                     turn: "- Added structured protocol summary fields.".to_string(),
@@ -4895,6 +5111,43 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies agent responses update cached follow-up tasks immediately for
+    /// the active session.
+    async fn apply_app_events_agent_response_updates_session_follow_up_tasks() {
+        // Arrange
+        let mut app = new_test_app().await;
+        app.sessions
+            .push_session(test_session(PathBuf::from("/tmp/session-follow-up-view")));
+
+        // Act
+        app.apply_app_events(AppEvent::AgentResponseReceived {
+            session_id: "session-1".into(),
+            turn_applied_state: test_turn_applied_state(
+                Vec::new(),
+                vec![
+                    "Document the new shortcut.",
+                    "Add a focused regression test.",
+                ],
+                None,
+                SessionStats::default(),
+            ),
+        })
+        .await;
+
+        // Assert
+        assert_eq!(
+            app.sessions.sessions[0]
+                .follow_up_tasks
+                .iter()
+                .map(|task| task.text.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Document the new shortcut.".to_string(),
+                "Add a focused regression test.".to_string()
+            ]
+        );
+    }
+    #[tokio::test]
     /// Verifies stale published-branch sync completions do not overwrite the
     /// latest in-progress auto-push state.
     async fn apply_app_events_ignores_stale_published_branch_sync_updates() {
@@ -4905,19 +5158,19 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             sync_operation_id: "sync-1".to_string(),
             sync_status: PublishedBranchSyncStatus::InProgress,
         })
         .await;
         app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             sync_operation_id: "sync-2".to_string(),
             sync_status: PublishedBranchSyncStatus::InProgress,
         })
         .await;
         app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             sync_operation_id: "sync-1".to_string(),
             sync_status: PublishedBranchSyncStatus::Failed,
         })
@@ -4943,7 +5196,7 @@ mod tests {
 
         event_sender
             .send(AppEvent::PublishedBranchSyncUpdated {
-                session_id: "session-1".to_string(),
+                session_id: "session-1".into(),
                 sync_operation_id: "sync-1".to_string(),
                 sync_status: PublishedBranchSyncStatus::Succeeded,
             })
@@ -4951,7 +5204,7 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::PublishedBranchSyncUpdated {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             sync_operation_id: "sync-1".to_string(),
             sync_status: PublishedBranchSyncStatus::InProgress,
         })
@@ -4978,8 +5231,9 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state: test_turn_applied_state(
+                Vec::new(),
                 Vec::new(),
                 None,
                 SessionStats {
@@ -5013,7 +5267,7 @@ mod tests {
             .push_session(test_session(PathBuf::from("/tmp/session-auto-review-sync")));
         app.sessions.sessions[0].status = Status::InProgress;
         app.sessions.handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::InProgress),
         );
         *app.sessions
@@ -5032,8 +5286,13 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: session_id.to_string(),
-            turn_applied_state: test_turn_applied_state(Vec::new(), None, SessionStats::default()),
+            session_id: session_id.into(),
+            turn_applied_state: test_turn_applied_state(
+                Vec::new(),
+                Vec::new(),
+                None,
+                SessionStats::default(),
+            ),
         })
         .await;
 
@@ -5074,7 +5333,7 @@ mod tests {
         // to `Review` in a prior render tick.
         app.sessions.sessions[0].status = Status::Review;
         app.sessions.handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::Review),
         );
 
@@ -5086,8 +5345,13 @@ mod tests {
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: session_id.to_string(),
-            turn_applied_state: test_turn_applied_state(Vec::new(), None, SessionStats::default()),
+            session_id: session_id.into(),
+            turn_applied_state: test_turn_applied_state(
+                Vec::new(),
+                Vec::new(),
+                None,
+                SessionStats::default(),
+            ),
         })
         .await;
 
@@ -5111,6 +5375,7 @@ mod tests {
 
         let first_turn = test_turn_applied_state(
             vec![QuestionItem::new("First question?")],
+            Vec::new(),
             None,
             SessionStats {
                 added_lines: 0,
@@ -5121,6 +5386,7 @@ mod tests {
         );
         let second_turn = test_turn_applied_state(
             vec![QuestionItem::new("Latest question?")],
+            vec!["Capture reducer batching coverage."],
             None,
             SessionStats {
                 added_lines: 0,
@@ -5132,14 +5398,14 @@ mod tests {
 
         event_sender
             .send(AppEvent::AgentResponseReceived {
-                session_id: "session-1".to_string(),
+                session_id: "session-1".into(),
                 turn_applied_state: second_turn,
             })
             .expect("queued event should send");
 
         // Act
         app.apply_app_events(AppEvent::AgentResponseReceived {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             turn_applied_state: first_turn,
         })
         .await;
@@ -5151,6 +5417,83 @@ mod tests {
         );
         assert_eq!(app.sessions.sessions[0].stats.input_tokens, 7);
         assert_eq!(app.sessions.sessions[0].stats.output_tokens, 11);
+        assert_eq!(
+            app.sessions.sessions[0]
+                .follow_up_tasks
+                .iter()
+                .map(|task| task.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["Capture reducer batching coverage.".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies launching an already-linked follow-up task opens its sibling
+    /// session instead of creating another session.
+    async fn launch_or_open_selected_follow_up_task_opens_existing_sibling_session() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut source_session = test_session(PathBuf::from("/tmp/source-session"));
+        source_session.follow_up_tasks = vec![SessionFollowUpTask {
+            id: 1,
+            launched_session_id: Some("session-2".into()),
+            position: 0,
+            text: "Open the sibling session.".to_string(),
+        }];
+        let mut sibling_session = test_session(PathBuf::from("/tmp/sibling-session"));
+        sibling_session.id = "session-2".into();
+        sibling_session.title = Some("Sibling session".to_string());
+        app.sessions.push_session(source_session);
+        app.sessions.push_session(sibling_session);
+
+        // Act
+        app.launch_or_open_selected_follow_up_task("session-1")
+            .await
+            .expect("follow-up task should open the linked sibling session");
+
+        // Assert
+        assert_eq!(app.sessions.table_state.selected(), Some(1));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                ..
+            } if session_id == "session-2"
+        ));
+    }
+
+    #[tokio::test]
+    /// Verifies a stale launched-session link is cleared before replacement
+    /// session creation starts, so a failed launch does not keep retrying the
+    /// same orphaned sibling id.
+    async fn launch_or_open_selected_follow_up_task_clears_stale_sibling_link_before_launch() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut source_session = test_session(PathBuf::from("/tmp/source-session"));
+        source_session.follow_up_tasks = vec![SessionFollowUpTask {
+            id: 1,
+            launched_session_id: Some("missing-session".into()),
+            position: 0,
+            text: "Open the sibling session.".to_string(),
+        }];
+        app.sessions.push_session(source_session);
+
+        // Act
+        let result = app
+            .launch_or_open_selected_follow_up_task("session-1")
+            .await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(AppError::Session(crate::app::SessionError::Workflow(message)))
+                if message == "Git branch is required to create a session"
+        ));
+        assert_eq!(app.sessions.sessions.len(), 1);
+        assert_eq!(
+            app.sessions.sessions[0].follow_up_tasks[0].launched_session_id,
+            None
+        );
     }
 
     #[tokio::test]
@@ -5162,20 +5505,20 @@ mod tests {
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-done-view")));
         app.sessions.handles.insert(
-            "session-1".to_string(),
+            "session-1".into(),
             SessionHandles::new("Merge finished".to_string(), Status::Done),
         );
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
             review_text: Some("Review text".to_string()),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             scroll_offset: Some(9),
         };
 
         // Act
         app.apply_app_events(AppEvent::SessionUpdated {
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         })
         .await;
 
@@ -5229,14 +5572,14 @@ mod tests {
         viewed_session.status = Status::Merging;
         app.sessions.push_session(viewed_session);
         app.sessions.handles.insert(
-            "session-1".to_string(),
+            "session-1".into(),
             SessionHandles::new("Merging".to_string(), Status::Merging),
         );
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
             scroll_offset: None,
         };
 
@@ -5816,15 +6159,15 @@ mod tests {
         let session_id = "session-review-cache";
         let review_text = "## Review\nLooks good.";
         let mut session = test_session(PathBuf::from("/tmp/session-review-cache"));
-        session.id = session_id.to_string();
+        session.id = session_id.to_string().into();
         session.status = Status::AgentReview;
         app.sessions.push_session(session);
         app.sessions.handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::AgentReview),
         );
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Loading { diff_hash: 123 },
         );
 
@@ -5862,7 +6205,7 @@ mod tests {
         let session_id = "session-review-fail";
         let error_message = "Review assist failed with exit code 1";
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Loading { diff_hash: 456 },
         );
 
@@ -5888,7 +6231,7 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-review-stale";
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Loading { diff_hash: 999 },
         );
 
@@ -5914,15 +6257,15 @@ mod tests {
         let mut app = new_test_app().await;
         let session_id = "session-review-progress";
         let mut session = test_session(PathBuf::from("/tmp/session-review-progress"));
-        session.id = session_id.to_string();
+        session.id = session_id.to_string().into();
         session.status = Status::InProgress;
         app.sessions.push_session(session);
         app.sessions.handles.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::InProgress),
         );
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Loading { diff_hash: 222 },
         );
 
@@ -5958,13 +6301,13 @@ mod tests {
             .push_session(test_session(PathBuf::from("/tmp/session-cache-clear")));
         app.sessions.sessions[0].status = Status::InProgress;
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Ready {
                 diff_hash: 789,
                 text: "old review".to_string(),
             },
         );
-        let session_ids = HashSet::from([session_id.to_string()]);
+        let session_ids = HashSet::from([session_id.into()]);
 
         // Act
         app.auto_start_reviews(&session_ids).await;
@@ -5985,13 +6328,13 @@ mod tests {
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let hash = diff_content_hash(diff_text);
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Ready {
                 diff_hash: hash,
                 text: "existing review".to_string(),
             },
         );
-        let session_ids = HashSet::from([session_id.to_string()]);
+        let session_ids = HashSet::from([session_id.into()]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -6023,10 +6366,10 @@ mod tests {
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let hash = diff_content_hash(diff_text);
         app.review_cache.insert(
-            session_id.to_string(),
+            session_id.to_string().into(),
             ReviewCacheEntry::Loading { diff_hash: hash },
         );
-        let session_ids = HashSet::from([session_id.to_string()]);
+        let session_ids = HashSet::from([session_id.into()]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -6057,7 +6400,7 @@ mod tests {
 
         let diff_text = "diff --git a/file.rs b/file.rs\n+new line";
         let expected_hash = diff_content_hash(diff_text);
-        let session_ids = HashSet::from([session_id.to_string()]);
+        let session_ids = HashSet::from([session_id.into()]);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -6096,7 +6439,7 @@ mod tests {
         app.delete_selected_session().await;
 
         // Assert
-        assert!(!app.review_cache.contains_key(&session_id));
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
     }
 
     /// Builds one test review request summary for background sync tests.
@@ -6124,7 +6467,7 @@ mod tests {
 
         let update = ReviewRequestStatusUpdate {
             result: Err("network timeout".to_string()),
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         };
 
         // Act
@@ -6171,7 +6514,7 @@ mod tests {
 
         let update = ReviewRequestStatusUpdate {
             result: Ok(task_result),
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
         };
 
         // Act
@@ -6225,7 +6568,7 @@ mod tests {
 
         let update = ReviewRequestStatusUpdate {
             result: Ok(task_result),
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
         };
 
         // Act
@@ -6278,7 +6621,7 @@ mod tests {
 
         let update = ReviewRequestStatusUpdate {
             result: Ok(task_result),
-            session_id: session_id.to_string(),
+            session_id: session_id.into(),
         };
 
         // Act

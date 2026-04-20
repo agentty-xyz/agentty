@@ -103,7 +103,7 @@ mod tests {
                 review_status_message: None,
                 review_text: None,
                 publish_pull_request_action: None,
-                session_id: "s1".to_string(),
+                session_id: "s1".into(),
                 session_state: ViewSessionState::Interactive,
                 scroll_offset: Some(5),
             },
@@ -199,7 +199,7 @@ mod tests {
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Help {
             context: HelpContext::Diff {
-                session_id: "s1".to_string(),
+                session_id: "s1".into(),
                 diff: "diff content".to_string(),
                 restore_question: None,
                 scroll_offset: 7,

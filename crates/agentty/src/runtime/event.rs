@@ -422,7 +422,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: std::env::temp_dir(),
-            id: session_id.clone(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.clone().into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -450,7 +451,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
-            session_id,
+            session_id: session_id.into(),
             slash_state: PromptSlashState::default(),
         };
         let mut terminal = ();
@@ -491,7 +492,7 @@ mod tests {
             }],
             responses: Vec::new(),
             selected_option_index: None,
-            session_id: "session-1".to_string(),
+            session_id: "session-1".into(),
         };
         let mut terminal = ();
 

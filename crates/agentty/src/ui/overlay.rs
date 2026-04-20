@@ -7,7 +7,7 @@ use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::session::Session;
+use crate::domain::session::{Session, SessionId};
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{
     AppMode, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
@@ -51,7 +51,7 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     /// Restored session view rendered behind the popup.
     pub(crate) restore_view: &'a ConfirmationViewMode,
     /// Session progress messages keyed by session id.
-    pub(crate) session_progress_messages: &'a HashMap<String, String>,
+    pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
     /// Session rows available for restored background rendering.
     pub(crate) sessions: &'a [Session],
     /// Popup title.
@@ -71,7 +71,7 @@ pub(crate) struct HelpOverlayRenderContext<'a> {
     /// Help overlay vertical scroll position.
     pub(crate) scroll_offset: u16,
     /// Session progress messages keyed by session id.
-    pub(crate) session_progress_messages: &'a HashMap<String, String>,
+    pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
     /// Render-time clock used for deterministic timers.
     pub(crate) wall_clock_unix_seconds: i64,
 }
@@ -374,7 +374,7 @@ fn render_help_background(
     help_context: &HelpContext,
     list_background: ListBackgroundRenderContext<'_>,
     markdown_render_cache: &markdown::MarkdownRenderCache,
-    session_progress_messages: &HashMap<String, String>,
+    session_progress_messages: &HashMap<SessionId, String>,
     wall_clock_unix_seconds: i64,
 ) {
     let sessions = list_background.sessions;
@@ -395,7 +395,7 @@ fn render_help_background(
                 done_session_output_mode,
                 review_status_message: review_status_message.clone(),
                 review_text: review_text.clone(),
-                session_id: session_id.to_string(),
+                session_id: session_id.into(),
                 scroll_offset,
             };
             let active_progress = session_progress_messages
@@ -613,7 +613,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: None,
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             session_state: crate::ui::state::help_action::ViewSessionState::Done,
             scroll_offset: Some(0),
         };
@@ -629,7 +629,7 @@ mod tests {
     fn test_resolve_help_background_returns_none_for_missing_diff_session() {
         // Arrange
         let help_context = HelpContext::Diff {
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             diff: "diff --git a/file b/file".to_string(),
             restore_question: None,
             scroll_offset: 0,

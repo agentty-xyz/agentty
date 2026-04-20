@@ -7,6 +7,7 @@ use ratatui::backend::Backend;
 use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
+use crate::domain::session::SessionId;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
@@ -28,7 +29,7 @@ use crate::ui::util::{format_token_count, move_input_cursor_down, move_input_cur
 struct PromptContext {
     input_mode: PromptInputMode,
     scroll_offset: Option<u16>,
-    session_id: String,
+    session_id: SessionId,
     session_index: usize,
     session_mode: PromptSessionMode,
 }
@@ -915,7 +916,7 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
     }
 
     let (cached_hash, cached_text) = if let Some(ReviewCacheEntry::Ready { diff_hash, text }) =
-        app.review_cache.get(&prompt_context.session_id)
+        app.review_cache.get(prompt_context.session_id.as_str())
     {
         (*diff_hash, text.clone())
     } else {
@@ -955,7 +956,7 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
     let current_hash = diff_content_hash(&current_diff);
 
     if current_hash != cached_hash {
-        app.review_cache.remove(&prompt_context.session_id);
+        app.review_cache.remove(prompt_context.session_id.as_str());
         clear_prompt_review_state(app);
         append_prompt_status_line(
             app,
@@ -986,7 +987,7 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
     ));
 
     cleanup_prompt_attachment_state(app).await;
-    app.review_cache.remove(&prompt_context.session_id);
+    app.review_cache.remove(prompt_context.session_id.as_str());
     app.reply(&prompt_context.session_id, prompt).await;
 
     app.mode = AppMode::View {
@@ -1541,7 +1542,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             slash_state: PromptSlashState::new(),
-            session_id,
+            session_id: session_id.into(),
             input: InputState::with_text(input_text.to_string()),
             scroll_offset: None,
         };
@@ -2671,7 +2672,7 @@ mod tests {
             review_status_message: None,
             review_text: None,
             input: InputState::with_text("follow up".to_string()),
-            session_id: "missing-session".to_string(),
+            session_id: "missing-session".into(),
             slash_state: PromptSlashState::new(),
             scroll_offset: Some(2),
         };
@@ -2982,7 +2983,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(!app.review_cache.contains_key(&session_id));
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
     }
 
     #[tokio::test]
@@ -3284,7 +3285,7 @@ mod tests {
 
         // Assert
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
-        assert!(app.review_cache.contains_key(&session_id));
+        assert!(app.review_cache.contains_key(session_id.as_str()));
     }
 
     #[tokio::test]
@@ -3329,7 +3330,7 @@ mod tests {
         handle_apply_command(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(!app.review_cache.contains_key(&session_id));
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
         let AppMode::Prompt {
             review_status_message,
             review_text,
@@ -3376,7 +3377,7 @@ mod tests {
         handle_apply_command(&mut app, &prompt_context).await;
 
         // Assert
-        assert!(!app.review_cache.contains_key(&session_id));
+        assert!(!app.review_cache.contains_key(session_id.as_str()));
         assert!(matches!(app.mode, AppMode::View { .. }));
     }
 
@@ -3413,7 +3414,7 @@ mod tests {
         assert!(matches!(app.mode, AppMode::Prompt { .. }));
         assert!(
             matches!(
-                app.review_cache.get(&session_id),
+                app.review_cache.get(session_id.as_str()),
                 Some(crate::app::ReviewCacheEntry::Ready { diff_hash: 42, .. }),
             ),
             "cached review must survive a transient git diff error",

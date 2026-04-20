@@ -8,7 +8,7 @@ use ag_forge as forge;
 use super::SESSION_REFRESH_INTERVAL;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
-use crate::domain::session::{ForgeKind, ReviewRequest};
+use crate::domain::session::{ForgeKind, ReviewRequest, SessionId};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode};
 
 impl SessionManager {
@@ -123,11 +123,13 @@ impl SessionManager {
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
         self.ensure_mode_session_exists(mode);
 
-        let active_session_ids: HashSet<String> = self
+        let active_session_ids: HashSet<SessionId> = self
             .sessions
             .iter()
             .map(|session| session.id.clone())
             .collect();
+        self.state
+            .retain_follow_up_task_positions(&active_session_ids);
         self.state.retain_session_branch_names(&active_session_ids);
         self.state.retain_session_git_statuses(&active_session_ids);
         self.worker_service_mut()
@@ -429,7 +431,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder,
-            id: "session-id".to_string(),
+            follow_up_tasks: Vec::new(),
+            id: "session-id".into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,

@@ -18,7 +18,7 @@ use crate::app::assist::{
 use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
-use crate::domain::session::{PublishedBranchSyncStatus, Status};
+use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::infra::agent;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::AppRepositories;
@@ -59,7 +59,7 @@ struct MergeTaskInput {
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
-    id: String,
+    id: SessionId,
     output: Arc<Mutex<String>>,
     repo_root: PathBuf,
     session_model: AgentModel,
@@ -76,7 +76,7 @@ struct RebaseAssistInput {
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
-    id: String,
+    id: SessionId,
     output: Arc<Mutex<String>>,
     session_model: AgentModel,
 }
@@ -90,7 +90,7 @@ struct RebaseTaskInput {
     folder: PathBuf,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
-    id: String,
+    id: SessionId,
     output: Arc<Mutex<String>>,
     session_model: AgentModel,
     status: Arc<Mutex<Status>>,
@@ -1354,7 +1354,7 @@ impl SessionManager {
         let sync_operation_id = uuid::Uuid::new_v4().to_string();
 
         let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-            session_id: session_id.to_string(),
+            session_id: SessionId::from(session_id),
             sync_operation_id: sync_operation_id.clone(),
             sync_status: PublishedBranchSyncStatus::InProgress,
         });
@@ -1364,7 +1364,7 @@ impl SessionManager {
         let folder = folder.to_path_buf();
         let git_client = Arc::clone(git_client);
         let output = Arc::clone(output);
-        let session_id = session_id.to_string();
+        let session_id = SessionId::from(session_id);
         let auto_push_input = super::worker::PublishedBranchAutoPushInput {
             app_event_tx,
             db,
@@ -1857,7 +1857,7 @@ impl SessionManager {
             db: input.db.clone(),
             folder: input.folder.clone(),
             git_client: Arc::clone(&input.git_client),
-            id: input.id.clone(),
+            id: input.id.to_string(),
             output: Arc::clone(&input.output),
             session_model: input.session_model,
         }
@@ -1976,7 +1976,7 @@ mod tests {
                 folder,
                 fs_client: test_fs_client(),
                 git_client,
-                id: "session-123".to_string(),
+                id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
                 session_model: AgentModel::Gemini3FlashPreview,
             },
@@ -2005,7 +2005,7 @@ mod tests {
                 folder,
                 fs_client: test_fs_client(),
                 git_client,
-                id: "session-123".to_string(),
+                id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
                 repo_root,
                 session_model: AgentModel::Gemini3FlashPreview,
@@ -2433,7 +2433,7 @@ mod tests {
             folder: temp_dir.path().to_path_buf(),
             fs_client: test_fs_client(),
             git_client: Arc::new(git::RealGitClient),
-            id: "session-123".to_string(),
+            id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
             session_model: AgentModel::Gemini3FlashPreview,
         };

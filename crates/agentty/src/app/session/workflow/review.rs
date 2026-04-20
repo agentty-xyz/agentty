@@ -3,14 +3,14 @@
 use std::collections::HashSet;
 
 use super::SessionManager;
-use crate::domain::session::Session;
+use crate::domain::session::{Session, SessionId};
 
 impl SessionManager {
     /// Collects session ids that should replay persisted transcript output on
     /// the next reply after app startup.
     pub(in crate::app::session) fn startup_history_replay_set(
         sessions: &[Session],
-    ) -> HashSet<String> {
+    ) -> HashSet<SessionId> {
         sessions
             .iter()
             .filter(|session| session.status.allows_review_actions())
@@ -20,7 +20,8 @@ impl SessionManager {
 
     /// Marks a session id for one-time transcript replay on next reply.
     pub(super) fn mark_history_replay_pending(&mut self, session_id: &str) {
-        self.pending_history_replay.insert(session_id.to_string());
+        self.pending_history_replay
+            .insert(SessionId::from(session_id));
     }
 
     /// Clears one-time transcript replay tracking for a session id.
@@ -71,7 +72,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::from("/tmp/test"),
-            id: session_id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,

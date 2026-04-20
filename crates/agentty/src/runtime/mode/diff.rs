@@ -262,7 +262,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff output".to_string(),
             scroll_offset: 7,
             file_explorer_selected_index: 0,
@@ -294,14 +294,14 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.review_cache.insert(
-            "session-id".to_string(),
+            "session-id".into(),
             crate::app::ReviewCacheEntry::Ready {
                 text: "Focused review".to_string(),
                 diff_hash: 7,
             },
         );
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff output".to_string(),
             scroll_offset: 7,
             file_explorer_selected_index: 0,
@@ -335,7 +335,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: scrollable_diff_fixture(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
@@ -366,7 +366,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: scrollable_diff_fixture(),
             scroll_offset: 3,
             file_explorer_selected_index: 2,
@@ -398,7 +398,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
@@ -429,7 +429,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 2,
@@ -479,7 +479,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 0,
@@ -510,7 +510,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 1,
@@ -541,7 +541,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 1,
@@ -572,7 +572,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             scroll_offset: 10,
             file_explorer_selected_index: 0,
@@ -603,7 +603,7 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff: "diff output".to_string(),
             scroll_offset: 5,
             file_explorer_selected_index: 3,
@@ -642,7 +642,7 @@ mod tests {
         let diff = scrollable_diff_fixture();
         let max_scroll_offset = diff_max_scroll_offset(&diff, TEST_TERMINAL_SIZE, 0, &mut None);
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff,
             scroll_offset: max_scroll_offset,
             file_explorer_selected_index: 0,
@@ -675,7 +675,7 @@ mod tests {
         let diff = scrollable_diff_fixture();
         let max_scroll_offset = diff_max_scroll_offset(&diff, TEST_TERMINAL_SIZE, 0, &mut None);
         app.mode = AppMode::Diff {
-            session_id: "session-id".to_string(),
+            session_id: "session-id".into(),
             diff,
             scroll_offset: u16::MAX,
             file_explorer_selected_index: 0,
@@ -710,7 +710,7 @@ mod tests {
 
         let (mut app, _base_dir) = new_test_app().await;
         app.mode = AppMode::Diff {
-            session_id: "session-q".to_string(),
+            session_id: "session-q".into(),
             diff: "diff output".to_string(),
             scroll_offset: 0,
             file_explorer_selected_index: 0,
@@ -727,7 +727,7 @@ mod tests {
                 responses: Vec::new(),
                 scroll_offset: None,
                 selected_option_index: None,
-                session_id: "session-q".to_string(),
+                session_id: "session-q".into(),
             }),
             scroll_cache: None,
         };
@@ -778,11 +778,11 @@ mod tests {
             responses: vec!["answer-1".to_string()],
             scroll_offset: None,
             selected_option_index: None,
-            session_id: "session-q".to_string(),
+            session_id: "session-q".into(),
         };
 
         app.mode = AppMode::Diff {
-            session_id: "session-q".to_string(),
+            session_id: "session-q".into(),
             diff: "diff output".to_string(),
             scroll_offset: 3,
             file_explorer_selected_index: 1,

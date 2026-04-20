@@ -18,6 +18,7 @@ use crate::app::error::AppError;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppEvent, UpdateStatus, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::session::SessionId;
 use crate::infra::agent;
 use crate::infra::git::GitClient;
 use crate::version;
@@ -36,7 +37,7 @@ pub(crate) struct SessionGitStatusTarget {
     /// `wt/1234abcd`.
     pub(crate) branch_name: String,
     /// Stable session identifier used as the reducer map key.
-    pub(crate) session_id: String,
+    pub(crate) session_id: SessionId,
 }
 
 /// Per-session forge-sync polling target for one active review-request
@@ -53,7 +54,7 @@ pub(crate) struct ReviewRequestSyncTarget {
     /// externally created review request when no link has been persisted yet.
     pub(crate) published_upstream_ref: Option<String>,
     /// Stable session identifier used to route reducer updates.
-    pub(crate) session_id: String,
+    pub(crate) session_id: SessionId,
 }
 
 /// Inputs needed to generate review assist text in the background.
@@ -65,7 +66,7 @@ pub(super) struct ReviewAssistTaskInput {
     pub(super) review_diff: String,
     pub(super) review_model: AgentModel,
     pub(super) session_folder: PathBuf,
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     pub(super) session_summary: Option<String>,
 }
 
@@ -167,7 +168,7 @@ impl TaskService {
         repo_root: &Path,
         session_git_status_targets: &[SessionGitStatusTarget],
         git_client: &dyn GitClient,
-    ) -> HashMap<String, SessionGitStatus> {
+    ) -> HashMap<SessionId, SessionGitStatus> {
         let mut session_git_statuses = HashMap::with_capacity(session_git_status_targets.len());
 
         for session_git_status_target in session_git_status_targets {
@@ -438,7 +439,7 @@ impl TaskService {
     fn review_app_event(
         diff_hash: u64,
         review_result: Result<String, AppError>,
-        session_id: String,
+        session_id: SessionId,
     ) -> AppEvent {
         match review_result {
             Ok(review_text) => AppEvent::ReviewPrepared {
@@ -714,12 +715,12 @@ mod tests {
             SessionGitStatusTarget {
                 base_branch: "main".to_string(),
                 branch_name: "wt/session-a".to_string(),
-                session_id: "session-a".to_string(),
+                session_id: "session-a".into(),
             },
             SessionGitStatusTarget {
                 base_branch: "develop".to_string(),
                 branch_name: "wt/session-b".to_string(),
-                session_id: "session-b".to_string(),
+                session_id: "session-b".into(),
             },
         ];
         let mut mock_git_client = MockGitClient::new();
@@ -772,7 +773,7 @@ mod tests {
         let session_git_status_targets = vec![SessionGitStatusTarget {
             base_branch: "main".to_string(),
             branch_name: "wt/session-a".to_string(),
-            session_id: "session-a".to_string(),
+            session_id: "session-a".into(),
         }];
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -959,7 +960,7 @@ mod tests {
         let session_id = "session-7".to_string();
 
         // Act
-        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id);
+        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id.into());
 
         // Assert
         assert_eq!(
@@ -967,7 +968,7 @@ mod tests {
             AppEvent::ReviewPrepared {
                 diff_hash: 7,
                 review_text: "Flagged one missing error branch.".to_string(),
-                session_id: "session-7".to_string(),
+                session_id: "session-7".into(),
             }
         );
     }
@@ -982,7 +983,7 @@ mod tests {
         let session_id = "session-9".to_string();
 
         // Act
-        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id);
+        let app_event = TaskService::review_app_event(diff_hash, review_result, session_id.into());
 
         // Assert
         assert_eq!(
@@ -990,7 +991,7 @@ mod tests {
             AppEvent::ReviewPreparationFailed {
                 diff_hash: 9,
                 error: "empty response".to_string(),
-                session_id: "session-9".to_string(),
+                session_id: "session-9".into(),
             }
         );
     }

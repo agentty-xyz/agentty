@@ -19,7 +19,8 @@ use crate::app::session::{
 use crate::app::{AppEvent, AppServices, SessionManager, branch_publish};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, SessionStats, Status,
+    PublishBranchAction, PublishedBranchSyncStatus, SessionFollowUpTask, SessionId, SessionStats,
+    Status,
 };
 use crate::domain::setting::SettingName;
 use crate::infra::channel::{
@@ -114,7 +115,7 @@ struct SessionWorkerContext {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     output: Arc<Mutex<String>>,
-    session_id: String,
+    session_id: SessionId,
     status: Arc<Mutex<Status>>,
 }
 
@@ -131,7 +132,7 @@ pub(super) struct SessionWorkerRuntime {
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
     output: Arc<Mutex<String>>,
-    session_id: String,
+    session_id: SessionId,
     session_model: AgentModel,
     status: Arc<Mutex<Status>>,
 }
@@ -144,8 +145,8 @@ pub(crate) struct SessionWorkerService {
     /// `ensure_session_worker` uses the injected channel instead of the
     /// default factory, enabling deterministic command execution without
     /// spawning real provider processes.
-    pub(in crate::app::session) test_agent_channels: HashMap<String, Arc<dyn AgentChannel>>,
-    workers: HashMap<String, mpsc::UnboundedSender<SessionCommand>>,
+    pub(in crate::app::session) test_agent_channels: HashMap<SessionId, Arc<dyn AgentChannel>>,
+    workers: HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>,
 }
 
 impl SessionWorkerService {
@@ -228,7 +229,7 @@ impl SessionWorkerService {
     }
 
     /// Drops worker queues for sessions no longer present in the active list.
-    pub(super) fn retain_active_workers(&mut self, active_session_ids: &HashSet<String>) {
+    pub(super) fn retain_active_workers(&mut self, active_session_ids: &HashSet<SessionId>) {
         self.workers
             .retain(|session_id, _| active_session_ids.contains(session_id));
     }
@@ -317,7 +318,7 @@ impl SessionWorkerService {
             // Best-effort: session transport may already be torn down.
             let _ = context
                 .channel
-                .shutdown_session(context.session_id.clone())
+                .shutdown_session(context.session_id.to_string())
                 .await;
             if let Ok(mut guard) = context.child_pid.lock() {
                 *guard = None;
@@ -558,7 +559,10 @@ impl SessionManager {
     /// Terminal sessions (`Done`, `Canceled`) no longer execute turns, so
     /// dropping their worker sender lets the worker task exit and shut down any
     /// provider runtime process associated with that session.
-    pub(crate) fn clear_terminal_session_workers(&mut self, updated_session_ids: &HashSet<String>) {
+    pub(crate) fn clear_terminal_session_workers(
+        &mut self,
+        updated_session_ids: &HashSet<SessionId>,
+    ) {
         let terminal_session_ids = updated_session_ids
             .iter()
             .filter_map(|session_id| {
@@ -616,6 +620,11 @@ impl TurnPersistence<'_> {
         } else {
             serde_json::to_string(&questions).unwrap_or_default()
         };
+        let follow_up_tasks = turn_applied_follow_up_tasks(assistant_message);
+        let persisted_follow_up_text = follow_up_tasks
+            .iter()
+            .map(|follow_up_task| follow_up_task.text.clone())
+            .collect::<Vec<_>>();
         let token_usage_delta = SessionStats {
             added_lines: 0,
             deleted_lines: 0,
@@ -642,8 +651,13 @@ impl TurnPersistence<'_> {
                 },
             )
             .await?;
+        self.context
+            .db
+            .replace_session_follow_up_tasks(&self.context.session_id, &persisted_follow_up_text)
+            .await?;
 
         Ok(TurnAppliedState {
+            follow_up_tasks,
             questions,
             summary: (!summary.is_empty()).then_some(summary),
             token_usage_delta,
@@ -687,7 +701,7 @@ async fn run_turn_with_cancellation(
         terminate_child_process(context);
         let _ = context
             .channel
-            .shutdown_session(context.session_id.clone())
+            .shutdown_session(context.session_id.to_string())
             .await;
 
         return Err(AgentError::Backend(
@@ -697,7 +711,7 @@ async fn run_turn_with_cancellation(
 
     let turn_future = context
         .channel
-        .run_turn(context.session_id.clone(), req, event_tx);
+        .run_turn(context.session_id.to_string(), req, event_tx);
     tokio::pin!(turn_future);
 
     tokio::select! {
@@ -714,7 +728,7 @@ async fn run_turn_with_cancellation(
             // needed.
             let _ = context
                 .channel
-                .shutdown_session(context.session_id.clone())
+                .shutdown_session(context.session_id.to_string())
                 .await;
 
             // Wait for the turn future to resolve so the subprocess is
@@ -868,7 +882,7 @@ async fn apply_successful_turn_result(
         db: context.db.clone(),
         folder: context.folder.clone(),
         git_client: Arc::clone(&context.git_client),
-        id: context.session_id.clone(),
+        id: context.session_id.to_string(),
         output: Arc::clone(&context.output),
         session_model: auto_commit_model,
     })
@@ -933,7 +947,7 @@ pub(super) struct PublishedBranchAutoPushInput {
     /// Published upstream reference that provides the remote branch target.
     pub(super) published_upstream_ref: String,
     /// Session id whose branch is being pushed.
-    pub(super) session_id: String,
+    pub(super) session_id: SessionId,
     /// Auto-push operation id used to ignore stale completion updates.
     pub(super) sync_operation_id: String,
 }
@@ -1132,6 +1146,14 @@ fn persisted_session_summary_payload(assistant_message: &agent::AgentResponse) -
         .unwrap_or_default()
 }
 
+/// Builds the reducer-facing follow-up-task projection for one assistant
+/// response.
+fn turn_applied_follow_up_tasks(
+    _assistant_message: &agent::AgentResponse,
+) -> Vec<SessionFollowUpTask> {
+    Vec::new()
+}
+
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
 ///
 /// - [`TurnEvent::ThoughtDelta`]: updates the transient thinking loader text.
@@ -1141,7 +1163,7 @@ fn persisted_session_summary_payload(assistant_message: &agent::AgentResponse) -
 async fn consume_turn_events(
     mut event_rx: mpsc::UnboundedReceiver<TurnEvent>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    session_id: String,
+    session_id: SessionId,
     child_pid: Arc<Mutex<Option<u32>>>,
 ) {
     let mut active_progress: Option<String> = None;
@@ -1394,7 +1416,7 @@ mod tests {
         consume_turn_events(
             event_rx,
             app_event_tx,
-            "session-1".to_string(),
+            "session-1".into(),
             Arc::clone(&child_pid),
         )
         .await;
@@ -1460,7 +1482,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1562,7 +1584,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1620,7 +1642,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess-preturn".to_string(),
+            session_id: "sess-preturn".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1686,7 +1708,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess-timeout".to_string(),
+            session_id: "sess-timeout".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1749,7 +1771,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess-term".to_string(),
+            session_id: "sess-term".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1787,7 +1809,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess-nopid".to_string(),
+            session_id: "sess-nopid".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1816,7 +1838,7 @@ mod tests {
         drop(event_tx);
 
         // Act
-        consume_turn_events(event_rx, app_event_tx, "session-1".to_string(), child_pid).await;
+        consume_turn_events(event_rx, app_event_tx, "session-1".into(), child_pid).await;
 
         let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
 
@@ -1826,11 +1848,11 @@ mod tests {
             vec![
                 AppEvent::SessionProgressUpdated {
                     progress_message: Some("Inspecting files".to_string()),
-                    session_id: "session-1".to_string(),
+                    session_id: "session-1".into(),
                 },
                 AppEvent::SessionProgressUpdated {
                     progress_message: None,
-                    session_id: "session-1".to_string(),
+                    session_id: "session-1".into(),
                 },
             ]
         );
@@ -1873,7 +1895,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -1965,7 +1987,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2067,7 +2089,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2153,7 +2175,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2242,7 +2264,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2310,7 +2332,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2428,7 +2450,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2487,7 +2509,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2558,7 +2580,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
-            session_id: "sess1".to_string(),
+            session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 

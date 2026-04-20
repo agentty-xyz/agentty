@@ -56,7 +56,9 @@ mod tests {
     use crate::app::session::{Clock, SessionDefaults, SessionError};
     use crate::app::{SessionManager, SessionState};
     use crate::domain::agent::{AgentKind, AgentModel};
-    use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::domain::session::{
+        Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
+    };
     use crate::infra::git;
 
     /// Deterministic clock for test construction.
@@ -79,7 +81,8 @@ mod tests {
             created_at: 0,
             draft_attachments: Vec::new(),
             folder: PathBuf::from("/tmp/test"),
-            id: session_id.to_string(),
+            follow_up_tasks: Vec::new(),
+            id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
@@ -104,7 +107,7 @@ mod tests {
     /// Builds a session manager with given sessions and optional handles.
     fn session_manager_with(
         sessions: Vec<Session>,
-        handles: HashMap<String, SessionHandles>,
+        handles: HashMap<SessionId, SessionHandles>,
     ) -> SessionManager {
         SessionManager::new(
             SessionDefaults {
@@ -205,7 +208,7 @@ mod tests {
         // Arrange
         let mut handles = HashMap::new();
         handles.insert(
-            "sess-1".to_string(),
+            "sess-1".into(),
             SessionHandles::new(String::new(), Status::Review),
         );
         let manager = session_manager_with(Vec::new(), handles);
@@ -237,7 +240,7 @@ mod tests {
         let session = test_session("sess-1", Status::Review);
         let mut handles = HashMap::new();
         handles.insert(
-            "sess-1".to_string(),
+            "sess-1".into(),
             SessionHandles::new("output".to_string(), Status::Review),
         );
         let manager = session_manager_with(vec![session], handles);
@@ -263,7 +266,7 @@ mod tests {
         // Arrange
         let mut handles = HashMap::new();
         handles.insert(
-            "sess-1".to_string(),
+            "sess-1".into(),
             SessionHandles::new(String::new(), Status::Review),
         );
         let manager = session_manager_with(Vec::new(), handles);
