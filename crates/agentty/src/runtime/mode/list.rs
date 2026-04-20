@@ -126,8 +126,11 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                 if session.status == Status::Question {
                     let questions = session.questions.clone();
                     let selected_option_index = question::default_option_index(&questions, 0);
+                    let (review_status_message, review_text) = app.review_view_state(&session_id);
                     app.mode = AppMode::Question {
                         at_mention_state: None,
+                        review_status_message,
+                        review_text,
                         session_id,
                         questions,
                         responses: Vec::new(),
@@ -688,6 +691,13 @@ mod tests {
             session.status = Status::Question;
             session.questions = expected_questions.clone();
         }
+        app.review_cache.insert(
+            expected_session_id.clone(),
+            crate::app::ReviewCacheEntry::Ready {
+                text: "Focused review".to_string(),
+                diff_hash: 42,
+            },
+        );
         app.tabs.set(Tab::Sessions);
         app.sessions.table_state.select(Some(0));
         app.mode = AppMode::List;
@@ -704,6 +714,8 @@ mod tests {
             AppMode::Question {
                 ref session_id,
                 ref questions,
+                review_status_message: None,
+                review_text: Some(ref review_text),
                 current_index: 0,
                 ref responses,
                 ref input,
@@ -711,6 +723,7 @@ mod tests {
                 ..
             } if session_id == &expected_session_id
                 && questions == &expected_questions
+                && review_text == "Focused review"
                 && responses.is_empty()
                 && input.text().is_empty()
         ));

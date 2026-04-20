@@ -86,6 +86,8 @@ pub struct QuestionModeSnapshot {
     pub current_index: usize,
     pub input: InputState,
     pub questions: Vec<QuestionItem>,
+    pub review_status_message: Option<String>,
+    pub review_text: Option<String>,
     pub responses: Vec<String>,
     pub scroll_offset: Option<u16>,
     pub selected_option_index: Option<usize>,
@@ -102,6 +104,8 @@ impl QuestionModeSnapshot {
             focus: QuestionFocus::Answer,
             input: self.input,
             questions: self.questions,
+            review_status_message: self.review_status_message,
+            review_text: self.review_text,
             responses: self.responses,
             scroll_offset: self.scroll_offset,
             selected_option_index: self.selected_option_index,
@@ -246,6 +250,12 @@ pub enum AppMode {
     Question {
         /// File/directory mention dropdown state for the free-text input.
         at_mention_state: Option<PromptAtMentionState>,
+        /// Focused-review status text kept visible above the clarification
+        /// panel while a review is still loading or has failed.
+        review_status_message: Option<String>,
+        /// Focused-review output kept visible above the clarification panel so
+        /// question mode does not hide the latest assisted review block.
+        review_text: Option<String>,
         /// Session receiving the follow-up clarification reply.
         session_id: String,
         /// Ordered clarification prompts emitted by the model.

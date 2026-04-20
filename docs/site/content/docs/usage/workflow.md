@@ -85,8 +85,9 @@ available, except `r`, which stays hidden until the session returns to
 Pressing `f` appends the cached review directly into the normal session output
 panel when it is ready, or shows a loading message there while generation is
 still running. That appended review remains visible when you leave and reopen
-the session, including after round-tripping through `d` diff mode, and it is
-cleared when you submit the next prompt.
+the session, including after round-tripping through `d` diff mode or entering
+**Question** mode for clarifications, and it is cleared when you submit the
+next prompt.
 Pressing `/` from an editable session view opens the same composer with a
 prefilled `/` so you can pick a slash command without typing the leading
 character first.

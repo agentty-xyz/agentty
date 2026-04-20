@@ -482,6 +482,8 @@ mod tests {
             current_index: 0,
             focus: QuestionFocus::Answer,
             input: InputState::default(),
+            review_status_message: None,
+            review_text: None,
             scroll_offset: None,
             questions: vec![QuestionItem {
                 options: vec!["yes".to_string()],

@@ -185,6 +185,10 @@ impl<'a> SessionChatPage<'a> {
             | AppMode::Prompt {
                 review_status_message,
                 ..
+            }
+            | AppMode::Question {
+                review_status_message,
+                ..
             } => review_status_message.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
             | AppMode::PublishBranchInput { restore_view, .. }
@@ -194,7 +198,6 @@ impl<'a> SessionChatPage<'a> {
             AppMode::List
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Question { .. }
             | AppMode::Diff { .. }
             | AppMode::Help { .. } => None,
         }
@@ -206,16 +209,15 @@ impl<'a> SessionChatPage<'a> {
     /// is submitted so reopening the composer does not hide the review block.
     fn review_text(&self) -> Option<&str> {
         match self.mode {
-            AppMode::View { review_text, .. } | AppMode::Prompt { review_text, .. } => {
-                review_text.as_deref()
-            }
+            AppMode::View { review_text, .. }
+            | AppMode::Prompt { review_text, .. }
+            | AppMode::Question { review_text, .. } => review_text.as_deref(),
             AppMode::OpenCommandSelector { restore_view, .. }
             | AppMode::PublishBranchInput { restore_view, .. }
             | AppMode::ViewInfoPopup { restore_view, .. } => restore_view.review_text.as_deref(),
             AppMode::List
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Question { .. }
             | AppMode::Diff { .. }
             | AppMode::Help { .. } => None,
         }
@@ -1644,6 +1646,67 @@ mod tests {
     }
 
     #[test]
+    fn test_review_text_reads_preserved_question_review_output() {
+        // Arrange
+        let session = session_fixture();
+        let mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: Some("Preparing review...".to_string()),
+            review_text: Some("Focused review".to_string()),
+            session_id: "session-id".to_string(),
+            questions: vec![QuestionItem::new("Need tests?")],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+        let page = test_session_chat_page(&session, &mode);
+
+        // Act
+        let review_text = page.review_text();
+        let review_status_message = page.review_status_message();
+
+        // Assert
+        assert_eq!(review_text, Some("Focused review"));
+        assert_eq!(review_status_message, Some("Preparing review..."));
+    }
+
+    #[test]
+    fn test_rendered_output_line_count_includes_question_review_output() {
+        // Arrange
+        let session = session_fixture();
+        let without_review = SessionChatPage::rendered_output_line_count(
+            &session,
+            40,
+            SessionOutputLineContext {
+                active_prompt_output: None,
+                active_progress: None,
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message: None,
+                review_text: None,
+            },
+        );
+
+        // Act
+        let with_review = SessionChatPage::rendered_output_line_count(
+            &session,
+            40,
+            SessionOutputLineContext {
+                active_prompt_output: None,
+                active_progress: None,
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message: Some("Preparing review..."),
+                review_text: Some("## Review\n\n- Focused finding"),
+            },
+        );
+
+        // Assert
+        assert!(with_review > without_review);
+    }
+
+    #[test]
     /// Ensures the prompt footer keeps shared help styling while showing image
     /// attachment readiness.
     fn test_prompt_footer_line_shows_highlighted_actions_and_attachment_count() {
@@ -1717,6 +1780,8 @@ mod tests {
         let answer = "Use two phases: schema and runtime.";
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1753,6 +1818,8 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -1781,6 +1848,8 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
@@ -2006,6 +2075,8 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -2042,6 +2113,8 @@ mod tests {
         let question = "Need a detailed migration plan with rollback guidance?".to_string();
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
@@ -2090,6 +2163,8 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec!["Yes".to_string(), "No".to_string()],
@@ -2129,6 +2204,8 @@ mod tests {
         let session = session_fixture();
         let mode = AppMode::Question {
             at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
             session_id: "session-id".to_string(),
             questions: vec![QuestionItem {
                 options: vec![

@@ -1961,7 +1961,28 @@ impl App {
             return;
         }
 
-        let is_viewing_session = match &self.mode {
+        if self.is_viewing_session(session_id) {
+            let (review_status_message, review_text) = self.question_mode_review_state(session_id);
+            self.mode = AppMode::Question {
+                at_mention_state: None,
+                selected_option_index: question::default_option_index(&questions, 0),
+                session_id: session_id.to_string(),
+                questions,
+                review_status_message,
+                review_text,
+                responses: Vec::new(),
+                current_index: 0,
+                focus: QuestionFocus::Answer,
+                input: InputState::default(),
+                scroll_offset: None,
+            };
+        }
+    }
+
+    /// Returns whether the active UI mode currently shows the provided
+    /// session.
+    fn is_viewing_session(&self, session_id: &str) -> bool {
+        match &self.mode {
             AppMode::View {
                 session_id: view_id,
                 ..
@@ -2006,20 +2027,43 @@ impl App {
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Help { .. } => false,
-        };
+        }
+    }
 
-        if is_viewing_session {
-            self.mode = AppMode::Question {
-                at_mention_state: None,
-                selected_option_index: question::default_option_index(&questions, 0),
-                session_id: session_id.to_string(),
-                questions,
-                responses: Vec::new(),
-                current_index: 0,
-                focus: QuestionFocus::Answer,
-                input: InputState::default(),
-                scroll_offset: None,
-            };
+    /// Returns the focused-review state that should remain visible when the
+    /// UI enters clarification-question mode for the provided session.
+    fn question_mode_review_state(&self, session_id: &str) -> (Option<String>, Option<String>) {
+        match &self.mode {
+            AppMode::View {
+                review_status_message,
+                review_text,
+                ..
+            }
+            | AppMode::Prompt {
+                review_status_message,
+                review_text,
+                ..
+            }
+            | AppMode::Question {
+                review_status_message,
+                review_text,
+                ..
+            } => (review_status_message.clone(), review_text.clone()),
+            AppMode::OpenCommandSelector { restore_view, .. }
+            | AppMode::PublishBranchInput { restore_view, .. }
+            | AppMode::ViewInfoPopup { restore_view, .. } => (
+                restore_view.review_status_message.clone(),
+                restore_view.review_text.clone(),
+            ),
+            AppMode::Diff {
+                session_id: diff_session_id,
+                ..
+            } if diff_session_id == session_id => self.review_view_state(session_id),
+            AppMode::List
+            | AppMode::Confirmation { .. }
+            | AppMode::SyncBlockedPopup { .. }
+            | AppMode::Diff { .. }
+            | AppMode::Help { .. } => (None, None),
         }
     }
 
@@ -4734,8 +4778,8 @@ mod tests {
             .push_session(test_session(PathBuf::from("/tmp/session-question-view")));
         app.mode = AppMode::View {
             done_session_output_mode: DoneSessionOutputMode::Summary,
-            review_status_message: None,
-            review_text: None,
+            review_status_message: Some("Preparing review...".to_string()),
+            review_text: Some("Focused review".to_string()),
             session_id: "session-1".to_string(),
             scroll_offset: None,
         };
@@ -4777,6 +4821,8 @@ mod tests {
             AppMode::Question {
                 ref session_id,
                 ref questions,
+                review_status_message: Some(ref review_status_message),
+                review_text: Some(ref review_text),
                 ref responses,
                 current_index: 0,
                 ref input,
@@ -4784,6 +4830,8 @@ mod tests {
                 ..
             } if session_id == "session-1"
                 && questions == &expected_questions
+                && review_status_message == "Preparing review..."
+                && review_text == "Focused review"
                 && responses.is_empty()
                 && input.text().is_empty()
         ));

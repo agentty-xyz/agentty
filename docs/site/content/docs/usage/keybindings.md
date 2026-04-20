@@ -126,7 +126,7 @@ Additional notes:
   custom branch name as `p`, then creates or refreshes the linked forge review
   request after the branch push succeeds. GitHub projects publish pull
   requests, while GitLab projects publish merge requests.
-- **Focused review persistence**: when a focused review has already been generated, it stays visible after opening `d` diff mode and returning to the session view.
+- **Focused review persistence**: when a focused review has already been generated, it stays visible after opening `d` diff mode, returning to the session view, or entering **Question** mode for clarifications.
 - **Branch publish lock**: once a session branch already tracks a remote branch, Agentty locks the popup field and re-publishes to that same remote branch only.
 - **Branch publish auth**: `p` and `Shift+P` always run `git push` first. HTTPS remotes therefore need Git credentials even when the forge CLI is already logged in. `Shift+P` also needs authenticated `gh` access for GitHub repositories and authenticated `glab` access for GitLab repositories. See [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab CLI setup steps.
 - **Question**: opening the session enters Question Input mode until all prompts are answered and submitted, or the clarification turn is ended with `Esc`.
