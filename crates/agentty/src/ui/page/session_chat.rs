@@ -1,25 +1,21 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::input::{self, extract_at_mention_query};
+use crate::domain::input;
 use crate::domain::session::Session;
 use crate::infra::agent::protocol::QuestionItem;
-use crate::infra::file_index;
-use crate::ui::component::chat_input::{ChatInput, SuggestionItem, SuggestionList};
+use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{SessionOutput, SessionOutputLineContext};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
-use crate::ui::state::prompt::{
-    PromptAtMentionState, PromptSlashState, build_prompt_slash_suggestion_list,
-};
+use crate::ui::state::prompt::PromptAtMentionState;
 use crate::ui::util::{
     calculate_input_height, overlay_area_above, question_panel_areas,
-    question_panel_reserved_height, suggestion_dropdown_height, wrap_lines,
+    question_panel_reserved_height, suggestion_dropdown_height,
 };
-use crate::ui::{Component, Page, layout, markdown, style};
+use crate::ui::{Component, Page, layout, markdown};
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
@@ -204,45 +200,6 @@ impl<'a> SessionChatPage<'a> {
         }
     }
 
-    /// Builds the prompt `@`-mention suggestion list using the default visible
-    /// window size.
-    fn build_at_mention_suggestion_list(
-        input_text: &str,
-        cursor: usize,
-        at_mention_state: &PromptAtMentionState,
-    ) -> Option<SuggestionList> {
-        build_at_mention_suggestion_list_with_capacity(
-            input_text,
-            cursor,
-            at_mention_state,
-            AT_MENTION_DEFAULT_MAX_VISIBLE,
-        )
-    }
-
-    /// Builds the current prompt suggestion list and clamps the highlighted
-    /// row into the visible item window.
-    fn build_prompt_suggestion_list(
-        input: &input::InputState,
-        slash_state: &PromptSlashState,
-        at_mention_state: Option<&PromptAtMentionState>,
-        session: &Session,
-    ) -> Option<SuggestionList> {
-        let input_text = input.text();
-        let cursor = input.cursor;
-
-        if input_text.starts_with('/') {
-            return build_prompt_slash_suggestion_list(
-                input_text,
-                slash_state,
-                session.model.kind(),
-            )
-            .map(Self::render_suggestion_list);
-        }
-
-        at_mention_state
-            .and_then(|state| Self::build_at_mention_suggestion_list(input_text, cursor, state))
-    }
-
     /// Prepares prompt-panel layout and suggestion data once for a render
     /// pass.
     fn prepare_prompt_panel(&self, area: Rect, session: &Session) -> Option<PreparedPromptPanel> {
@@ -257,15 +214,13 @@ impl<'a> SessionChatPage<'a> {
             return None;
         };
 
-        let suggestion_list = Self::build_prompt_suggestion_list(
+        let suggestion_list = layout::prompt_suggestion_list(
             input,
             slash_state,
             at_mention_state.as_ref(),
-            session,
+            session.model.kind(),
         );
-        let dropdown_row_count = suggestion_list
-            .as_ref()
-            .map_or(0, |list| list.items.len().saturating_add(2));
+        let dropdown_row_count = layout::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
         let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
             .min(CHAT_INPUT_MAX_PANEL_HEIGHT);
         let desired_bottom_height = input_height
@@ -279,27 +234,6 @@ impl<'a> SessionChatPage<'a> {
             title: format!(" [{}] ", session.model.as_str()),
             total_height: desired_bottom_height.min(max_bottom_height),
         })
-    }
-
-    /// Converts domain-level prompt suggestions into the UI component rows
-    /// used by `ChatInput`.
-    fn render_suggestion_list(
-        suggestion_list: crate::ui::state::prompt::PromptSuggestionList,
-    ) -> SuggestionList {
-        SuggestionList {
-            items: suggestion_list
-                .items
-                .into_iter()
-                .map(|item| SuggestionItem {
-                    badge: item.badge,
-                    detail: item.detail,
-                    label: item.label,
-                    metadata: item.metadata,
-                })
-                .collect(),
-            selected_index: suggestion_list.selected_index,
-            title: suggestion_list.title,
-        }
     }
 
     /// Renders the session header, output panel, and context-aware bottom
@@ -506,39 +440,23 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
     let is_chat_focused = focus == QuestionFocus::Chat;
     let question_title = format!("Question {}/{}", current_index + 1, questions.len());
     if panel_areas.question_area.height > 0 {
-        let title_color = if is_chat_focused {
-            style::palette::TEXT_MUTED
-        } else {
-            style::palette::QUESTION
-        };
-        let title_line = Line::from(Span::styled(
+        let question_para = Paragraph::new(layout::question_panel_lines(
             &question_title,
-            Style::default()
-                .fg(title_color)
-                .add_modifier(Modifier::BOLD),
+            question,
+            is_chat_focused,
+            bottom_area.width,
         ));
-        let text_color = if is_chat_focused {
-            style::palette::TEXT_MUTED
-        } else {
-            Color::Yellow
-        };
-        let mut lines = vec![title_line];
-        lines.extend(
-            wrap_lines(question, usize::from(bottom_area.width.max(1)))
-                .into_iter()
-                .map(|line| line.style(Style::default().fg(text_color))),
-        );
-        let question_para = Paragraph::new(lines);
         f.render_widget(question_para, panel_areas.question_area);
     }
 
     if panel_areas.options_area.height > 0 {
-        render_question_options(
-            f,
+        f.render_widget(
+            Paragraph::new(layout::question_option_lines(
+                options,
+                selected_option_index,
+                is_chat_focused,
+            )),
             panel_areas.options_area,
-            options,
-            selected_option_index,
-            is_chat_focused,
         );
     }
 
@@ -551,13 +469,11 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         ("", 0)
     };
     let input_placeholder = "Type answer (Enter: send, Esc: end turn)";
-    let available_above = usize::from(panel_areas.input_area.y.saturating_sub(bottom_area.y));
-    let at_mention_max_visible = available_above
-        .saturating_sub(2)
-        .clamp(1, AT_MENTION_DEFAULT_MAX_VISIBLE);
+    let at_mention_max_visible =
+        layout::question_at_mention_max_visible(bottom_area, panel_areas.input_area, 10);
     let at_mention_menu = if is_free_text_mode {
         at_mention_state.and_then(|state| {
-            build_at_mention_suggestion_list_with_capacity(
+            layout::file_lookup_suggestion_list(
                 display_text,
                 display_cursor,
                 state,
@@ -616,109 +532,6 @@ fn render_question_at_mention_overlay(
     ChatInput::render_suggestion_dropdown(f, dropdown_area, &menu);
 }
 
-/// Default maximum number of at-mention dropdown entries visible at once.
-const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
-
-/// Builds an at-mention dropdown menu for the free-text input.
-///
-/// `max_visible` caps how many items the windowed slice may contain. Callers
-/// should derive this from the available rendering height so the logical
-/// window never exceeds what the overlay can display.
-///
-/// Returns `None` when the input has no active `@` query or when no file
-/// entries match the query.
-fn build_at_mention_suggestion_list_with_capacity(
-    input_text: &str,
-    cursor: usize,
-    at_mention_state: &PromptAtMentionState,
-    max_visible: usize,
-) -> Option<SuggestionList> {
-    let (_, query) = extract_at_mention_query(input_text, cursor)?;
-    let filtered = file_index::filter_entries(&at_mention_state.all_entries, &query);
-
-    if filtered.is_empty() {
-        return None;
-    }
-    let window_start = at_mention_state
-        .selected_index
-        .saturating_sub(max_visible / 2);
-    let window_end = filtered.len().min(window_start + max_visible);
-    let window_start = window_end.saturating_sub(max_visible);
-
-    let items: Vec<SuggestionItem> = filtered[window_start..window_end]
-        .iter()
-        .map(|entry| {
-            let label = if entry.is_dir {
-                format!("{}/", entry.path)
-            } else {
-                entry.path.clone()
-            };
-
-            SuggestionItem {
-                badge: None,
-                detail: entry.is_dir.then(|| "folder".to_string()),
-                label,
-                metadata: None,
-            }
-        })
-        .collect();
-
-    let display_index = at_mention_state
-        .selected_index
-        .min(filtered.len().saturating_sub(1))
-        .saturating_sub(window_start);
-
-    Some(SuggestionList {
-        items,
-        selected_index: display_index,
-        title: "Files (\u{2191}\u{2193} move, Enter select, Esc dismiss)".to_string(),
-    })
-}
-
-/// Renders the answer option list for the active question.
-///
-/// Each predefined option is shown as a numbered line with the currently
-/// selected option highlighted. The input widget below the options serves
-/// as the "type custom answer" area, so no virtual entry is appended here.
-fn render_question_options(
-    f: &mut Frame,
-    area: Rect,
-    options: &[String],
-    selected_option_index: Option<usize>,
-    dimmed: bool,
-) {
-    let mut lines: Vec<Line<'_>> = Vec::with_capacity(options.len() + 1);
-    let header_color = if dimmed {
-        style::palette::TEXT_MUTED
-    } else {
-        Color::Yellow
-    };
-    lines.push(Line::from(Span::styled(
-        "Options:",
-        Style::default().fg(header_color),
-    )));
-
-    for (option_index, option_text) in options.iter().enumerate() {
-        let is_selected = selected_option_index == Some(option_index);
-        let prefix = if is_selected { "▸ " } else { "  " };
-        let label = format!("{prefix}{}. {option_text}", option_index + 1);
-        let style = if dimmed {
-            Style::default().fg(style::palette::TEXT_MUTED)
-        } else if is_selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        lines.push(Line::from(Span::styled(label, style)));
-    }
-
-    f.render_widget(Paragraph::new(lines), area);
-}
-
 impl Page for SessionChatPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         if let Some(session) = self.sessions.get(self.session_index) {
@@ -730,11 +543,10 @@ impl Page for SessionChatPage<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::agent::{AgentKind, ReasoningLevel};
+    use crate::domain::agent::ReasoningLevel;
     use crate::domain::input::InputState;
     use crate::domain::session::Status;
     use crate::infra::agent::protocol::QuestionItem;
-    use crate::infra::file_index::FileEntry;
     use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 
@@ -839,321 +651,6 @@ mod tests {
             wrapped_message,
             Some("Press ? to inspect the shortcuts available for the current session state.")
         );
-    }
-
-    #[test]
-    fn test_build_slash_suggestion_list_for_command_stage_has_description() {
-        // Arrange
-        let slash_state = PromptSlashState::new();
-
-        // Act
-        let menu = SessionChatPage::render_suggestion_list(
-            build_prompt_slash_suggestion_list("/m", &slash_state, AgentKind::Codex)
-                .expect("expected suggestion list"),
-        );
-
-        // Assert
-        assert_eq!(menu.items.len(), 1);
-        assert_eq!(menu.items[0].label, "/model");
-        assert_eq!(
-            menu.items[0].detail,
-            Some("Choose an agent and model for this session.".to_string())
-        );
-    }
-
-    #[test]
-    fn test_build_slash_suggestion_list_for_agent_stage_has_agent_descriptions() {
-        // Arrange
-        let mut slash_state = PromptSlashState::new();
-        slash_state.stage = crate::ui::state::prompt::PromptSlashStage::Agent;
-
-        // Act
-        let menu = SessionChatPage::render_suggestion_list(
-            build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Codex)
-                .expect("expected suggestion list"),
-        );
-
-        // Assert
-        assert_eq!(menu.items.len(), AgentKind::ALL.len());
-        assert_eq!(menu.items[0].label, "gemini");
-        assert_eq!(
-            menu.items[0].detail,
-            Some("Google Gemini CLI agent.".to_string())
-        );
-    }
-
-    #[test]
-    fn test_build_slash_suggestion_list_for_agent_stage_filters_available_agents() {
-        // Arrange
-        let mut slash_state = PromptSlashState::with_available_agent_kinds(vec![AgentKind::Codex]);
-        slash_state.stage = crate::ui::state::prompt::PromptSlashStage::Agent;
-
-        // Act
-        let menu = SessionChatPage::render_suggestion_list(
-            build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Codex)
-                .expect("expected suggestion list"),
-        );
-
-        // Assert
-        assert_eq!(menu.items.len(), 1);
-        assert_eq!(menu.items[0].label, "codex");
-    }
-
-    #[test]
-    fn test_build_slash_suggestion_list_for_model_stage_has_model_descriptions() {
-        // Arrange
-        let mut slash_state = PromptSlashState::new();
-        slash_state.stage = crate::ui::state::prompt::PromptSlashStage::Model;
-        slash_state.selected_agent = Some(AgentKind::Codex);
-
-        // Act
-        let menu = SessionChatPage::render_suggestion_list(
-            build_prompt_slash_suggestion_list("/model", &slash_state, AgentKind::Codex)
-                .expect("expected suggestion list"),
-        );
-
-        // Assert
-        assert_eq!(menu.items.len(), AgentKind::Codex.models().len());
-        assert_eq!(menu.items[0].label, "gpt-5.4");
-        assert_eq!(
-            menu.items[0].detail,
-            Some("Latest Codex model for coding quality.".to_string())
-        );
-    }
-
-    fn file_entries_fixture() -> Vec<FileEntry> {
-        vec![
-            FileEntry {
-                is_dir: true,
-                path: "src".to_string(),
-            },
-            FileEntry {
-                is_dir: true,
-                path: "tests".to_string(),
-            },
-            FileEntry {
-                is_dir: false,
-                path: "Cargo.toml".to_string(),
-            },
-            FileEntry {
-                is_dir: false,
-                path: "README.md".to_string(),
-            },
-            FileEntry {
-                is_dir: false,
-                path: "src/lib.rs".to_string(),
-            },
-            FileEntry {
-                is_dir: false,
-                path: "src/main.rs".to_string(),
-            },
-            FileEntry {
-                is_dir: false,
-                path: "tests/integration.rs".to_string(),
-            },
-        ]
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_with_matches() {
-        // Arrange
-        let state = PromptAtMentionState::new(file_entries_fixture());
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@src", 4, &state)
-            .expect("expected suggestion list");
-
-        // Assert
-        assert_eq!(menu.items.len(), 3);
-        assert_eq!(menu.items[0].label, "src/");
-        assert_eq!(menu.items[0].detail, Some("folder".to_string()));
-        assert_eq!(menu.items[1].label, "src/lib.rs");
-        assert_eq!(menu.items[2].label, "src/main.rs");
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_with_trailing_slash_includes_exact_directory() {
-        // Arrange
-        let state = PromptAtMentionState::new(file_entries_fixture());
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@src/", 5, &state)
-            .expect("expected suggestion list");
-
-        // Assert
-        assert_eq!(menu.items[0].label, "src/");
-        assert_eq!(menu.items[0].detail, Some("folder".to_string()));
-        assert_eq!(menu.items[1].label, "src/lib.rs");
-        assert_eq!(menu.items[2].label, "src/main.rs");
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_no_matches() {
-        // Arrange
-        let state = PromptAtMentionState::new(file_entries_fixture());
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@nonexistent", 12, &state);
-
-        // Assert
-        assert!(menu.is_none());
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_empty_query_returns_all() {
-        // Arrange
-        let state = PromptAtMentionState::new(file_entries_fixture());
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@", 1, &state)
-            .expect("expected suggestion list");
-
-        // Assert
-        assert_eq!(menu.items.len(), 7);
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_caps_at_10() {
-        // Arrange
-        let entries: Vec<FileEntry> = (0..20)
-            .map(|index| FileEntry {
-                is_dir: false,
-                path: format!("file_{index:02}.rs"),
-            })
-            .collect();
-        let state = PromptAtMentionState::new(entries);
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@", 1, &state)
-            .expect("expected suggestion list");
-
-        // Assert
-        assert_eq!(menu.items.len(), 10);
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_respects_capacity() {
-        // Arrange — 20 entries but only 5 visible slots.
-        let entries: Vec<FileEntry> = (0..20)
-            .map(|index| FileEntry {
-                is_dir: false,
-                path: format!("file_{index:02}.rs"),
-            })
-            .collect();
-        let state = PromptAtMentionState::new(entries);
-
-        // Act
-        let menu = build_at_mention_suggestion_list_with_capacity("@", 1, &state, 5)
-            .expect("expected suggestion list");
-
-        // Assert — window must not exceed the capacity.
-        assert_eq!(menu.items.len(), 5);
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_capacity_scroll_keeps_selection_visible() {
-        // Arrange — 20 entries, capacity 5, selected near the end.
-        let entries: Vec<FileEntry> = (0..20)
-            .map(|index| FileEntry {
-                is_dir: false,
-                path: format!("file_{index:02}.rs"),
-            })
-            .collect();
-        let mut state = PromptAtMentionState::new(entries);
-        state.selected_index = 18;
-
-        // Act
-        let menu = build_at_mention_suggestion_list_with_capacity("@", 1, &state, 5)
-            .expect("expected suggestion list");
-
-        // Assert — the selected item must be within the visible window.
-        assert_eq!(menu.items.len(), 5);
-        assert!(
-            menu.selected_index < menu.items.len(),
-            "selected_index {} must be < items.len() {}",
-            menu.selected_index,
-            menu.items.len()
-        );
-        assert_eq!(menu.items[0].label, "file_15.rs");
-        assert_eq!(menu.items[4].label, "file_19.rs");
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_clamps_selected_index() {
-        // Arrange
-        let mut state = PromptAtMentionState::new(file_entries_fixture());
-        state.selected_index = 100; // Way beyond bounds
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@src", 4, &state)
-            .expect("expected suggestion list");
-
-        // Assert — should clamp to last visible item
-        assert_eq!(menu.selected_index, 2);
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_scroll_window() {
-        // Arrange
-        let entries: Vec<FileEntry> = (0..20)
-            .map(|index| FileEntry {
-                is_dir: false,
-                path: format!("file_{index:02}.rs"),
-            })
-            .collect();
-        let mut state = PromptAtMentionState::new(entries);
-        state.selected_index = 15;
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@", 1, &state)
-            .expect("expected suggestion list");
-
-        // Assert — window should be centered around index 15
-        assert_eq!(menu.items.len(), 10);
-        assert_eq!(menu.items[0].label, "file_10.rs");
-        assert_eq!(menu.items[9].label, "file_19.rs");
-        assert_eq!(menu.selected_index, 5); // 15 - 10 = 5
-    }
-
-    #[test]
-    fn test_build_at_mention_suggestion_list_directory_has_trailing_slash() {
-        // Arrange
-        let entries = vec![
-            FileEntry {
-                is_dir: true,
-                path: "src".to_string(),
-            },
-            FileEntry {
-                is_dir: false,
-                path: "src/main.rs".to_string(),
-            },
-        ];
-        let state = PromptAtMentionState::new(entries);
-
-        // Act
-        let menu = SessionChatPage::build_at_mention_suggestion_list("@src", 4, &state)
-            .expect("expected suggestion list");
-
-        // Assert
-        assert_eq!(menu.items[0].label, "src/");
-        assert_eq!(menu.items[0].detail, Some("folder".to_string()));
-        assert_eq!(menu.items[1].label, "src/main.rs");
-        assert_eq!(menu.items[1].detail, None);
-    }
-
-    #[test]
-    fn test_build_slash_suggestion_list_for_command_stage_includes_commands() {
-        // Act
-        let menu = SessionChatPage::render_suggestion_list(
-            build_prompt_slash_suggestion_list("/", &PromptSlashState::new(), AgentKind::Codex)
-                .expect("expected suggestion list"),
-        );
-
-        // Assert
-        let labels: Vec<&str> = menu.items.iter().map(|opt| opt.label.as_str()).collect();
-        assert!(labels.contains(&"/model"));
-        assert!(labels.contains(&"/reasoning"));
-        assert!(labels.contains(&"/stats"));
     }
 
     #[test]

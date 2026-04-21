@@ -2,13 +2,21 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
+use serde_json;
 
-use crate::domain::agent::ReasoningLevel;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
 use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
 use crate::icon::Icon;
+use crate::infra::agent::protocol::AgentResponseSummary;
+use crate::infra::file_index;
+use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
 use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
+use crate::ui::state::prompt::{
+    PromptAtMentionState, PromptSlashState, PromptSuggestionList,
+    build_prompt_slash_suggestion_list,
+};
 use crate::ui::{markdown, style, text_util};
 
 /// Maximum number of visible content lines inside the chat input viewport.
@@ -20,13 +28,20 @@ const CHAT_INPUT_INNER_OFFSET: u16 = 1;
 const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
 const QUESTION_PANEL_HELP_HEIGHT: u16 = 1;
 const QUESTION_PANEL_SPACER_HEIGHT: u16 = 1;
+const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
+const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str = "### Suggestions (type \"/apply\" to apply)";
 const SESSION_HEADER_HEIGHT: u16 = 2;
+const SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT: &str = "No changes";
 const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
+const USER_PROMPT_PREFIX: &str = " › ";
+const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
+const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
 /// Foreground color used for chat input `@` lookup tokens.
 const CHAT_INPUT_AT_MENTION_COLOR: Color = Color::LightBlue;
 /// Foreground color used for inline prompt image placeholders.
 const CHAT_INPUT_IMAGE_TOKEN_COLOR: Color = Color::Yellow;
 const SINGLE_LINE_FOOTER_HEIGHT: u16 = 1;
+const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
 
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     help_action::HelpAction::new("stage draft", "Enter", "Stage draft"),
@@ -277,6 +292,273 @@ pub fn question_help_footer_line(focus: QuestionFocus) -> Line<'static> {
     }
 
     help_action::footer_line(&help_actions)
+}
+
+/// Builds the prompt suggestion dropdown for the current input state.
+///
+/// Slash-command input renders the command/model suggestion set. Otherwise an
+/// active `@` mention query renders the matching file lookup list. The
+/// returned dropdown is already windowed so the highlighted row stays visible.
+pub(crate) fn prompt_suggestion_list(
+    input: &crate::domain::input::InputState,
+    slash_state: &PromptSlashState,
+    at_mention_state: Option<&PromptAtMentionState>,
+    agent_kind: AgentKind,
+) -> Option<SuggestionList> {
+    let input_text = input.text();
+    let cursor = input.cursor;
+
+    if input_text.starts_with('/') {
+        return build_prompt_slash_suggestion_list(input_text, slash_state, agent_kind)
+            .map(render_prompt_suggestion_list);
+    }
+
+    at_mention_state.and_then(|state| {
+        file_lookup_suggestion_list(input_text, cursor, state, AT_MENTION_DEFAULT_MAX_VISIBLE)
+    })
+}
+
+/// Converts prompt-suggestion state into chat-input dropdown rows.
+pub(crate) fn render_prompt_suggestion_list(
+    suggestion_list: PromptSuggestionList,
+) -> SuggestionList {
+    SuggestionList {
+        items: suggestion_list
+            .items
+            .into_iter()
+            .map(|item| SuggestionItem {
+                badge: item.badge,
+                detail: item.detail,
+                label: item.label,
+                metadata: item.metadata,
+            })
+            .collect(),
+        selected_index: suggestion_list.selected_index,
+        title: suggestion_list.title,
+    }
+}
+
+/// Builds one file-lookup suggestion list for an active `@` mention query.
+///
+/// Directory entries keep a trailing slash and visible rows are clamped to
+/// `max_visible` while preserving the selected item inside the visible window.
+pub(crate) fn file_lookup_suggestion_list(
+    input_text: &str,
+    cursor: usize,
+    at_mention_state: &PromptAtMentionState,
+    max_visible: usize,
+) -> Option<SuggestionList> {
+    let (_, query) = crate::domain::input::extract_at_mention_query(input_text, cursor)?;
+    let filtered = file_index::filter_entries(&at_mention_state.all_entries, &query);
+
+    if filtered.is_empty() {
+        return None;
+    }
+
+    let window_start = at_mention_state
+        .selected_index
+        .saturating_sub(max_visible / 2);
+    let window_end = filtered.len().min(window_start + max_visible);
+    let window_start = window_end.saturating_sub(max_visible);
+
+    let items = filtered[window_start..window_end]
+        .iter()
+        .map(|entry| {
+            let label = if entry.is_dir {
+                format!("{}/", entry.path)
+            } else {
+                entry.path.clone()
+            };
+
+            SuggestionItem {
+                badge: None,
+                detail: entry.is_dir.then(|| "folder".to_string()),
+                label,
+                metadata: None,
+            }
+        })
+        .collect();
+
+    let selected_index = at_mention_state
+        .selected_index
+        .min(filtered.len().saturating_sub(1))
+        .saturating_sub(window_start);
+
+    Some(SuggestionList {
+        items,
+        selected_index,
+        title: "Files (\u{2191}\u{2193} move, Enter select, Esc dismiss)".to_string(),
+    })
+}
+
+/// Returns the number of dropdown rows shown above the prompt input.
+///
+/// The visible row count includes the dropdown border chrome so callers can
+/// reserve the same height used by the rendered widget.
+pub(crate) fn prompt_suggestion_dropdown_rows(suggestion_list: Option<&SuggestionList>) -> usize {
+    suggestion_list.map_or(0, |list| list.items.len().saturating_add(2))
+}
+
+/// Returns wrapped question-panel lines with the correct focus styling.
+pub(crate) fn question_panel_lines(
+    question_title: &str,
+    question: &str,
+    is_chat_focused: bool,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let title_color = if is_chat_focused {
+        style::palette::TEXT_MUTED
+    } else {
+        style::palette::QUESTION
+    };
+    let text_color = if is_chat_focused {
+        style::palette::TEXT_MUTED
+    } else {
+        Color::Yellow
+    };
+    let mut lines = vec![Line::from(Span::styled(
+        question_title.to_string(),
+        Style::default()
+            .fg(title_color)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    lines.extend(
+        text_util::wrap_lines(question, usize::from(width.max(1)))
+            .into_iter()
+            .map(|line| Line::from(line.to_string()).style(Style::default().fg(text_color))),
+    );
+
+    lines
+}
+
+/// Returns wrapped and styled option rows for the question panel.
+pub(crate) fn question_option_lines(
+    options: &[String],
+    selected_option_index: Option<usize>,
+    dimmed: bool,
+) -> Vec<Line<'static>> {
+    let header_color = if dimmed {
+        style::palette::TEXT_MUTED
+    } else {
+        Color::Yellow
+    };
+    let mut lines = Vec::with_capacity(options.len() + 1);
+    lines.push(Line::from(Span::styled(
+        "Options:",
+        Style::default().fg(header_color),
+    )));
+
+    for (option_index, option_text) in options.iter().enumerate() {
+        let is_selected = selected_option_index == Some(option_index);
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let label = format!("{prefix}{}. {option_text}", option_index + 1);
+        let style = if dimmed {
+            Style::default().fg(style::palette::TEXT_MUTED)
+        } else if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(Span::styled(label, style)));
+    }
+
+    lines
+}
+
+/// Returns how many lookup entries can fit above the question input overlay.
+pub(crate) fn question_at_mention_max_visible(
+    bottom_area: Rect,
+    input_area: Rect,
+    default_max_visible: usize,
+) -> usize {
+    usize::from(input_area.y.saturating_sub(bottom_area.y))
+        .saturating_sub(2)
+        .clamp(1, default_max_visible)
+}
+
+/// Renders persisted summary payloads into display markdown.
+///
+/// Structured JSON summaries are expanded into `Current Turn` and `Session
+/// Changes` sections. Plain text falls back unchanged, and empty content uses
+/// the shared `No changes` placeholder for both sections.
+pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
+    let trimmed_summary = summary_text.trim();
+    if let Ok(summary_payload) = serde_json::from_str::<AgentResponseSummary>(trimmed_summary) {
+        return format!(
+            "## Change Summary\n### Current Turn\n{}\n\n### Session Changes\n{}",
+            summary_section_text(&summary_payload.turn),
+            summary_section_text(&summary_payload.session)
+        );
+    }
+
+    if !trimmed_summary.is_empty() {
+        return trimmed_summary.to_string();
+    }
+
+    format!(
+        "## Change Summary\n### Current Turn\n{}\n\n### Session Changes\n{}",
+        SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT, SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT
+    )
+}
+
+/// Adds the `/apply` hint to the exact focused-review suggestions header.
+pub(crate) fn annotate_review_suggestions_header(review_markdown: &str) -> String {
+    let mut annotated_lines = Vec::with_capacity(review_markdown.lines().count());
+    for line in review_markdown.lines() {
+        if line.trim_end() == REVIEW_SUGGESTIONS_HEADER {
+            annotated_lines.push(REVIEW_SUGGESTIONS_HEADER_WITH_HINT.to_string());
+        } else {
+            annotated_lines.push(line.to_string());
+        }
+    }
+
+    annotated_lines.join("\n")
+}
+
+/// Adds visual spacing around user prompt blocks inside session output text.
+///
+/// Clarification blocks receive extra blank rows between numbered follow-up
+/// questions so grouped answers remain easy to scan.
+pub(crate) fn session_output_text_with_spaced_user_input(output_text: &str) -> String {
+    let raw_lines = output_text.split('\n').collect::<Vec<_>>();
+    let mut formatted_lines = Vec::with_capacity(raw_lines.len());
+    let mut line_index = 0;
+
+    while line_index < raw_lines.len() {
+        let line = raw_lines[line_index];
+        if !line.starts_with(USER_PROMPT_PREFIX) {
+            formatted_lines.push(line.to_string());
+            line_index += 1;
+
+            continue;
+        }
+
+        if formatted_lines
+            .last()
+            .is_some_and(|item: &String| !item.is_empty())
+        {
+            formatted_lines.push(String::new());
+        }
+
+        let block_end_index = user_prompt_block_end_index(&raw_lines, line_index);
+        formatted_lines.extend(format_prompt_block_lines(
+            &raw_lines[line_index..=block_end_index],
+        ));
+        line_index = block_end_index + 1;
+
+        let next_line_is_empty = raw_lines
+            .get(line_index)
+            .is_none_or(|next_line| next_line.is_empty());
+        if !next_line_is_empty {
+            formatted_lines.push(String::new());
+        }
+    }
+
+    formatted_lines.join("\n")
 }
 
 /// Returns borders used for the session output panel.
@@ -731,6 +1013,86 @@ fn wrapped_text_height(text: &str, width: u16) -> u16 {
     u16::try_from(wrapped_line_count).unwrap_or(u16::MAX).max(1)
 }
 
+/// Returns one rendered summary section or the shared empty placeholder.
+fn summary_section_text(summary_text: &str) -> &str {
+    let trimmed_summary = summary_text.trim();
+    if trimmed_summary.is_empty() {
+        return SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT;
+    }
+
+    trimmed_summary
+}
+
+/// Formats one prompt block and adds blank separators between clarification
+/// question groups.
+fn format_prompt_block_lines(raw_block_lines: &[&str]) -> Vec<String> {
+    if !is_clarification_prompt_block(raw_block_lines) {
+        return raw_block_lines.iter().map(ToString::to_string).collect();
+    }
+
+    let mut formatted_block_lines = Vec::with_capacity(raw_block_lines.len() + 2);
+    for (block_line_index, raw_block_line) in raw_block_lines.iter().enumerate() {
+        if block_line_index > 0 && is_clarification_question_line(raw_block_line) {
+            formatted_block_lines.push(USER_PROMPT_CONTINUATION_PREFIX.to_string());
+        }
+
+        formatted_block_lines.push((*raw_block_line).to_string());
+    }
+
+    formatted_block_lines
+}
+
+/// Returns true when a prompt block is the generated clarifications payload.
+fn is_clarification_prompt_block(raw_block_lines: &[&str]) -> bool {
+    raw_block_lines
+        .first()
+        .is_some_and(|line| line.trim_end() == CLARIFICATION_HEADER_LINE)
+}
+
+/// Returns true for numbered clarification question rows like
+/// `   1. Q: Need tests?`.
+fn is_clarification_question_line(raw_block_line: &str) -> bool {
+    let Some(line_without_prefix) = raw_block_line.strip_prefix(USER_PROMPT_CONTINUATION_PREFIX)
+    else {
+        return false;
+    };
+    let trimmed_line = line_without_prefix.trim_start();
+    let digit_count = trimmed_line
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .count();
+    if digit_count == 0 {
+        return false;
+    }
+
+    let (_, suffix) = trimmed_line.split_at(digit_count);
+
+    suffix.starts_with(". Q: ")
+}
+
+/// Returns the final non-empty line index for one prompt block.
+fn user_prompt_block_end_index(raw_lines: &[&str], start_index: usize) -> usize {
+    let mut candidate_index = start_index + 1;
+
+    while candidate_index < raw_lines.len() {
+        let candidate_line = raw_lines[candidate_index];
+        if candidate_line.is_empty() || candidate_line.starts_with(USER_PROMPT_PREFIX) {
+            break;
+        }
+
+        candidate_index += 1;
+    }
+
+    if raw_lines
+        .get(candidate_index)
+        .is_some_and(|candidate_line| candidate_line.is_empty())
+    {
+        return candidate_index.saturating_sub(1).max(start_index);
+    }
+
+    start_index
+}
+
 /// Returns the loader label for active session states.
 fn session_output_status_message(
     status: Status,
@@ -1055,9 +1417,13 @@ mod tests {
     use ratatui::style::{Color, Modifier, Style};
 
     use super::*;
-    use crate::domain::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+    use crate::domain::input::InputState;
     use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+    use crate::infra::agent::protocol::AgentResponseSummary;
+    use crate::infra::file_index::FileEntry;
     use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
+    use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
 
     fn session_fixture() -> Session {
         crate::domain::session::tests::SessionFixtureBuilder::new()
@@ -1071,6 +1437,47 @@ mod tests {
         done_session_output_mode: DoneSessionOutputMode,
     ) -> String {
         session_view_footer_line(session, can_open_worktree, done_session_output_mode).to_string()
+    }
+
+    fn summary_fixture() -> String {
+        serde_json::to_string(&AgentResponseSummary {
+            turn: "- Added the structured protocol summary.".to_string(),
+            session: "- Session output now renders persisted summary markdown.".to_string(),
+        })
+        .expect("summary fixture should serialize")
+    }
+
+    fn file_entries_fixture() -> Vec<FileEntry> {
+        vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: true,
+                path: "tests".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "Cargo.toml".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "README.md".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/lib.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "tests/integration.rs".to_string(),
+            },
+        ]
     }
 
     #[test]
@@ -1297,6 +1704,429 @@ mod tests {
         // Assert
         assert!(footer_line.to_string().contains("Enter: stage draft"));
         assert!(!footer_line.to_string().contains("Enter: submit"));
+    }
+
+    #[test]
+    fn test_prompt_suggestion_list_for_command_stage_has_description() {
+        // Arrange
+        let input = InputState::with_text("/m".to_string());
+        let slash_state = PromptSlashState::new();
+
+        // Act
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 1);
+        assert_eq!(menu.items[0].label, "/model");
+        assert_eq!(
+            menu.items[0].detail,
+            Some("Choose an agent and model for this session.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prompt_suggestion_list_for_agent_stage_has_agent_descriptions() {
+        // Arrange
+        let input = InputState::with_text("/model".to_string());
+        let mut slash_state = PromptSlashState::new();
+        slash_state.stage = PromptSlashStage::Agent;
+
+        // Act
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), AgentKind::ALL.len());
+        assert_eq!(menu.items[0].label, "gemini");
+        assert_eq!(
+            menu.items[0].detail,
+            Some("Google Gemini CLI agent.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prompt_suggestion_list_for_agent_stage_filters_available_agents() {
+        // Arrange
+        let input = InputState::with_text("/model".to_string());
+        let mut slash_state = PromptSlashState::with_available_agent_kinds(vec![AgentKind::Codex]);
+        slash_state.stage = PromptSlashStage::Agent;
+
+        // Act
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 1);
+        assert_eq!(menu.items[0].label, "codex");
+    }
+
+    #[test]
+    fn test_prompt_suggestion_list_for_model_stage_has_model_descriptions() {
+        // Arrange
+        let input = InputState::with_text("/model".to_string());
+        let mut slash_state = PromptSlashState::new();
+        slash_state.stage = PromptSlashStage::Model;
+        slash_state.selected_agent = Some(AgentKind::Codex);
+
+        // Act
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+            .expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), AgentKind::Codex.models().len());
+        assert_eq!(menu.items[0].label, "gpt-5.4");
+        assert_eq!(
+            menu.items[0].detail,
+            Some("Latest Codex model for coding quality.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prompt_suggestion_list_for_command_stage_includes_commands() {
+        // Arrange
+        let input = InputState::with_text("/".to_string());
+
+        // Act
+        let menu = prompt_suggestion_list(&input, &PromptSlashState::new(), None, AgentKind::Codex)
+            .expect("expected suggestion list");
+        let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
+
+        // Assert
+        assert!(labels.contains(&"/model"));
+        assert!(labels.contains(&"/reasoning"));
+        assert!(labels.contains(&"/stats"));
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_with_matches() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@src", 4, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 3);
+        assert_eq!(menu.items[0].label, "src/");
+        assert_eq!(menu.items[0].detail, Some("folder".to_string()));
+        assert_eq!(menu.items[1].label, "src/lib.rs");
+        assert_eq!(menu.items[2].label, "src/main.rs");
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_with_trailing_slash_includes_exact_directory() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@src/", 5, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items[0].label, "src/");
+        assert_eq!(menu.items[0].detail, Some("folder".to_string()));
+        assert_eq!(menu.items[1].label, "src/lib.rs");
+        assert_eq!(menu.items[2].label, "src/main.rs");
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_no_matches() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu = file_lookup_suggestion_list("@nonexistent", 12, &state, 10);
+
+        // Assert
+        assert!(menu.is_none());
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_empty_query_returns_all() {
+        // Arrange
+        let state = PromptAtMentionState::new(file_entries_fixture());
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@", 1, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 7);
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_caps_at_10() {
+        // Arrange
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                is_dir: false,
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let state = PromptAtMentionState::new(entries);
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@", 1, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 10);
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_respects_capacity() {
+        // Arrange
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                is_dir: false,
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let state = PromptAtMentionState::new(entries);
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@", 1, &state, 5).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 5);
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_capacity_scroll_keeps_selection_visible() {
+        // Arrange
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                is_dir: false,
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let mut state = PromptAtMentionState::new(entries);
+        state.selected_index = 18;
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@", 1, &state, 5).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 5);
+        assert_eq!(menu.items[0].label, "file_15.rs");
+        assert_eq!(menu.items[4].label, "file_19.rs");
+        assert_eq!(menu.selected_index, 3);
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_clamps_selected_index() {
+        // Arrange
+        let mut state = PromptAtMentionState::new(file_entries_fixture());
+        state.selected_index = 100;
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@src", 4, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.selected_index, 2);
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_scroll_window() {
+        // Arrange
+        let entries: Vec<FileEntry> = (0..20)
+            .map(|index| FileEntry {
+                is_dir: false,
+                path: format!("file_{index:02}.rs"),
+            })
+            .collect();
+        let mut state = PromptAtMentionState::new(entries);
+        state.selected_index = 15;
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@", 1, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items.len(), 10);
+        assert_eq!(menu.items[0].label, "file_10.rs");
+        assert_eq!(menu.items[9].label, "file_19.rs");
+        assert_eq!(menu.selected_index, 5);
+    }
+
+    #[test]
+    fn test_file_lookup_suggestion_list_directory_has_trailing_slash() {
+        // Arrange
+        let entries = vec![
+            FileEntry {
+                is_dir: true,
+                path: "src".to_string(),
+            },
+            FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            },
+        ];
+        let state = PromptAtMentionState::new(entries);
+
+        // Act
+        let menu =
+            file_lookup_suggestion_list("@src", 4, &state, 10).expect("expected suggestion list");
+
+        // Assert
+        assert_eq!(menu.items[0].label, "src/");
+        assert_eq!(menu.items[0].detail, Some("folder".to_string()));
+        assert_eq!(menu.items[1].label, "src/main.rs");
+        assert_eq!(menu.items[1].detail, None);
+    }
+
+    #[test]
+    fn test_question_panel_lines_wrap_and_style_title() {
+        // Arrange
+        let title = "Question 1/2";
+
+        // Act
+        let lines = question_panel_lines(title, "Need tests for the new flow?", false, 12);
+
+        // Assert
+        assert_eq!(lines[0].to_string(), title);
+        assert!(lines.len() > 2);
+        assert_eq!(lines[0].spans[0].style.fg, Some(style::palette::QUESTION));
+    }
+
+    #[test]
+    fn test_question_option_lines_highlight_selected_row() {
+        // Arrange
+        let options = vec!["Yes".to_string(), "No".to_string()];
+
+        // Act
+        let lines = question_option_lines(&options, Some(1), false);
+
+        // Assert
+        assert_eq!(lines[0].to_string(), "Options:");
+        assert_eq!(lines[2].to_string(), "▸ 2. No");
+        assert_eq!(lines[2].spans[0].style.bg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn test_question_at_mention_max_visible_clamps_to_available_rows() {
+        // Arrange
+        let bottom_area = Rect::new(1, 10, 78, 8);
+        let input_area = Rect::new(1, 15, 78, 2);
+
+        // Act
+        let max_visible = question_at_mention_max_visible(bottom_area, input_area, 10);
+
+        // Assert
+        assert_eq!(max_visible, 3);
+    }
+
+    #[test]
+    fn test_session_output_summary_markdown_uses_plain_text_fallback() {
+        // Arrange / Act
+        let rendered_summary = session_output_summary_markdown("plain summary");
+
+        // Assert
+        assert_eq!(rendered_summary, "plain summary");
+    }
+
+    #[test]
+    fn test_session_output_summary_markdown_expands_protocol_payload() {
+        // Arrange
+        let summary_text = summary_fixture();
+
+        // Act
+        let rendered_summary = session_output_summary_markdown(&summary_text);
+
+        // Assert
+        assert!(rendered_summary.contains("Current Turn"));
+        assert!(rendered_summary.contains("Session Changes"));
+        assert!(rendered_summary.contains("Added the structured protocol summary."));
+    }
+
+    #[test]
+    fn test_session_output_text_with_spaced_user_input_adds_empty_line_before_and_after() {
+        // Arrange
+        let output = "assistant output\n › user prompt\nagent response";
+
+        // Act
+        let spaced = session_output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(
+            spaced,
+            "assistant output\n\n › user prompt\n\nagent response"
+        );
+    }
+
+    #[test]
+    fn test_session_output_text_with_spaced_user_input_keeps_existing_empty_lines() {
+        // Arrange
+        let output = "assistant output\n\n › user prompt\n\nagent response";
+
+        // Act
+        let spaced = session_output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(spaced, output);
+    }
+
+    #[test]
+    fn test_session_output_text_with_spaced_user_input_keeps_multiline_user_prompt_together() {
+        // Arrange
+        let output = "assistant output\n › first line\nsecond line\n\nagent response";
+
+        // Act
+        let spaced = session_output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(
+            spaced,
+            "assistant output\n\n › first line\nsecond line\n\nagent response"
+        );
+    }
+
+    #[test]
+    fn test_session_output_text_with_spaced_user_input_adds_question_group_spacing() {
+        // Arrange
+        let output = "assistant output\n › Clarifications:\n   1. Q: Need target branch?\n      \
+                      A: main\n   2. Q: Need tests?\n      A: yes\n\nagent response";
+
+        // Act
+        let spaced = session_output_text_with_spaced_user_input(output);
+
+        // Assert
+        assert_eq!(
+            spaced,
+            "assistant output\n\n › Clarifications:\n   \n   1. Q: Need target branch?\n      A: \
+             main\n   \n   2. Q: Need tests?\n      A: yes\n\nagent response"
+        );
+    }
+
+    #[test]
+    fn test_annotate_review_suggestions_header_appends_apply_hint_to_exact_header() {
+        // Arrange
+        let review_markdown = "## Review\n### Project Impact\n- None\n### Suggestions\n- Fix typo.";
+
+        // Act
+        let annotated = annotate_review_suggestions_header(review_markdown);
+
+        // Assert
+        assert!(annotated.contains("### Suggestions (type \"/apply\" to apply)"));
+        assert!(!annotated.contains("### Suggestions\n"));
+        assert!(annotated.contains("- Fix typo."));
+    }
+
+    #[test]
+    fn test_annotate_review_suggestions_header_leaves_non_matching_lines_untouched() {
+        // Arrange
+        let review_markdown = "### Suggestions extra\n- keep as-is";
+
+        // Act
+        let annotated = annotate_review_suggestions_header(review_markdown);
+
+        // Assert
+        assert_eq!(annotated, review_markdown);
     }
 
     #[test]

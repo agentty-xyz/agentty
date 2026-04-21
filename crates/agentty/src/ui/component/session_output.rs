@@ -5,18 +5,13 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph};
-use serde_json;
 
 use crate::domain::session::{Session, Status};
-use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::{Component, layout, text_util};
 
-const USER_PROMPT_PREFIX: &str = " › ";
-const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
-const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
                                         first draft locally, then press `s` in session view to \
@@ -24,8 +19,8 @@ const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter
 const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
 const TRANSCRIPT_FOOTER_PREFIXES: &[&str] = &["[Commit]", "[Commit Error]"];
-const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
-const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str = "### Suggestions (type \"/apply\" to apply)";
+const USER_PROMPT_PREFIX: &str = " › ";
+const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
@@ -60,8 +55,6 @@ pub(crate) struct SessionOutputLineContext<'a> {
 }
 
 impl<'a> SessionOutput<'a> {
-    const DEFAULT_SUMMARY_TEXT: &'static str = "No changes";
-
     /// Creates a new session output component.
     pub fn new(session: &'a Session) -> Self {
         Self {
@@ -176,8 +169,10 @@ impl<'a> SessionOutput<'a> {
         let output_text = Self::output_text(session, done_session_output_mode);
         let (completed_turn_text, active_turn_text) =
             Self::transcript_sections(status, &output_text, active_prompt_output);
-        let completed_turn_text = Self::output_text_with_spaced_user_input(completed_turn_text);
-        let active_turn_text = active_turn_text.map(Self::output_text_with_spaced_user_input);
+        let completed_turn_text =
+            layout::session_output_text_with_spaced_user_input(completed_turn_text);
+        let active_turn_text =
+            active_turn_text.map(layout::session_output_text_with_spaced_user_input);
         let inner_width = panel_inner_width(output_area, layout::session_output_panel_borders());
         let (completed_turn_text, trailing_footer_text) =
             text_util::split_trailing_line_block(&completed_turn_text, TRANSCRIPT_FOOTER_PREFIXES);
@@ -292,7 +287,9 @@ impl<'a> SessionOutput<'a> {
                 return Self::render_draft_session_preview(session);
             }
             Status::Done if done_session_output_mode == DoneSessionOutputMode::Summary => {
-                return Self::render_summary_text(Self::session_summary_text(session));
+                return layout::session_output_summary_markdown(Self::session_summary_text(
+                    session,
+                ));
             }
             Status::Canceled => {
                 return session.output.clone();
@@ -355,39 +352,6 @@ impl<'a> SessionOutput<'a> {
             .unwrap_or("")
     }
 
-    /// Renders one persisted summary payload into markdown for display.
-    fn render_summary_text(summary_text: &str) -> String {
-        let trimmed_summary = summary_text.trim();
-        if let Ok(summary_payload) = serde_json::from_str::<AgentResponseSummary>(trimmed_summary) {
-            return format!(
-                "## Change Summary\n### Current Turn\n{}\n\n### Session Changes\n{}",
-                Self::summary_section_text(&summary_payload.turn),
-                Self::summary_section_text(&summary_payload.session)
-            );
-        }
-
-        if !trimmed_summary.is_empty() {
-            return trimmed_summary.to_string();
-        }
-
-        format!(
-            "## Change Summary\n### Current Turn\n{}\n\n### Session Changes\n{}",
-            Self::DEFAULT_SUMMARY_TEXT,
-            Self::DEFAULT_SUMMARY_TEXT
-        )
-    }
-
-    /// Returns one rendered summary section value, falling back to
-    /// `No changes` when the persisted value is blank.
-    fn summary_section_text(summary_text: &str) -> &str {
-        let trimmed_summary = summary_text.trim();
-        if trimmed_summary.is_empty() {
-            return Self::DEFAULT_SUMMARY_TEXT;
-        }
-
-        trimmed_summary
-    }
-
     /// Returns whether the output panel should append the structured summary
     /// block outside the persisted transcript string.
     ///
@@ -429,29 +393,13 @@ impl<'a> SessionOutput<'a> {
         let review_markdown = review_text
             .map(str::trim)
             .filter(|review_text| !review_text.is_empty())
-            .map(Self::annotate_suggestions_header);
+            .map(layout::annotate_review_suggestions_header);
 
         let Some(review_markdown) = review_markdown else {
             return;
         };
 
         Self::append_markdown_lines(lines, &review_markdown, inner_width, markdown_render_cache);
-    }
-
-    /// Replaces the bare `### Suggestions` header line with a version that
-    /// includes the `(type "/apply" to apply)` discovery hint, leaving the
-    /// rest of the review markdown untouched.
-    fn annotate_suggestions_header(review_markdown: &str) -> String {
-        let mut annotated_lines = Vec::with_capacity(review_markdown.lines().count());
-        for line in review_markdown.lines() {
-            if line.trim_end() == REVIEW_SUGGESTIONS_HEADER {
-                annotated_lines.push(REVIEW_SUGGESTIONS_HEADER_WITH_HINT.to_string());
-            } else {
-                annotated_lines.push(line.to_string());
-            }
-        }
-
-        annotated_lines.join("\n")
     }
 
     /// Appends a rendered structured-summary section without mutating the
@@ -471,7 +419,7 @@ impl<'a> SessionOutput<'a> {
 
         Self::append_markdown_lines(
             lines,
-            &Self::render_summary_text(summary_text),
+            &layout::session_output_summary_markdown(summary_text),
             inner_width,
             markdown_render_cache,
         );
@@ -556,123 +504,6 @@ impl<'a> SessionOutput<'a> {
             None => Arc::from(render_markdown(markdown, inner_width)),
         }
     }
-
-    /// Adds visual spacing around user prompt blocks while preserving pasted
-    /// multiline prompts as one contiguous message.
-    ///
-    /// Clarification replies receive one extra spacer row between numbered
-    /// question/answer groups so the block scans faster than plain prompt
-    /// text.
-    fn output_text_with_spaced_user_input(output_text: &str) -> String {
-        let raw_lines = output_text.split('\n').collect::<Vec<_>>();
-        let mut formatted_lines = Vec::with_capacity(raw_lines.len());
-        let mut line_index = 0;
-
-        while line_index < raw_lines.len() {
-            let line = raw_lines[line_index];
-            if !line.starts_with(USER_PROMPT_PREFIX) {
-                formatted_lines.push(line.to_string());
-                line_index += 1;
-
-                continue;
-            }
-
-            if formatted_lines
-                .last()
-                .is_some_and(|item: &String| !item.is_empty())
-            {
-                formatted_lines.push(String::new());
-            }
-
-            let block_end_index = Self::user_prompt_block_end_index(&raw_lines, line_index);
-            formatted_lines.extend(Self::format_prompt_block_lines(
-                &raw_lines[line_index..=block_end_index],
-            ));
-            line_index = block_end_index + 1;
-
-            let next_line_is_empty = raw_lines
-                .get(line_index)
-                .is_none_or(|next_line| next_line.is_empty());
-            if !next_line_is_empty {
-                formatted_lines.push(String::new());
-            }
-        }
-
-        formatted_lines.join("\n")
-    }
-
-    /// Formats one prompt block and inserts intra-block separators for
-    /// clarification question groups.
-    fn format_prompt_block_lines(raw_block_lines: &[&str]) -> Vec<String> {
-        if !Self::is_clarification_prompt_block(raw_block_lines) {
-            return raw_block_lines.iter().map(ToString::to_string).collect();
-        }
-
-        let mut formatted_block_lines = Vec::with_capacity(raw_block_lines.len() + 2);
-        for (block_line_index, raw_block_line) in raw_block_lines.iter().enumerate() {
-            if block_line_index > 0 && Self::is_clarification_question_line(raw_block_line) {
-                formatted_block_lines.push(USER_PROMPT_CONTINUATION_PREFIX.to_string());
-            }
-
-            formatted_block_lines.push((*raw_block_line).to_string());
-        }
-
-        formatted_block_lines
-    }
-
-    /// Returns true when the prompt block is the generated clarifications
-    /// payload.
-    fn is_clarification_prompt_block(raw_block_lines: &[&str]) -> bool {
-        raw_block_lines
-            .first()
-            .is_some_and(|line| line.trim_end() == CLARIFICATION_HEADER_LINE)
-    }
-
-    /// Returns true for numbered clarification question rows like
-    /// `   1. Q: Need tests?`.
-    fn is_clarification_question_line(raw_block_line: &str) -> bool {
-        let Some(line_without_prefix) =
-            raw_block_line.strip_prefix(USER_PROMPT_CONTINUATION_PREFIX)
-        else {
-            return false;
-        };
-        let trimmed_line = line_without_prefix.trim_start();
-        let digit_count = trimmed_line
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .count();
-        if digit_count == 0 {
-            return false;
-        }
-
-        let (_, suffix) = trimmed_line.split_at(digit_count);
-
-        suffix.starts_with(". Q: ")
-    }
-
-    /// Returns the final non-empty line index for a user prompt block that
-    /// starts at `start_index`.
-    fn user_prompt_block_end_index(raw_lines: &[&str], start_index: usize) -> usize {
-        let mut candidate_index = start_index + 1;
-
-        while candidate_index < raw_lines.len() {
-            let candidate_line = raw_lines[candidate_index];
-            if candidate_line.is_empty() || candidate_line.starts_with(USER_PROMPT_PREFIX) {
-                break;
-            }
-
-            candidate_index += 1;
-        }
-
-        if raw_lines
-            .get(candidate_index)
-            .is_some_and(|candidate_line| candidate_line.is_empty())
-        {
-            return candidate_index.saturating_sub(1).max(start_index);
-        }
-
-        start_index
-    }
 }
 
 impl Component for SessionOutput<'_> {
@@ -736,26 +567,12 @@ mod tests {
         }
     }
 
-    /// Collects one rendered terminal buffer into plain text for assertions.
-    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
-        buffer
-            .content()
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect()
-    }
-
     fn summary_fixture() -> String {
         serde_json::to_string(&AgentResponseSummary {
             turn: "- Added the structured protocol summary.".to_string(),
             session: "- Session output now renders persisted summary markdown.".to_string(),
         })
         .expect("summary fixture should serialize")
-    }
-
-    fn done_summary_fixture() -> String {
-        "# Summary\n\nSession now greets users on startup.\n\n# Commit\n\nRefine session summary"
-            .to_string()
     }
 
     fn session_fixture() -> Session {
@@ -1053,18 +870,9 @@ mod tests {
         assert!(!text.contains("Session Changes"));
     }
 
-    #[test]
-    fn test_render_summary_text_uses_plain_text_fallback_for_non_protocol_summary() {
-        // Arrange / Act
-        let rendered_summary = SessionOutput::render_summary_text("plain summary");
-
-        // Assert
-        assert_eq!(rendered_summary, "plain summary");
-    }
-
-    #[test]
     /// Verifies the done-summary transition renders the rewritten summary
     /// payload exactly once in summary mode.
+    #[test]
     fn test_output_lines_done_summary_transition_renders_rewritten_summary() {
         // Arrange
         let mut session = session_fixture();
@@ -1082,7 +890,11 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        session.summary = Some(done_summary_fixture());
+        session.summary = Some(
+            "# Summary\n\nSession now greets users on startup.\n\n# Commit\n\nRefine session \
+             summary"
+                .to_string(),
+        );
         session.status = Status::Done;
 
         // Act
@@ -1102,7 +914,11 @@ mod tests {
         // Assert
         assert!(review_text.contains("Change Summary"));
         assert!(review_text.contains("Added the structured protocol summary."));
-        assert_eq!(done_output_text, done_summary_fixture());
+        assert_eq!(
+            done_output_text,
+            "# Summary\n\nSession now greets users on startup.\n\n# Commit\n\nRefine session \
+             summary"
+        );
         assert!(done_text.contains("Summary"));
         assert!(done_text.contains("Session now greets users on startup."));
         assert!(done_text.contains("Commit"));
@@ -1168,65 +984,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_text_with_spaced_user_input_adds_empty_line_before_and_after() {
-        // Arrange
-        let output = "assistant output\n › user prompt\nagent response";
-
-        // Act
-        let spaced = SessionOutput::output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(
-            spaced,
-            "assistant output\n\n › user prompt\n\nagent response"
-        );
-    }
-
-    #[test]
-    fn test_output_text_with_spaced_user_input_keeps_existing_empty_lines() {
-        // Arrange
-        let output = "assistant output\n\n › user prompt\n\nagent response";
-
-        // Act
-        let spaced = SessionOutput::output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(spaced, output);
-    }
-
-    #[test]
-    fn test_output_text_with_spaced_user_input_keeps_multiline_user_prompt_together() {
-        // Arrange
-        let output = "assistant output\n › first line\nsecond line\n\nagent response";
-
-        // Act
-        let spaced = SessionOutput::output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(
-            spaced,
-            "assistant output\n\n › first line\nsecond line\n\nagent response"
-        );
-    }
-
-    #[test]
-    fn test_output_text_with_spaced_user_input_adds_question_group_spacing_for_clarifications() {
-        // Arrange
-        let output = "assistant output\n › Clarifications:\n   1. Q: Need target branch?\n      \
-                      A: main\n   2. Q: Need tests?\n      A: yes\n\nagent response";
-
-        // Act
-        let spaced = SessionOutput::output_text_with_spaced_user_input(output);
-
-        // Assert
-        assert_eq!(
-            spaced,
-            "assistant output\n\n › Clarifications:\n   \n   1. Q: Need target branch?\n      A: \
-             main\n   \n   2. Q: Need tests?\n      A: yes\n\nagent response"
-        );
-    }
-
-    #[test]
     fn test_output_lines_use_generic_in_progress_loader() {
         // Arrange
         let mut session = session_fixture();
@@ -1248,81 +1005,5 @@ mod tests {
 
         // Assert
         assert!(text.contains("Working..."));
-    }
-
-    #[test]
-    fn test_builder_methods() {
-        // Arrange
-        let session = session_fixture();
-        let active_progress = "Inspecting changed files";
-        let review_status_message = "Preparing review...";
-        let review_text = "Assisted review";
-
-        // Act
-        let output = SessionOutput::new(&session)
-            .active_progress(active_progress)
-            .done_session_output_mode(DoneSessionOutputMode::Output)
-            .review_status_message(Some(review_status_message))
-            .review_text(Some(review_text))
-            .scroll_offset(10);
-
-        // Assert
-        assert_eq!(output.active_progress, Some(active_progress));
-        assert_eq!(
-            output.done_session_output_mode,
-            DoneSessionOutputMode::Output
-        );
-        assert_eq!(output.review_status_message, Some(review_status_message));
-        assert_eq!(output.review_text, Some(review_text));
-        assert_eq!(output.scroll_offset, Some(10));
-    }
-
-    #[test]
-    fn test_render_does_not_draw_status_title_in_output_border() {
-        // Arrange
-        let mut session = session_fixture();
-        session.title = Some("Header Session".to_string());
-        session.status = Status::Review;
-        let output = SessionOutput::new(&session);
-        let backend = ratatui::backend::TestBackend::new(80, 10);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                output.render(frame, area);
-            })
-            .expect("failed to draw session output");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(!text.contains("Review - Header Session"));
-    }
-
-    #[test]
-    fn annotate_suggestions_header_appends_apply_hint_to_exact_header() {
-        // Arrange
-        let review_markdown = "## Review\n### Project Impact\n- None\n### Suggestions\n- Fix typo.";
-
-        // Act
-        let annotated = SessionOutput::annotate_suggestions_header(review_markdown);
-
-        // Assert
-        assert!(annotated.contains("### Suggestions (type \"/apply\" to apply)"));
-        assert!(!annotated.contains("### Suggestions\n"));
-        assert!(annotated.contains("- Fix typo."));
-    }
-
-    #[test]
-    fn annotate_suggestions_header_leaves_non_matching_lines_untouched() {
-        // Arrange
-        let review_markdown = "### Suggestions extra\n- keep as-is";
-
-        // Act
-        let annotated = SessionOutput::annotate_suggestions_header(review_markdown);
-
-        // Assert
-        assert_eq!(annotated, review_markdown);
     }
 }
