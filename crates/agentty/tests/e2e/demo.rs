@@ -138,18 +138,28 @@ fn create_fake_project_dirs(demo_root: &Path) -> std::io::Result<Vec<PathBuf>> {
 /// protocol output with a canned reply.
 fn install_scripted_claude_stub(env: &BuilderEnv) -> std::io::Result<()> {
     let claude_path = env.stub_bin.join("claude");
-    let script = r#"#!/bin/sh
+    // Reply text is hard-coded to match session 1's prompt ("Add rate
+    // limiting to the auth API"). Session 2 in the tape never finishes, so
+    // the same canned output never renders on-screen for it.
+    let reply = "I added a token-bucket rate limiter middleware on the auth routes. Each client \
+                 IP is capped at 10 requests per second with a 20-request burst, and overflow \
+                 returns 429 with a Retry-After header.";
+    let script = format!(
+        r#"#!/bin/sh
 # Consume stdin so the parent's writer does not block.
 cat > /dev/null 2>&1
-# Simulate a short "thinking" pause so the session view shows the in-progress state.
-sleep 2
-printf '%s\n' '{"type":"system","subtype":"init"}'
+# Long "thinking" pause so the Sessions list shows InProgress long enough
+# for the viewer to notice the timer ticking.
+sleep 8
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
 sleep 1
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi! I am Agentty, ready to help."}]}}'
+printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{reply}"}}]}}}}'
 sleep 1
-printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Hi! I am Agentty, ready to help.\",\"questions\":[],\"summary\":null}","usage":{"input_tokens":5,"output_tokens":9}}'
-"#;
-    std::fs::write(&claude_path, script)?;
+printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{reply}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":42}}}}'
+"#,
+        reply = reply,
+    );
+    std::fs::write(&claude_path, &script)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -176,9 +186,14 @@ fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Seeds fake projects and forces a Claude-backed default model for the
-/// cwd project so the on-screen session uses the scripted `claude` stub
-/// instead of the Gemini app-server backend.
+/// Seeds fake projects, pre-existing sessions in mixed statuses (`Done`,
+/// `Review`) backed by different agent models, and forces a Gemini default
+/// model on the cwd project so the launch footer shows a non-Claude model.
+///
+/// The tape uses `/model` to switch each live-created session to Claude
+/// before submission so it can reach the scripted `claude` stub; the
+/// pre-seeded rows never run, so their non-Claude models are only ever read
+/// by the list renderer to decide the per-row agent badge.
 fn seed_database(
     env: &BuilderEnv,
     fake_project_paths: &[PathBuf],
@@ -228,13 +243,112 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
             )
             .bind(cwd_project_id)
             .bind(name)
-            .bind("claude-sonnet-4-6");
+            .bind("claude-haiku-4-5-20251001");
             connection.execute(query).await?;
         }
+
+        seed_pre_existing_sessions(&mut connection, cwd_project_id, &env.agentty_root).await?;
+
         connection.close().await?;
 
         Result::<(), Box<dyn std::error::Error>>::Ok(())
     })?;
+
+    Ok(())
+}
+
+/// Inserts pre-existing fleet rows into `session` so the list renders with
+/// a mix of agents and statuses the moment the demo lands on the Sessions
+/// tab.
+///
+/// These rows are never executed by a worker — their sole purpose is visual
+/// presence. Timestamps are anchored a few minutes in the past so the list
+/// sort order stays stable and the "last updated" labels read plausibly.
+///
+/// Non-terminal statuses (`Review`, `Question`, etc.) are filtered by
+/// `should_skip_missing_folder_session` unless their worktree folder exists
+/// on disk, so this also creates empty placeholder directories under
+/// `<AGENTTY_ROOT>/wt/<first-8-of-id>/` for every non-`Done`/`Canceled` row.
+async fn seed_pre_existing_sessions(
+    connection: &mut sqlx::SqliteConnection,
+    cwd_project_id: i64,
+    agentty_root: &Path,
+) -> DemoResult {
+    let now_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs() as i64);
+
+    // (id, title, model, status, base_branch, added_lines, deleted_lines,
+    //  prompt, output, age_seconds)
+    let rows: &[(&str, &str, &str, &str, &str, i64, i64, &str, &str, i64)] = &[
+        (
+            "aaaa1111-aaaa-1111-aaaa-111111111111",
+            "Refactor request handlers",
+            "gemini-3.1-pro-preview",
+            "Review",
+            "main",
+            89,
+            45,
+            "Refactor the request handler pipeline to share middleware.",
+            "Ready for your review — see diff.",
+            600,
+        ),
+        (
+            "bbbb2222-bbbb-2222-bbbb-222222222222",
+            "Add dark mode",
+            "gpt-5.4",
+            "Done",
+            "main",
+            127,
+            33,
+            "Add a dark theme with a toggle in settings.",
+            "Merged.",
+            3_600,
+        ),
+        (
+            "cccc3333-cccc-3333-cccc-333333333333",
+            "Fix auth token refresh",
+            "claude-sonnet-4-6",
+            "Done",
+            "main",
+            42,
+            18,
+            "Fix the token refresh race that logs users out.",
+            "Merged.",
+            7_200,
+        ),
+    ];
+
+    let wt_base = agentty_root.join("wt");
+    for (id, title, model, status, base_branch, added, deleted, prompt, output, age) in rows {
+        let created = now_seconds - age;
+        if !matches!(*status, "Done" | "Canceled") {
+            let stub_worktree = wt_base.join(&id[..8]);
+            std::fs::create_dir_all(&stub_worktree)?;
+        }
+        let query = sqlx::query(
+            r"
+INSERT INTO session (
+    id, base_branch, status, project_id, model, title, prompt, output,
+    added_lines, deleted_lines, created_at, updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+",
+        )
+        .bind(id)
+        .bind(base_branch)
+        .bind(status)
+        .bind(cwd_project_id)
+        .bind(model)
+        .bind(title)
+        .bind(prompt)
+        .bind(output)
+        .bind(added)
+        .bind(deleted)
+        .bind(created)
+        .bind(created);
+        connection.execute(query).await?;
+    }
 
     Ok(())
 }
@@ -247,8 +361,9 @@ fn repo_demo_dir() -> PathBuf {
 }
 
 /// Hand-crafts a VHS tape that shows the user typing `agentty`, landing on
-/// the Projects tab briefly, opening a session with "Hi Agentty!" and
-/// reading the reply.
+/// a Sessions list pre-seeded with a mixed-agent fleet, then spinning up
+/// two new Claude-backed sessions via the `/model` picker, returning to the
+/// list, and opening the first session once it transitions to `Review`.
 fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
@@ -296,19 +411,50 @@ Sleep 600ms
 Type "agentty"
 Sleep 400ms
 Enter
-Sleep 2500ms
+Sleep 1500ms
 
 Tab
-Sleep 900ms
+Sleep 2200ms
 
 Type "a"
 Sleep 900ms
 
-Type "Hi Agentty!"
-Sleep 1200ms
+Type "/model"
+Sleep 500ms
+Enter
+Sleep 700ms
+
+Down
+Sleep 400ms
+Enter
+Sleep 700ms
 
 Enter
-Sleep 8s
+Sleep 700ms
+
+Type "Add rate limiting to the auth API"
+Sleep 900ms
+Enter
+Sleep 2500ms
+
+Type "q"
+Sleep 2500ms
+
+Type "a"
+Sleep 900ms
+
+Type "Add pagination to the users list endpoint"
+Sleep 900ms
+Enter
+Sleep 2500ms
+
+Type "q"
+Sleep 1500ms
+
+Up
+Sleep 400ms
+Enter
+Sleep 3500ms
 
 Hide
 Type "q"
