@@ -320,6 +320,9 @@ impl SessionWorkerService {
                 .channel
                 .shutdown_session(context.session_id.to_string())
                 .await;
+            // Sync critical section (single assignment, no `.await`);
+            // `std::sync::Mutex` is the correct choice per CLAUDE.md
+            // §"Mutex Selection".
             if let Ok(mut guard) = context.child_pid.lock() {
                 *guard = None;
             }
@@ -756,6 +759,9 @@ async fn run_turn_with_cancellation(
 /// publish a PID) or the process may have already exited. Both cases are
 /// silently ignored.
 fn terminate_child_process(context: &SessionWorkerContext) {
+    // Sync critical section (the guard is dropped at the end of the chain
+    // expression, before any `.await`); `std::sync::Mutex` is the correct
+    // choice per CLAUDE.md §"Mutex Selection".
     let active_pid = context
         .child_pid
         .lock()
@@ -772,6 +778,8 @@ fn terminate_child_process(context: &SessionWorkerContext) {
 fn fresh_turn_cancel_token(
     context: &SessionWorkerContext,
 ) -> Result<CancellationToken, SessionError> {
+    // Sync critical section (assignment + clone, no `.await`); `std::sync::Mutex`
+    // is the correct choice per CLAUDE.md §"Mutex Selection".
     let mut guard = context
         .cancel_token
         .lock()
@@ -1182,6 +1190,9 @@ async fn consume_turn_events(
                 SessionTaskService::set_session_progress(&app_event_tx, &session_id, Some(thought));
             }
             TurnEvent::PidUpdate(pid) => {
+                // Sync critical section (single assignment, no `.await`);
+                // `std::sync::Mutex` is the correct choice per CLAUDE.md
+                // §"Mutex Selection".
                 if let Ok(mut guard) = child_pid.lock() {
                     *guard = pid;
                 }

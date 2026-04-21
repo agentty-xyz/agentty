@@ -691,6 +691,8 @@ impl SessionHandles {
 
     /// Appends text to the output buffer.
     pub fn append_output(&self, message: &str) {
+        // Sync critical section (string push, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
         if let Ok(mut buf) = self.output.lock() {
             buf.push_str(message);
         }

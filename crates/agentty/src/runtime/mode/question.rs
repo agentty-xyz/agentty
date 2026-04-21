@@ -469,21 +469,35 @@ fn resolve_enter_action(
 
 /// Moves the selected option index up, entering free-text mode when wrapping
 /// past the first predefined option.
+///
+/// # Invariant
+///
+/// The caller in `resolve_question_action` only routes `Up`/`k` here when
+/// `is_navigating_options` (i.e. `selected_option_index.is_some()`) holds, so
+/// `*selected_option_index` is always `Some(_)` on entry. Reaching the `None`
+/// arm means a key handler regressed.
 fn navigate_option_up(selected_option_index: &mut Option<usize>) {
     *selected_option_index = match *selected_option_index {
         Some(0) => None,
         Some(index) => Some(index.saturating_sub(1)),
-        None => unreachable!(),
+        None => unreachable!("navigate_option_up requires selected_option_index = Some(_)"),
     };
 }
 
 /// Moves the selected option index down, entering free-text mode when
 /// advancing past the last predefined option.
+///
+/// # Invariant
+///
+/// The caller in `resolve_question_action` only routes `Down`/`j` here when
+/// `is_navigating_options` (i.e. `selected_option_index.is_some()`) holds, so
+/// `*selected_option_index` is always `Some(_)` on entry. Reaching the `None`
+/// arm means a key handler regressed.
 fn navigate_option_down(selected_option_index: &mut Option<usize>, option_count: usize) {
     *selected_option_index = match *selected_option_index {
         Some(index) if index + 1 >= option_count => None,
         Some(index) => Some(index + 1),
-        None => unreachable!(),
+        None => unreachable!("navigate_option_down requires selected_option_index = Some(_)"),
     };
 }
 
