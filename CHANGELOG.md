@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.8.0] - 2026-04-21
+
+### Added
+
+- Add terminal session continuation that seeds a new session from completed or canceled work.
+- Add `/apply` so focused-review suggestions can be sent back to the agent as a new prompt.
+- Add background review-request polling plus refreshed session-view guidance and demo coverage.
+
+### Changed
+
+- Refactor app orchestration, database repositories, and UI layout/state into narrower modules with typed `SessionId` handling.
+- Improve forge workflow handling, including remote working-directory GitHub CLI execution and stacked review-request planning.
+- Refresh release-policy, workflow, keybinding, and architecture documentation for the new session and review flows.
+
+### Fixed
+
+- Add SQLite busy-timeout handling and align WAL persistence settings for more reliable session storage.
+- Debounce stale `@`-mention loading, clear pending session tasks correctly, and preserve focused-review output through clarification flows.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.7.9] - 2026-04-18
 
 ### Changed

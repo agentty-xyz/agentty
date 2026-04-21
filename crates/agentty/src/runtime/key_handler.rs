@@ -1010,7 +1010,7 @@ mod tests {
         ));
         let continued_session_id = match &app.mode {
             AppMode::Prompt { session_id, .. } => session_id.as_str().to_string(),
-            _ => panic!("expected prompt mode"),
+            _ => unreachable!("expected prompt mode"),
         };
         let continued_session = app
             .sessions
