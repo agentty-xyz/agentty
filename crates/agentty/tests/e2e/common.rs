@@ -122,7 +122,7 @@ pub(crate) fn acquire_e2e_test_lock() -> MutexGuard<'static, ()> {
     E2E_TEST_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("e2e test lock should not be poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Return the feature GIF output directory, creating it if needed.

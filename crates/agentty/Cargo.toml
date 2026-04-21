@@ -27,6 +27,7 @@ dirs.workspace = true
 ignore.workspace = true
 image.workspace = true
 ratatui.workspace = true
+rustc-hash.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

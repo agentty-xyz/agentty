@@ -1,8 +1,11 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::hash::Hasher;
+use std::sync::Arc;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use rustc_hash::FxHasher;
 use unicode_width::UnicodeWidthChar;
 
 use crate::ui::util::wrap_styled_line;
@@ -12,76 +15,98 @@ const CLARIFICATION_HEADER: &str = "Clarifications:";
 const CLARIFICATION_PROMPT_PREFIX: &str = USER_PROMPT_PREFIX;
 const STATS_LABEL_WIDTH: usize = 22;
 /// Maximum number of distinct markdown blocks cached at once.
-const MARKDOWN_RENDER_CACHE_ENTRY_LIMIT: usize = 8;
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const MARKDOWN_RENDER_CACHE_ENTRY_LIMIT: usize = 64;
+
+/// Cache key for one rendered markdown block.
+///
+/// The `version` field invalidates every cached render after a theme change so
+/// style-bearing `Line` values are never reused across incompatible palettes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MarkdownRenderCacheKey {
+    content_hash: u64,
+    content_len: usize,
+    version: u64,
+    width: u16,
+}
 
 /// Cached result of a single `render_markdown` invocation.
 struct MarkdownRenderCacheEntry {
-    content_hash: u64,
-    content_len: usize,
-    lines: Vec<Line<'static>>,
-    width: usize,
+    key: MarkdownRenderCacheKey,
+    lines: Arc<[Line<'static>]>,
 }
 
 /// Bounded LRU cache for `render_markdown` output.
 ///
-/// Stores the most recent rendered `Vec<Line<'static>>` values keyed by a
-/// content fingerprint and target width. Keeping several entries avoids cache
-/// thrash when one frame renders transcript text alongside summary, review, or
-/// footer markdown blocks. Interior mutability via `RefCell` allows cache
-/// updates through shared references so the cache can be threaded through
-/// immutable render contexts without requiring `&mut` at every call site.
+/// Stores the most recent rendered markdown slices keyed by a content
+/// fingerprint and target width. Keeping several entries avoids cache thrash
+/// when one frame renders transcript text alongside summary, review, or footer
+/// markdown blocks. Interior mutability via `RefCell` allows cache updates
+/// through shared references so the cache can be threaded through immutable
+/// render contexts without requiring `&mut` at every call site.
+///
+/// Cached values are stored as `Arc<[Line<'static>]>` so cache hits can reuse
+/// the rendered slice without cloning every line. Callers only clone `Line`
+/// values when they need to append the cached content into a larger output
+/// buffer.
 pub struct MarkdownRenderCache {
     entries: RefCell<VecDeque<MarkdownRenderCacheEntry>>,
+    version: Cell<u64>,
 }
 
 impl Default for MarkdownRenderCache {
     fn default() -> Self {
         Self {
             entries: RefCell::new(VecDeque::with_capacity(MARKDOWN_RENDER_CACHE_ENTRY_LIMIT)),
+            version: Cell::new(0),
         }
     }
 }
 
 impl MarkdownRenderCache {
-    /// Returns cached rendered lines when the text hash and width match,
-    /// otherwise renders fresh and updates the cache.
-    pub fn render(&self, text: &str, width: usize) -> Vec<Line<'static>> {
-        let content_hash = Self::hash_text(text);
-        let content_len = text.len();
-        if let Some(lines) = self.cached_lines(content_hash, content_len, width) {
+    /// Returns cached rendered lines when the text hash, width, and cache
+    /// version match; otherwise renders fresh and updates the cache.
+    pub fn render(&self, text: &str, width: usize) -> Arc<[Line<'static>]> {
+        let key = self.cache_key(text, width);
+        if let Some(lines) = self.cached_lines(key) {
             return lines;
         }
 
-        let lines = render_markdown(text, width);
+        let lines = Arc::<[Line<'static>]>::from(render_markdown(text, width));
 
         self.store_entry(MarkdownRenderCacheEntry {
-            content_hash,
-            content_len,
-            lines: lines.clone(),
-            width,
+            key,
+            lines: Arc::clone(&lines),
         });
 
         lines
     }
 
+    /// Bumps the cache version and drops all rendered entries.
+    ///
+    /// Theme mutations call this so cached styled lines never outlive the
+    /// palette they were rendered with.
+    pub fn bump_version(&self) {
+        self.version.set(self.version.get().wrapping_add(1));
+        self.entries.borrow_mut().clear();
+    }
+
+    /// Builds the cache key for one render call.
+    fn cache_key(&self, text: &str, width: usize) -> MarkdownRenderCacheKey {
+        MarkdownRenderCacheKey {
+            content_hash: Self::hash_text(text),
+            content_len: text.len(),
+            version: self.version.get(),
+            width: u16::try_from(width).unwrap_or(u16::MAX),
+        }
+    }
+
     /// Returns cached lines for a matching entry and promotes it to the
     /// front of the LRU queue.
-    fn cached_lines(
-        &self,
-        content_hash: u64,
-        content_len: usize,
-        width: usize,
-    ) -> Option<Vec<Line<'static>>> {
+    fn cached_lines(&self, key: MarkdownRenderCacheKey) -> Option<Arc<[Line<'static>]>> {
         let mut entries = self.entries.borrow_mut();
-        let entry_index = entries.iter().position(|entry| {
-            entry.content_hash == content_hash
-                && entry.content_len == content_len
-                && entry.width == width
-        })?;
+        let entry_index = entries.iter().position(|entry| entry.key == key)?;
         let entry = entries.remove(entry_index)?;
-        let lines = entry.lines.clone();
+        let lines = Arc::clone(&entry.lines);
         entries.push_front(entry);
 
         Some(lines)
@@ -98,17 +123,13 @@ impl MarkdownRenderCache {
         }
     }
 
-    /// Computes a fast non-cryptographic content hash for cache key
+    /// Computes a fast non-cryptographic content hash for cache-key
     /// comparison.
     fn hash_text(text: &str) -> u64 {
-        let mut hash = FNV_OFFSET_BASIS;
+        let mut hasher = FxHasher::default();
+        hasher.write(text.as_bytes());
 
-        for byte in text.as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(FNV_PRIME);
-        }
-
-        hash
+        hasher.finish()
     }
 }
 
@@ -1198,6 +1219,8 @@ fn find_matching_single_asterisk(characters: &[char], start_index: usize) -> Opt
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -1666,8 +1689,11 @@ mod tests {
         let cached_first_lines = cache.render("# First", 24);
 
         // Assert
-        assert_eq!(first_lines, cached_first_lines);
-        assert_eq!(second_lines, render_markdown("# Second", 24));
+        assert!(Arc::ptr_eq(&first_lines, &cached_first_lines));
+        assert_eq!(
+            second_lines.as_ref(),
+            render_markdown("# Second", 24).as_slice()
+        );
         assert_eq!(cache.entries.borrow().len(), 2);
     }
 
@@ -1689,11 +1715,27 @@ mod tests {
             .entries
             .borrow()
             .iter()
-            .map(|entry| entry.content_hash)
+            .map(|entry| entry.key.content_hash)
             .collect::<Vec<_>>();
         assert_eq!(cached_hashes.len(), MARKDOWN_RENDER_CACHE_ENTRY_LIMIT);
         assert!(cached_hashes.contains(&MarkdownRenderCache::hash_text("# Entry 0")));
         assert!(!cached_hashes.contains(&MarkdownRenderCache::hash_text("# Entry 1")));
         assert!(cached_hashes.contains(&MarkdownRenderCache::hash_text("# Overflow")));
+    }
+
+    #[test]
+    fn test_markdown_render_cache_bump_version_clears_styled_entries() {
+        // Arrange
+        let cache = MarkdownRenderCache::default();
+        let initial_lines = cache.render("# Entry", 24);
+
+        // Act
+        cache.bump_version();
+        let refreshed_lines = cache.render("# Entry", 24);
+
+        // Assert
+        assert!(!Arc::ptr_eq(&initial_lines, &refreshed_lines));
+        assert_eq!(cache.entries.borrow().len(), 1);
+        assert_eq!(cache.version.get(), 1);
     }
 }

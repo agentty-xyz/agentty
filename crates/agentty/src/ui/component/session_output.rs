@@ -1,4 +1,5 @@
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -526,10 +527,8 @@ impl<'a> SessionOutput<'a> {
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
-        let mut rendered_lines = match markdown_render_cache {
-            Some(cache) => cache.render(markdown, inner_width),
-            None => render_markdown(markdown, inner_width),
-        };
+        let rendered_lines =
+            Self::rendered_markdown_lines(markdown, inner_width, markdown_render_cache);
         if rendered_lines.is_empty() {
             return;
         }
@@ -542,7 +541,20 @@ impl<'a> SessionOutput<'a> {
             lines.push(Line::from(""));
         }
 
-        lines.append(&mut rendered_lines);
+        lines.extend(rendered_lines.iter().cloned());
+    }
+
+    /// Returns rendered markdown as a shared slice so cache hits avoid cloning
+    /// the entire rendered block.
+    fn rendered_markdown_lines(
+        markdown: &str,
+        inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) -> Arc<[Line<'static>]> {
+        match markdown_render_cache {
+            Some(cache) => cache.render(markdown, inner_width),
+            None => Arc::from(render_markdown(markdown, inner_width)),
+        }
     }
 
     /// Adds visual spacing around user prompt blocks while preserving pasted

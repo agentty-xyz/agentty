@@ -438,9 +438,7 @@ impl SessionManager {
         &mut self,
         lookup_root: &Path,
     ) -> Option<Vec<FileEntry>> {
-        let Some(cached_index) = self.at_mention_indexes.get(lookup_root) else {
-            return None;
-        };
+        let cached_index = self.at_mention_indexes.get(lookup_root)?;
 
         if self
             .state
@@ -1384,7 +1382,7 @@ mod tests {
     fn test_at_mention_index_for_root_invalidates_after_ttl_expires() {
         // Arrange
         let initial_instant = Instant::now();
-        let initial_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+        let initial_system_time = SystemTime::UNIX_EPOCH + Duration::from_mins(1);
         let clock = Arc::new(TestClock::new(initial_instant, initial_system_time));
         let mut session_manager =
             test_session_manager_with_clock("session-id", None, clock.clone());
@@ -1530,7 +1528,7 @@ mod tests {
     fn test_retain_active_prompt_outputs_prunes_expired_at_mention_indexes() {
         // Arrange
         let initial_instant = Instant::now();
-        let initial_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+        let initial_system_time = SystemTime::UNIX_EPOCH + Duration::from_mins(1);
         let clock = Arc::new(TestClock::new(initial_instant, initial_system_time));
         let mut session_manager =
             test_session_manager_with_clock("session-id", None, clock.clone());

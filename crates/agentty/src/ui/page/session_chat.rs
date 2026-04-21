@@ -46,7 +46,8 @@ pub struct SessionChatPage<'a> {
     pub active_progress: Option<&'a str>,
     pub can_open_worktree: bool,
     pub default_reasoning_level: ReasoningLevel,
-    pub markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    /// Shared markdown cache reused across transcript renders in this page.
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     pub mode: &'a AppMode,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
@@ -98,7 +99,7 @@ impl<'a> SessionChatPage<'a> {
             active_progress,
             can_open_worktree: false,
             default_reasoning_level,
-            markdown_render_cache: Some(markdown_render_cache),
+            markdown_render_cache,
             mode,
             scroll_offset,
             session_index,
@@ -311,11 +312,9 @@ impl<'a> SessionChatPage<'a> {
         );
         let session_areas = layout::session_chat_areas(area, bottom_height);
 
-        let mut output =
-            SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
-        if let Some(cache) = self.markdown_render_cache {
-            output = output.markdown_render_cache(cache);
-        }
+        let mut output = SessionOutput::new(session)
+            .done_session_output_mode(self.done_session_output_mode())
+            .markdown_render_cache(self.markdown_render_cache);
         output = output.active_prompt_output(self.active_prompt_output);
         output = output.review_status_message(self.review_status_message());
         output = output.review_text(self.review_text());

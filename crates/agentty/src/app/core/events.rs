@@ -475,31 +475,7 @@ impl App {
     async fn apply_app_event_batch(&mut self, mut event_batch: AppEventBatch) {
         let previous_session_states = self.previous_session_states(&event_batch.session_ids);
 
-        if event_batch.should_force_reload {
-            self.refresh_sessions_now().await;
-            self.reload_projects().await;
-            self.refresh_active_project_roadmap_and_tabs().await;
-        }
-
-        if event_batch.should_refresh_git_status {
-            self.restart_git_status_task();
-        }
-
-        if let Some(git_status_update) = &event_batch.git_status_update {
-            self.projects.set_git_status(git_status_update.status);
-            self.sessions
-                .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
-        }
-
-        if let Some(latest_available_version_update) = &event_batch.latest_available_version_update
-        {
-            self.latest_available_version
-                .clone_from(&latest_available_version_update.latest_available_version);
-        }
-
-        if let Some(update_status) = event_batch.update_status {
-            self.update_status = Some(update_status);
-        }
+        self.apply_batch_runtime_updates(&event_batch).await;
 
         for (session_id, session_model) in event_batch.session_model_updates {
             self.sessions
@@ -593,6 +569,36 @@ impl App {
             .await;
         self.retain_valid_session_progress_messages();
         self.sessions.retain_active_prompt_outputs();
+    }
+
+    /// Applies reducer-batch updates that affect global app runtime state
+    /// before session-local projections are synchronized.
+    async fn apply_batch_runtime_updates(&mut self, event_batch: &AppEventBatch) {
+        if event_batch.should_force_reload {
+            self.refresh_sessions_now().await;
+            self.reload_projects().await;
+            self.refresh_active_project_roadmap_and_tabs().await;
+        }
+
+        if event_batch.should_refresh_git_status {
+            self.restart_git_status_task();
+        }
+
+        if let Some(git_status_update) = &event_batch.git_status_update {
+            self.projects.set_git_status(git_status_update.status);
+            self.sessions
+                .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
+        }
+
+        if let Some(latest_available_version_update) = &event_batch.latest_available_version_update
+        {
+            self.latest_available_version
+                .clone_from(&latest_available_version_update.latest_available_version);
+        }
+
+        if let Some(update_status) = event_batch.update_status.clone() {
+            self.update_status = Some(update_status);
+        }
     }
 
     /// Returns status snapshots for sessions touched before applying a

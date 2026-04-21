@@ -33,6 +33,7 @@ mockall = "0.14"
 portable-pty = "0.9"
 pulldown-cmark = "0.13.1"
 ratatui = "0.30.0"
+rustc-hash = "2"
 schemars = { version = "1", features = ["derive"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
