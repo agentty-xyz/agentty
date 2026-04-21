@@ -14,6 +14,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Header guidance FYIs | The top status bar now rotates page-specific `FYI:` guidance for the sessions list and session chat once per minute while keeping version and update-state text visible. | Landed |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Chained session workflow | Follow-up tasks can already launch sibling sessions, but each new session still starts from the active project base branch and published review requests always target that same base branch instead of another session branch. | Missing |
+| Terminal session continuation | `Done` and `Canceled` sessions keep their transcript and summary context, but users still cannot launch a fresh session that reuses that closed session as the initial context source. | Missing |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
 
@@ -22,6 +23,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 - `Delivery`: project-level landing strategy, forge-aware review-request publishing, and chained-session delivery for review-ready sessions, including direct-merge vs. review-request expectations.
 - `Quality`: PTY-driven E2E coverage and `FeatureTest` migration for landed visible session flows.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
+- `Workflow`: continuation entry points for `Done` and `Canceled` sessions so follow-on work can start from prior session context instead of manual copy-paste.
 - `Session Output`: per-turn execution digests that summarize the commands, changed files, and skill activity users need to review directly in the chat transcript.
 
 ## Planning Model
@@ -155,6 +157,33 @@ Completed turns persist one shared activity-summary record and can print a stabl
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md`, `docs/site/content/docs/architecture/runtime-flow.md`, and `docs/site/content/docs/architecture/testability-boundaries.md` to document the shared turn-activity summary contract, the git-derived CRUD source of truth, and how later provider integrations populate command and skill data.
 
+### [c40593d1-8707-48ff-b282-15234fcef2a2] Workflow: Continue done or canceled sessions
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+Terminal sessions already persist the transcript and structured summary users need for follow-on work, but Agentty still makes them manually copy that context into a brand-new session before they can continue.
+
+#### Usable outcome
+
+From a `Done` or `Canceled` session view, users can launch a fresh session whose initial composer is seeded from the closed session's persisted context, so follow-on work starts from prior session state instead of an empty prompt.
+
+#### Substeps
+
+- [ ] **Build a continuation seed from one terminal session's persisted context.** Update `crates/agentty/src/domain/session.rs`, `crates/agentty/src/app/core/state.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and related session-state helpers so Agentty can create a fresh session from a `Done` or `Canceled` source and prefill the first prompt/composer with the source session's persisted summary or transcript context without reopening the closed session.
+- [ ] **Expose the continue flow in terminal session view only.** Update `crates/agentty/src/runtime/key_handler.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/state/help_action.rs`, and any touched session-view rendering helpers so `Done` and `Canceled` sessions surface one continue action that opens the seeded new-session composer while leaving non-terminal session shortcuts unchanged.
+
+#### Tests
+
+- [ ] Add or extend coverage in `crates/agentty/src/app/core/state.rs` and `crates/agentty/src/runtime/key_handler.rs` for terminal-session continuation seed generation, allowed-status gating, and the view-mode shortcut flow, and add an E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` that proves a `Done` or `Canceled` session can open the continuation composer with the expected seeded context.
+
+#### Docs
+
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to explain how terminal-session continuation works from session view and which shortcut starts the seeded follow-on session.
+
 ## Ready Now Execution Order
 
 ```mermaid
@@ -163,6 +192,7 @@ flowchart TD
     R2["[b2f83d5e] Quality: migrate legacy E2E to FeatureTest"]
     R3["[84aa58cc] Protocol: compact reset memory"]
     R4["[eff3638c] Session Output: turn activity base"]
+    R5["[c40593d1] Workflow: continue terminal session"]
 ```
 
 ## Queued Next
@@ -231,6 +261,7 @@ No parked user-facing cards right now.
 
 - `Delivery: Add project commit strategy selection` should define the landing policy at the Agentty project level so merge and publish actions can present the right default path for each managed repository.
 - `Delivery: Chain sessions for stacked review requests` should build on the existing follow-up-task sibling-session flow, persist session lineage, and let review-request publishing target the parent session branch instead of always targeting the project base branch.
+- `Workflow: Continue done or canceled sessions` should create a new session instead of reopening the closed one, reuse persisted summary or transcript context when available, and keep the source-session linkage visible enough that users can tell what the continuation came from.
 - `Protocol: Replace reset replay with compact session memory` should stay restart-specific, preserve the first-turn bootstrap prompt, and reuse the already-compact steady-state follow-up path instead of inventing another session-memory format.
 - `Session Output: Define turn activity storage and protocol base` should introduce the shared DB and protocol shape plus git-derived changed-file CRUD classification once so the Claude, Gemini, and Codex capture cards all target the same stored summary contract.
 - `Session Output` provider capture cards should map Claude, Gemini, and Codex activity surfaces into that shared contract instead of inventing provider-specific transcript formats.
