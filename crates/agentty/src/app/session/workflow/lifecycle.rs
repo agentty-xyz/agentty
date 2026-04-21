@@ -260,11 +260,7 @@ impl SessionManager {
             )));
         }
 
-        // Best-effort: activity tracking is non-critical.
-        let _ = services
-            .db()
-            .insert_session_creation_activity_now(&session_id)
-            .await;
+        Self::record_session_creation_activity(services, &session_id).await;
 
         if !is_draft && let Err(error) = agent::create_backend(session_model.kind()).setup(&folder)
         {
@@ -627,14 +623,20 @@ impl SessionManager {
             session.draft_attachments.clear();
         }
 
-        // Best-effort: the live session has already started successfully.
-        let _ = draft::store_staged_draft_attachments(
+        if let Err(error) = draft::store_staged_draft_attachments(
             services.fs_client().as_ref(),
             services.base_path(),
             session_id,
             &[],
         )
-        .await;
+        .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to clear staged draft attachments after session start"
+            );
+        }
 
         Ok(())
     }
@@ -693,8 +695,7 @@ impl SessionManager {
         .await;
         self.set_active_prompt_output(&persisted_session_id, initial_output);
 
-        // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
+        if !SessionTaskService::update_status(
             &status,
             services.clock().as_ref(),
             services.db(),
@@ -702,7 +703,13 @@ impl SessionManager {
             &persisted_session_id,
             Status::InProgress,
         )
-        .await;
+        .await
+        {
+            warn!(
+                session_id = %persisted_session_id,
+                "skipped session start status update because the in-memory status did not transition to in-progress"
+            );
+        }
 
         let operation_id = Uuid::new_v4().to_string();
         let command = SessionCommand::Run {
@@ -1057,15 +1064,25 @@ impl SessionManager {
         self.abort_title_generation_task(&session.id);
         self.clear_history_replay_pending(&session.id);
 
-        // Best-effort: cancellation failure is non-critical during session deletion.
-        let _ = services
+        if let Err(error) = services
             .db()
             .request_cancel_for_session_operations(&session.id)
-            .await;
+            .await
+        {
+            warn!(
+                session_id = %session.id,
+                error = %error,
+                "failed to cancel pending session operations during deletion"
+            );
+        }
         self.clear_session_worker(&session.id);
-        // Best-effort: session record removal failure is non-critical during session
-        // deletion.
-        let _ = services.db().delete_session(&session.id).await;
+        if let Err(error) = services.db().delete_session(&session.id).await {
+            warn!(
+                session_id = %session.id,
+                error = %error,
+                "failed to delete session record during session deletion"
+            );
+        }
         services.emit_app_event(AppEvent::RefreshSessions);
 
         let staged_draft_root = services.base_path().join(&session.id);
@@ -1102,8 +1119,14 @@ impl SessionManager {
         )
         .await;
         Self::warn_cleanup_errors(&cleanup.session_id, &cleanup_errors);
-        if fs_client.is_dir(cleanup.staged_draft_root.clone()) {
-            let _ = fs_client.remove_dir_all(cleanup.staged_draft_root).await;
+        if fs_client.is_dir(cleanup.staged_draft_root.clone())
+            && let Err(error) = fs_client.remove_dir_all(cleanup.staged_draft_root).await
+        {
+            warn!(
+                session_id = %cleanup.session_id,
+                error = %error,
+                "failed to remove staged draft directory during session deletion"
+            );
         }
         Self::cleanup_session_temp_directory(fs_client, &cleanup.session_id).await;
     }
@@ -1282,8 +1305,7 @@ impl SessionManager {
             )
             .await;
 
-            // Best-effort: status transition failure is non-critical.
-            let _ = SessionTaskService::update_status(
+            if !SessionTaskService::update_status(
                 &status,
                 services.clock().as_ref(),
                 services.db(),
@@ -1291,7 +1313,13 @@ impl SessionManager {
                 &persisted_session_id,
                 Status::InProgress,
             )
-            .await;
+            .await
+            {
+                warn!(
+                    session_id = %persisted_session_id,
+                    "skipped reply status update because the in-memory status did not transition to in-progress"
+                );
+            }
         }
 
         self.append_reply_prompt_line(
@@ -1390,13 +1418,25 @@ impl SessionManager {
         prompt: &str,
         title: &str,
     ) {
-        // Best-effort: title persistence failure is non-critical.
-        let _ = services.db().update_session_title(session_id, title).await;
-        // Best-effort: prompt persistence failure is non-critical.
-        let _ = services
+        if let Err(error) = services.db().update_session_title(session_id, title).await {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to persist first-message session title"
+            );
+        }
+
+        if let Err(error) = services
             .db()
             .update_session_prompt(session_id, prompt)
-            .await;
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to persist first-message session prompt"
+            );
+        }
     }
 
     /// Appends the user reply marker line to session output.
@@ -1649,13 +1689,26 @@ impl SessionManager {
                 return;
             }
 
-            if db
+            match db
                 .update_session_title_for_prompt(&persisted_session_id, &prompt, &generated_title)
                 .await
-                .unwrap_or(false)
             {
-                // Fire-and-forget: receiver may be dropped during shutdown.
-                let _ = app_event_tx.send(AppEvent::RefreshSessions);
+                Ok(true) => {
+                    if app_event_tx.send(AppEvent::RefreshSessions).is_err() {
+                        warn!(
+                            session_id = %persisted_session_id,
+                            "failed to refresh sessions after title generation because the app event receiver is closed"
+                        );
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    warn!(
+                        session_id = %persisted_session_id,
+                        error = %error,
+                        "failed to persist generated session title"
+                    );
+                }
             }
 
             SessionManager::emit_title_generation_finished_event(
@@ -1675,10 +1728,19 @@ impl SessionManager {
             return;
         };
 
-        let _ = app_event_tx.send(AppEvent::SessionTitleGenerationFinished {
-            generation: tracked_completion.generation,
-            session_id: tracked_completion.session_id.clone(),
-        });
+        if app_event_tx
+            .send(AppEvent::SessionTitleGenerationFinished {
+                generation: tracked_completion.generation,
+                session_id: tracked_completion.session_id.clone(),
+            })
+            .is_err()
+        {
+            warn!(
+                session_id = %tracked_completion.session_id,
+                generation = tracked_completion.generation,
+                "failed to send session title generation completion event because the app event receiver is closed"
+            );
+        }
     }
 
     /// Executes one detached title-generation command and returns parsed
@@ -1814,9 +1876,12 @@ impl SessionManager {
         worktree_branch: &str,
         session_saved: bool,
     ) {
-        if session_saved {
-            // Best-effort cleanup: session record may already be removed.
-            let _ = services.db().delete_session(session_id).await;
+        if session_saved && let Err(error) = services.db().delete_session(session_id).await {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to roll back persisted session metadata"
+            );
         }
 
         {
@@ -1824,18 +1889,52 @@ impl SessionManager {
             let folder = folder.to_path_buf();
             let repo_root = repo_root.to_path_buf();
             let worktree_branch = worktree_branch.to_string();
-            // Best-effort cleanup: worktree may already be removed.
-            let _ = git_client.remove_worktree(folder).await;
-            // Best-effort cleanup: branch may already be removed.
-            let _ = git_client.delete_branch(repo_root, worktree_branch).await;
+            if let Err(error) = git_client.remove_worktree(folder).await {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to remove worktree while rolling back session creation"
+                );
+            }
+
+            if let Err(error) = git_client.delete_branch(repo_root, worktree_branch).await {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to delete branch while rolling back session creation"
+                );
+            }
         }
 
-        // Best-effort cleanup: worktree directory may already be removed.
-        let _ = services
+        if let Err(error) = services
             .fs_client()
             .remove_dir_all(folder.to_path_buf())
-            .await;
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to remove session worktree directory while rolling back session creation"
+            );
+        }
+
         Self::cleanup_session_temp_directory(services.fs_client(), session_id).await;
+    }
+
+    /// Records that one session was created and warns if analytics persistence
+    /// fails.
+    async fn record_session_creation_activity(services: &AppServices, session_id: &str) {
+        if let Err(error) = services
+            .db()
+            .insert_session_creation_activity_now(session_id)
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to record session creation activity"
+            );
+        }
     }
 
     /// Appends text to a specific session output stream.
@@ -2013,25 +2112,39 @@ impl SessionManager {
             managed_prompt_attachment_directory(&attachment_paths, managed_tmp_root);
 
         for attachment_path in attachment_paths {
-            if is_managed_prompt_attachment_path(&attachment_path, managed_tmp_root) {
-                // Best-effort cleanup: attachment file may already be removed.
-                let _ = fs_client.remove_file(attachment_path).await;
+            if is_managed_prompt_attachment_path(&attachment_path, managed_tmp_root)
+                && let Err(error) = fs_client.remove_file(attachment_path).await
+            {
+                warn!(
+                    error = %error,
+                    "failed to remove managed prompt attachment file"
+                );
             }
         }
 
-        if let Some(image_directory) = image_directory {
-            // Best-effort cleanup: image directory may already be removed.
-            let _ = fs_client.remove_dir_all(image_directory).await;
+        if let Some(image_directory) = image_directory
+            && let Err(error) = fs_client.remove_dir_all(image_directory).await
+        {
+            warn!(
+                error = %error,
+                "failed to remove managed prompt attachment directory"
+            );
         }
     }
 
     /// Removes the session-scoped temp directory used for pasted prompt
     /// images.
     async fn cleanup_session_temp_directory(fs_client: Arc<dyn FsClient>, session_id: &str) {
-        // Best-effort cleanup: temp directory may already be removed.
-        let _ = fs_client
+        if let Err(error) = fs_client
             .remove_dir_all(session_prompt_temp_directory(session_id))
-            .await;
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to remove session prompt temp directory"
+            );
+        }
     }
 }
 

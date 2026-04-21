@@ -3,9 +3,10 @@ use std::io;
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
-use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
@@ -684,23 +685,11 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
 
     match selection {
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/apply")) => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.take_text();
-                slash_state.reset();
-            }
+            reset_prompt_slash_input(app);
             handle_apply_command(app, prompt_context).await;
         }
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/stats")) => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.take_text();
-                slash_state.reset();
-            }
+            reset_prompt_slash_input(app);
             handle_stats_command(app, prompt_context).await;
         }
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/reasoning")) => {
@@ -735,34 +724,65 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             }
         }
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Model(selected_model)) => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.take_text();
-                slash_state.reset();
-            }
-
-            // Best-effort: model switch failure is non-critical.
-            let _ = app
-                .set_session_model(&prompt_context.session_id, selected_model)
-                .await;
+            reset_prompt_slash_input(app);
+            update_prompt_session_model(app, prompt_context, selected_model).await;
         }
         Some(crate::ui::state::prompt::PromptSuggestionSelection::Reasoning(reasoning_level)) => {
-            if let AppMode::Prompt {
-                input, slash_state, ..
-            } = &mut app.mode
-            {
-                input.take_text();
-                slash_state.reset();
-            }
-
-            // Best-effort: reasoning override failure is non-critical.
-            let _ = app
-                .set_session_reasoning_level(&prompt_context.session_id, Some(reasoning_level))
-                .await;
+            reset_prompt_slash_input(app);
+            update_prompt_session_reasoning_level(app, prompt_context, reasoning_level).await;
         }
         None => {}
+    }
+}
+
+/// Clears the slash-command buffer after one prompt slash action is accepted.
+fn reset_prompt_slash_input(app: &mut App) {
+    if let AppMode::Prompt {
+        input, slash_state, ..
+    } = &mut app.mode
+    {
+        input.take_text();
+        slash_state.reset();
+    }
+}
+
+/// Persists one slash-selected model change and logs any failure with session
+/// context.
+async fn update_prompt_session_model(
+    app: &mut App,
+    prompt_context: &PromptContext,
+    selected_model: AgentModel,
+) {
+    if let Err(error) = app
+        .set_session_model(&prompt_context.session_id, selected_model)
+        .await
+    {
+        warn!(
+            session_id = %prompt_context.session_id,
+            model = %selected_model.as_str(),
+            error = %error,
+            "failed to switch session model from prompt slash command"
+        );
+    }
+}
+
+/// Persists one slash-selected reasoning override and logs any failure with
+/// session context.
+async fn update_prompt_session_reasoning_level(
+    app: &mut App,
+    prompt_context: &PromptContext,
+    reasoning_level: ReasoningLevel,
+) {
+    if let Err(error) = app
+        .set_session_reasoning_level(&prompt_context.session_id, Some(reasoning_level))
+        .await
+    {
+        warn!(
+            session_id = %prompt_context.session_id,
+            reasoning_level = ?reasoning_level,
+            error = %error,
+            "failed to update session reasoning level from prompt slash command"
+        );
     }
 }
 

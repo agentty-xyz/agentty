@@ -3,6 +3,7 @@ use std::io;
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use tracing::warn;
 
 use crate::app::session::remote_branch_name_from_upstream_ref;
 use crate::app::{
@@ -293,7 +294,7 @@ async fn handle_workflow_view_key(
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && is_view_diff_allowed(view_session_snapshot.session_status) =>
         {
-            let _ = show_diff_for_view_session(app, view_context).await;
+            show_diff_for_view_session(app, view_context).await;
         }
         KeyCode::Char(character)
             if character.eq_ignore_ascii_case(&'p')
@@ -550,24 +551,37 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     let timestamp_seconds =
         app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
 
-    // Signal the worker to skip any remaining queued operations.
-    let _ = app
+    if let Err(error) = app
         .services
         .db()
         .request_cancel_for_session_operations(session_id)
-        .await;
+        .await
+    {
+        warn!(
+            session_id = session_id,
+            error = %error,
+            "failed to request cancellation for queued session operations"
+        );
+    }
 
     if let Some(handles) = app.sessions.handles.get(session_id) {
         // Cancel the current turn's token so the worker's `select!`
         // branch fires and triggers graceful channel shutdown. The
         // worker sends SIGTERM to CLI child processes inside the
         // cancellation path where the PID is guaranteed valid.
-        if let Ok(cancel_token) = handles.cancel_token.lock() {
-            cancel_token.cancel();
+        match handles.cancel_token.lock() {
+            Ok(cancel_token) => cancel_token.cancel(),
+            Err(error) => {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to lock session cancel token"
+                );
+            }
         }
     }
 
-    if app
+    if let Err(error) = app
         .services
         .db()
         .update_session_status_with_timing_at(
@@ -576,8 +590,13 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
             timestamp_seconds,
         )
         .await
-        .is_err()
     {
+        warn!(
+            session_id = session_id,
+            error = %error,
+            "failed to persist review status after interrupting session"
+        );
+
         return;
     }
 
@@ -968,11 +987,23 @@ async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String
     let session_folder = session.folder.clone();
     let base_branch = session.base_branch.clone();
 
-    app.services
+    match app
+        .services
         .git_client()
         .diff(session_folder, base_branch)
         .await
-        .unwrap_or_else(|error| format!("Failed to run git diff: {error}"))
+    {
+        Ok(diff) => diff,
+        Err(error) => {
+            warn!(
+                session_id = %view_context.session_id,
+                error = %error,
+                "failed to load session diff for view mode"
+            );
+
+            format!("Failed to run git diff: {error}")
+        }
+    }
 }
 
 async fn rebase_view_session(app: &mut App, session_id: &str) {

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::warn;
 
 use crate::app::AppEvent;
 use crate::app::session::SessionManager;
@@ -80,11 +81,18 @@ pub(crate) fn start_loading_entries(
     session_manager: &mut SessionManager,
 ) {
     if let Some(entries) = session_manager.at_mention_index_for_root(&lookup_root) {
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
-            entries,
-            session_id,
-        });
+        if event_tx
+            .send(AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id: session_id.clone(),
+            })
+            .is_err()
+        {
+            warn!(
+                session_id = %session_id,
+                "failed to publish cached at-mention entries because the app event receiver is closed"
+            );
+        }
 
         return;
     }
@@ -95,15 +103,32 @@ pub(crate) fn start_loading_entries(
     let handle = tokio::spawn(async move {
         tokio::time::sleep(AT_MENTION_LOAD_DEBOUNCE).await;
 
-        let entries = tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root))
-            .await
-            .unwrap_or_default();
+        let entries =
+            match tokio::task::spawn_blocking(move || file_index::list_files(&lookup_root)).await {
+                Ok(entries) => entries,
+                Err(error) => {
+                    warn!(
+                        session_id = %session_id,
+                        error = %error,
+                        "failed to join at-mention file index task"
+                    );
 
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
-            entries,
-            session_id,
-        });
+                    Vec::new()
+                }
+            };
+
+        if event_tx
+            .send(AppEvent::AtMentionEntriesLoaded {
+                entries,
+                session_id: session_id.clone(),
+            })
+            .is_err()
+        {
+            warn!(
+                session_id = %session_id,
+                "failed to publish at-mention entries because the app event receiver is closed"
+            );
+        }
 
         finish_pending_load(&task_session_id, request_id);
     });

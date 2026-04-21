@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use askama::Template;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
@@ -93,11 +94,18 @@ impl SessionTaskService {
         session_id: &str,
         folder: &Path,
     ) -> Option<(SessionSize, u64, u64)> {
-        let base_branch = db
-            .get_session_base_branch(session_id)
-            .await
-            .ok()
-            .flatten()?;
+        let base_branch = match db.get_session_base_branch(session_id).await {
+            Ok(base_branch) => base_branch?,
+            Err(error) => {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to load session base branch while refreshing diff stats"
+                );
+
+                return None;
+            }
+        };
 
         let (computed_size, added_lines, deleted_lines) =
             SessionManager::session_diff_stats_for_folder(
@@ -107,14 +115,23 @@ impl SessionTaskService {
                 &base_branch,
             )
             .await;
-        db.update_session_diff_stats(
-            added_lines,
-            deleted_lines,
-            session_id,
-            &computed_size.to_string(),
-        )
-        .await
-        .ok()?;
+        if let Err(error) = db
+            .update_session_diff_stats(
+                added_lines,
+                deleted_lines,
+                session_id,
+                &computed_size.to_string(),
+            )
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to persist refreshed session diff stats"
+            );
+
+            return None;
+        }
 
         Some((computed_size, added_lines, deleted_lines))
     }
@@ -176,8 +193,12 @@ impl SessionTaskService {
 
     /// Requests one immediate reducer-driven git-status refresh.
     pub(super) fn request_git_status_refresh(app_event_tx: &mpsc::UnboundedSender<AppEvent>) {
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::RefreshGitStatus);
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::RefreshGitStatus,
+            None,
+            "RefreshGitStatus",
+        );
     }
 
     /// Loads the project-scoped toggle that controls whether generated session
@@ -189,16 +210,54 @@ impl SessionTaskService {
         db: &AppRepositories,
         session_id: &str,
     ) -> bool {
-        let Some(project_id) = db.load_session_project_id(session_id).await.ok().flatten() else {
+        let project_id = match db.load_session_project_id(session_id).await {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to load session project while reading coauthor setting"
+                );
+
+                return false;
+            }
+        };
+        let Some(project_id) = project_id else {
             return false;
         };
 
-        db.get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
+        let persisted_value = match db
+            .get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
             .await
-            .ok()
-            .flatten()
-            .and_then(|setting_value| setting_value.parse::<bool>().ok())
-            .unwrap_or(false)
+        {
+            Ok(persisted_value) => persisted_value,
+            Err(error) => {
+                warn!(
+                    project_id,
+                    error = %error,
+                    "failed to load include-coauthored-by-agentty setting"
+                );
+
+                return false;
+            }
+        };
+        let Some(setting_value) = persisted_value else {
+            return false;
+        };
+
+        match setting_value.parse::<bool>() {
+            Ok(parsed_value) => parsed_value,
+            Err(error) => {
+                warn!(
+                    project_id,
+                    value = setting_value,
+                    error = %error,
+                    "failed to parse persisted include-coauthored-by-agentty setting"
+                );
+
+                false
+            }
+        }
     }
 
     /// Loads the model used by auto-commit utility prompts for one session.
@@ -211,7 +270,18 @@ impl SessionTaskService {
         session_id: &str,
         fallback_model: AgentModel,
     ) -> AgentModel {
-        let project_id = db.load_session_project_id(session_id).await.ok().flatten();
+        let project_id = match db.load_session_project_id(session_id).await {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to load session project while resolving auto-commit model"
+                );
+
+                return fallback_model;
+            }
+        };
 
         if let Some(model) =
             Self::load_project_model_setting(db, project_id, SettingName::DefaultFastModel).await
@@ -324,11 +394,35 @@ impl SessionTaskService {
     ) -> Option<AgentModel> {
         let project_id = project_id?;
 
-        db.get_project_setting(project_id, setting_name)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|setting_value| AgentModel::parse_persisted(&setting_value).ok())
+        let persisted_value = match db.get_project_setting(project_id, setting_name).await {
+            Ok(persisted_value) => persisted_value,
+            Err(error) => {
+                warn!(
+                    project_id,
+                    setting = ?setting_name,
+                    error = %error,
+                    "failed to load persisted agent model setting"
+                );
+
+                return None;
+            }
+        };
+        let setting_value = persisted_value?;
+
+        match AgentModel::parse_persisted(&setting_value) {
+            Ok(model) => Some(model),
+            Err(error) => {
+                warn!(
+                    project_id,
+                    setting = ?setting_name,
+                    value = setting_value,
+                    error = %error,
+                    "failed to parse persisted agent model setting"
+                );
+
+                None
+            }
+        }
     }
 
     async fn append_commit_assist_header(
@@ -676,12 +770,25 @@ impl SessionTaskService {
             Self::append_session_output(&output, &db, &app_event_tx, &id, &answer_text).await;
         }
 
-        // Best-effort: stats persistence failure is non-critical.
-        let _ = db.update_session_stats(&id, &assist_submission.stats).await;
-        // Best-effort: usage persistence failure is non-critical.
-        let _ = db
+        if let Err(error) = db.update_session_stats(&id, &assist_submission.stats).await {
+            warn!(
+                session_id = id,
+                error = %error,
+                "failed to persist session stats after utility prompt"
+            );
+        }
+
+        if let Err(error) = db
             .upsert_session_usage(&id, session_model.as_str(), &assist_submission.stats)
-            .await;
+            .await
+        {
+            warn!(
+                session_id = id,
+                model = %session_model.as_str(),
+                error = %error,
+                "failed to persist session usage after utility prompt"
+            );
+        }
 
         Ok(())
     }
@@ -749,16 +856,33 @@ impl SessionTaskService {
 
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
 
-        // Best-effort: status persistence failure is non-critical.
-        let _ = db
+        if let Err(error) = db
             .update_session_status_with_timing_at(id, &new.to_string(), timestamp_seconds)
-            .await;
+            .await
+        {
+            warn!(
+                session_id = id,
+                status = %new,
+                error = %error,
+                "failed to persist session status update"
+            );
+        }
         let session_id = SessionId::from(id);
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::SessionUpdated { session_id });
+
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionUpdated { session_id },
+            Some(id),
+            "SessionUpdated",
+        );
+
         if Self::status_requires_full_refresh(new) {
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = app_event_tx.send(AppEvent::RefreshSessions);
+            Self::send_app_event(
+                app_event_tx,
+                AppEvent::RefreshSessions,
+                Some(id),
+                "RefreshSessions",
+            );
         }
 
         true
@@ -772,15 +896,33 @@ impl SessionTaskService {
         id: &str,
         message: &str,
     ) {
-        if let Ok(mut buf) = output.lock() {
-            buf.push_str(message);
+        match output.lock() {
+            Ok(mut buf) => buf.push_str(message),
+            Err(error) => {
+                warn!(
+                    session_id = id,
+                    error = %error,
+                    "failed to lock session output buffer"
+                );
+            }
         }
-        // Best-effort: output persistence failure is non-critical.
-        let _ = db.append_session_output(id, message).await;
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::SessionUpdated {
-            session_id: SessionId::from(id),
-        });
+
+        if let Err(error) = db.append_session_output(id, message).await {
+            warn!(
+                session_id = id,
+                error = %error,
+                "failed to persist session output"
+            );
+        }
+
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionUpdated {
+                session_id: SessionId::from(id),
+            },
+            Some(id),
+            "SessionUpdated",
+        );
     }
 
     /// Clears the transient thinking message for one session.
@@ -794,11 +936,15 @@ impl SessionTaskService {
         id: &str,
         progress_message: Option<String>,
     ) {
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::SessionProgressUpdated {
-            progress_message,
-            session_id: SessionId::from(id),
-        });
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionProgressUpdated {
+                progress_message,
+                session_id: SessionId::from(id),
+            },
+            Some(id),
+            "SessionProgressUpdated",
+        );
     }
 
     fn status_requires_full_refresh(status: Status) -> bool {
@@ -806,6 +952,30 @@ impl SessionTaskService {
             status,
             Status::InProgress | Status::Review | Status::Merging | Status::Done | Status::Canceled
         )
+    }
+
+    /// Emits one app event and warns when the reducer side has already shut
+    /// down.
+    fn send_app_event(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        event: AppEvent,
+        session_id: Option<&str>,
+        event_name: &str,
+    ) {
+        if app_event_tx.send(event).is_err() {
+            if let Some(session_id) = session_id {
+                warn!(
+                    session_id = session_id,
+                    event = event_name,
+                    "failed to send app event because the receiver is closed"
+                );
+            } else {
+                warn!(
+                    event = event_name,
+                    "failed to send app event because the receiver is closed"
+                );
+            }
+        }
     }
 }
 

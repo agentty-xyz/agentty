@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use askama::Template;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use super::{SessionTaskService, session_branch};
 use crate::app::assist::{
@@ -501,8 +502,7 @@ impl SessionMergeService {
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         session_id: &str,
     ) {
-        // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
+        if !SessionTaskService::update_status(
             status,
             clock,
             db,
@@ -510,7 +510,13 @@ impl SessionMergeService {
             session_id,
             Status::Review,
         )
-        .await;
+        .await
+        {
+            warn!(
+                session_id = session_id,
+                "skipped restoring review status because the in-memory status was already current"
+            );
+        }
     }
 
     /// Rebases a reviewed session branch onto its base branch.
@@ -844,8 +850,7 @@ impl SessionManager {
                     &merge_error,
                 )
                 .await;
-                // Best-effort: status transition failure is non-critical.
-                let _ = SessionTaskService::update_status(
+                if !SessionTaskService::update_status(
                     status,
                     clock,
                     db,
@@ -853,7 +858,14 @@ impl SessionManager {
                     id,
                     Status::Review,
                 )
-                .await;
+                .await
+                {
+                    warn!(
+                        session_id = id,
+                        "skipped restoring review status after merge error because the in-memory \
+                         status was already current"
+                    );
+                }
             }
         }
     }
@@ -1127,8 +1139,13 @@ impl SessionManager {
     /// Aborts an in-progress sync rebase after assistance failure.
     async fn abort_sync_rebase_after_assist_failure(input: &SyncRebaseAssistInput) {
         let folder = input.folder.clone();
-        // Best-effort cleanup: rebase may have already completed or been aborted.
-        let _ = input.git_client.abort_rebase(folder).await;
+        if let Err(error) = input.git_client.abort_rebase(folder).await {
+            warn!(
+                base_branch = input.base_branch,
+                error = %error,
+                "failed to abort sync rebase after assistance failure"
+            );
+        }
     }
 
     async fn run_rebase_task(input: RebaseTaskInput) {
@@ -1323,10 +1340,15 @@ impl SessionManager {
             }
         }
 
-        // Best-effort: status transition failure is non-critical.
-        let _ =
-            SessionTaskService::update_status(status, clock, db, app_event_tx, id, Status::Review)
-                .await;
+        if !SessionTaskService::update_status(status, clock, db, app_event_tx, id, Status::Review)
+            .await
+        {
+            warn!(
+                session_id = id,
+                "skipped restoring review status after rebase because the in-memory status was \
+                 already current"
+            );
+        }
     }
 
     /// Starts a detached auto-push task when the rebased session has a
@@ -1351,11 +1373,20 @@ impl SessionManager {
 
         let sync_operation_id = uuid::Uuid::new_v4().to_string();
 
-        let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-            session_id: SessionId::from(session_id),
-            sync_operation_id: sync_operation_id.clone(),
-            sync_status: PublishedBranchSyncStatus::InProgress,
-        });
+        if app_event_tx
+            .send(AppEvent::PublishedBranchSyncUpdated {
+                session_id: SessionId::from(session_id),
+                sync_operation_id: sync_operation_id.clone(),
+                sync_status: PublishedBranchSyncStatus::InProgress,
+            })
+            .is_err()
+        {
+            warn!(
+                session_id = session_id,
+                sync_operation_id = sync_operation_id,
+                "failed to publish branch sync start because the app event receiver is closed"
+            );
+        }
 
         let app_event_tx = app_event_tx.clone();
         let db = db.clone();
@@ -1388,11 +1419,21 @@ impl SessionManager {
     ) {
         let title = Self::session_title_from_commit_message(commit_message);
 
-        // Best-effort: title persistence failure is non-critical.
-        let _ = db.update_session_title(session_id, &title).await;
+        if let Err(error) = db.update_session_title(session_id, &title).await {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to persist session title from commit message"
+            );
+        }
 
-        // Fire-and-forget: receiver may be dropped during shutdown.
-        let _ = app_event_tx.send(AppEvent::RefreshSessions);
+        if app_event_tx.send(AppEvent::RefreshSessions).is_err() {
+            warn!(
+                session_id = session_id,
+                "failed to refresh sessions after commit-title update because the app event \
+                 receiver is closed"
+            );
+        }
     }
 
     /// Updates the persisted done-session summary by formatting the latest
@@ -1411,8 +1452,13 @@ impl SessionManager {
             commit_message,
         );
 
-        // Best-effort: summary persistence failure is non-critical.
-        let _ = db.update_session_summary(session_id, &summary).await;
+        if let Err(error) = db.update_session_summary(session_id, &summary).await {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to persist done-session summary from commit message"
+            );
+        }
     }
 
     /// Loads the currently persisted session summary text for one session.
@@ -1864,8 +1910,13 @@ impl SessionManager {
     /// Aborts rebase after assistance fails to keep worktree state clean.
     async fn abort_rebase_after_assist_failure(input: &RebaseAssistInput) {
         let folder = input.folder.clone();
-        // Best-effort cleanup: rebase may have already completed or been aborted.
-        let _ = input.git_client.abort_rebase(folder).await;
+        if let Err(error) = input.git_client.abort_rebase(folder).await {
+            warn!(
+                session_id = %input.id,
+                error = %error,
+                "failed to abort rebase after assistance failure"
+            );
+        }
     }
 
     /// Removes a merged session worktree and deletes its source branch.
@@ -1893,8 +1944,12 @@ impl SessionManager {
             git_client.delete_branch(repo_root, source_branch).await?;
         }
 
-        // Best-effort cleanup: worktree directory may already be removed.
-        let _ = fs_client.remove_dir_all(folder).await;
+        if let Err(error) = fs_client.remove_dir_all(folder).await {
+            warn!(
+                error = %error,
+                "failed to remove merged session worktree directory"
+            );
+        }
 
         Ok(())
     }

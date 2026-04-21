@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout, Rect};
+use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash, review_loading_message};
 use crate::domain::session::SessionId;
@@ -400,9 +401,14 @@ async fn handle_cancel_session_confirmation(
 ) -> io::Result<EventResult> {
     app.mode = AppMode::List;
 
-    if let Some(session_id) = confirmation_session_id {
-        // Best-effort: cancellation failure is non-critical after user confirmation.
-        let _ = app.cancel_session(&session_id).await;
+    if let Some(session_id) = confirmation_session_id
+        && let Err(error) = app.cancel_session(&session_id).await
+    {
+        warn!(
+            session_id = %session_id,
+            error = %error,
+            "failed to cancel confirmed session"
+        );
     }
 
     Ok(EventResult::Continue)

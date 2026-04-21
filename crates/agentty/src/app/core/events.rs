@@ -539,11 +539,7 @@ impl App {
             self.apply_published_branch_sync_update(&session_id, sync_update);
         }
 
-        for session_id in &event_batch.session_ids {
-            self.sessions.sync_session_from_handle(session_id);
-        }
-        self.sessions
-            .clear_terminal_session_workers(&event_batch.session_ids);
+        self.sync_touched_sessions(&event_batch.session_ids);
 
         auto_start_reviews(
             &mut self.review_cache,
@@ -599,6 +595,16 @@ impl App {
         if let Some(update_status) = event_batch.update_status.clone() {
             self.update_status = Some(update_status);
         }
+    }
+
+    /// Synchronizes touched sessions from their runtime handles and drops
+    /// worker queues for sessions that reached a terminal status.
+    fn sync_touched_sessions(&mut self, session_ids: &HashSet<SessionId>) {
+        for session_id in session_ids {
+            self.sessions.sync_session_from_handle(session_id);
+        }
+
+        self.sessions.clear_terminal_session_workers(session_ids);
     }
 
     /// Returns status snapshots for sessions touched before applying a
