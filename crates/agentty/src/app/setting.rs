@@ -858,14 +858,12 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::db::Database;
+    use crate::db::AppRepositories;
     use crate::infra::{app_server, fs, git};
 
     /// Builds app services backed by an in-memory database for settings tests.
     async fn test_services() -> (AppServices, i64) {
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -880,7 +878,7 @@ mod tests {
                 available_agent_kinds: AgentKind::ALL.to_vec(),
                 fs_client: Arc::new(fs::MockFsClient::new()),
                 git_client: Arc::new(git::MockGitClient::new()),
-                repositories: crate::db::AppRepositories::from_database(&database),
+                repositories: database.clone(),
                 review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
             },
         );

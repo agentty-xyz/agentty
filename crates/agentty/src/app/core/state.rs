@@ -1346,7 +1346,7 @@ mod tests {
     };
     use crate::domain::setting::SettingName;
     use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
-    use crate::infra::db::Database;
+    use crate::infra::db::AppRepositories;
     use crate::infra::file_index::FileEntry;
     use crate::infra::project_discovery::{
         HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient,
@@ -1457,9 +1457,7 @@ mod tests {
     async fn new_test_app_with_tmux_client(tmux_client: Arc<dyn TmuxClient>) -> App {
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let clients = test_app_clients()
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(tmux_client);
@@ -1478,9 +1476,7 @@ mod tests {
     /// Builds a test app rooted at `working_dir` with one injected filesystem
     /// boundary.
     async fn app_with_fs_client(working_dir: PathBuf, fs_client: Arc<dyn FsClient>) -> App {
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let clients = test_app_clients()
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()))
@@ -1496,9 +1492,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let clients = test_app_clients_with_available_agent_kinds(Vec::new())
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -1572,9 +1566,7 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let second_project_dir = tempdir().expect("failed to create second temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let first_project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
@@ -1644,9 +1636,7 @@ mod tests {
             .await
             .expect("failed to create roadmap file");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let first_project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
@@ -1692,9 +1682,7 @@ mod tests {
         let second_project_dir = tempdir().expect("failed to create second temp dir");
         let base_path = base_dir.path().to_path_buf();
         let second_project_path = second_project_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let first_project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
@@ -1756,9 +1744,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
@@ -1813,11 +1799,9 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
         sqlx::query("DROP TABLE project")
-            .execute(database.pool())
+            .execute(&pool)
             .await
             .expect("failed to drop project table");
 
@@ -1846,11 +1830,9 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let (database, pool) = AppRepositories::in_memory_with_pool().await;
         sqlx::query("DROP TABLE setting")
-            .execute(database.pool())
+            .execute(&pool)
             .await
             .expect("failed to drop setting table");
 
@@ -1884,9 +1866,7 @@ mod tests {
         fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
         fs::create_dir_all(&current_project_path).expect("failed to create current project");
         let missing_project_path = temp_dir.path().join("missing-project");
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let current_project_id = database
             .upsert_project(&current_project_path.to_string_lossy(), Some("main"))
             .await
@@ -2120,15 +2100,13 @@ mod tests {
                 })
             });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let database = crate::infra::db::Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = crate::infra::db::AppRepositories::in_memory().await;
 
         // Act
         let result = push_session_branch(
             PublishBranchAction::Push,
             &branch_session,
-            database.into(),
+            database,
             git_client,
             None,
         )
@@ -2159,15 +2137,13 @@ mod tests {
             .once()
             .returning(|_, _| Box::pin(async { Ok(true) }));
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let database = crate::infra::db::Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = crate::infra::db::AppRepositories::in_memory().await;
 
         // Act
         let result = push_session_branch(
             PublishBranchAction::Push,
             &branch_session,
-            database.into(),
+            database,
             git_client,
             Some("feature/existing"),
         )
@@ -2200,15 +2176,13 @@ mod tests {
                 })
             });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let database = crate::infra::db::Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = crate::infra::db::AppRepositories::in_memory().await;
 
         // Act
         let result = push_session_branch(
             PublishBranchAction::Push,
             &branch_session,
-            database.into(),
+            database,
             git_client,
             Some("feature/new"),
         )
@@ -2293,15 +2267,13 @@ mod tests {
                 Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
             });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let database = crate::infra::db::Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = crate::infra::db::AppRepositories::in_memory().await;
 
         // Act
         let result = push_session_branch(
             PublishBranchAction::Push,
             &branch_session,
-            database.clone().into(),
+            database.clone(),
             git_client,
             Some("review/custom-branch"),
         )
@@ -2343,15 +2315,13 @@ mod tests {
                 Box::pin(async { Ok("https://example.com/team/project.git".to_string()) })
             });
         let git_client: Arc<dyn crate::infra::git::GitClient> = Arc::new(mock_git_client);
-        let database = crate::infra::db::Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = crate::infra::db::AppRepositories::in_memory().await;
 
         // Act
         let result = push_session_branch(
             PublishBranchAction::Push,
             &branch_session,
-            database.into(),
+            database,
             git_client,
             None,
         )
@@ -3257,9 +3227,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let clients = test_app_clients()
             .with_app_server_client_override(mock_app_server())
             .with_tmux_client(Arc::new(MockTmuxClient::new()));
@@ -3862,9 +3830,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
@@ -4262,9 +4228,7 @@ mod tests {
         let current_project_dir = tempdir().expect("failed to create current project dir");
         let current_project_path = current_project_dir.path().to_path_buf();
         let missing_project_path = current_project_path.join("removed-project");
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let current_project_id = database
             .upsert_project(&current_project_path.to_string_lossy(), Some("main"))
             .await
@@ -4298,9 +4262,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
@@ -4362,9 +4324,7 @@ mod tests {
     /// discover repositories implicitly.
     async fn load_project_items_uses_persisted_rows_without_home_scan() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let home_directory = tempdir().expect("failed to create temp dir");
         let discovered_repo = home_directory.path().join("agentty");
         create_git_repo_marker(discovered_repo.as_path());
@@ -4395,9 +4355,7 @@ mod tests {
     /// the first project list load.
     async fn refresh_project_catalog_on_startup_discovers_home_directory_repositories() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let home_directory = tempdir().expect("failed to create temp dir");
         let discovered_repo = home_directory.path().join("agentty");
         create_git_repo_marker(discovered_repo.as_path());

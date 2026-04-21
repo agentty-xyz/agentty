@@ -11,8 +11,6 @@ use crate::domain::session::{
     SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::infra::agent::protocol::QuestionItem;
-#[cfg(test)]
-use crate::infra::db::Database;
 use crate::infra::db::{AppRepositories, SessionRow};
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
@@ -366,9 +364,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_preserves_live_handle_output_and_status() {
         // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/test", None)
             .await
@@ -437,9 +433,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_reports_worktree_availability() {
         // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/test", None)
             .await
@@ -496,9 +490,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_reads_persisted_summary_for_active_session() {
         // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/test", None)
             .await
@@ -552,9 +544,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_terminal_db_status_overrides_handle_status() {
         // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/test", None)
             .await
@@ -611,9 +601,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_sessions_maps_review_request_metadata() {
         // Arrange
-        let db = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/test", None)
             .await

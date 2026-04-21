@@ -22,8 +22,6 @@ use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
 use crate::infra::agent;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::AppRepositories;
-#[cfg(test)]
-use crate::infra::db::Database;
 use crate::infra::fs::{self as fs, FsClient};
 use crate::infra::git::{self as git, GitClient};
 
@@ -1962,7 +1960,7 @@ mod tests {
         git_client: Arc<dyn GitClient>,
     ) -> (TempDir, RebaseAssistInput) {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let folder = temp_dir.path().to_path_buf();
 
@@ -1972,7 +1970,7 @@ mod tests {
                 app_event_tx,
                 base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
-                db: AppRepositories::from_database(&db),
+                db,
                 folder,
                 fs_client: test_fs_client(),
                 git_client,
@@ -1989,7 +1987,7 @@ mod tests {
         git_client: Arc<dyn GitClient>,
     ) -> (TempDir, MergeTaskInput) {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let folder = temp_dir.path().join("session-worktree");
         let repo_root = temp_dir.path().join("repo-root");
@@ -2001,7 +1999,7 @@ mod tests {
                 base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
                 clock: Arc::new(crate::app::session::RealClock),
-                db: AppRepositories::from_database(&db),
+                db,
                 folder,
                 fs_client: test_fs_client(),
                 git_client,
@@ -2194,9 +2192,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_session_title_from_commit_message_preserves_existing_summary() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2247,9 +2243,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_done_session_summary_from_commit_message_appends_commit_message() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2423,13 +2417,13 @@ mod tests {
     async fn test_rebase_assist_input_clone() {
         // Arrange
         let (tx, _rx) = mpsc::unbounded_channel();
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let input = RebaseAssistInput {
             app_event_tx: tx,
             base_branch: "main".to_string(),
             child_pid: Arc::new(Mutex::new(None)),
-            db: AppRepositories::from_database(&db),
+            db,
             folder: temp_dir.path().to_path_buf(),
             fs_client: test_fs_client(),
             git_client: Arc::new(git::RealGitClient),
@@ -3272,7 +3266,7 @@ mod tests {
     /// upstream branch.
     async fn test_finalize_rebase_task_triggers_auto_push_for_published_branch() {
         // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -3355,7 +3349,7 @@ mod tests {
     /// session has no published upstream branch.
     async fn test_finalize_rebase_task_skips_auto_push_without_published_branch() {
         // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await

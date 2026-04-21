@@ -925,6 +925,7 @@ fn truncate_session_diff_for_commit_message(diff: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::Mutex as StdMutex;
@@ -932,7 +933,7 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime};
 
     use super::*;
-    use crate::db::Database;
+    use crate::db::AppRepositories;
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::channel::AgentRequestKind;
     use crate::infra::git::{GitError, MockGitClient};
@@ -990,7 +991,7 @@ mod tests {
     }
 
     /// Inserts one review session used by assist-task tests.
-    async fn insert_review_session(database: &Database, model: &str) {
+    async fn insert_review_session(database: &AppRepositories, model: &str) {
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -1026,9 +1027,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_status_accumulates_repeated_in_progress_intervals() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -1335,9 +1334,10 @@ mod tests {
     /// Verifies diff truncation removes middle content and adds a marker.
     fn test_truncate_session_commit_diff_preserves_edge_content() {
         // Arrange
-        let diff = (0..SESSION_COMMIT_DIFF_TRUNCATION_LIMIT + 1)
-            .map(|index| format!("file {index}\n"))
-            .collect::<String>();
+        let mut diff = String::new();
+        for index in 0..=SESSION_COMMIT_DIFF_TRUNCATION_LIMIT {
+            writeln!(&mut diff, "file {index}").expect("writing to string should succeed");
+        }
 
         // Act
         let truncated =
@@ -1427,16 +1427,14 @@ mod tests {
             .returning(|_| {
                 Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) })
             });
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            db: AppRepositories::from_database(&database),
+            db: database.clone(),
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
@@ -1465,16 +1463,14 @@ mod tests {
             .expect_is_worktree_clean()
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>(true) }));
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            db: AppRepositories::from_database(&database),
+            db: database.clone(),
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
@@ -1498,9 +1494,7 @@ mod tests {
     /// project has not persisted a value yet.
     async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
 
         // Act
@@ -1517,9 +1511,7 @@ mod tests {
     /// stored value cannot be parsed as a boolean.
     async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let project_id = database
             .load_session_project_id("session-id")
@@ -1576,9 +1568,7 @@ mod tests {
             .expect_head_short_hash()
             .times(1)
             .returning(|_| Box::pin(async { Ok::<_, GitError>("abc1234".to_string()) }));
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
@@ -1590,7 +1580,7 @@ mod tests {
         let context = AssistContext {
             app_event_tx,
             child_pid: Arc::new(Mutex::new(None)),
-            db: AppRepositories::from_database(&database),
+            db: database.clone(),
             folder: PathBuf::from("/tmp/project"),
             git_client: Arc::new(mock_git_client),
             id: "session-id".to_string(),
@@ -1625,9 +1615,7 @@ mod tests {
     /// fallback settings.
     async fn test_load_auto_commit_model_setting_prefers_project_fast_model() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let project_id = database
             .load_session_project_id("session-id")
@@ -1668,9 +1656,7 @@ mod tests {
     /// when the fast-model setting is absent.
     async fn test_load_auto_commit_model_setting_falls_back_through_defaults() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let project_id = database
             .load_session_project_id("session-id")
@@ -1720,9 +1706,7 @@ mod tests {
     /// before persistence and session usage updates.
     async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::ClaudeOpus47.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
@@ -1748,7 +1732,7 @@ mod tests {
             RunAgentAssistTaskInput {
                 app_event_tx,
                 child_pid: Arc::clone(&child_pid),
-                db: AppRepositories::from_database(&database),
+                db: database.clone(),
                 folder: temp_dir.path().to_path_buf(),
                 id: "session-id".to_string(),
                 output: Arc::clone(&output),
@@ -1782,9 +1766,7 @@ mod tests {
     /// original parse and the protocol-repair retry fail.
     async fn test_run_agent_assist_task_rejects_plain_text_output() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::ClaudeOpus47.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
@@ -1811,7 +1793,7 @@ mod tests {
             RunAgentAssistTaskInput {
                 app_event_tx,
                 child_pid: Arc::new(Mutex::new(None)),
-                db: AppRepositories::from_database(&database),
+                db: database.clone(),
                 folder: temp_dir.path().to_path_buf(),
                 id: "session-id".to_string(),
                 output: Arc::clone(&output),
@@ -1845,9 +1827,7 @@ mod tests {
     /// error details.
     async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::ClaudeOpus47.as_str()).await;
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -1862,7 +1842,7 @@ mod tests {
             RunAgentAssistTaskInput {
                 app_event_tx,
                 child_pid: Arc::new(Mutex::new(None)),
-                db: AppRepositories::from_database(&database),
+                db: database.clone(),
                 folder: temp_dir.path().to_path_buf(),
                 id: "session-id".to_string(),
                 output: Arc::new(Mutex::new(String::new())),

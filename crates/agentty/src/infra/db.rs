@@ -109,11 +109,6 @@ impl AppRepositories {
     }
 
     /// Creates a repository bundle backed by one shared `SQLite` pool.
-    pub(crate) fn from_database(database: &Database) -> Self {
-        Self::from_pool(database.pool().clone())
-    }
-
-    /// Creates a repository bundle backed by one shared `SQLite` pool.
     pub(crate) fn from_pool(pool: SqlitePool) -> Self {
         Self::new(
             Arc::new(SqliteActivityRepository::new(pool.clone())),
@@ -124,6 +119,32 @@ impl AppRepositories {
             Arc::new(SqliteSettingRepository::new(pool.clone())),
             Arc::new(SqliteUsageRepository::new(pool)),
         )
+    }
+
+    /// Opens an isolated in-memory repository bundle for tests.
+    #[cfg(test)]
+    pub(crate) async fn in_memory() -> Self {
+        let (repositories, _pool) = Self::in_memory_with_pool().await;
+
+        repositories
+    }
+
+    /// Opens an isolated in-memory repository bundle plus its shared
+    /// `SQLite` pool for tests that need raw SQL setup.
+    #[cfg(test)]
+    pub(crate) async fn in_memory_with_pool() -> (Self, SqlitePool) {
+        Self::from_new_in_memory_pool().await
+    }
+
+    /// Opens an isolated in-memory repository bundle plus its shared
+    /// `SQLite` pool without depending on `Database`.
+    #[cfg(test)]
+    pub(crate) async fn from_new_in_memory_pool() -> (Self, SqlitePool) {
+        let pool = open_in_memory_pool(1)
+            .await
+            .expect("failed to open in-memory db");
+
+        (Self::from_pool(pool.clone()), pool)
     }
 
     /// Loads aggregated session-creation activity counts keyed by local day.
@@ -808,18 +829,7 @@ impl Database {
     /// # Errors
     /// Returns an error if the database connection or migrations fail.
     pub async fn open_in_memory() -> Result<Self, DbError> {
-        let options = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
-            .foreign_keys(true);
-
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await?;
-
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        let pool = open_in_memory_pool(1).await?;
 
         let repositories = AppRepositories::from_pool(pool.clone());
 
@@ -845,6 +855,30 @@ impl From<Database> for AppRepositories {
     fn from(database: Database) -> Self {
         database.repositories
     }
+}
+
+/// Opens an in-memory `SQLite` pool with migrations applied.
+///
+/// The caller chooses the connection cap so tests and runtime code can share
+/// the same setup logic while keeping their own concurrency requirements.
+///
+/// # Errors
+/// Returns an error if the in-memory database connection or migrations fail.
+async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePool, DbError> {
+    let options = SqliteConnectOptions::new()
+        .filename(":memory:")
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .foreign_keys(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .connect_with(options)
+        .await?;
+
+    sqlx::migrate!("./migrations").run(&pool).await?;
+
+    Ok(pool)
 }
 
 /// Returns the current Unix timestamp in whole seconds.

@@ -1218,7 +1218,7 @@ mod tests {
     use crate::infra::agent::AgentResponse;
     use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
     use crate::infra::channel::MockAgentChannel;
-    use crate::infra::db::Database;
+    use crate::infra::db::AppRepositories;
     use crate::infra::fs;
     use crate::infra::git::MockGitClient;
 
@@ -1433,7 +1433,7 @@ mod tests {
     async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -1477,7 +1477,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
@@ -1527,7 +1527,7 @@ mod tests {
         // cancellation. `run_channel_turn` swaps in a fresh token so the
         // stale cancellation is discarded.
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -1579,7 +1579,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
@@ -1635,9 +1635,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(
-                &Database::open_in_memory().await.expect("failed to open db"),
-            ),
+            db: AppRepositories::in_memory().await,
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -1701,9 +1699,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(
-                &Database::open_in_memory().await.expect("failed to open db"),
-            ),
+            db: AppRepositories::in_memory().await,
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -1764,9 +1760,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(Some(child_pid))),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(
-                &Database::open_in_memory().await.expect("failed to open db"),
-            ),
+            db: AppRepositories::in_memory().await,
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -1802,9 +1796,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(
-                &Database::open_in_memory().await.expect("failed to open db"),
-            ),
+            db: AppRepositories::in_memory().await,
             folder: std::env::temp_dir(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -1864,7 +1856,7 @@ mod tests {
     async fn test_apply_turn_result_persists_summary_to_database() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -1890,7 +1882,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
@@ -1949,7 +1941,7 @@ mod tests {
     async fn test_apply_turn_result_starts_background_push_for_published_branch() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -1982,7 +1974,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().join("sess1"),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
@@ -2044,7 +2036,7 @@ mod tests {
     async fn test_apply_turn_result_reports_background_push_failures() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2084,7 +2076,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().join("sess1"),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
@@ -2146,7 +2138,7 @@ mod tests {
     async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2170,7 +2162,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -2232,7 +2224,7 @@ mod tests {
     async fn test_apply_turn_result_keeps_summary_out_of_transcript_output() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2259,7 +2251,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
@@ -2307,7 +2299,7 @@ mod tests {
     async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_server_turns() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2327,7 +2319,7 @@ mod tests {
             channel: Arc::new(MockAgentChannel::new()),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
@@ -2373,7 +2365,7 @@ mod tests {
     /// restores affected sessions to `Review`.
     async fn test_fail_unfinished_operations_from_previous_run_restores_session_review_status() {
         // Arrange
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2416,7 +2408,7 @@ mod tests {
     async fn test_should_skip_worker_command_without_cancel_request() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2445,7 +2437,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -2472,7 +2464,7 @@ mod tests {
     async fn test_should_skip_worker_command_when_cancel_is_requested() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2504,7 +2496,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
@@ -2532,7 +2524,7 @@ mod tests {
     async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
-        let db = Database::open_in_memory().await.expect("failed to open db");
+        let db = AppRepositories::in_memory().await;
         let project_id = db
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2575,7 +2567,7 @@ mod tests {
             channel: Arc::new(mock_channel),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::app::session::RealClock),
-            db: AppRepositories::from_database(&db),
+            db: db.clone(),
             folder: base_dir.path().to_path_buf(),
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),

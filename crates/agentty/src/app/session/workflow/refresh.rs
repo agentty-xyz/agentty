@@ -312,7 +312,7 @@ mod tests {
         ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
         SessionHandles, SessionSize, SessionStats, Status,
     };
-    use crate::infra::db::Database;
+    use crate::infra::db::AppRepositories;
     use crate::infra::{app_server, fs, git};
 
     /// Builds one mock app-server client wrapped in `Arc` for service
@@ -351,10 +351,8 @@ mod tests {
     }
 
     /// Persists one session row that matches the in-memory fixture.
-    async fn database_with_session(session: &Session) -> Database {
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+    async fn database_with_session(session: &Session) -> AppRepositories {
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -381,7 +379,7 @@ mod tests {
 
     /// Builds app services with caller-provided git and forge boundaries.
     fn test_services(
-        database: &Database,
+        database: &AppRepositories,
         git_client: Arc<dyn git::GitClient>,
         review_request_client: Arc<dyn forge::ReviewRequestClient>,
     ) -> AppServices {
@@ -396,7 +394,7 @@ mod tests {
                 available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 git_client,
-                repositories: crate::db::AppRepositories::from_database(database),
+                repositories: database.clone(),
                 review_request_client,
             },
         )
@@ -597,8 +595,8 @@ mod tests {
     /// Test fixture for refreshing a stored review request after its worktree
     /// has been deleted.
     struct MissingWorktreeReviewRefreshFixture {
-        /// Database containing the linked review request session.
-        database: Database,
+        /// Repository bundle containing the linked review request session.
+        database: AppRepositories,
         /// App services wired with git and forge mocks.
         services: AppServices,
         /// Session manager seeded with the linked session.
@@ -764,9 +762,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_sessions_if_needed_skips_db_call_before_deadline_and_preserves_deadline() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let now = Instant::now();
         let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
         let clock: Arc<dyn Clock> = fake_clock;
@@ -796,9 +792,7 @@ mod tests {
     async fn refresh_sessions_if_needed_advances_deadline_and_skips_reload_when_metadata_unchanged()
     {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+        let database = AppRepositories::in_memory().await;
         let now = Instant::now();
         let fake_clock = Arc::new(FakeClock::new(now, SystemTime::UNIX_EPOCH));
         let clock: Arc<dyn Clock> = fake_clock.clone();

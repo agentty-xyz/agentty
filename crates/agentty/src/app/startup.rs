@@ -15,8 +15,6 @@ use crate::app::{AppError, ProjectManager, session};
 use crate::domain::agent::{AgentKind, AgentModel};
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::infra::db::AppRepositories;
-#[cfg(test)]
-use crate::infra::db::Database;
 use crate::infra::fs::FsClient;
 use crate::infra::git::{GitClient, detect_git_info};
 use crate::infra::project_discovery::ProjectDiscoveryClient;
@@ -534,9 +532,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_startup_active_project_id_prefers_existing_stored_project() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory database");
+        let database = AppRepositories::in_memory().await;
         let current_project_path = PathBuf::from("/workspace/current");
         let stored_project_path = PathBuf::from("/workspace/stored");
         let current_project_id = database
@@ -573,9 +569,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_startup_active_project_id_falls_back_for_missing_stored_project() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory database");
+        let database = AppRepositories::in_memory().await;
         let current_project_path = PathBuf::from("/workspace/current");
         let missing_project_path = PathBuf::from("/workspace/missing");
         let current_project_id = database
@@ -637,9 +631,7 @@ mod tests {
     #[tokio::test]
     async fn load_project_items_with_session_worktree_root_filters_database_rows() {
         // Arrange
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory database");
+        let database = AppRepositories::in_memory().await;
         let visible_project_path = PathBuf::from("/workspace/visible");
         let session_worktree_root = Path::new("/workspace/.agentty/wt");
         let worktree_project_path = session_worktree_root.join("session-a");

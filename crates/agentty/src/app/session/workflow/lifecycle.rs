@@ -2155,7 +2155,7 @@ mod tests {
         SessionStats,
     };
     use crate::infra::channel::TurnPromptAttachment;
-    use crate::infra::db::{self, Database};
+    use crate::infra::db::{self, AppRepositories};
     use crate::infra::{app_server, fs};
 
     /// Builds a session manager with one session for reply-context tests.
@@ -2255,10 +2255,8 @@ mod tests {
     }
 
     /// Persists one session row that matches the in-memory fixture.
-    async fn database_with_session(session: &Session) -> Database {
-        let database = Database::open_in_memory()
-            .await
-            .expect("failed to open in-memory db");
+    async fn database_with_session(session: &Session) -> AppRepositories {
+        let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project("/tmp/project", Some("main"))
             .await
@@ -2309,7 +2307,7 @@ mod tests {
     /// Builds app services with caller-provided filesystem, git, and forge
     /// boundaries.
     fn test_services_with_fs_client(
-        database: &Database,
+        database: &AppRepositories,
         fs_client: Arc<dyn fs::FsClient>,
         git_client: Arc<dyn git::GitClient>,
         review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -2325,7 +2323,7 @@ mod tests {
                 fs_client,
                 available_agent_kinds: AgentKind::ALL.to_vec(),
                 git_client,
-                repositories: crate::db::AppRepositories::from_database(database),
+                repositories: database.clone(),
                 review_request_client,
             },
         )
@@ -2333,7 +2331,7 @@ mod tests {
 
     /// Builds app services with caller-provided git and forge boundaries.
     fn test_services(
-        database: &Database,
+        database: &AppRepositories,
         git_client: Arc<dyn git::GitClient>,
         review_request_client: Arc<dyn forge::ReviewRequestClient>,
     ) -> AppServices {
@@ -2348,7 +2346,7 @@ mod tests {
     /// Builds app services plus an event receiver for reducer-event
     /// assertions.
     fn test_services_with_event_receiver(
-        database: &Database,
+        database: &AppRepositories,
         git_client: Arc<dyn git::GitClient>,
         review_request_client: Arc<dyn forge::ReviewRequestClient>,
     ) -> (AppServices, mpsc::UnboundedReceiver<AppEvent>) {
@@ -2362,7 +2360,7 @@ mod tests {
                 fs_client: Arc::new(create_passthrough_mock_fs_client()),
                 available_agent_kinds: AgentKind::ALL.to_vec(),
                 git_client,
-                repositories: crate::db::AppRepositories::from_database(database),
+                repositories: database.clone(),
                 review_request_client,
             },
         );
@@ -2421,7 +2419,7 @@ mod tests {
     }
 
     /// Loads the persisted session row used by workflow assertions.
-    async fn load_persisted_session_row(database: &Database) -> db::SessionRow {
+    async fn load_persisted_session_row(database: &AppRepositories) -> db::SessionRow {
         database
             .load_sessions()
             .await

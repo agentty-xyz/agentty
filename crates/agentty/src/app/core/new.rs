@@ -14,7 +14,7 @@ use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadC
 use crate::app::{AppError, session, task};
 use crate::domain::agent::AgentKind;
 use crate::infra::db;
-use crate::infra::db::{AppRepositories, Database};
+use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 #[cfg(test)]
@@ -35,11 +35,19 @@ impl App {
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
-        db: Database,
+        repositories: impl Into<AppRepositories>,
     ) -> Result<Self, AppError> {
         let clients = AppClients::new();
 
-        Self::new_with_options(auto_update, base_path, working_dir, git_branch, db, clients).await
+        Self::new_with_options(
+            auto_update,
+            base_path,
+            working_dir,
+            git_branch,
+            repositories,
+            clients,
+        )
+        .await
     }
 
     /// Builds app state from persisted data with explicit external clients.
@@ -55,10 +63,18 @@ impl App {
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
-        db: Database,
+        repositories: impl Into<AppRepositories>,
         clients: AppClients,
     ) -> Result<Self, AppError> {
-        Self::new_with_options(false, base_path, working_dir, git_branch, db, clients).await
+        Self::new_with_options(
+            false,
+            base_path,
+            working_dir,
+            git_branch,
+            repositories,
+            clients,
+        )
+        .await
     }
 
     /// Core constructor with all options explicit.
@@ -71,12 +87,17 @@ impl App {
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
-        db: Database,
+        repositories: impl Into<AppRepositories>,
         clients: AppClients,
     ) -> Result<Self, AppError> {
-        let (repositories, startup_project_context) =
-            Self::load_startup_project_state(working_dir.as_path(), git_branch, &db, &clients)
-                .await?;
+        let repositories = repositories.into();
+        let startup_project_context = Self::load_startup_project_state(
+            working_dir.as_path(),
+            git_branch,
+            &repositories,
+            &clients,
+        )
+        .await?;
         let StartupProjectContext {
             active_project_id,
             active_project_name,
@@ -164,15 +185,14 @@ impl App {
     async fn load_startup_project_state(
         working_dir: &Path,
         git_branch: Option<String>,
-        db: &Database,
+        repositories: &AppRepositories,
         clients: &AppClients,
-    ) -> Result<(AppRepositories, StartupProjectContext), AppError> {
-        let repositories = AppRepositories::from_database(db);
+    ) -> Result<StartupProjectContext, AppError> {
         let current_project_id =
-            AppStartup::persist_startup_project(&repositories, working_dir, git_branch.as_deref())
+            AppStartup::persist_startup_project(repositories, working_dir, git_branch.as_deref())
                 .await?;
         let startup_project_context = AppStartup::load_startup_project_context(
-            &repositories,
+            repositories,
             clients.fs_client.as_ref(),
             &clients.git_client,
             clients.project_discovery_client.as_ref(),
@@ -182,7 +202,7 @@ impl App {
         )
         .await?;
 
-        Ok((repositories, startup_project_context))
+        Ok(startup_project_context)
     }
 
     /// Builds the shared app services after validating startup agent
