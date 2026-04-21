@@ -223,6 +223,33 @@ fn render_protocol_refresh_instructions(
     }
 }
 
+/// Builds a Markdown code-fence delimiter long enough to safely wrap an
+/// arbitrary diff payload.
+///
+/// Returns a string of backticks whose length exceeds the longest run of
+/// consecutive backticks found anywhere in `content`, with a minimum length
+/// of three. This prevents a triple-backtick fence from being terminated
+/// prematurely when the diff itself contains Markdown fences (for example,
+/// when reviewing changes to Markdown or prompt-template files).
+pub(crate) fn diff_fence(content: &str) -> String {
+    let mut max_run = 0usize;
+    let mut current_run = 0usize;
+    for character in content.chars() {
+        if character == '`' {
+            current_run += 1;
+            if current_run > max_run {
+                max_run = current_run;
+            }
+        } else {
+            current_run = 0;
+        }
+    }
+
+    let fence_length = std::cmp::max(3, max_run + 1);
+
+    "`".repeat(fence_length)
+}
+
 /// Renders one Askama markdown template and trims the trailing newline added
 /// by file-based templates.
 fn render_template(
@@ -239,6 +266,49 @@ fn render_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Ensures the diff fence falls back to three backticks when the content
+    /// contains no backtick runs.
+    fn test_diff_fence_returns_minimum_three_backticks_for_plain_diff() {
+        // Arrange
+        let diff = "diff --git a/a.rs b/a.rs\n+fn main() {}\n";
+
+        // Act
+        let fence = diff_fence(diff);
+
+        // Assert
+        assert_eq!(fence, "```");
+    }
+
+    #[test]
+    /// Ensures the diff fence grows to exceed the longest backtick run in the
+    /// diff so a Markdown triple-backtick fence inside the diff cannot
+    /// terminate the outer wrapper fence.
+    fn test_diff_fence_exceeds_longest_backtick_run_in_diff() {
+        // Arrange
+        let diff = "+```\nsample\n+```\n";
+
+        // Act
+        let fence = diff_fence(diff);
+
+        // Assert
+        assert_eq!(fence, "````");
+    }
+
+    #[test]
+    /// Ensures longer backtick runs keep producing a strictly longer fence so
+    /// nested or unusually long code fences in the diff stay contained.
+    fn test_diff_fence_handles_long_backtick_runs() {
+        // Arrange
+        let diff = "prefix `````diff\ncontent\n`````\n";
+
+        // Act
+        let fence = diff_fence(diff);
+
+        // Assert
+        assert_eq!(fence, "``````");
+    }
 
     #[test]
     /// Ensures resume prompt rendering includes trimmed session output and

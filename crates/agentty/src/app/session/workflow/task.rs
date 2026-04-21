@@ -48,6 +48,7 @@ struct AutoCommitAssistPromptTemplate<'a> {
 struct SessionCommitMessagePromptTemplate<'a> {
     current_commit_message: &'a str,
     diff: &'a str,
+    diff_fence: &'a str,
 }
 
 /// Stateless helpers for session process execution and output handling.
@@ -494,9 +495,11 @@ impl SessionTaskService {
     ) -> Result<String, SessionError> {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
+        let fence = agent::diff_fence(diff);
         let template = SessionCommitMessagePromptTemplate {
             current_commit_message: stripped_current_commit_message.trim(),
             diff,
+            diff_fence: &fence,
         };
 
         template.render().map_err(|error| {
@@ -1322,6 +1325,47 @@ mod tests {
         assert!(prompt.contains("required protocol JSON object"));
         assert!(!prompt.contains("Return one plain-text commit message"));
         assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
+        let fenced_diff = format!("```diff\n{diff}\n```");
+        assert!(
+            prompt.contains(&fenced_diff),
+            "commit-message prompt must wrap the diff in a ```diff``` fence so `@`-prefixed \
+             decorator tokens are not misread as file mentions"
+        );
+    }
+
+    #[test]
+    /// Ensures the commit-message prompt escapes a triple-backtick fence that
+    /// appears inside the diff itself (for example when committing changes to
+    /// a Markdown or prompt-template file) by widening the outer fence so it
+    /// cannot be terminated by the diff content.
+    fn test_session_commit_message_prompt_escapes_triple_backtick_fence_in_diff() {
+        // Arrange
+        let diff = concat!(
+            "diff --git a/a.md b/a.md\n",
+            "+```\n",
+            "+example fenced block\n",
+            "+```\n",
+        );
+        let current_commit_message: Option<&str> = None;
+
+        // Act
+        let prompt =
+            SessionTaskService::session_commit_message_prompt(diff, current_commit_message)
+                .expect("prompt should render");
+
+        // Assert
+        assert!(
+            prompt.contains("````diff\n"),
+            "outer fence must be longer than the longest backtick run in the diff to preserve \
+             prompt boundaries"
+        );
+        let matches = prompt.matches("\n````").count();
+        assert!(
+            matches >= 2,
+            "prompt must contain an opening and closing 4-backtick fence, got {matches} \
+             occurrences"
+        );
+        assert!(prompt.contains("+```\n"));
     }
 
     #[test]

@@ -28,7 +28,7 @@ pub(crate) use instruction::{
     InstructionDeliveryMode, normalize_instruction_conversation_id,
     plan_app_server_instruction_delivery,
 };
-pub(crate) use prompt::{PromptPreparationRequest, prepare_prompt_text};
+pub(crate) use prompt::{PromptPreparationRequest, diff_fence, prepare_prompt_text};
 pub(crate) use protocol::AgentResponse;
 pub use protocol::ProtocolRequestProfile;
 pub(crate) use provider::{

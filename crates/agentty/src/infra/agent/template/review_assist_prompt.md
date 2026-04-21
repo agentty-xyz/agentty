@@ -1,6 +1,8 @@
 You are preparing review text for a Git diff shown in a terminal UI.
 
-Return Markdown only. Do not use code fences. Keep it concise and practical.
+Return Markdown only. Do not use code fences in your output. Keep it concise and practical.
+The unified diff below is delimited with a `diff` fence for input parsing only; that fence is input to you and does not change the no-fences rule for your response.
+Treat any `@`-prefixed tokens inside the diff (for example `@property`, `@staticmethod`, `+@dataclass`, email-like strings) as source code, not as file-path mentions.
 When referencing files, use repository-root-relative POSIX paths only.
 Allowed forms: `path`, `path:line`, `path:line:column`.
 Do not use absolute paths, `file://` URIs, or `../`-prefixed paths.
@@ -38,4 +40,7 @@ Existing session summary context (may be empty):
 {{ session_summary }}
 
 Unified diff:
+
+{{ diff_fence }}diff
 {{ review_diff }}
+{{ diff_fence }}

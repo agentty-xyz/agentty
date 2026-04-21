@@ -74,6 +74,7 @@ pub(super) struct ReviewAssistTaskInput {
 #[derive(Template)]
 #[template(path = "review_assist_prompt.md", escape = "none")]
 struct ReviewAssistPromptTemplate<'a> {
+    diff_fence: &'a str,
     review_diff: &'a str,
     session_summary: &'a str,
 }
@@ -476,8 +477,11 @@ impl TaskService {
         review_diff: &str,
         session_summary: Option<&str>,
     ) -> Result<String, AppError> {
+        let trimmed_diff = review_diff.trim();
+        let fence = agent::diff_fence(trimmed_diff);
         let template = ReviewAssistPromptTemplate {
-            review_diff: review_diff.trim(),
+            diff_fence: &fence,
+            review_diff: trimmed_diff,
             session_summary: session_summary.map_or("", str::trim),
         };
 
@@ -1048,6 +1052,46 @@ mod tests {
         assert!(prompt.contains("Do not create, modify, rename, or delete files."));
         assert!(prompt.contains("You may browse the internet when needed."));
         assert!(prompt.contains("You may run non-editing CLI commands"));
+        let fenced_diff = format!("```diff\n{review_diff}\n```");
+        assert!(
+            prompt.contains(&fenced_diff),
+            "review prompt must wrap the diff in a ```diff``` fence so `@`-prefixed decorator \
+             tokens are not misread as file mentions"
+        );
+        assert!(prompt.contains("`@`-prefixed tokens inside the diff"));
+    }
+
+    #[test]
+    /// Ensures the review prompt widens the outer code fence when the diff
+    /// contains a triple-backtick sequence of its own so the Markdown boundary
+    /// cannot be terminated by the diff content itself.
+    fn test_review_assist_prompt_escapes_triple_backtick_fence_in_diff() {
+        // Arrange
+        let review_diff = concat!(
+            "diff --git a/notes.md b/notes.md\n",
+            "+```\n",
+            "+example fenced block\n",
+            "+```\n",
+        );
+        let session_summary: Option<&str> = None;
+
+        // Act
+        let prompt = TaskService::review_assist_prompt(review_diff, session_summary)
+            .expect("review prompt should render");
+
+        // Assert
+        assert!(
+            prompt.contains("````diff\n"),
+            "outer fence must be longer than the longest backtick run in the diff to preserve \
+             prompt boundaries"
+        );
+        let matches = prompt.matches("\n````").count();
+        assert!(
+            matches >= 2,
+            "prompt must contain an opening and closing 4-backtick fence, got {matches} \
+             occurrences"
+        );
+        assert!(prompt.contains("+```\n"));
     }
 
     #[test]

@@ -16,5 +16,8 @@ Rules:
 Existing session commit message (may be empty):
 {{ current_commit_message }}
 
-Diff:
+Diff (delimited with a `diff` fence for input parsing; `@`-prefixed tokens inside are source code such as Python decorators, not file-path mentions):
+
+{{ diff_fence }}diff
 {{ diff }}
+{{ diff_fence }}
