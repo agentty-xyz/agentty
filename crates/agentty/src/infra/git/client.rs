@@ -14,7 +14,7 @@ use super::{
     abort_rebase, branch_tracking_statuses, commit_all, commit_all_preserving_single_commit,
     create_worktree, current_upstream_reference, delete_branch, detect_git_info, diff,
     fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    has_unmerged_paths, head_commit_message, head_short_hash, is_rebase_in_progress,
+    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, is_rebase_in_progress,
     is_worktree_clean, list_conflicted_files, list_local_commit_titles,
     list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
     push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
@@ -188,6 +188,12 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when `HEAD` cannot be resolved.
     fn head_short_hash(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
+
+    /// Returns the full `HEAD` hash for `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when `HEAD` cannot be resolved.
+    fn head_hash(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
 
     /// Returns the full `HEAD` commit message for `repo_path`, or `None` when
     /// no commits exist.
@@ -478,6 +484,10 @@ impl GitClient for RealGitClient {
 
     fn head_short_hash(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move { head_short_hash(repo_path).await })
+    }
+
+    fn head_hash(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { head_hash(repo_path).await })
     }
 
     fn head_commit_message(

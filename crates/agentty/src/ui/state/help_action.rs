@@ -30,11 +30,11 @@ impl HelpAction {
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
-    /// Session is completed; only read-only view actions and output toggling
-    /// remain available.
+    /// Session is completed; a seeded continuation prompt can be opened and
+    /// output toggling remains available.
     Done,
-    /// Session was canceled locally; read-only navigation remains available,
-    /// plus any linked review-request refresh flow.
+    /// Session was canceled locally; a seeded continuation prompt can be
+    /// opened while the rest of the view stays read-only.
     Canceled,
     /// Session is currently running; worktree-open remains available, while
     /// reply and diff shortcuts are hidden.
@@ -271,6 +271,10 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
     );
+    let can_continue_terminal_session = matches!(
+        state.session_state,
+        ViewSessionState::Done | ViewSessionState::Canceled
+    );
     let can_stop_session = state.session_state == ViewSessionState::InProgress;
     let can_toggle_done_output = state.session_state == ViewSessionState::Done;
 
@@ -316,6 +320,10 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         }
     }
 
+    if can_continue_terminal_session {
+        actions.push(HelpAction::new("continue", "c", "Continue in new session"));
+    }
+
     if can_toggle_done_output {
         actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
     }
@@ -357,6 +365,10 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         state.session_state,
         ViewSessionState::Review | ViewSessionState::AgentReview
     );
+    let can_continue_terminal_session = matches!(
+        state.session_state,
+        ViewSessionState::Done | ViewSessionState::Canceled
+    );
     let can_stop_session = state.session_state == ViewSessionState::InProgress;
 
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
@@ -379,6 +391,10 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(publish_pull_request_help_action(
             publish_pull_request_action,
         ));
+    }
+
+    if can_continue_terminal_session {
+        actions.push(HelpAction::new("continue", "c", "Continue in new session"));
     }
 
     if state.session_state == ViewSessionState::Done {
@@ -809,6 +825,7 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
+        assert!(actions.iter().any(|action| action.key == "c"));
         assert!(actions.iter().any(|action| action.key == "t"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
@@ -933,10 +950,45 @@ mod tests {
         let actions = view_actions(state);
 
         // Assert
+        assert!(actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "t"));
+    }
+
+    #[test]
+    fn test_view_footer_actions_done_shows_continue_before_toggle() {
+        // Arrange
+        let state = ViewHelpState {
+            can_open_worktree: true,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Done,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+        let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(&ordered_keys[..5], ["q", "c", "t", "j/k", "?"]);
+    }
+
+    #[test]
+    fn test_view_footer_actions_canceled_shows_continue_without_toggle() {
+        // Arrange
+        let state = ViewHelpState {
+            can_open_worktree: true,
+            publish_pull_request_action: None,
+            session_state: ViewSessionState::Canceled,
+        };
+
+        // Act
+        let actions = view_footer_actions(state);
+        let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
     }
 
     #[test]

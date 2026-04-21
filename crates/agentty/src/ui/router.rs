@@ -257,7 +257,9 @@ fn render_confirmation_mode(
 
     if matches!(
         confirmation_intent,
-        ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview
+        ConfirmationIntent::ContinueSession
+            | ConfirmationIntent::MergeSession
+            | ConfirmationIntent::RegenerateReview
     ) && let Some(view_mode) = restore_view
     {
         render_session_confirmation_overlay(

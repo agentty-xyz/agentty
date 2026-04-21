@@ -99,6 +99,39 @@ fn seed_draft_at_lookup_project(env: &BuilderEnv) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// Seeds one done session whose merged commit hash can drive the continuation
+/// draft flow.
+fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .await?;
+
+        database.touch_project_last_opened(project_id).await?;
+        database
+            .insert_session("done-continue-0001", "gpt-5.4", "main", "Done", project_id)
+            .await?;
+        database
+            .update_session_title("done-continue-0001", "Continue terminal session")
+            .await?;
+        database
+            .update_session_merged_commit_hash("done-continue-0001", Some(merged_commit_hash))
+            .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
+
 /// Verify that the Sessions tab shows an empty-state message when no
 /// sessions exist.
 ///
@@ -318,6 +351,70 @@ fn session_open_and_return_to_list() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "test", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that pressing `c` in a terminal session opens a confirmation and,
+/// after acceptance, stages the continuation message before focusing an empty
+/// draft composer.
+#[test]
+fn terminal_session_continue_opens_seeded_prompt() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("terminal_session_continue")
+        .with_git()
+        .setup(seed_done_session_for_continuation)
+        .zola(
+            "Continue terminal session",
+            "Confirm continuation from a done session and stage a merged-commit summary message \
+             before focusing an empty draft composer.",
+            45,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("q: back", 5000)
+                    .press_key("c")
+                    .wait_for_text("Confirm Continue", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "continue_confirmation",
+                        "Continuation confirmation for the selected done session",
+                    )
+                    .press_key("y")
+                    .wait_for_stable_frame(500, 15000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "terminal_session_continue",
+                        "Continuation draft composer with the staged merged-commit summary",
+                    )
+            },
+            |frame, report| {
+                let confirmation_frame = common::frame_from_capture(&report.captures[0]);
+                let confirmation_full =
+                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Confirm Continue",
+                    &confirmation_full,
+                );
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Create a new draft sess...",
+                    &confirmation_full,
+                );
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: stage draft", &full);
+                assertion::assert_text_in_region(frame, "Summarize changes from", &full);
+                assertion::assert_text_in_region(frame, "704de31d0f4b5a12", &full);
+                assertion::assert_text_in_region(frame, "as an initial context", &full);
+                assertion::assert_text_in_region(frame, "Type your message", &full);
             },
         )?;
 

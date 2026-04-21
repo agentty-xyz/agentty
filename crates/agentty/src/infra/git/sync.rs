@@ -148,6 +148,33 @@ pub async fn head_short_hash(repo_path: PathBuf) -> Result<String, GitError> {
     Ok(hash)
 }
 
+/// Returns the full hash of the current `HEAD` commit.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// The full commit hash as a string.
+///
+/// # Errors
+/// Returns a [`GitError`] if resolving `HEAD` fails.
+pub async fn head_hash(repo_path: PathBuf) -> Result<String, GitError> {
+    let hash = run_git_command(
+        repo_path,
+        vec!["rev-parse".to_string(), "HEAD".to_string()],
+        "Failed to resolve HEAD hash".to_string(),
+    )
+    .await?;
+    let hash = hash.trim().to_string();
+    if hash.is_empty() {
+        return Err(GitError::OutputParse(
+            "Failed to resolve HEAD hash: empty output".to_string(),
+        ));
+    }
+
+    Ok(hash)
+}
+
 /// Returns the full `HEAD` commit message, or `None` when no commits exist.
 ///
 /// # Errors

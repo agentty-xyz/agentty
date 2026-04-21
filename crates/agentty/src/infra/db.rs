@@ -468,6 +468,19 @@ impl AppRepositories {
         self.session.load_session_published_upstream_ref(id).await
     }
 
+    /// Loads the persisted merged commit hash for one session, when present.
+    ///
+    /// # Errors
+    /// Returns an error if the session lookup fails.
+    pub async fn load_session_merged_commit_hash(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, DbError> {
+        self.session
+            .load_session_merged_commit_hash(session_id)
+            .await
+    }
+
     /// Loads the persisted session-specific reasoning override, when present.
     pub(crate) async fn load_session_reasoning_level_override(
         &self,
@@ -551,6 +564,20 @@ impl AppRepositories {
     /// Updates the persisted model for a session.
     pub(crate) async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError> {
         self.session.update_session_model(id, model).await
+    }
+
+    /// Updates the persisted merged commit hash for a session row.
+    ///
+    /// # Errors
+    /// Returns an error if the session update fails.
+    pub async fn update_session_merged_commit_hash(
+        &self,
+        id: &str,
+        merged_commit_hash: Option<&str>,
+    ) -> Result<(), DbError> {
+        self.session
+            .update_session_merged_commit_hash(id, merged_commit_hash.map(str::to_string))
+            .await
     }
 
     /// Updates the saved prompt for a session row.
@@ -2238,6 +2265,44 @@ WHERE model = ?
 
         // Assert
         assert_eq!(loaded_ref, None);
+    }
+
+    #[tokio::test]
+    async fn test_session_merged_commit_hash_round_trip_and_clear() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", None)
+            .await
+            .expect("failed to upsert project");
+        database
+            .insert_session("session-a", "gpt-5.4", "main", "Done", project_id)
+            .await
+            .expect("failed to insert session");
+
+        // Act
+        database
+            .update_session_merged_commit_hash("session-a", Some("abc1234"))
+            .await
+            .expect("failed to store merged commit hash");
+        let stored_hash = database
+            .load_session_merged_commit_hash("session-a")
+            .await
+            .expect("failed to load stored merged commit hash");
+        database
+            .update_session_merged_commit_hash("session-a", None)
+            .await
+            .expect("failed to clear merged commit hash");
+        let cleared_hash = database
+            .load_session_merged_commit_hash("session-a")
+            .await
+            .expect("failed to load cleared merged commit hash");
+
+        // Assert
+        assert_eq!(stored_hash.as_deref(), Some("abc1234"));
+        assert_eq!(cleared_hash, None);
     }
 
     #[tokio::test]

@@ -454,6 +454,40 @@ impl App {
         Ok(session_id)
     }
 
+    /// Creates one fresh draft session, stages the continuation context as
+    /// its first draft message, and opens an empty composer for follow-up
+    /// notes.
+    ///
+    /// # Errors
+    /// Returns an error if the source session is missing, is not terminal, has
+    /// neither a merged commit hash nor persisted continuation context, or if
+    /// the new draft session cannot be created.
+    pub async fn continue_terminal_session(
+        &mut self,
+        source_session_id: &str,
+    ) -> Result<String, AppError> {
+        let continuation_prompt_seed = self
+            .terminal_session_continuation_seed(source_session_id)
+            .await?;
+        let session_id = self.create_draft_session().await?;
+        self.stage_draft_message(&session_id, continuation_prompt_seed)
+            .await?;
+
+        self.mode = AppMode::Prompt {
+            at_mention_state: None,
+            attachment_state: crate::ui::state::prompt::PromptAttachmentState::default(),
+            history_state: crate::ui::state::prompt::PromptHistoryState::new(Vec::new()),
+            review_status_message: None,
+            review_text: None,
+            slash_state: self.prompt_slash_state(),
+            session_id: SessionId::from(session_id.as_str()),
+            input: InputState::new(),
+            scroll_offset: None,
+        };
+
+        Ok(session_id)
+    }
+
     /// Applies the shared post-create refresh and selection flow for a new
     /// session.
     async fn finish_session_creation(&mut self, session_id: &str) {
@@ -467,6 +501,60 @@ impl App {
             .position(|session| session.id == session_id)
             .unwrap_or(0);
         self.sessions.table_state.select(Some(index));
+    }
+
+    /// Returns the persisted continuation prompt seed for one terminal session.
+    ///
+    /// # Errors
+    /// Returns an error if the source session is missing, not terminal, or has
+    /// neither a stored merged commit hash nor usable persisted continuation
+    /// context.
+    async fn terminal_session_continuation_seed(
+        &self,
+        source_session_id: &str,
+    ) -> Result<String, AppError> {
+        let source_session = self
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == source_session_id)
+            .ok_or_else(|| AppError::Workflow("Session not found".to_string()))?;
+        if !source_session.allows_terminal_continuation() {
+            return Err(AppError::Workflow(
+                "Only `Done` or `Canceled` sessions can be continued".to_string(),
+            ));
+        }
+
+        if let Some(merged_commit_hash) = self
+            .services
+            .db()
+            .load_session_merged_commit_hash(source_session_id)
+            .await?
+        {
+            return Ok(Self::merged_commit_continuation_prompt(
+                source_session,
+                &merged_commit_hash,
+            ));
+        }
+
+        source_session.continuation_prompt_seed().ok_or_else(|| {
+            AppError::Workflow(
+                "Terminal continuation requires a merged commit hash or persisted context"
+                    .to_string(),
+            )
+        })
+    }
+
+    /// Builds the initial continuation draft message for one merged session
+    /// commit hash.
+    fn merged_commit_continuation_prompt(
+        _source_session: &Session,
+        merged_commit_hash: &str,
+    ) -> String {
+        format!(
+            "Summarize changes from {merged_commit_hash} to use it as an initial context for this \
+             session"
+        )
     }
 
     /// Submits the initial prompt for a newly created session.
@@ -4490,6 +4578,202 @@ mod tests {
             },
         );
     }
+
+    #[tokio::test]
+    async fn test_continue_terminal_session_opens_draft_prompt_for_done_session_with_hash() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let database = AppRepositories::in_memory().await;
+        let clients = test_app_clients()
+            .with_app_server_client_override(mock_app_server())
+            .with_tmux_client(Arc::new(MockTmuxClient::new()));
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path.clone(),
+            Some("main".to_string()),
+            database,
+            clients,
+        )
+        .await
+        .expect("failed to build test app");
+        let project_id = app
+            .services
+            .db()
+            .upsert_project(&base_path.to_string_lossy(), None)
+            .await
+            .expect("failed to insert project");
+        app.services
+            .db()
+            .insert_session("done-source", "gpt-5.4", "main", "Done", project_id)
+            .await
+            .expect("failed to insert source session row");
+        let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
+        app.services
+            .db()
+            .update_session_merged_commit_hash("done-source", Some(merged_commit_hash))
+            .await
+            .expect("failed to persist merged commit hash");
+        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+            .id("done-source")
+            .status(Status::Done)
+            .project_name("project-alpha")
+            .title(Some("Done source".to_string()))
+            .build();
+        app.sessions.push_session(source_session);
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1..)
+            .returning(|path| Box::pin(async move { Some(path) }));
+        mock_git_client
+            .expect_fetch_remote()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_branch_tracking_statuses()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        let continued_session_id = app
+            .continue_terminal_session("done-source")
+            .await
+            .expect("expected terminal continuation to succeed");
+
+        // Assert
+        assert_ne!(continued_session_id, "done-source");
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                ..
+            } if session_id.as_str() == continued_session_id
+                && input.text().is_empty()
+        ));
+        let continued_session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == continued_session_id)
+            .expect("expected created continuation draft");
+        assert!(continued_session.is_draft_session());
+        assert_eq!(continued_session.status, Status::New);
+        assert_eq!(
+            continued_session.prompt,
+            format!(
+                "Summarize changes from {merged_commit_hash} to use it as an initial context for \
+                 this session"
+            )
+        );
+        assert!(matches!(
+            app.selected_session(),
+            Some(session) if session.id == continued_session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_continue_terminal_session_falls_back_to_persisted_context_without_hash() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let base_path = base_dir.path().to_path_buf();
+        let database = AppRepositories::in_memory().await;
+        let clients = test_app_clients()
+            .with_app_server_client_override(mock_app_server())
+            .with_tmux_client(Arc::new(MockTmuxClient::new()));
+        let mut app = App::new_with_clients(
+            base_path.clone(),
+            base_path,
+            Some("main".to_string()),
+            database,
+            clients,
+        )
+        .await
+        .expect("failed to build test app");
+        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+            .id("canceled-source")
+            .status(Status::Canceled)
+            .summary(Some("# Summary\n\nUse the saved context.".to_string()))
+            .title(Some("Canceled source".to_string()))
+            .build();
+        app.sessions.push_session(source_session);
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_find_git_repo_root()
+            .times(1..)
+            .returning(|path| Box::pin(async move { Some(path) }));
+        mock_git_client
+            .expect_fetch_remote()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_branch_tracking_statuses()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        let continued_session_id = app
+            .continue_terminal_session("canceled-source")
+            .await
+            .expect("expected canceled continuation to succeed");
+
+        // Assert
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                ..
+            } if session_id.as_str() == continued_session_id && input.text().is_empty()
+        ));
+        let continued_session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == continued_session_id)
+            .expect("expected created continuation draft");
+        assert_eq!(
+            continued_session.prompt,
+            "Continue the work from this previous Agentty session.\n\nPrevious session: Canceled \
+             source\nProject: project\nStatus: Canceled\n\nPrevious session summary:\n# \
+             Summary\n\nUse the saved context.\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_continue_terminal_session_rejects_non_terminal_source_session() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+            .id("review-source")
+            .status(Status::Review)
+            .summary(Some("summary".to_string()))
+            .build();
+        app.sessions.push_session(source_session);
+
+        // Act
+        let result = app.continue_terminal_session("review-source").await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(AppError::Workflow(message))
+                if message == "Only `Done` or `Canceled` sessions can be continued"
+        ));
+    }
+
     #[tokio::test]
     async fn apply_review_update_stores_success_in_cache() {
         // Arrange

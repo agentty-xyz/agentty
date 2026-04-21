@@ -777,6 +777,9 @@ impl SessionManager {
         } else {
             git::SquashMergeOutcome::AlreadyPresentInTarget
         };
+        let merged_commit_hash =
+            Self::load_merged_commit_hash(git_client.as_ref(), repo_root.clone(), merge_outcome)
+                .await?;
 
         Self::cleanup_merged_session_worktree(
             folder.clone(),
@@ -792,16 +795,14 @@ impl SessionManager {
             ))
         })?;
 
-        if let Some(commit_message) = authoritative_commit_message {
-            Self::update_session_title_from_commit_message(
-                &db,
-                &id,
-                &commit_message,
-                &app_event_tx,
-            )
-            .await;
-            Self::update_done_session_summary_from_commit_message(&db, &id, &commit_message).await;
-        }
+        Self::persist_merged_session_metadata(
+            &db,
+            &id,
+            authoritative_commit_message.as_deref(),
+            merged_commit_hash.as_deref(),
+            &app_event_tx,
+        )
+        .await?;
 
         if !SessionTaskService::update_status(
             &status,
@@ -824,6 +825,57 @@ impl SessionManager {
             &base_branch,
             merge_outcome,
         ))
+    }
+
+    /// Persists post-merge metadata derived from the authoritative session
+    /// commit message and merged base-branch commit hash.
+    ///
+    /// # Errors
+    /// Returns an error when the merged commit hash cannot be saved.
+    async fn persist_merged_session_metadata(
+        db: &AppRepositories,
+        session_id: &str,
+        authoritative_commit_message: Option<&str>,
+        merged_commit_hash: Option<&str>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+    ) -> Result<(), SessionError> {
+        if let Some(commit_message) = authoritative_commit_message {
+            Self::update_session_title_from_commit_message(
+                db,
+                session_id,
+                commit_message,
+                app_event_tx,
+            )
+            .await;
+            Self::update_done_session_summary_from_commit_message(db, session_id, commit_message)
+                .await;
+        }
+        if let Some(merged_commit_hash) = merged_commit_hash {
+            db.update_session_merged_commit_hash(session_id, Some(merged_commit_hash))
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Loads the target-branch `HEAD` hash created by one completed squash
+    /// merge, when the merge produced a new commit.
+    ///
+    /// # Errors
+    /// Returns an error when the merged commit hash cannot be inspected after
+    /// a successful squash commit.
+    async fn load_merged_commit_hash(
+        git_client: &dyn GitClient,
+        repo_root: PathBuf,
+        merge_outcome: git::SquashMergeOutcome,
+    ) -> Result<Option<String>, SessionError> {
+        if merge_outcome != git::SquashMergeOutcome::Committed {
+            return Ok(None);
+        }
+
+        let merged_commit_hash = git_client.head_hash(repo_root).await?;
+
+        Ok(Some(merged_commit_hash))
     }
 
     /// Builds rebase input used by merge workflows.
@@ -2449,6 +2501,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
         // Arrange
+        let expected_merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
         let canonical_commit_message = "Refine merge flow\n\n- Reuse the session commit body";
         let mut mock_git_client = git::MockGitClient::new();
         let mut sequence = Sequence::new();
@@ -2503,6 +2556,19 @@ mod tests {
                 }
             });
         mock_git_client
+            .expect_head_hash()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning({
+                let expected_merged_commit_hash = expected_merged_commit_hash.to_string();
+
+                move |_| {
+                    let expected_merged_commit_hash = expected_merged_commit_hash.clone();
+
+                    Box::pin(async move { Ok(expected_merged_commit_hash) })
+                }
+            });
+        mock_git_client
             .expect_remove_worktree()
             .times(1)
             .in_sequence(&mut sequence)
@@ -2513,6 +2579,17 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
+        let project_id = input
+            .db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        input
+            .db
+            .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
+            .await
+            .expect("failed to insert merge session row");
+        let db = input.db.clone();
 
         // Act
         let result = SessionManager::execute_merge_workflow(input).await;
@@ -2520,6 +2597,14 @@ mod tests {
         // Assert
         let message = result.expect("merge workflow should succeed");
         assert_eq!(message, "Successfully merged wt/session-123 into main");
+        let merged_commit_hash = db
+            .load_session_merged_commit_hash("session-123")
+            .await
+            .expect("failed to load merged commit hash");
+        assert_eq!(
+            merged_commit_hash.as_deref(),
+            Some(expected_merged_commit_hash)
+        );
     }
 
     #[tokio::test]
@@ -2560,6 +2645,17 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_, _| Box::pin(async { Ok(()) }));
         let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
+        let project_id = input
+            .db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        input
+            .db
+            .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
+            .await
+            .expect("failed to insert merge session row");
+        let db = input.db.clone();
 
         // Act
         let result = SessionManager::execute_merge_workflow(input).await;
@@ -2570,6 +2666,11 @@ mod tests {
             message,
             "Session changes from wt/session-123 are already present in main"
         );
+        let merged_commit_hash = db
+            .load_session_merged_commit_hash("session-123")
+            .await
+            .expect("failed to load merged commit hash");
+        assert_eq!(merged_commit_hash, None);
     }
 
     #[tokio::test]

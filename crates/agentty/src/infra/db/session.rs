@@ -154,6 +154,12 @@ pub(crate) trait SessionRepository: Send + Sync {
         id: &str,
     ) -> Result<Option<String>, DbError>;
 
+    /// Loads the persisted merged commit hash for one session, when present.
+    async fn load_session_merged_commit_hash(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, DbError>;
+
     /// Loads the persisted session-specific reasoning override, when present.
     async fn load_session_reasoning_level_override(
         &self,
@@ -218,6 +224,13 @@ pub(crate) trait SessionRepository: Send + Sync {
 
     /// Updates the persisted model for a session.
     async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError>;
+
+    /// Updates the persisted merged commit hash for a session row.
+    async fn update_session_merged_commit_hash(
+        &self,
+        id: &str,
+        merged_commit_hash: Option<String>,
+    ) -> Result<(), DbError>;
 
     /// Updates the saved prompt for a session row.
     async fn update_session_prompt(&self, id: &str, prompt: &str) -> Result<(), DbError>;
@@ -832,6 +845,24 @@ WHERE id = ?
         Ok(value)
     }
 
+    async fn load_session_merged_commit_hash(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, DbError> {
+        let row = sqlx::query_scalar::<_, Option<String>>(
+            r"
+SELECT merged_commit_hash
+FROM session
+WHERE id = ?
+",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(row.flatten())
+    }
+
     async fn load_session_reasoning_level_override(
         &self,
         session_id: &str,
@@ -1104,6 +1135,26 @@ WHERE id = ?
 ",
         )
         .bind(model)
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_merged_commit_hash(
+        &self,
+        id: &str,
+        merged_commit_hash: Option<String>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET merged_commit_hash = ?
+WHERE id = ?
+",
+        )
+        .bind(merged_commit_hash.as_deref())
         .bind(id)
         .execute(&self.0)
         .await?;

@@ -37,14 +37,16 @@ pub enum ConfirmationIntent {
     Quit,
     /// Confirms canceling a selected review session.
     CancelSession,
+    /// Confirms creating a continuation draft from one terminal session.
+    ContinueSession,
     /// Confirms queueing merge for the active view session.
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
     RegenerateReview,
 }
 
-/// Stored view-mode values used to restore session view after merge
-/// confirmation.
+/// Stored view-mode values used to restore session view after session-scoped
+/// confirmations and overlays.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfirmationViewMode {
     pub done_session_output_mode: DoneSessionOutputMode,
@@ -133,7 +135,8 @@ pub enum AppMode {
         confirmation_intent: ConfirmationIntent,
         confirmation_message: String,
         confirmation_title: String,
-        /// View state to restore when dismissing merge confirmation.
+        /// View state to restore when dismissing a session-scoped
+        /// confirmation.
         restore_view: Option<ConfirmationViewMode>,
         session_id: Option<SessionId>,
         selected_confirmation_index: usize,

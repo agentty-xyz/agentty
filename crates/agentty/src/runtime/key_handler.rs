@@ -352,7 +352,10 @@ async fn handle_confirmation_decision(
 /// Resolves target mode for `Cancel` in confirmation overlays.
 fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
     if let AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::MergeSession | ConfirmationIntent::RegenerateReview,
+        confirmation_intent:
+            ConfirmationIntent::ContinueSession
+            | ConfirmationIntent::MergeSession
+            | ConfirmationIntent::RegenerateReview,
         restore_view: Some(restore_view),
         ..
     } = mode
@@ -389,6 +392,9 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
         ConfirmationIntent::CancelSession => {
             handle_cancel_session_confirmation(app, confirmation_session_id).await
         }
+        ConfirmationIntent::ContinueSession => {
+            handle_continue_session_confirmation(app, confirmation_session_id, restore_view).await
+        }
         ConfirmationIntent::MergeSession => {
             handle_merge_confirmation(app, confirmation_session_id, restore_view).await
         }
@@ -414,6 +420,28 @@ async fn handle_cancel_session_confirmation(
             error = %error,
             "failed to cancel confirmed session"
         );
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Creates a continuation draft for the confirmed terminal session and opens
+/// its prompt composer.
+async fn handle_continue_session_confirmation(
+    app: &mut App,
+    confirmation_session_id: Option<SessionId>,
+    restore_view: Option<ConfirmationViewMode>,
+) -> io::Result<EventResult> {
+    let Some(session_id) = confirmation_session_id else {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+
+        return Ok(EventResult::Continue);
+    };
+
+    if let Err(error) = app.continue_terminal_session(&session_id).await {
+        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
+        app.append_output_for_session(&session_id, &format!("\n[Continue Error] {error}\n"))
+            .await;
     }
 
     Ok(EventResult::Continue)
@@ -790,6 +818,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_key_event_routes_done_session_continue_shortcut() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let source_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create source session");
+        app.services
+            .db()
+            .update_session_merged_commit_hash(&source_session_id, Some("abc1234"))
+            .await
+            .expect("failed to persist merged commit hash");
+        let source_session = app
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == source_session_id)
+            .expect("expected source session");
+        source_session.status = crate::domain::session::Status::Done;
+        source_session.title = Some("Done source".to_string());
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id: source_session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let event_result = handle_key_event(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ContinueSession,
+                ref confirmation_title,
+                ref restore_view,
+                ref session_id,
+                ..
+            } if confirmation_title == "Confirm Continue"
+                && matches!(restore_view, Some(restore_view) if restore_view.session_id == source_session_id)
+                && matches!(session_id, Some(session_id) if session_id.as_str() == source_session_id)
+        ));
+    }
+
+    #[tokio::test]
     async fn test_handle_confirmation_decision_cancel_restores_view_for_merge_confirmation() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_with_git().await;
@@ -830,6 +913,118 @@ mod tests {
                 && review_status_message == &review_loading_message(AgentModel::Gpt54)
                 && review_text == "Review output"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_confirmation_decision_cancel_restores_view_for_continue_confirmation() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ContinueSession,
+            confirmation_message: "Create a new draft session with initial context from this \
+                                   session?"
+                .to_string(),
+            confirmation_title: "Confirm Continue".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message: None,
+                review_text: None,
+                scroll_offset: Some(4),
+                session_id: session_id.clone().into(),
+            }),
+            session_id: Some(session_id.clone().into()),
+            selected_confirmation_index: 1,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Cancel).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                session_id: ref session_id_in_mode,
+                scroll_offset: Some(4),
+                ..
+            } if session_id_in_mode == &session_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_confirmation_decision_confirm_opens_continuation_draft_prompt() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
+        let source_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.services
+            .db()
+            .update_session_merged_commit_hash(&source_session_id, Some(merged_commit_hash))
+            .await
+            .expect("failed to persist merged commit hash");
+        set_session_status_for_test(
+            &mut app,
+            &source_session_id,
+            crate::domain::session::Status::Done,
+        );
+        app.mode = AppMode::Confirmation {
+            confirmation_intent: ConfirmationIntent::ContinueSession,
+            confirmation_message: "Create a new draft session with initial context from this \
+                                   session?"
+                .to_string(),
+            confirmation_title: "Confirm Continue".to_string(),
+            restore_view: Some(ConfirmationViewMode {
+                done_session_output_mode: DoneSessionOutputMode::Summary,
+                review_status_message: None,
+                review_text: None,
+                scroll_offset: Some(4),
+                session_id: source_session_id.clone().into(),
+            }),
+            session_id: Some(source_session_id.clone().into()),
+            selected_confirmation_index: 0,
+        };
+
+        // Act
+        let event_result =
+            handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
+
+        // Assert
+        assert!(matches!(event_result, Ok(EventResult::Continue)));
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref input,
+                ref session_id,
+                ..
+            } if session_id.as_str() != source_session_id
+                && input.text().is_empty()
+        ));
+        let continued_session_id = match &app.mode {
+            AppMode::Prompt { session_id, .. } => session_id.as_str().to_string(),
+            _ => panic!("expected prompt mode"),
+        };
+        let continued_session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == continued_session_id)
+            .expect("expected created continuation draft");
+        assert_eq!(
+            continued_session.prompt,
+            format!(
+                "Summarize changes from {merged_commit_hash} to use it as an initial context for \
+                 this session"
+            )
+        );
     }
 
     #[tokio::test]

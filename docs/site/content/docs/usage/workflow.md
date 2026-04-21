@@ -68,8 +68,8 @@ Session statuses and what you can do in each state:
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
 | **Merging** | Changes are being merged into the base branch. | read-only view (`q`, scroll, help) |
-| **Done** | Session completed, merged, and its worktree checkout was removed. | `t` toggle summary/output, scroll, help |
-| **Canceled** | Session was canceled by the user and its worktree checkout was removed. | read-only view (`q`, scroll, help) |
+| **Done** | Session completed, merged, and its worktree checkout was removed. | `c` confirm continuation into a new draft, `t` toggle summary/output, scroll, help |
+| **Canceled** | Session was canceled by the user and its worktree checkout was removed. | `c` confirm continuation into a new draft, read-only view (`q`, scroll, help) |
 
 Settings values are stored per active project. Switching projects reloads that
 project's `Default Reasoning Level`, `Default Smart Model` mode (explicit model or
@@ -91,6 +91,11 @@ next prompt.
 Pressing `/` from an editable session view opens the same composer with a
 prefilled `/` so you can pick a slash command without typing the leading
 character first.
+Pressing `c` from a **Done** or **Canceled** session first opens a confirmation
+dialog. Confirming creates a brand-new draft session and focuses its composer
+immediately so you can add more notes before starting it. For merged **Done**
+sessions, Agentty stores the merged base-branch commit hash and stages the
+first draft message as `Summarize changes from <full-hash> to use it as an initial context for this session`. When that hash is unavailable, or when the source session is **Canceled**, Agentty stages the saved summary or transcript context instead. The original terminal session stays closed while the new draft session carries the follow-on work.
 
 After each successful turn with file changes, Agentty keeps the session branch
 at one evolving commit. It regenerates that commit message from the cumulative

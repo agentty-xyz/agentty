@@ -38,7 +38,7 @@ pub use sync::{
     BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy, branch_tracking_statuses,
     commit_all, commit_all_preserving_single_commit, current_upstream_reference, delete_branch,
     diff, fetch_remote, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    head_commit_message, head_short_hash, is_worktree_clean, list_local_commit_titles,
+    head_commit_message, head_hash, head_short_hash, is_worktree_clean, list_local_commit_titles,
     list_upstream_commit_titles, pull_rebase, push_current_branch,
     push_current_branch_to_remote_branch, remote_branch_exists, stage_all,
 };

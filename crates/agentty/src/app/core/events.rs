@@ -572,15 +572,10 @@ impl App {
                 .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
         }
 
-        if let Some(latest_available_version_update) = &event_batch.latest_available_version_update
-        {
-            self.latest_available_version
-                .clone_from(&latest_available_version_update.latest_available_version);
-        }
-
-        if let Some(update_status) = event_batch.update_status.take() {
-            self.update_status = Some(update_status);
-        }
+        self.apply_status_bar_updates(
+            event_batch.latest_available_version_update.as_ref(),
+            event_batch.update_status.take(),
+        );
     }
 
     /// Synchronizes touched sessions from their runtime handles and drops
@@ -591,6 +586,22 @@ impl App {
         }
 
         self.sessions.clear_terminal_session_workers(session_ids);
+    }
+
+    /// Applies status-bar state updates carried by one reducer batch.
+    fn apply_status_bar_updates(
+        &mut self,
+        latest_available_version_update: Option<&LatestAvailableVersionUpdate>,
+        update_status: Option<UpdateStatus>,
+    ) {
+        if let Some(latest_available_version_update) = latest_available_version_update {
+            self.latest_available_version
+                .clone_from(&latest_available_version_update.latest_available_version);
+        }
+
+        if let Some(update_status) = update_status {
+            self.update_status = Some(update_status);
+        }
     }
 
     /// Returns status snapshots for sessions touched before applying a

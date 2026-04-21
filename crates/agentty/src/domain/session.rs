@@ -18,6 +18,10 @@ use crate::infra::channel::TurnPromptAttachment;
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
+/// Lead sentence used when seeding a follow-on prompt from a terminal session.
+const TERMINAL_CONTINUATION_PROMPT_INTRO: &str =
+    "Continue the work from this previous Agentty session.";
+
 /// Shared stable identifier for one session.
 ///
 /// The app clones session identifiers heavily across maps, events, and worker
@@ -185,6 +189,11 @@ impl Status {
     /// Returns whether this status keeps the review shortcut set enabled.
     pub fn allows_review_actions(self) -> bool {
         matches!(self, Status::Review | Status::AgentReview)
+    }
+
+    /// Returns whether this status can seed a follow-on continuation session.
+    pub fn allows_terminal_continuation(self) -> bool {
+        matches!(self, Status::Done | Status::Canceled)
     }
 
     /// Returns whether a transition to `next` is valid.
@@ -558,6 +567,30 @@ impl Session {
             || (self.status == Status::New && self.is_draft_session())
     }
 
+    /// Returns whether this terminal session can launch a seeded follow-on
+    /// session from view mode.
+    pub fn allows_terminal_continuation(&self) -> bool {
+        self.status.allows_terminal_continuation()
+    }
+
+    /// Returns one seeded first-prompt body for a follow-on session launched
+    /// from a terminal session view.
+    pub fn continuation_prompt_seed(&self) -> Option<String> {
+        if !self.allows_terminal_continuation() {
+            return None;
+        }
+
+        let (context_label, context_text) = self.continuation_context()?;
+
+        Some(format!(
+            "{TERMINAL_CONTINUATION_PROMPT_INTRO}\n\nPrevious session: {}\nProject: {}\nStatus: \
+             {}\n\n{context_label}:\n{context_text}\n",
+            self.display_title(),
+            self.project_name,
+            self.status,
+        ))
+    }
+
     /// Returns whether session chat should render the cumulative active-work
     /// timer for this session.
     pub fn has_in_progress_timer(&self) -> bool {
@@ -658,6 +691,43 @@ impl Session {
         self.follow_up_tasks
             .iter()
             .find(|task| task.position == position)
+    }
+
+    /// Returns the best persisted context section for a continuation prompt.
+    fn continuation_context(&self) -> Option<(&'static str, &str)> {
+        self.non_empty_summary()
+            .map(|summary| ("Previous session summary", summary))
+            .or_else(|| {
+                self.non_empty_output()
+                    .map(|output| ("Previous session transcript", output))
+            })
+            .or_else(|| {
+                self.non_empty_prompt()
+                    .map(|prompt| ("Previous session prompt", prompt))
+            })
+    }
+
+    /// Returns the trimmed persisted summary text when it is non-empty.
+    fn non_empty_summary(&self) -> Option<&str> {
+        self.summary
+            .as_deref()
+            .and_then(Self::trimmed_non_empty_text)
+    }
+
+    /// Returns the trimmed persisted transcript output when it is non-empty.
+    fn non_empty_output(&self) -> Option<&str> {
+        Self::trimmed_non_empty_text(&self.output)
+    }
+
+    /// Returns the trimmed persisted initial prompt when it is non-empty.
+    fn non_empty_prompt(&self) -> Option<&str> {
+        Self::trimmed_non_empty_text(&self.prompt)
+    }
+
+    /// Returns `value` trimmed to a non-empty slice when any content remains.
+    fn trimmed_non_empty_text(value: &str) -> Option<&str> {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
     }
 }
 
@@ -976,6 +1046,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_status_allows_terminal_continuation_only_for_terminal_statuses() {
+        // Arrange
+        let done_status = Status::Done;
+        let canceled_status = Status::Canceled;
+        let review_status = Status::Review;
+
+        // Act
+        let done_allows_continuation = done_status.allows_terminal_continuation();
+        let canceled_allows_continuation = canceled_status.allows_terminal_continuation();
+        let review_allows_continuation = review_status.allows_terminal_continuation();
+
+        // Assert
+        assert!(done_allows_continuation);
+        assert!(canceled_allows_continuation);
+        assert!(!review_allows_continuation);
+    }
+
+    #[test]
     fn test_status_transition_new_to_canceled() {
         // Arrange
         let current_status = Status::New;
@@ -1086,6 +1174,68 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         // Assert
         assert_eq!(effective_reasoning_level, ReasoningLevel::Low);
         assert!(uses_default_reasoning_level);
+    }
+
+    #[test]
+    fn test_session_continuation_prompt_seed_prefers_summary_for_terminal_session() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .status(Status::Done)
+            .project_name("project-alpha")
+            .summary(Some("# Summary\n\nShip it.".to_string()))
+            .output("assistant transcript")
+            .title(Some("Terminal session".to_string()))
+            .build();
+
+        // Act
+        let continuation_prompt_seed = session
+            .continuation_prompt_seed()
+            .expect("expected continuation prompt seed");
+
+        // Assert
+        assert!(continuation_prompt_seed.contains(TERMINAL_CONTINUATION_PROMPT_INTRO));
+        assert!(continuation_prompt_seed.contains("Previous session: Terminal session"));
+        assert!(continuation_prompt_seed.contains("Project: project-alpha"));
+        assert!(continuation_prompt_seed.contains("Status: Done"));
+        assert!(continuation_prompt_seed.contains("Previous session summary:\n# Summary"));
+        assert!(!continuation_prompt_seed.contains("assistant transcript"));
+    }
+
+    #[test]
+    fn test_session_continuation_prompt_seed_falls_back_to_transcript_when_summary_is_missing() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .status(Status::Canceled)
+            .project_name("project-beta")
+            .output("  recent transcript  ")
+            .title(Some("Canceled session".to_string()))
+            .build();
+
+        // Act
+        let continuation_prompt_seed = session
+            .continuation_prompt_seed()
+            .expect("expected continuation prompt seed");
+
+        // Assert
+        assert!(
+            continuation_prompt_seed.contains("Previous session transcript:\nrecent transcript")
+        );
+        assert!(continuation_prompt_seed.contains("Status: Canceled"));
+    }
+
+    #[test]
+    fn test_session_continuation_prompt_seed_rejects_non_terminal_session() {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .status(Status::Review)
+            .summary(Some("summary".to_string()))
+            .build();
+
+        // Act
+        let continuation_prompt_seed = session.continuation_prompt_seed();
+
+        // Assert
+        assert_eq!(continuation_prompt_seed, None);
     }
 
     #[test]

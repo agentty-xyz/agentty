@@ -581,7 +581,7 @@ pub fn session_output_done_toggle_line(
     let toggle_target = done_toggle_action_label(done_session_output_mode);
 
     Line::from(vec![Span::styled(
-        format!("Press t to switch to {toggle_target}."),
+        format!("Press 't' to switch to {toggle_target}. Press 'c' to continue in a new session."),
         Style::default().fg(style::palette::TEXT_SUBTLE),
     )])
 }
@@ -2166,9 +2166,18 @@ mod tests {
         let review_line = session_output_done_toggle_line(DoneSessionOutputMode::Review);
 
         // Assert
-        assert_eq!(summary_line.to_string(), "Press t to switch to output.");
-        assert_eq!(output_line.to_string(), "Press t to switch to summary.");
-        assert_eq!(review_line.to_string(), "Press t to switch to summary.");
+        assert_eq!(
+            summary_line.to_string(),
+            "Press 't' to switch to output. Press 'c' to continue in a new session."
+        );
+        assert_eq!(
+            output_line.to_string(),
+            "Press 't' to switch to summary. Press 'c' to continue in a new session."
+        );
+        assert_eq!(
+            review_line.to_string(),
+            "Press 't' to switch to summary. Press 'c' to continue in a new session."
+        );
     }
 
     #[test]

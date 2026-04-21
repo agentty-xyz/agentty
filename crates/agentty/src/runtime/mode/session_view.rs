@@ -70,8 +70,9 @@ struct ViewKeyContext<'a> {
 
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
-    can_start_staged_session: bool,
+    can_continue_terminal_session: bool,
     can_open_worktree: bool,
+    can_start_staged_session: bool,
     follow_up_task_action: Option<FollowUpTaskAction>,
     publish_pull_request_action: Option<PublishBranchAction>,
     session_state: ViewSessionState,
@@ -204,6 +205,14 @@ async fn handle_primary_view_key(
                 )
                 .await;
             }
+
+            return Some(false);
+        }
+        KeyCode::Char('c')
+            if key.modifiers == event::KeyModifiers::NONE
+                && view_session_snapshot.can_continue_terminal_session =>
+        {
+            open_continue_confirmation(app, view_context);
 
             return Some(false);
         }
@@ -361,6 +370,23 @@ fn open_merge_confirmation(app: &mut App, view_context: &ViewContext) {
     };
 }
 
+/// Opens a continuation confirmation overlay for one terminal session.
+///
+/// The confirmation explains that Agentty will create a new draft session
+/// seeded with initial context so the user can add more notes before starting
+/// it.
+fn open_continue_confirmation(app: &mut App, view_context: &ViewContext) {
+    app.mode = AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::ContinueSession,
+        confirmation_message: "Create a new draft session with initial context from this session?"
+            .to_string(),
+        confirmation_title: "Confirm Continue".to_string(),
+        restore_view: Some(confirmation_view_mode(view_context)),
+        session_id: Some(view_context.session_id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    };
+}
+
 /// Opens the viewed session worktree directly or shows a command selector when
 /// multiple open commands are configured.
 async fn open_worktree_for_view_session(app: &mut App, view_context: &ViewContext) {
@@ -451,10 +477,11 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             .unwrap_or(&false);
 
     Some(ViewSessionSnapshot {
+        can_continue_terminal_session: session.allows_terminal_continuation(),
+        can_open_worktree,
         can_start_staged_session: session.is_draft_session()
             && session.status == Status::New
             && session.has_staged_drafts(),
-        can_open_worktree,
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state: help_action::session_view_state(session),
@@ -1394,9 +1421,34 @@ mod tests {
         let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
 
         // Assert
+        assert!(snapshot.can_continue_terminal_session);
         assert!(!snapshot.can_open_worktree);
         assert_eq!(snapshot.session_state, ViewSessionState::Done);
         assert_eq!(snapshot.session_status, Status::Done);
+    }
+
+    #[tokio::test]
+    async fn test_view_session_snapshot_enables_continue_for_canceled_session() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::Canceled;
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.into(),
+            scroll_offset: Some(1),
+        };
+        let context = view_context(&mut app).expect("expected view context");
+
+        // Act
+        let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+
+        // Assert
+        assert!(snapshot.can_continue_terminal_session);
+        assert!(!snapshot.can_open_worktree);
+        assert_eq!(snapshot.session_state, ViewSessionState::Canceled);
+        assert_eq!(snapshot.session_status, Status::Canceled);
     }
 
     #[tokio::test]
@@ -2136,8 +2188,9 @@ mod tests {
             session_index: 0,
         };
         let view_session_snapshot = ViewSessionSnapshot {
-            can_start_staged_session: false,
+            can_continue_terminal_session: false,
             can_open_worktree: true,
+            can_start_staged_session: false,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -2529,8 +2582,9 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_start_staged_session: false,
+            can_continue_terminal_session: false,
             can_open_worktree: false,
+            can_start_staged_session: false,
             follow_up_task_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Done,
@@ -2624,6 +2678,58 @@ mod tests {
             } if session_id == &sibling_session_id
         ));
     }
+
+    #[tokio::test]
+    async fn test_handle_continue_key_opens_confirmation_for_done_session() {
+        // Arrange
+        let (mut app, _base_dir, source_session_id) = new_test_app_with_session().await;
+        let source_session = app
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == source_session_id)
+            .expect("expected source session in session list");
+        source_session.status = Status::Done;
+        source_session.summary = Some("# Summary\n\nKeep going.".to_string());
+        source_session.title = Some("Done source".to_string());
+        app.mode = AppMode::View {
+            done_session_output_mode: DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            session_id: source_session_id.clone().into(),
+            scroll_offset: Some(0),
+        };
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        let result = handle(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("continue key should be handled");
+
+        // Assert
+        assert!(matches!(result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::ContinueSession,
+                ref confirmation_title,
+                ref confirmation_message,
+                ref restore_view,
+                ref session_id,
+                ..
+            } if confirmation_title == "Confirm Continue"
+                && confirmation_message
+                    == "Create a new draft session with initial context from this session?"
+                && matches!(restore_view, Some(restore_view) if restore_view.session_id == source_session_id)
+                && matches!(session_id, Some(session_id) if session_id.as_str() == source_session_id)
+        ));
+    }
+
     #[tokio::test]
     async fn test_handle_view_key_slash_opens_prompt_with_prefilled_slash() {
         // Arrange
@@ -2638,8 +2744,9 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_start_staged_session: false,
+            can_continue_terminal_session: false,
             can_open_worktree: true,
+            can_start_staged_session: false,
             follow_up_task_action: None,
             publish_pull_request_action: None,
             session_state: ViewSessionState::Review,
@@ -2696,8 +2803,9 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_start_staged_session: false,
+            can_continue_terminal_session: false,
             can_open_worktree: true,
+            can_start_staged_session: false,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -2747,8 +2855,9 @@ mod tests {
         let view_context = view_context(&mut app).expect("expected view context");
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            can_start_staged_session: false,
+            can_continue_terminal_session: false,
             can_open_worktree: true,
+            can_start_staged_session: false,
             follow_up_task_action: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
             session_state: ViewSessionState::Review,
@@ -2816,8 +2925,9 @@ mod tests {
         ] {
             let mut pending_update = ViewPendingUpdate::from_context(&view_context);
             let view_session_snapshot = ViewSessionSnapshot {
-                can_start_staged_session: false,
+                can_continue_terminal_session: false,
                 can_open_worktree: false,
+                can_start_staged_session: false,
                 follow_up_task_action: None,
                 publish_pull_request_action: None,
                 session_state: ViewSessionState::Done,
