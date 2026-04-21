@@ -1,7 +1,8 @@
 //! Shared app dependency container for managers and background workflows.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_forge::ReviewRequestClient;
 use tokio::sync::mpsc;
@@ -10,9 +11,13 @@ use crate::app::AppEvent;
 use crate::app::session::Clock;
 use crate::db::AppRepositories;
 use crate::domain::agent::AgentKind;
+use crate::domain::session::SessionId;
 use crate::infra::app_server::AppServerClient;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
+
+/// Shared per-app session redraw version counters keyed by session id.
+pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
 
 /// External clients and cached machine-scoped availability injected into
 /// [`AppServices`].
@@ -43,6 +48,7 @@ pub struct AppServices {
     git_client: Arc<dyn GitClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
+    session_update_versions: SessionUpdateVersionMap,
 }
 
 impl AppServices {
@@ -73,6 +79,7 @@ impl AppServices {
             git_client,
             repositories,
             review_request_client,
+            session_update_versions: Arc::default(),
         }
     }
 
@@ -120,6 +127,11 @@ impl AppServices {
     /// Returns the shared forge review-request client.
     pub(crate) fn review_request_client(&self) -> Arc<dyn ReviewRequestClient> {
         Arc::clone(&self.review_request_client)
+    }
+
+    /// Returns the shared per-app session update version counters.
+    pub(crate) fn session_update_versions(&self) -> SessionUpdateVersionMap {
+        Arc::clone(&self.session_update_versions)
     }
 
     /// Returns the optional app-server client override used by tests and

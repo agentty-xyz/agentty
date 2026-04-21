@@ -500,8 +500,8 @@ pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
     }
 
     format!(
-        "## Change Summary\n### Current Turn\n{}\n\n### Session Changes\n{}",
-        SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT, SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT
+        "## Change Summary\n### Current Turn\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}\n\n### \
+         Session Changes\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}"
     )
 }
 

@@ -111,8 +111,9 @@ pub(crate) enum AppEvent {
         error: String,
         session_id: SessionId,
     },
-    /// Indicates that a session handle snapshot changed in-memory.
-    SessionUpdated { session_id: SessionId },
+    /// Indicates that a session handle snapshot changed in-memory and carries
+    /// the latest observable handle version for redraw deduplication.
+    SessionUpdated { session_id: SessionId, version: u64 },
     /// Indicates that an agent turn completed and persisted one reducer-ready
     /// projection.
     AgentResponseReceived {
@@ -145,6 +146,7 @@ pub(super) struct AppEventBatch {
     pub(super) review_updates: HashMap<SessionId, ReviewUpdate>,
     pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
+    pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentModel>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, Option<crate::domain::agent::ReasoningLevel>>,
@@ -271,9 +273,10 @@ impl AppEventBatch {
                 error,
                 session_id,
             } => self.collect_review_preparation_failed(diff_hash, error, session_id),
-            AppEvent::SessionUpdated { session_id } => {
-                self.session_ids.insert(session_id);
-            }
+            AppEvent::SessionUpdated {
+                session_id,
+                version,
+            } => self.collect_session_updated(session_id, version),
             AppEvent::AgentResponseReceived {
                 session_id,
                 turn_applied_state,
@@ -407,6 +410,12 @@ impl AppEventBatch {
             .push(ReviewRequestStatusUpdate { result, session_id });
     }
 
+    /// Stores the latest reduced handle version for one touched session.
+    fn collect_session_updated(&mut self, session_id: SessionId, version: u64) {
+        self.session_ids.insert(session_id.clone());
+        self.session_update_versions.insert(session_id, version);
+    }
+
     /// Merges one completed-turn projection into the per-session batch.
     ///
     /// Agent responses also mark the session as touched so the reducer still
@@ -469,48 +478,21 @@ impl App {
 
     /// Applies one reduced app-event batch to in-memory app state.
     ///
-    /// Session updates are synchronized from runtime handles first. Any touched
-    /// session that reached terminal status (`Done`, `Canceled`) then drops its
-    /// worker queue so background workers can shut down provider runtimes.
+    /// The reducer first records whether the batch changes any render-visible
+    /// state, applies global runtime updates, and then synchronizes touched
+    /// session snapshots from their live handles. Any touched session that
+    /// reached terminal status (`Done`, `Canceled`) then drops its worker queue
+    /// so background workers can shut down provider runtimes.
     async fn apply_app_event_batch(&mut self, mut event_batch: AppEventBatch) {
+        let mut should_mark_dirty = Self::app_event_batch_changes_observable_state(&event_batch);
         let previous_session_states = self.previous_session_states(&event_batch.session_ids);
 
-        self.apply_batch_runtime_updates(&event_batch).await;
+        should_mark_dirty |=
+            self.update_session_redraw_versions(&event_batch.session_update_versions);
 
-        for (session_id, session_model) in event_batch.session_model_updates {
-            self.sessions
-                .apply_session_model_updated(&session_id, session_model);
-        }
+        self.apply_batch_runtime_updates(&mut event_batch).await;
 
-        for (session_id, reasoning_level_override) in event_batch.session_reasoning_level_updates {
-            self.sessions
-                .apply_session_reasoning_level_updated(&session_id, reasoning_level_override);
-        }
-
-        for (session_id, (added_lines, deleted_lines, session_size)) in
-            event_batch.session_size_updates
-        {
-            self.sessions.apply_session_size_updated(
-                &session_id,
-                added_lines,
-                deleted_lines,
-                session_size,
-            );
-        }
-
-        for (session_id, generation) in event_batch.session_title_generation_finished {
-            self.sessions
-                .clear_title_generation_task_if_matches(&session_id, generation);
-        }
-
-        for (session_id, entries) in event_batch.at_mention_entries_updates {
-            self.sessions.set_at_mention_index_for_root(
-                self.at_mention_lookup_root(&session_id),
-                entries.clone(),
-            );
-
-            self.apply_prompt_at_mention_entries(&session_id, entries);
-        }
+        self.apply_batch_session_snapshot_updates(&mut event_batch);
 
         apply_review_updates(
             &mut self.review_cache,
@@ -565,11 +547,15 @@ impl App {
             .await;
         self.retain_valid_session_progress_messages();
         self.sessions.retain_active_prompt_outputs();
+
+        if should_mark_dirty {
+            self.mark_dirty();
+        }
     }
 
     /// Applies reducer-batch updates that affect global app runtime state
     /// before session-local projections are synchronized.
-    async fn apply_batch_runtime_updates(&mut self, event_batch: &AppEventBatch) {
+    async fn apply_batch_runtime_updates(&mut self, event_batch: &mut AppEventBatch) {
         if event_batch.should_force_reload {
             self.refresh_sessions_now().await;
             self.reload_projects().await;
@@ -592,7 +578,7 @@ impl App {
                 .clone_from(&latest_available_version_update.latest_available_version);
         }
 
-        if let Some(update_status) = event_batch.update_status.clone() {
+        if let Some(update_status) = event_batch.update_status.take() {
             self.update_status = Some(update_status);
         }
     }
@@ -623,6 +609,91 @@ impl App {
                     .map(|session| (session_id.clone(), session.status))
             })
             .collect()
+    }
+
+    /// Returns whether one reduced event batch changes any render-visible
+    /// application state before `SessionUpdated` version deduplication.
+    fn app_event_batch_changes_observable_state(event_batch: &AppEventBatch) -> bool {
+        event_batch.should_force_reload
+            || event_batch.git_status_update.is_some()
+            || event_batch.latest_available_version_update.is_some()
+            || event_batch.update_status.is_some()
+            || !event_batch.applied_turns.is_empty()
+            || !event_batch.at_mention_entries_updates.is_empty()
+            || event_batch.branch_publish_action_update.is_some()
+            || !event_batch.published_branch_sync_updates.is_empty()
+            || !event_batch.review_request_status_updates.is_empty()
+            || !event_batch.review_updates.is_empty()
+            || !event_batch.session_model_updates.is_empty()
+            || !event_batch.session_progress_updates.is_empty()
+            || !event_batch.session_reasoning_level_updates.is_empty()
+            || !event_batch.session_size_updates.is_empty()
+            || !event_batch.session_title_generation_finished.is_empty()
+            || event_batch.sync_main_result.is_some()
+    }
+
+    /// Updates the last-seen session-handle versions and returns whether any
+    /// carried version is newer than the reduced value already applied.
+    fn update_session_redraw_versions(
+        &mut self,
+        session_update_versions: &HashMap<SessionId, u64>,
+    ) -> bool {
+        let mut did_change = false;
+
+        for (session_id, version) in session_update_versions {
+            let previous_version = self
+                .last_seen_session_update_versions
+                .insert(session_id.clone(), *version);
+
+            if previous_version != Some(*version) {
+                did_change = true;
+            }
+        }
+
+        did_change
+    }
+
+    /// Applies reducer batch updates that mutate cached session snapshots or
+    /// auxiliary session-view lookup state.
+    fn apply_batch_session_snapshot_updates(&mut self, event_batch: &mut AppEventBatch) {
+        for (session_id, session_model) in std::mem::take(&mut event_batch.session_model_updates) {
+            self.sessions
+                .apply_session_model_updated(&session_id, session_model);
+        }
+
+        for (session_id, reasoning_level_override) in
+            std::mem::take(&mut event_batch.session_reasoning_level_updates)
+        {
+            self.sessions
+                .apply_session_reasoning_level_updated(&session_id, reasoning_level_override);
+        }
+
+        for (session_id, (added_lines, deleted_lines, session_size)) in
+            std::mem::take(&mut event_batch.session_size_updates)
+        {
+            self.sessions.apply_session_size_updated(
+                &session_id,
+                added_lines,
+                deleted_lines,
+                session_size,
+            );
+        }
+
+        for (session_id, generation) in
+            std::mem::take(&mut event_batch.session_title_generation_finished)
+        {
+            self.sessions
+                .clear_title_generation_task_if_matches(&session_id, generation);
+        }
+
+        for (session_id, entries) in std::mem::take(&mut event_batch.at_mention_entries_updates) {
+            self.sessions.set_at_mention_index_for_root(
+                self.at_mention_lookup_root(&session_id),
+                entries.clone(),
+            );
+
+            self.apply_prompt_at_mention_entries(&session_id, entries);
+        }
     }
 
     /// Applies active progress message updates from one reducer batch.
@@ -1023,6 +1094,7 @@ impl App {
             self.services.clock().as_ref(),
             self.services.db(),
             &app_event_tx,
+            &self.services.session_update_versions(),
             session_id,
             Status::Done,
         )
@@ -1043,6 +1115,7 @@ impl App {
             self.services.clock().as_ref(),
             self.services.db(),
             &app_event_tx,
+            &self.services.session_update_versions(),
             session_id,
             Status::Canceled,
         )

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
+use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
 use crate::domain::agent::AgentModel;
 use crate::infra::db::AppRepositories;
@@ -38,6 +39,8 @@ pub(super) struct AssistContext {
     pub(super) output: Arc<Mutex<String>>,
     /// Model used when invoking agent-assisted recovery.
     pub(super) session_model: AgentModel,
+    /// Per-app session update versions shared with the main runtime.
+    pub(super) session_update_versions: SessionUpdateVersionMap,
 }
 
 /// Tracks repeated identical failures to stop non-progressing assist loops.
@@ -107,6 +110,7 @@ pub(super) async fn append_assist_header(
         &context.output,
         &context.db,
         &context.app_event_tx,
+        &context.session_update_versions,
         &context.id,
         &assist_header,
     )
@@ -131,6 +135,7 @@ pub(super) async fn run_agent_assist(
         output: Arc::clone(&context.output),
         prompt: prompt.to_string(),
         session_model: context.session_model,
+        session_update_versions: context.session_update_versions.clone(),
     })
     .await
 }

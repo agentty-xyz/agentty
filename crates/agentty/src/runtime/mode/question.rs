@@ -1,6 +1,7 @@
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
+use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::session::{SessionId, Status};
@@ -813,8 +814,18 @@ async fn end_turn_no_answer(app: &mut App) {
         return;
     }
 
+    if let Some(handles) = app.sessions.handles.get(session_id.as_str())
+        && let Ok(mut handle_status) = handles.status.lock()
+    {
+        *handle_status = Status::Review;
+    }
+
     app.services.emit_app_event(AppEvent::SessionUpdated {
         session_id: session_id.clone(),
+        version: SessionTaskService::next_session_update_version(
+            &app.services.session_update_versions(),
+            session_id.as_str(),
+        ),
     });
     app.services.emit_app_event(AppEvent::RefreshSessions);
 
@@ -825,12 +836,6 @@ async fn end_turn_no_answer(app: &mut App) {
         .find(|session| session.id == session_id)
     {
         session.status = Status::Review;
-    }
-
-    if let Some(handles) = app.sessions.handles.get(session_id.as_str())
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
     }
 
     let (review_status_message, review_text) = app.review_view_state(&session_id);

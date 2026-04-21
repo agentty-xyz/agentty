@@ -5,6 +5,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -12,6 +13,10 @@ use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::runtime::{FRAME_INTERVAL, event, terminal};
+
+/// Fallback redraw cadence for visible spinner and timer UI when no new
+/// events arrive.
+const FORCED_REDRAW_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Concrete terminal type used by the production runtime entry point.
 pub(crate) type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -94,6 +99,7 @@ where
     let mut main_loop_state = MainLoopState {
         app,
         event_rx,
+        last_draw_at: Instant::now(),
         terminal,
         tick,
     };
@@ -105,6 +111,7 @@ where
 struct MainLoopState<'a, B: Backend> {
     app: &'a mut App,
     event_rx: &'a mut mpsc::UnboundedReceiver<crossterm::event::Event>,
+    last_draw_at: Instant,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
 }
@@ -119,7 +126,7 @@ where
     /// from their live handles without a full per-frame session sweep.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
         self.app.process_pending_app_events().await;
-        render_frame(self.app, self.terminal)?;
+        render_frame(self.app, self.terminal, &mut self.last_draw_at)?;
 
         event::process_events(self.app, self.terminal, self.event_rx, self.tick).await
     }
@@ -143,13 +150,28 @@ where
 }
 
 /// Renders one frame of the TUI application into the terminal buffer.
-fn render_frame<B: Backend>(app: &mut App, terminal: &mut Terminal<B>) -> io::Result<()>
+///
+/// Idle redraws are skipped unless the app explicitly requested a fresh frame
+/// or one visible spinner/timer has reached the forced redraw cadence.
+fn render_frame<B: Backend>(
+    app: &mut App,
+    terminal: &mut Terminal<B>,
+    last_draw_at: &mut Instant,
+) -> io::Result<()>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    let forced_redraw_due =
+        app.has_visible_tick_driven_ui() && last_draw_at.elapsed() >= FORCED_REDRAW_INTERVAL;
+    if !app.needs_redraw() && !forced_redraw_due {
+        return Ok(());
+    }
+
     terminal
         .draw(|frame| app.draw(frame))
         .map_err(backend_err)?;
+    app.clear_redraw();
+    *last_draw_at = Instant::now();
 
     Ok(())
 }
@@ -157,10 +179,15 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::convert::Infallible;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::TestBackend;
+    use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+    use ratatui::buffer::Cell;
+    use ratatui::layout::{Position, Size};
     use tempfile::tempdir;
 
     use super::*;
@@ -273,6 +300,82 @@ mod tests {
             .collect()
     }
 
+    /// Test backend wrapper that counts each `Terminal::draw()` flush.
+    struct CountingBackend {
+        draw_count: Arc<AtomicUsize>,
+        inner: TestBackend,
+    }
+
+    impl CountingBackend {
+        /// Creates a counting wrapper around one `TestBackend`.
+        fn new(width: u16, height: u16) -> (Self, Arc<AtomicUsize>) {
+            let draw_count = Arc::new(AtomicUsize::new(0));
+
+            (
+                Self {
+                    draw_count: Arc::clone(&draw_count),
+                    inner: TestBackend::new(width, height),
+                },
+                draw_count,
+            )
+        }
+    }
+
+    impl Backend for CountingBackend {
+        type Error = Infallible;
+
+        fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.draw_count.fetch_add(1, Ordering::Relaxed);
+            self.inner.draw(content)
+        }
+
+        fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+            self.inner.hide_cursor()
+        }
+
+        fn show_cursor(&mut self) -> Result<(), Self::Error> {
+            self.inner.show_cursor()
+        }
+
+        fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+            self.inner.get_cursor_position()
+        }
+
+        fn set_cursor_position<P: Into<Position>>(
+            &mut self,
+            position: P,
+        ) -> Result<(), Self::Error> {
+            self.inner.set_cursor_position(position)
+        }
+
+        fn clear(&mut self) -> Result<(), Self::Error> {
+            self.inner.clear()
+        }
+
+        fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+            self.inner.clear_region(clear_type)
+        }
+
+        fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
+            self.inner.append_lines(n)
+        }
+
+        fn size(&self) -> Result<Size, Self::Error> {
+            self.inner.size()
+        }
+
+        fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+            self.inner.window_size()
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            self.inner.flush()
+        }
+    }
+
     /// Verifies that `run_with_backend` drives the main loop with a
     /// `TestBackend` and exits cleanly when quit key events are injected.
     #[tokio::test]
@@ -304,6 +407,51 @@ mod tests {
         assert!(
             result.is_ok(),
             "run_with_backend should exit cleanly on quit"
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies idle `run_with_backend` redraws stay throttled when no visible
+    /// spinner or timer is active.
+    async fn run_with_backend_skips_idle_redraws_without_tick_driven_ui() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        let (backend, draw_count) = CountingBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let run_future = run_with_backend(&mut app, &mut terminal, &mut event_rx);
+        tokio::pin!(run_future);
+
+        // Act
+        tokio::select! {
+            result = &mut run_future => {
+                unreachable!("runtime exited before idle window elapsed: {result:?}");
+            }
+            () = tokio::time::sleep(Duration::from_millis(1100)) => {}
+        }
+        let idle_draw_count = draw_count.load(Ordering::Relaxed);
+        event_tx
+            .send(Event::Key(KeyEvent::new(
+                KeyCode::Char('q'),
+                KeyModifiers::NONE,
+            )))
+            .expect("failed to send quit key");
+        event_tx
+            .send(Event::Key(KeyEvent::new(
+                KeyCode::Char('y'),
+                KeyModifiers::NONE,
+            )))
+            .expect("failed to send confirm key");
+        let result = run_future.await;
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "run_with_backend should exit cleanly on quit"
+        );
+        assert!(
+            idle_draw_count <= 2,
+            "expected at most two idle draws per second, observed {idle_draw_count}"
         );
     }
 
@@ -356,11 +504,13 @@ mod tests {
         }
         app.services.emit_app_event(AppEvent::SessionUpdated {
             session_id: session_id.clone().into(),
+            version: 1,
         });
 
         let mut main_loop_state = MainLoopState {
             app: &mut app,
             event_rx: &mut event_rx,
+            last_draw_at: Instant::now(),
             terminal: &mut terminal,
             tick: &mut tick,
         };

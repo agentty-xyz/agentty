@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::SessionTaskService;
 use crate::app::assist::AssistContext;
+use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{
     Clock, SessionError, TurnAppliedState, remote_branch_name_from_upstream_ref,
     unix_timestamp_from_system_time,
@@ -115,6 +116,8 @@ struct SessionWorkerContext {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     output: Arc<Mutex<String>>,
+    /// Per-app session update versions shared with the main runtime.
+    session_update_versions: SessionUpdateVersionMap,
     session_id: SessionId,
     status: Arc<Mutex<Status>>,
 }
@@ -132,6 +135,8 @@ pub(super) struct SessionWorkerRuntime {
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
     output: Arc<Mutex<String>>,
+    /// Per-app session update versions shared with the main runtime.
+    session_update_versions: SessionUpdateVersionMap,
     session_id: SessionId,
     session_model: AgentModel,
     status: Arc<Mutex<Status>>,
@@ -267,6 +272,7 @@ impl SessionWorkerService {
             fs_client: services.fs_client(),
             git_client: services.git_client(),
             output: Arc::clone(&runtime.output),
+            session_update_versions: Arc::clone(&runtime.session_update_versions),
             session_id: runtime.session_id.clone(),
             status: Arc::clone(&runtime.status),
         };
@@ -384,6 +390,7 @@ impl SessionWorkerService {
                 context.clock.as_ref(),
                 &context.db,
                 &context.app_event_tx,
+                &context.session_update_versions,
                 &context.session_id,
                 Status::InProgress,
             )
@@ -419,7 +426,6 @@ impl SessionWorkerService {
         };
 
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-
         let consumer = tokio::spawn(consume_turn_events(
             event_rx,
             context.app_event_tx.clone(),
@@ -467,10 +473,7 @@ impl SessionWorkerService {
             });
         }
 
-        let target_status = match &result {
-            Ok(status) => *status,
-            Err(_) => Status::Review,
-        };
+        let target_status = result.as_ref().copied().unwrap_or(Status::Review);
 
         // Best-effort: status transition failure is non-critical.
         let _ = SessionTaskService::update_status(
@@ -478,6 +481,7 @@ impl SessionWorkerService {
             context.clock.as_ref(),
             &context.db,
             &context.app_event_tx,
+            &context.session_update_versions,
             &context.session_id,
             target_status,
         )
@@ -545,7 +549,7 @@ impl SessionManager {
         session_id: &str,
         command: SessionCommand,
     ) -> Result<(), SessionError> {
-        let runtime = self.session_worker_runtime_or_err(session_id)?;
+        let runtime = self.session_worker_runtime_or_err(services, session_id)?;
 
         self.worker_service_mut()
             .enqueue_session_command(services, runtime, command)
@@ -590,6 +594,7 @@ impl SessionManager {
     /// Returns an error when the session or runtime handles are missing.
     fn session_worker_runtime_or_err(
         &self,
+        services: &AppServices,
         session_id: &str,
     ) -> Result<SessionWorkerRuntime, SessionError> {
         let (session, handles) = self.session_and_handles_or_err(session_id)?;
@@ -599,6 +604,7 @@ impl SessionManager {
             child_pid: Arc::clone(&handles.child_pid),
             folder: session.folder.clone(),
             output: Arc::clone(&handles.output),
+            session_update_versions: services.session_update_versions(),
             session_id: session.id.clone(),
             session_model: session.model,
             status: Arc::clone(&handles.status),
@@ -812,6 +818,7 @@ async fn apply_turn_result(
                 &context.output,
                 &context.db,
                 &context.app_event_tx,
+                &context.session_update_versions,
                 &context.session_id,
                 &message,
             )
@@ -843,6 +850,7 @@ async fn apply_successful_turn_result(
             &context.output,
             &context.db,
             &context.app_event_tx,
+            &context.session_update_versions,
             &context.session_id,
             message.as_str(),
         )
@@ -893,6 +901,7 @@ async fn apply_successful_turn_result(
         id: context.session_id.to_string(),
         output: Arc::clone(&context.output),
         session_model: auto_commit_model,
+        session_update_versions: context.session_update_versions.clone(),
     })
     .await;
     start_published_branch_auto_push(context, turn_metadata.published_upstream_ref);
@@ -917,6 +926,7 @@ fn start_published_branch_auto_push(
     let folder = context.folder.clone();
     let git_client = Arc::clone(&context.git_client);
     let output = Arc::clone(&context.output);
+    let session_update_versions = context.session_update_versions.clone();
 
     let _ = app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
         session_id: session_id.clone(),
@@ -932,6 +942,7 @@ fn start_published_branch_auto_push(
         output,
         published_upstream_ref,
         session_id,
+        session_update_versions,
         sync_operation_id,
     };
     tokio::spawn(async move {
@@ -956,6 +967,8 @@ pub(super) struct PublishedBranchAutoPushInput {
     pub(super) published_upstream_ref: String,
     /// Session id whose branch is being pushed.
     pub(super) session_id: SessionId,
+    /// Per-app session update versions shared with the main runtime.
+    pub(super) session_update_versions: SessionUpdateVersionMap,
     /// Auto-push operation id used to ignore stale completion updates.
     pub(super) sync_operation_id: String,
 }
@@ -975,6 +988,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
         git_client,
         output,
         session_id,
+        session_update_versions,
         sync_operation_id,
         published_upstream_ref,
     } = input;
@@ -1005,6 +1019,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
                 &output,
                 &db,
                 &app_event_tx,
+                &session_update_versions,
                 &session_id,
                 &message,
             )
@@ -1028,6 +1043,7 @@ async fn handle_turn_persistence_failure(context: &SessionWorkerContext, error: 
         &context.output,
         &context.db,
         &context.app_event_tx,
+        &context.session_update_versions,
         &context.session_id,
         &message,
     )
@@ -1493,6 +1509,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1595,6 +1612,7 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1651,6 +1669,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess-preturn".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1715,6 +1734,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess-timeout".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1776,6 +1796,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess-term".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1812,6 +1833,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess-nopid".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1898,6 +1920,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -1990,6 +2013,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2092,6 +2116,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2178,6 +2203,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2267,6 +2293,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2335,6 +2362,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2453,6 +2481,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2512,6 +2541,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
@@ -2583,6 +2613,7 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            session_update_versions: Arc::default(),
             session_id: "sess1".into(),
             status: Arc::new(Mutex::new(Status::InProgress)),
         };

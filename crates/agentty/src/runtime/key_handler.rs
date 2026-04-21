@@ -16,6 +16,9 @@ use crate::ui::state::app_mode::{
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
+///
+/// Successful handlers mark the app dirty so the next loop iteration renders
+/// the updated UI state.
 pub(crate) async fn handle_key_event<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
@@ -24,54 +27,56 @@ pub(crate) async fn handle_key_event<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    if let AppMode::Confirmation {
+    let result = if let AppMode::Confirmation {
         selected_confirmation_index,
         ..
     } = &mut app.mode
     {
         let decision = mode::confirmation::handle(selected_confirmation_index, key);
 
-        return handle_confirmation_decision(app, decision).await;
+        handle_confirmation_decision(app, decision).await
+    } else if matches!(app.mode, AppMode::OpenCommandSelector { .. }) {
+        handle_open_command_selector_key(app, key).await
+    } else if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
+        Ok(handle_publish_branch_input_key(app, key))
+    } else {
+        match &app.mode {
+            AppMode::List => mode::list::handle(app, key).await,
+            AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
+            AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
+            AppMode::Confirmation { .. } => {
+                unreachable!("confirmation mode is handled before dispatch matching")
+            }
+            AppMode::View { .. } => mode::session_view::handle(app, terminal, key).await,
+            AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
+            AppMode::Question { .. } => {
+                let size = terminal.size().map_err(backend_err)?;
+                let terminal_rect = Rect::new(0, 0, size.width, size.height);
+
+                Ok(mode::question::handle(app, terminal_rect, key).await)
+            }
+            AppMode::Diff { .. } => {
+                let size = terminal.size().map_err(backend_err)?;
+                let terminal_rect = Rect::new(0, 0, size.width, size.height);
+                let content_area = content_area_for_terminal(terminal_rect);
+
+                Ok(mode::diff::handle(app, content_area, key))
+            }
+            AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
+            AppMode::OpenCommandSelector { .. } => {
+                unreachable!("open-command selector mode is handled before dispatch matching")
+            }
+            AppMode::PublishBranchInput { .. } => {
+                unreachable!("publish-branch input mode is handled before dispatch matching")
+            }
+        }
+    };
+
+    if result.is_ok() {
+        app.mark_dirty();
     }
 
-    if matches!(app.mode, AppMode::OpenCommandSelector { .. }) {
-        return handle_open_command_selector_key(app, key).await;
-    }
-
-    if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
-        return Ok(handle_publish_branch_input_key(app, key));
-    }
-
-    match &app.mode {
-        AppMode::List => mode::list::handle(app, key).await,
-        AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
-        AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
-        AppMode::Confirmation { .. } => {
-            unreachable!("confirmation mode is handled before dispatch matching")
-        }
-        AppMode::View { .. } => mode::session_view::handle(app, terminal, key).await,
-        AppMode::Prompt { .. } => mode::prompt::handle(app, terminal, key).await,
-        AppMode::Question { .. } => {
-            let size = terminal.size().map_err(backend_err)?;
-            let terminal_rect = Rect::new(0, 0, size.width, size.height);
-
-            Ok(mode::question::handle(app, terminal_rect, key).await)
-        }
-        AppMode::Diff { .. } => {
-            let size = terminal.size().map_err(backend_err)?;
-            let terminal_rect = Rect::new(0, 0, size.width, size.height);
-            let content_area = content_area_for_terminal(terminal_rect);
-
-            Ok(mode::diff::handle(app, content_area, key))
-        }
-        AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
-        AppMode::OpenCommandSelector { .. } => {
-            unreachable!("open-command selector mode is handled before dispatch matching")
-        }
-        AppMode::PublishBranchInput { .. } => {
-            unreachable!("publish-branch input mode is handled before dispatch matching")
-        }
-    }
+    result
 }
 
 /// Returns the central content area after removing the global status and

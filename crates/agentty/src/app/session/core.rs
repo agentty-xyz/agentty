@@ -2648,6 +2648,7 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "A").await;
+        let session_id = app.sessions.sessions[0].id.clone();
         let session_folder = app.sessions.sessions[0].folder.clone();
         app.sessions.set_at_mention_index_for_root(
             session_folder.clone(),
@@ -2656,9 +2657,23 @@ mod tests {
                 path: "src/main.rs".to_string(),
             }],
         );
+        let session_update_versions = app.services.session_update_versions();
+        SessionTaskService::remove_session_update_version(
+            &session_update_versions,
+            session_id.as_str(),
+        );
+        let initial_version = SessionTaskService::next_session_update_version(
+            &session_update_versions,
+            session_id.as_str(),
+        );
+        assert_eq!(initial_version, 1);
 
         // Act
         app.delete_selected_session().await;
+        let reset_version = SessionTaskService::next_session_update_version(
+            &session_update_versions,
+            session_id.as_str(),
+        );
 
         // Assert
         assert!(app.sessions.sessions.is_empty());
@@ -2675,6 +2690,12 @@ mod tests {
             app.sessions
                 .at_mention_index_for_root(&session_folder)
                 .is_none()
+        );
+        assert_eq!(reset_version, 1);
+
+        SessionTaskService::remove_session_update_version(
+            &session_update_versions,
+            session_id.as_str(),
         );
     }
 
@@ -4913,6 +4934,7 @@ mod tests {
             app.services.clock().as_ref(),
             app.services.db(),
             &app_event_tx,
+            &app.services.session_update_versions(),
             &session_id,
             Status::Merging,
         )
@@ -4926,6 +4948,7 @@ mod tests {
             app.services.clock().as_ref(),
             app.services.db(),
             &app_event_tx,
+            &app.services.session_update_versions(),
             &session_id,
             Status::Done,
         )

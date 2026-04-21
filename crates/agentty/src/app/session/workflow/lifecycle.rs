@@ -689,6 +689,7 @@ impl SessionManager {
             &output,
             services.db(),
             &app_event_tx,
+            &services.session_update_versions(),
             &persisted_session_id,
             &initial_output,
         )
@@ -700,6 +701,7 @@ impl SessionManager {
             services.clock().as_ref(),
             services.db(),
             &app_event_tx,
+            &services.session_update_versions(),
             &persisted_session_id,
             Status::InProgress,
         )
@@ -1063,6 +1065,10 @@ impl SessionManager {
         self.remove_at_mention_index_for_root(&session.folder);
         self.abort_title_generation_task(&session.id);
         self.clear_history_replay_pending(&session.id);
+        SessionTaskService::remove_session_update_version(
+            &services.session_update_versions(),
+            &session.id,
+        );
 
         if let Err(error) = services
             .db()
@@ -1310,6 +1316,7 @@ impl SessionManager {
                 services.clock().as_ref(),
                 services.db(),
                 &app_event_tx,
+                &services.session_update_versions(),
                 &persisted_session_id,
                 Status::InProgress,
             )
@@ -1453,6 +1460,7 @@ impl SessionManager {
             output,
             services.db(),
             app_event_tx,
+            &services.session_update_versions(),
             session_id,
             &reply_line,
         )
@@ -1587,6 +1595,7 @@ impl SessionManager {
             &handles.output,
             services.db(),
             &app_event_tx,
+            &services.session_update_versions(),
             session_id,
             &status_error,
         )
@@ -1613,6 +1622,7 @@ impl SessionManager {
                 output,
                 services.db(),
                 app_event_tx,
+                &services.session_update_versions(),
                 persisted_session_id,
                 &error_line,
             )
@@ -1876,11 +1886,17 @@ impl SessionManager {
         worktree_branch: &str,
         session_saved: bool,
     ) {
-        if session_saved && let Err(error) = services.db().delete_session(session_id).await {
-            warn!(
-                session_id = session_id,
-                error = %error,
-                "failed to roll back persisted session metadata"
+        if session_saved {
+            if let Err(error) = services.db().delete_session(session_id).await {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to roll back persisted session metadata"
+                );
+            }
+            SessionTaskService::remove_session_update_version(
+                &services.session_update_versions(),
+                session_id,
             );
         }
 
@@ -1953,6 +1969,7 @@ impl SessionManager {
             &handles.output,
             services.db(),
             &app_event_tx,
+            &services.session_update_versions(),
             &session.id,
             output,
         )
@@ -2008,6 +2025,7 @@ impl SessionManager {
             services.clock().as_ref(),
             services.db(),
             &app_event_tx,
+            &services.session_update_versions(),
             session_id,
             Status::Canceled,
         )

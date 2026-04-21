@@ -5,7 +5,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use tracing::warn;
 
-use crate::app::session::remote_branch_name_from_upstream_ref;
+use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
 use crate::app::{
     self, App, AppEvent, ReviewCacheEntry, diff_content_hash, is_review_loading_status_message,
     review_loading_message,
@@ -600,8 +600,18 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         return;
     }
 
+    if let Some(handles) = app.sessions.handles.get(session_id)
+        && let Ok(mut handle_status) = handles.status.lock()
+    {
+        *handle_status = Status::Review;
+    }
+
     app.services.emit_app_event(AppEvent::SessionUpdated {
         session_id: session_id.into(),
+        version: SessionTaskService::next_session_update_version(
+            &app.services.session_update_versions(),
+            session_id,
+        ),
     });
     app.services.emit_app_event(AppEvent::RefreshSessions);
 
@@ -612,12 +622,6 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         .find(|session| session.id == session_id)
     {
         session.status = Status::Review;
-    }
-
-    if let Some(handles) = app.sessions.handles.get(session_id)
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
     }
 }
 

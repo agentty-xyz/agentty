@@ -16,6 +16,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
+use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -49,6 +50,17 @@ struct RebaseAssistPromptTemplate<'a> {
 /// Boxed async result used by sync conflict assistance boundary methods.
 type SyncAssistFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// Shared context needed to restore a failed merge-start attempt back to
+/// `Review`.
+struct MergeStartRestoreContext<'a> {
+    app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    clock: &'a dyn Clock,
+    db: &'a AppRepositories,
+    session_id: &'a str,
+    session_update_versions: &'a SessionUpdateVersionMap,
+    status: &'a Arc<Mutex<Status>>,
+}
+
 struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     base_branch: String,
@@ -62,6 +74,7 @@ struct MergeTaskInput {
     output: Arc<Mutex<String>>,
     repo_root: PathBuf,
     session_model: AgentModel,
+    session_update_versions: SessionUpdateVersionMap,
     source_branch: String,
     status: Arc<Mutex<Status>>,
 }
@@ -78,6 +91,7 @@ struct RebaseAssistInput {
     id: SessionId,
     output: Arc<Mutex<String>>,
     session_model: AgentModel,
+    session_update_versions: SessionUpdateVersionMap,
 }
 
 struct RebaseTaskInput {
@@ -92,6 +106,7 @@ struct RebaseTaskInput {
     id: SessionId,
     output: Arc<Mutex<String>>,
     session_model: AgentModel,
+    session_update_versions: SessionUpdateVersionMap,
     status: Arc<Mutex<Status>>,
 }
 
@@ -105,6 +120,19 @@ struct FinalizeRebaseInput<'a> {
     id: &'a str,
     output: &'a Arc<Mutex<String>>,
     rebase_result: Result<String, SessionError>,
+    session_update_versions: &'a SessionUpdateVersionMap,
+    status: &'a Arc<Mutex<Status>>,
+}
+
+/// Bundled context for finalizing one merge task.
+struct FinalizeMergeInput<'a> {
+    clock: &'a dyn Clock,
+    db: &'a AppRepositories,
+    app_event_tx: &'a mpsc::UnboundedSender<AppEvent>,
+    id: &'a str,
+    output: &'a Arc<Mutex<String>>,
+    result: Result<String, SessionError>,
+    session_update_versions: &'a SessionUpdateVersionMap,
     status: &'a Arc<Mutex<Status>>,
 }
 
@@ -414,27 +442,42 @@ impl SessionMergeService {
             ));
         }
 
-        let db = services.db().clone();
-        let folder = session.folder.clone();
-        let id = session.id.clone();
-        let session_model = session.model;
-        let app_event_tx = services.event_sender();
-        let clock = services.clock();
-        let fs_client = services.fs_client();
-        let git_client = manager.git_client();
+        let (db, folder, id, session_model) = (
+            services.db().clone(),
+            session.folder.clone(),
+            session.id.clone(),
+            session.model,
+        );
+        let (app_event_tx, clock, fs_client, git_client, session_update_versions) = (
+            services.event_sender(),
+            services.clock(),
+            services.fs_client(),
+            manager.git_client(),
+            services.session_update_versions(),
+        );
 
         let handles = manager
             .session_handles_or_err(session_id)
             .map_err(|_| SessionError::HandlesNotFound)?;
-        let child_pid = Arc::clone(&handles.child_pid);
-        let output = Arc::clone(&handles.output);
-        let status = Arc::clone(&handles.status);
-
+        let (child_pid, output, status) = (
+            Arc::clone(&handles.child_pid),
+            Arc::clone(&handles.output),
+            Arc::clone(&handles.status),
+        );
+        let restore_context = MergeStartRestoreContext {
+            app_event_tx: &app_event_tx,
+            clock: clock.as_ref(),
+            db: &db,
+            session_id: &id,
+            session_update_versions: &session_update_versions,
+            status: &status,
+        };
         if !SessionTaskService::update_status(
             &status,
             clock.as_ref(),
             &db,
             &app_event_tx,
+            &session_update_versions,
             &id,
             Status::Merging,
         )
@@ -445,30 +488,13 @@ impl SessionMergeService {
             ));
         }
 
-        let base_branch = match db.get_session_base_branch(&id).await {
-            Ok(Some(base_branch)) => base_branch,
-            Ok(None) => {
-                Self::restore_review_status(&status, clock.as_ref(), &db, &app_event_tx, &id).await;
-
-                return Err(SessionError::Workflow(
-                    "No git worktree for this session".to_string(),
-                ));
-            }
-            Err(error) => {
-                Self::restore_review_status(&status, clock.as_ref(), &db, &app_event_tx, &id).await;
-
-                return Err(SessionError::Db(error));
-            }
-        };
-
-        let working_dir = projects.working_dir().to_path_buf();
-        let Some(repo_root) = git_client.find_git_repo_root(working_dir).await else {
-            Self::restore_review_status(&status, clock.as_ref(), &db, &app_event_tx, &id).await;
-
-            return Err(SessionError::Workflow(
-                "Failed to find git repository root".to_string(),
-            ));
-        };
+        let base_branch = Self::load_merge_base_branch(&restore_context).await?;
+        let repo_root = Self::find_merge_repo_root(
+            git_client.as_ref(),
+            projects.working_dir().to_path_buf(),
+            &restore_context,
+        )
+        .await?;
 
         let merge_task_input = MergeTaskInput {
             app_event_tx,
@@ -483,6 +509,7 @@ impl SessionMergeService {
             output,
             repo_root,
             session_model,
+            session_update_versions,
             source_branch: session_branch(&id),
             status,
         };
@@ -495,28 +522,70 @@ impl SessionMergeService {
 
     /// Restores a failed merge-start attempt to `Review` status without
     /// masking the original error.
-    async fn restore_review_status(
-        status: &Arc<Mutex<Status>>,
-        clock: &dyn Clock,
-        db: &AppRepositories,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        session_id: &str,
-    ) {
+    async fn restore_review_status(context: &MergeStartRestoreContext<'_>) {
         if !SessionTaskService::update_status(
-            status,
-            clock,
-            db,
-            app_event_tx,
-            session_id,
+            context.status,
+            context.clock,
+            context.db,
+            context.app_event_tx,
+            context.session_update_versions,
+            context.session_id,
             Status::Review,
         )
         .await
         {
             warn!(
-                session_id = session_id,
+                session_id = context.session_id,
                 "skipped restoring review status because the in-memory status was already current"
             );
         }
+    }
+
+    /// Loads the persisted base branch for a mergeable session or restores the
+    /// session to `Review` when required metadata is missing.
+    ///
+    /// # Errors
+    /// Returns an error when the session lacks a worktree-backed base branch
+    /// or when reading the metadata from persistence fails.
+    async fn load_merge_base_branch(
+        context: &MergeStartRestoreContext<'_>,
+    ) -> Result<String, SessionError> {
+        match context.db.get_session_base_branch(context.session_id).await {
+            Ok(Some(base_branch)) => Ok(base_branch),
+            Ok(None) => {
+                Self::restore_review_status(context).await;
+
+                Err(SessionError::Workflow(
+                    "No git worktree for this session".to_string(),
+                ))
+            }
+            Err(error) => {
+                Self::restore_review_status(context).await;
+
+                Err(SessionError::Db(error))
+            }
+        }
+    }
+
+    /// Resolves the main repository root for a mergeable session or restores
+    /// the session to `Review` when the repository cannot be found.
+    ///
+    /// # Errors
+    /// Returns an error when the repository root cannot be discovered.
+    async fn find_merge_repo_root(
+        git_client: &dyn GitClient,
+        working_dir: PathBuf,
+        context: &MergeStartRestoreContext<'_>,
+    ) -> Result<PathBuf, SessionError> {
+        if let Some(repo_root) = git_client.find_git_repo_root(working_dir).await {
+            return Ok(repo_root);
+        }
+
+        Self::restore_review_status(context).await;
+
+        Err(SessionError::Workflow(
+            "Failed to find git repository root".to_string(),
+        ))
     }
 
     /// Rebases a reviewed session branch onto its base branch.
@@ -559,12 +628,14 @@ impl SessionMergeService {
         let clock = services.clock();
         let fs_client = services.fs_client();
         let git_client = manager.git_client();
+        let session_update_versions = services.session_update_versions();
 
         if !SessionTaskService::update_status(
             &status,
             clock.as_ref(),
             &db,
             &app_event_tx,
+            &session_update_versions,
             &session.id,
             Status::Rebasing,
         )
@@ -590,6 +661,7 @@ impl SessionMergeService {
             id,
             output,
             session_model,
+            session_update_versions,
             status,
         };
         tokio::spawn(async move {
@@ -625,18 +697,19 @@ impl SessionManager {
         let app_event_tx = input.app_event_tx.clone();
         let id = input.id.clone();
         let status = Arc::clone(&input.status);
+        let session_update_versions = input.session_update_versions.clone();
 
         let merge_result = Self::execute_merge_workflow(input).await;
-
-        Self::finalize_merge_task(
-            merge_result,
-            clock.as_ref(),
-            &output,
-            &db,
-            &app_event_tx,
-            &id,
-            &status,
-        )
+        Self::finalize_merge_task(FinalizeMergeInput {
+            clock: clock.as_ref(),
+            db: &db,
+            app_event_tx: &app_event_tx,
+            id: &id,
+            output: &output,
+            result: merge_result,
+            session_update_versions: &session_update_versions,
+            status: &status,
+        })
         .await;
     }
 
@@ -660,6 +733,7 @@ impl SessionManager {
             output: _,
             repo_root,
             source_branch,
+            session_update_versions,
             status,
             ..
         } = input;
@@ -734,6 +808,7 @@ impl SessionManager {
             clock.as_ref(),
             &db,
             &app_event_tx,
+            &session_update_versions,
             &id,
             Status::Done,
         )
@@ -764,6 +839,7 @@ impl SessionManager {
             id: input.id.clone(),
             output: Arc::clone(&input.output),
             session_model: input.session_model,
+            session_update_versions: input.session_update_versions.clone(),
         }
     }
 
@@ -818,22 +894,26 @@ impl SessionManager {
     /// branch stats reflect the new refs without waiting for the periodic
     /// poller. The `Done` status transition also emits a full session refresh,
     /// which refreshes active-project roadmap task data.
-    async fn finalize_merge_task(
-        merge_result: Result<String, SessionError>,
-        clock: &dyn Clock,
-        output: &Arc<Mutex<String>>,
-        db: &AppRepositories,
-        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        id: &str,
-        status: &Arc<Mutex<Status>>,
-    ) {
-        match merge_result {
+    async fn finalize_merge_task(input: FinalizeMergeInput<'_>) {
+        let FinalizeMergeInput {
+            clock,
+            db,
+            app_event_tx,
+            id,
+            output,
+            result,
+            session_update_versions,
+            status,
+        } = input;
+
+        match result {
             Ok(message) => {
                 let merge_message = format!("\n[Merge] {message}\n");
                 SessionTaskService::append_session_output(
                     output,
                     db,
                     app_event_tx,
+                    session_update_versions,
                     id,
                     &merge_message,
                 )
@@ -846,6 +926,7 @@ impl SessionManager {
                     output,
                     db,
                     app_event_tx,
+                    session_update_versions,
                     id,
                     &merge_error,
                 )
@@ -855,6 +936,7 @@ impl SessionManager {
                     clock,
                     db,
                     app_event_tx,
+                    session_update_versions,
                     id,
                     Status::Review,
                 )
@@ -1161,6 +1243,7 @@ impl SessionManager {
             id,
             output,
             session_model,
+            session_update_versions,
             status,
         } = input;
 
@@ -1176,6 +1259,7 @@ impl SessionManager {
                 id: id.clone(),
                 output: Arc::clone(&output),
                 session_model,
+                session_update_versions: session_update_versions.clone(),
             };
 
             Self::execute_rebase_workflow(rebase_input).await
@@ -1191,6 +1275,7 @@ impl SessionManager {
             id: &id,
             output: &output,
             rebase_result,
+            session_update_versions: &session_update_versions,
             status: &status,
         })
         .await;
@@ -1247,6 +1332,7 @@ impl SessionManager {
                     &input.output,
                     &input.db,
                     &input.app_event_tx,
+                    &input.session_update_versions,
                     &input.id,
                     &commit_message,
                 )
@@ -1259,6 +1345,7 @@ impl SessionManager {
                     &input.output,
                     &input.db,
                     &input.app_event_tx,
+                    &input.session_update_versions,
                     &input.id,
                     commit_message,
                 )
@@ -1301,6 +1388,7 @@ impl SessionManager {
             id,
             output,
             rebase_result,
+            session_update_versions,
             status,
         } = input;
 
@@ -1311,6 +1399,7 @@ impl SessionManager {
                     output,
                     db,
                     app_event_tx,
+                    session_update_versions,
                     id,
                     &rebase_message,
                 )
@@ -1324,6 +1413,7 @@ impl SessionManager {
                     git_client,
                     output,
                     id,
+                    session_update_versions,
                 )
                 .await;
             }
@@ -1333,6 +1423,7 @@ impl SessionManager {
                     output,
                     db,
                     app_event_tx,
+                    session_update_versions,
                     id,
                     &rebase_error,
                 )
@@ -1340,8 +1431,16 @@ impl SessionManager {
             }
         }
 
-        if !SessionTaskService::update_status(status, clock, db, app_event_tx, id, Status::Review)
-            .await
+        if !SessionTaskService::update_status(
+            status,
+            clock,
+            db,
+            app_event_tx,
+            session_update_versions,
+            id,
+            Status::Review,
+        )
+        .await
         {
             warn!(
                 session_id = id,
@@ -1360,6 +1459,7 @@ impl SessionManager {
         git_client: &Arc<dyn GitClient>,
         output: &Arc<Mutex<String>>,
         session_id: &str,
+        session_update_versions: &SessionUpdateVersionMap,
     ) {
         let published_upstream_ref = db
             .load_session_published_upstream_ref(session_id)
@@ -1402,6 +1502,7 @@ impl SessionManager {
             output,
             published_upstream_ref,
             session_id,
+            session_update_versions: session_update_versions.clone(),
             sync_operation_id,
         };
 
@@ -1904,6 +2005,7 @@ impl SessionManager {
             id: input.id.to_string(),
             output: Arc::clone(&input.output),
             session_model: input.session_model,
+            session_update_versions: input.session_update_versions.clone(),
         }
     }
 
@@ -2032,6 +2134,7 @@ mod tests {
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
                 session_model: AgentModel::Gemini3FlashPreview,
+                session_update_versions: Arc::default(),
             },
         )
     }
@@ -2061,6 +2164,7 @@ mod tests {
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
                 repo_root,
+                session_update_versions: Arc::default(),
                 session_model: AgentModel::Gemini3FlashPreview,
                 source_branch: "wt/session-123".to_string(),
                 status: Arc::new(Mutex::new(Status::Merging)),
@@ -2485,6 +2589,7 @@ mod tests {
             id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
             session_model: AgentModel::Gemini3FlashPreview,
+            session_update_versions: Arc::default(),
         };
 
         // Act
@@ -3365,6 +3470,7 @@ mod tests {
             id: "sess-rebase",
             output: &output,
             rebase_result: Ok("Successfully rebased wt/sess-rebase onto main".to_string()),
+            session_update_versions: &Arc::default(),
             status: &status,
         })
         .await;
@@ -3436,6 +3542,7 @@ mod tests {
             id: "sess-no-push",
             output: &output,
             rebase_result: Ok("Successfully rebased wt/sess-no-push onto main".to_string()),
+            session_update_versions: &Arc::default(),
             status: &status,
         })
         .await;

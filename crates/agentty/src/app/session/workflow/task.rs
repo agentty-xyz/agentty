@@ -12,6 +12,7 @@ use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
 };
+use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
@@ -80,9 +81,41 @@ pub(crate) struct RunAgentAssistTaskInput {
     pub(crate) prompt: String,
     /// Session model used for agent metadata and parsing.
     pub(crate) session_model: AgentModel,
+    /// Per-app session update versions shared with the main runtime.
+    pub(crate) session_update_versions: SessionUpdateVersionMap,
 }
 
 impl SessionTaskService {
+    /// Increments and returns the latest observable-state version for one
+    /// session handle bundle within the current app runtime.
+    pub(crate) fn next_session_update_version(
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+    ) -> u64 {
+        let mut session_update_versions = session_update_versions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = session_update_versions
+            .entry(SessionId::from(id))
+            .or_insert(0);
+        *entry += 1;
+
+        *entry
+    }
+
+    /// Removes the cached observable-state version for one deleted session so
+    /// the current app runtime does not accumulate stale version entries.
+    pub(crate) fn remove_session_update_version(
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+    ) {
+        let mut session_update_versions = session_update_versions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        session_update_versions.remove(id);
+    }
+
     /// Recomputes and persists diff-derived size and line-count totals using
     /// the session worktree diff.
     ///
@@ -161,6 +194,7 @@ impl SessionTaskService {
                     &context.output,
                     &context.db,
                     &context.app_event_tx,
+                    &context.session_update_versions,
                     &context.id,
                     &message,
                 )
@@ -173,6 +207,7 @@ impl SessionTaskService {
                     &context.output,
                     &context.db,
                     &context.app_event_tx,
+                    &context.session_update_versions,
                     &context.id,
                     message,
                 )
@@ -184,6 +219,7 @@ impl SessionTaskService {
                     &context.output,
                     &context.db,
                     &context.app_event_tx,
+                    &context.session_update_versions,
                     &context.id,
                     &message,
                 )
@@ -458,6 +494,7 @@ impl SessionTaskService {
             id: context.id.clone(),
             output: Arc::clone(&context.output),
             session_model: context.session_model,
+            session_update_versions: context.session_update_versions.clone(),
         };
 
         run_agent_assist(&assist_context, &prompt)
@@ -753,6 +790,7 @@ impl SessionTaskService {
             output,
             prompt,
             session_model,
+            session_update_versions,
         } = input;
         let assist_submission = Self::submit_utility_prompt_with_backend(
             session_model,
@@ -770,7 +808,15 @@ impl SessionTaskService {
 
         let answer_text = assist_submission.response.to_answer_display_text();
         if !answer_text.trim().is_empty() {
-            Self::append_session_output(&output, &db, &app_event_tx, &id, &answer_text).await;
+            Self::append_session_output(
+                &output,
+                &db,
+                &app_event_tx,
+                &session_update_versions,
+                &id,
+                &answer_text,
+            )
+            .await;
         }
 
         if let Err(error) = db.update_session_stats(&id, &assist_submission.stats).await {
@@ -832,14 +878,16 @@ impl SessionTaskService {
 
     /// Applies a status transition to memory and database when valid.
     ///
-    /// This emits [`AppEvent::SessionUpdated`] for targeted snapshot sync and
-    /// emits [`AppEvent::RefreshSessions`] for transitions that require full
-    /// list reload.
+    /// This bumps the session-update version, emits
+    /// [`AppEvent::SessionUpdated`] for targeted snapshot sync, and emits
+    /// [`AppEvent::RefreshSessions`] for transitions that require full list
+    /// reload.
     pub(crate) async fn update_status(
         status: &Mutex<Status>,
         clock: &dyn Clock,
         db: &AppRepositories,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         new: Status,
     ) -> bool {
@@ -871,14 +919,16 @@ impl SessionTaskService {
             );
         }
         let session_id = SessionId::from(id);
-
+        let version = Self::next_session_update_version(session_update_versions, id);
         Self::send_app_event(
             app_event_tx,
-            AppEvent::SessionUpdated { session_id },
+            AppEvent::SessionUpdated {
+                session_id,
+                version,
+            },
             Some(id),
             "SessionUpdated",
         );
-
         if Self::status_requires_full_refresh(new) {
             Self::send_app_event(
                 app_event_tx,
@@ -896,6 +946,7 @@ impl SessionTaskService {
         output: &Arc<Mutex<String>>,
         db: &AppRepositories,
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
         id: &str,
         message: &str,
     ) {
@@ -909,7 +960,6 @@ impl SessionTaskService {
                 );
             }
         }
-
         if let Err(error) = db.append_session_output(id, message).await {
             warn!(
                 session_id = id,
@@ -917,11 +967,12 @@ impl SessionTaskService {
                 "failed to persist session output"
             );
         }
-
+        let version = Self::next_session_update_version(session_update_versions, id);
         Self::send_app_event(
             app_event_tx,
             AppEvent::SessionUpdated {
                 session_id: SessionId::from(id),
+                version,
             },
             Some(id),
             "SessionUpdated",
@@ -1218,6 +1269,7 @@ mod tests {
         let status = Mutex::new(Status::New);
         let clock = StaticClock::new(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let session_update_versions = Arc::default();
 
         // Act
         let entered_first_interval = SessionTaskService::update_status(
@@ -1225,6 +1277,7 @@ mod tests {
             &clock,
             &database,
             &app_event_tx,
+            &session_update_versions,
             "session-id",
             Status::InProgress,
         )
@@ -1235,6 +1288,7 @@ mod tests {
             &clock,
             &database,
             &app_event_tx,
+            &session_update_versions,
             "session-id",
             Status::Review,
         )
@@ -1245,6 +1299,7 @@ mod tests {
             &clock,
             &database,
             &app_event_tx,
+            &session_update_versions,
             "session-id",
             Status::InProgress,
         )
@@ -1255,6 +1310,7 @@ mod tests {
             &clock,
             &database,
             &app_event_tx,
+            &session_update_versions,
             "session-id",
             Status::Question,
         )
@@ -1654,6 +1710,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             session_model: AgentModel::Gpt54,
+            session_update_versions: Arc::default(),
         };
 
         // Act
@@ -1690,6 +1747,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             session_model: AgentModel::Gpt54,
+            session_update_versions: Arc::default(),
         };
 
         // Act
@@ -1800,6 +1858,7 @@ mod tests {
             id: "session-id".to_string(),
             output: Arc::clone(&output),
             session_model: AgentModel::Gpt54,
+            session_update_versions: Arc::default(),
         };
 
         // Act
@@ -1952,6 +2011,7 @@ mod tests {
                 output: Arc::clone(&output),
                 prompt: "Resolve conflict".to_string(),
                 session_model: AgentModel::ClaudeOpus47,
+                session_update_versions: Arc::default(),
             },
             &backend,
         )
@@ -2013,6 +2073,7 @@ mod tests {
                 output: Arc::clone(&output),
                 prompt: "Resolve conflict".to_string(),
                 session_model: AgentModel::ClaudeOpus47,
+                session_update_versions: Arc::default(),
             },
             &backend,
         )
@@ -2062,6 +2123,7 @@ mod tests {
                 output: Arc::new(Mutex::new(String::new())),
                 prompt: "Resolve conflict".to_string(),
                 session_model: AgentModel::ClaudeOpus47,
+                session_update_versions: Arc::default(),
             },
             &backend,
         )

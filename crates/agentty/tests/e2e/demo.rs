@@ -19,6 +19,18 @@ use sqlx::{ConnectOptions, Connection, Executor};
 use crate::common::BuilderEnv;
 
 type DemoResult = Result<(), Box<dyn std::error::Error>>;
+type SeedSessionRow<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    i64,
+    i64,
+    &'a str,
+    &'a str,
+    i64,
+);
 
 const GIF_NAME: &str = "demo";
 
@@ -156,8 +168,7 @@ sleep 1
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{reply}"}}]}}}}'
 sleep 1
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{reply}\",\"questions\":[],\"summary\":null}}","usage":{{"input_tokens":5,"output_tokens":42}}}}'
-"#,
-        reply = reply,
+"#
     );
     std::fs::write(&claude_path, &script)?;
     #[cfg(unix)]
@@ -276,11 +287,13 @@ async fn seed_pre_existing_sessions(
 ) -> DemoResult {
     let now_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs() as i64);
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        });
 
     // (id, title, model, status, base_branch, added_lines, deleted_lines,
     //  prompt, output, age_seconds)
-    let rows: &[(&str, &str, &str, &str, &str, i64, i64, &str, &str, i64)] = &[
+    let rows: &[SeedSessionRow<'_>] = &[
         (
             "aaaa1111-aaaa-1111-aaaa-111111111111",
             "Refactor request handlers",

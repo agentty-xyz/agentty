@@ -137,7 +137,10 @@ where
         }
         LoopSignal::Event(event) => event,
         LoopSignal::Tick => {
-            app.refresh_sessions_if_needed().await;
+            if app.refresh_sessions_if_needed().await {
+                app.mark_dirty();
+            }
+
             None
         }
     };
@@ -205,6 +208,7 @@ where
             }
             Event::Paste(pasted_text) => {
                 process_paste_event(app, &pasted_text);
+                app.mark_dirty();
             }
             _ => {}
         }

@@ -156,6 +156,7 @@ impl App {
 
         Ok(Self {
             mode: crate::ui::state::app_mode::AppMode::List,
+            needs_redraw: true,
             settings,
             tabs: crate::app::tab::TabManager::new(),
             projects,
@@ -167,6 +168,7 @@ impl App {
             event_rx,
             review_cache: std::collections::HashMap::new(),
             latest_available_version: None,
+            last_seen_session_update_versions: std::collections::HashMap::new(),
             markdown_render_cache: crate::ui::markdown::MarkdownRenderCache::default(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
             session_progress_messages: std::collections::HashMap::new(),

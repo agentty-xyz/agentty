@@ -15,31 +15,34 @@ impl SessionManager {
     /// Reloads session rows when the metadata cache indicates a change.
     ///
     /// This is a low-frequency fallback safety poll; primary refreshes should
-    /// come from explicit `RefreshSessions` events.
+    /// come from explicit `RefreshSessions` events. Returns `true` when the
+    /// poll detected persisted changes and refreshed the in-memory snapshots.
     pub async fn refresh_sessions_if_needed(
         &mut self,
         mode: &mut AppMode,
         projects: &ProjectManager,
         services: &AppServices,
-    ) {
+    ) -> bool {
         if !self.is_session_refresh_due() {
-            return;
+            return false;
         }
 
         self.state.refresh_deadline = self.next_refresh_deadline();
 
         let Ok(sessions_metadata) = services.db().load_sessions_metadata().await else {
-            return;
+            return false;
         };
         let (sessions_row_count, sessions_updated_at_max) = sessions_metadata;
         if sessions_row_count == self.state.row_count
             && sessions_updated_at_max == self.state.updated_at_max
         {
-            return;
+            return false;
         }
 
         self.reload_sessions(mode, projects, services, Some(sessions_metadata))
             .await;
+
+        true
     }
 
     /// Reloads sessions immediately, bypassing refresh deadline checks.

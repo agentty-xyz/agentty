@@ -247,6 +247,8 @@ impl AppClients {
 pub struct App {
     /// Tracks the currently active UI mode and its transient state.
     pub mode: AppMode,
+    /// Tracks whether the foreground runtime should render a fresh frame.
+    pub(crate) needs_redraw: bool,
     /// Stores persisted and in-memory application settings for the active
     /// project.
     pub settings: SettingsManager,
@@ -289,11 +291,29 @@ pub struct App {
     /// Caches rendered markdown output for the session transcript panel so
     /// unchanged content is not re-parsed on every frame.
     pub(super) markdown_render_cache: markdown::MarkdownRenderCache,
+    /// Tracks the last reduced observable-handle version for each session so
+    /// stale `SessionUpdated` events do not trigger redundant redraws.
+    pub(super) last_seen_session_update_versions: HashMap<SessionId, u64>,
     /// Stores the current auto-update progress state when an update is running.
     pub(super) update_status: Option<UpdateStatus>,
 }
 
 impl App {
+    /// Marks the app as needing one fresh terminal frame.
+    pub(crate) fn mark_dirty(&mut self) {
+        self.needs_redraw = true;
+    }
+
+    /// Returns whether the runtime should render a fresh frame immediately.
+    pub(crate) fn needs_redraw(&self) -> bool {
+        self.needs_redraw
+    }
+
+    /// Clears the pending redraw request after one frame is rendered.
+    pub(crate) fn clear_redraw(&mut self) {
+        self.needs_redraw = false;
+    }
+
     /// Cycles the active list tab forward using the active project's available
     /// tab set.
     pub fn next_tab(&mut self) {
@@ -944,10 +964,13 @@ impl App {
     }
 
     /// Reloads sessions when metadata cache indicates changes.
-    pub async fn refresh_sessions_if_needed(&mut self) {
+    ///
+    /// Returns `true` when the fallback poll refreshed render-visible session
+    /// state.
+    pub async fn refresh_sessions_if_needed(&mut self) -> bool {
         self.sessions
             .refresh_sessions_if_needed(&mut self.mode, &self.projects, &self.services)
-            .await;
+            .await
     }
 
     /// Forces immediate session list reload.
@@ -1169,6 +1192,7 @@ impl App {
             self.services.clock().as_ref(),
             self.services.db(),
             &app_event_tx,
+            &self.services.session_update_versions(),
             session_id,
             Status::Queued,
         )
@@ -1203,6 +1227,7 @@ impl App {
             self.services.clock().as_ref(),
             self.services.db(),
             &app_event_tx,
+            &self.services.session_update_versions(),
             session_id,
             Status::Review,
         )
@@ -3022,9 +3047,11 @@ mod tests {
         });
         event_batch.collect_event(AppEvent::SessionUpdated {
             session_id: "session-a".into(),
+            version: 1,
         });
         event_batch.collect_event(AppEvent::SessionUpdated {
             session_id: "session-a".into(),
+            version: 2,
         });
         event_batch.collect_event(AppEvent::AgentResponseReceived {
             session_id: "session-a".into(),
@@ -3057,6 +3084,10 @@ mod tests {
         assert_eq!(
             event_batch.session_size_updates.get("session-a"),
             Some(&(8, 13, SessionSize::L))
+        );
+        assert_eq!(
+            event_batch.session_update_versions.get("session-a"),
+            Some(&2)
         );
         assert_eq!(
             event_batch
@@ -3169,6 +3200,7 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         assert!(app.update_status().is_none());
+        app.clear_redraw();
 
         // Act
         app.apply_app_events(AppEvent::UpdateStatusChanged {
@@ -3185,6 +3217,31 @@ mod tests {
                 version: "v2.0.0".to_string()
             })
         );
+        assert!(app.needs_redraw());
+    }
+
+    #[tokio::test]
+    /// Verifies stale `SessionUpdated` versions do not re-arm redraw when the
+    /// reducer has already applied that handle snapshot.
+    async fn apply_app_events_session_updated_same_version_keeps_redraw_clean() {
+        // Arrange
+        let mut app = new_test_app().await;
+
+        // Act
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: "session-1".into(),
+            version: 7,
+        })
+        .await;
+        app.clear_redraw();
+        app.apply_app_events(AppEvent::SessionUpdated {
+            session_id: "session-1".into(),
+            version: 7,
+        })
+        .await;
+
+        // Assert
+        assert!(!app.needs_redraw());
     }
 
     #[tokio::test]
@@ -3809,6 +3866,7 @@ mod tests {
         // Act
         app.apply_app_events(AppEvent::SessionUpdated {
             session_id: "session-1".into(),
+            version: 1,
         })
         .await;
 
