@@ -3,7 +3,7 @@
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -791,7 +791,9 @@ impl Database {
     ///
     /// Uses up to `DB_POOL_MAX_CONNECTIONS` pooled connections so UI reads can
     /// stay responsive without oversizing the `SQLite` pool beyond what WAL
-    /// can use effectively.
+    /// can use effectively. Applies a short busy timeout so bursty reducer
+    /// writes wait briefly for the single `SQLite` writer instead of failing
+    /// immediately with `SQLITE_BUSY`.
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created, the database
@@ -804,6 +806,7 @@ impl Database {
         let options = SqliteConnectOptions::new()
             .filename(db_path)
             .create_if_missing(true)
+            .busy_timeout(Duration::from_secs(2))
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true);
@@ -824,7 +827,9 @@ impl Database {
     ///
     /// This is primarily used by tests and any ephemeral workflows that need
     /// an isolated database instance while keeping the same durability and
-    /// foreign-key settings as the on-disk database.
+    /// foreign-key settings as the on-disk database. Applies the same short
+    /// busy timeout as the on-disk configuration so tests exercise the same
+    /// writer wait policy.
     ///
     /// # Errors
     /// Returns an error if the database connection or migrations fail.
@@ -861,12 +866,15 @@ impl From<Database> for AppRepositories {
 ///
 /// The caller chooses the connection cap so tests and runtime code can share
 /// the same setup logic while keeping their own concurrency requirements.
+/// Applies the same 2-second busy timeout as the on-disk database so pooled
+/// test connections exercise the same writer wait policy.
 ///
 /// # Errors
 /// Returns an error if the in-memory database connection or migrations fail.
 async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePool, DbError> {
     let options = SqliteConnectOptions::new()
         .filename(":memory:")
+        .busy_timeout(Duration::from_secs(2))
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true);
@@ -2840,7 +2848,7 @@ WHERE model = ?
     }
 
     #[tokio::test]
-    async fn open_configures_small_wal_pool_and_normal_synchronous_mode() {
+    async fn open_configures_small_wal_pool_normal_synchronous_mode_and_busy_timeout() {
         // Arrange
         let temp = tempdir().expect("failed to create temp directory");
         let db_path = temp.path().join("agentty.db");
@@ -2857,18 +2865,26 @@ WHERE model = ?
             .fetch_one(database.pool())
             .await
             .expect("failed to load synchronous pragma");
+        let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout;")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load busy-timeout pragma");
 
         // Assert
+        // `SqliteConnectOptions` are reused for every pooled connection, so
+        // checking one pooled connection here is sufficient to prove the
+        // configured busy timeout propagates across the on-disk pool.
         assert_eq!(
             database.pool().options().get_max_connections(),
             DB_POOL_MAX_CONNECTIONS
         );
         assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
         assert_eq!(synchronous, 1, "expected PRAGMA synchronous = NORMAL");
+        assert_eq!(busy_timeout, 2_000, "expected PRAGMA busy_timeout = 2000");
     }
 
     #[tokio::test]
-    async fn open_in_memory_uses_single_connection_and_normal_synchronous_mode() {
+    async fn open_in_memory_uses_single_connection_normal_synchronous_mode_and_busy_timeout() {
         // Arrange, Act
         let database = Database::open_in_memory()
             .await
@@ -2877,10 +2893,15 @@ WHERE model = ?
             .fetch_one(database.pool())
             .await
             .expect("failed to load synchronous pragma");
+        let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout;")
+            .fetch_one(database.pool())
+            .await
+            .expect("failed to load busy-timeout pragma");
 
         // Assert
         assert_eq!(database.pool().options().get_max_connections(), 1);
         assert_eq!(synchronous, 1, "expected PRAGMA synchronous = NORMAL");
+        assert_eq!(busy_timeout, 2_000, "expected PRAGMA busy_timeout = 2000");
     }
 
     // NOTE: `DbError::Migration` is not directly tested because

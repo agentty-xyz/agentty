@@ -181,7 +181,8 @@ pub(crate) trait SessionRepository: Send + Sync {
     /// Replaces the full output for a session row.
     async fn replace_session_output(&self, id: &str, output: &str) -> Result<(), DbError>;
 
-    /// Replaces the persisted follow-up task list for one session.
+    /// Replaces the persisted follow-up task list for one session inside one
+    /// transaction so task deletion and reinsertion commit atomically.
     async fn replace_session_follow_up_tasks(
         &self,
         session_id: &str,
