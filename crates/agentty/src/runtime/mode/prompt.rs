@@ -1340,7 +1340,7 @@ fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
     let session_id = prompt_context.session_id.clone();
     let event_tx = app.services.event_sender();
 
-    at_mention::start_loading_entries(event_tx, lookup_root, session_id);
+    at_mention::start_loading_entries(event_tx, lookup_root, session_id, &mut app.sessions);
 
     if let AppMode::Prompt {
         at_mention_state, ..

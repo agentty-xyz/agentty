@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::app::AppEvent;
+use crate::app::session::SessionManager;
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
 use crate::infra::file_index::{self, FileEntry};
@@ -69,11 +70,25 @@ pub(crate) fn sync_action(
 }
 
 /// Starts asynchronous loading of `@`-mention entries for one composer root.
+///
+/// When a fresh cache entry already exists for `lookup_root`, this emits the
+/// loaded event immediately and skips the debounced filesystem walk.
 pub(crate) fn start_loading_entries(
     event_tx: mpsc::UnboundedSender<AppEvent>,
     lookup_root: PathBuf,
     session_id: SessionId,
+    session_manager: &mut SessionManager,
 ) {
+    if let Some(entries) = session_manager.at_mention_index_for_root(&lookup_root) {
+        // Fire-and-forget: receiver may be dropped during shutdown.
+        let _ = event_tx.send(AppEvent::AtMentionEntriesLoaded {
+            entries,
+            session_id,
+        });
+
+        return;
+    }
+
     let request_id = NEXT_AT_MENTION_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let tracked_session_id = session_id.clone();
     let task_session_id = session_id.clone();
@@ -211,9 +226,18 @@ fn format_mention_text(entry: &FileEntry) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use ratatui::widgets::TableState;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::app::SessionState;
+    use crate::app::session::{RealClock, SessionDefaults};
+    use crate::domain::agent::AgentModel;
+    use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
+    use crate::infra::git;
 
     #[test]
     fn test_sync_action_requests_activation_for_new_query() {
@@ -306,21 +330,26 @@ mod tests {
         let temp_dir = TempDir::new().expect("create temp dir");
         let event_session_id = "session-1".to_string();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut initial_session_manager = test_session_manager(&event_session_id);
         std::fs::write(temp_dir.path().join("first.txt"), "").expect("write first file");
 
         start_loading_entries(
             event_tx.clone(),
             temp_dir.path().to_path_buf(),
             event_session_id.clone().into(),
+            &mut initial_session_manager,
         );
 
         std::fs::write(temp_dir.path().join("second.txt"), "").expect("write second file");
 
         // Act
+        let mut session_manager = test_session_manager(&event_session_id);
+
         start_loading_entries(
             event_tx,
             temp_dir.path().to_path_buf(),
             event_session_id.clone().into(),
+            &mut session_manager,
         );
         let next_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
             .await
@@ -353,10 +382,13 @@ mod tests {
         let session_id = "session-1".to_string();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
+        let mut session_manager = test_session_manager(&session_id);
+
         start_loading_entries(
             event_tx,
             temp_dir.path().to_path_buf(),
             session_id.clone().into(),
+            &mut session_manager,
         );
 
         // Act
@@ -368,5 +400,103 @@ mod tests {
             next_event,
             Ok(Some(AppEvent::AtMentionEntriesLoaded { .. }))
         ));
+    }
+
+    #[tokio::test]
+    async fn test_start_loading_entries_uses_cached_index_without_debounced_walk() {
+        // Arrange
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let lookup_root = temp_dir.path().to_path_buf();
+        let session_id = "session-1".to_string();
+        let cached_entries = vec![FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
+        }];
+        let mut session_manager = test_session_manager(&session_id);
+        session_manager.set_at_mention_index_for_root(lookup_root.clone(), cached_entries.clone());
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        start_loading_entries(
+            event_tx,
+            lookup_root,
+            session_id.clone().into(),
+            &mut session_manager,
+        );
+        let next_event = tokio::time::timeout(Duration::from_millis(25), event_rx.recv())
+            .await
+            .expect("cached at-mention event should arrive immediately")
+            .expect("event channel should stay open");
+
+        // Assert
+        assert_eq!(
+            next_event,
+            AppEvent::AtMentionEntriesLoaded {
+                entries: cached_entries,
+                session_id: session_id.into(),
+            }
+        );
+
+        let extra_event = tokio::time::timeout(Duration::from_millis(125), event_rx.recv()).await;
+        assert!(
+            !matches!(
+                extra_event,
+                Ok(Some(AppEvent::AtMentionEntriesLoaded { .. }))
+            ),
+            "cache hits should not schedule a debounced filesystem walk"
+        );
+    }
+
+    /// Builds a minimal `SessionManager` for cache tests.
+    fn test_session_manager(session_id: &str) -> SessionManager {
+        let mut handles = HashMap::new();
+        handles.insert(
+            session_id.to_string().into(),
+            SessionHandles::new(String::new(), Status::Review),
+        );
+
+        let state = SessionState::new(
+            handles,
+            vec![Session {
+                base_branch: "main".to_string(),
+                created_at: 0,
+                draft_attachments: Vec::new(),
+                folder: PathBuf::from(format!("/tmp/{session_id}")),
+                follow_up_tasks: Vec::new(),
+                id: session_id.into(),
+                in_progress_started_at: None,
+                in_progress_total_seconds: 0,
+                is_draft: false,
+                model: AgentModel::Gpt54,
+                output: String::new(),
+                project_name: "project".to_string(),
+                prompt: String::new(),
+                reasoning_level_override: None,
+                published_upstream_ref: None,
+                published_branch_sync_status:
+                    crate::domain::session::PublishedBranchSyncStatus::Idle,
+                questions: Vec::new(),
+                review_request: None,
+                size: SessionSize::Xs,
+                stats: SessionStats::default(),
+                status: Status::Review,
+                summary: None,
+                title: Some("Title".to_string()),
+                updated_at: 0,
+            }],
+            TableState::default(),
+            Arc::new(RealClock),
+            1,
+            0,
+        );
+
+        SessionManager::new(
+            SessionDefaults {
+                model: AgentModel::Gpt54,
+            },
+            Arc::new(git::MockGitClient::new()),
+            state,
+            Vec::new(),
+        )
     }
 }

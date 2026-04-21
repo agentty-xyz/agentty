@@ -2,6 +2,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use app::branch_publish::{
     BranchPublishActionUpdate, BranchPublishTaskResult, BranchPublishTaskSuccess,
@@ -27,7 +28,7 @@ use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
 use crate::infra::file_index::FileEntry;
-use crate::runtime::mode::{question, sync_blocked};
+use crate::runtime::mode::{at_mention, question, sync_blocked};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 use crate::ui::state::prompt::PromptAtMentionState;
 
@@ -527,6 +528,11 @@ impl App {
         }
 
         for (session_id, entries) in event_batch.at_mention_entries_updates {
+            self.sessions.set_at_mention_index_for_root(
+                self.at_mention_lookup_root(&session_id),
+                entries.clone(),
+            );
+
             self.apply_prompt_at_mention_entries(&session_id, entries);
         }
 
@@ -783,6 +789,27 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Returns the lookup root for the session associated with an at-mention
+    /// event.
+    fn at_mention_lookup_root(&self, session_id: &str) -> PathBuf {
+        let project_working_dir = self.working_dir().to_path_buf();
+
+        self.sessions.session_for_id(session_id).map_or_else(
+            || project_working_dir.clone(),
+            |session| {
+                let project_working_dir = project_working_dir.clone();
+                let session_folder = session.folder.clone();
+                let has_session_folder = self.services.fs_client().is_dir(session_folder.clone());
+
+                at_mention::lookup_root(
+                    project_working_dir,
+                    Some(session_folder),
+                    has_session_folder,
+                )
+            },
+        )
     }
 
     /// Applies loaded at-mention entries to the currently focused prompt or

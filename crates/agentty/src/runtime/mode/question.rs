@@ -673,7 +673,7 @@ fn activate_question_at_mention(app: &mut App, session_id: &str) {
     let owned_session_id = SessionId::from(session_id);
     let event_tx = app.services.event_sender();
 
-    at_mention::start_loading_entries(event_tx, lookup_root, owned_session_id);
+    at_mention::start_loading_entries(event_tx, lookup_root, owned_session_id, &mut app.sessions);
 
     if let AppMode::Question {
         at_mention_state, ..

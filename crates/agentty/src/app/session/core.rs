@@ -22,6 +22,7 @@ use crate::domain::session::{
     SessionFollowUpTask, SessionId, SessionStats,
 };
 use crate::infra::agent::protocol::QuestionItem;
+use crate::infra::file_index::FileEntry;
 use crate::infra::git;
 
 /// Render payload tuple returned by [`SessionManager::render_parts`].
@@ -29,6 +30,8 @@ type SessionRenderParts<'a> = (&'a [Session], &'a [DailyActivity], &'a mut Table
 
 /// Low-frequency fallback interval for metadata-based session refresh.
 pub(crate) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+/// Cache duration for `@`-mention filesystem index snapshots.
+pub(crate) const AT_MENTION_INDEX_TTL: Duration = Duration::from_secs(30);
 
 /// Defaults used when creating new sessions from the UI.
 #[derive(Clone, Copy)]
@@ -101,6 +104,7 @@ impl Clock for RealClock {
 /// Session domain state and worker orchestration state.
 pub struct SessionManager {
     pub(super) active_prompt_outputs: HashMap<SessionId, String>,
+    at_mention_indexes: HashMap<PathBuf, AtMentionIndex>,
     pub(super) default_session_model: AgentModel,
     pub(super) git_client: Arc<dyn git::GitClient>,
     pub(super) merge_service: SessionMergeService,
@@ -119,6 +123,13 @@ pub(crate) struct TitleGenerationTask {
     join_handle: JoinHandle<()>,
 }
 
+/// Cached `@`-mention file index snapshot for one lookup root.
+#[derive(Debug)]
+struct AtMentionIndex {
+    created_at: Instant,
+    entries: Vec<FileEntry>,
+}
+
 impl SessionManager {
     /// Creates a session manager from persisted snapshot state and defaults.
     ///
@@ -134,6 +145,7 @@ impl SessionManager {
 
         Self {
             active_prompt_outputs: HashMap::new(),
+            at_mention_indexes: HashMap::new(),
             default_session_model: defaults.model,
             git_client,
             merge_service: SessionMergeService,
@@ -420,8 +432,53 @@ impl SessionManager {
             .insert(SessionId::from(session_id), prompt_output);
     }
 
+    /// Returns cached `@`-mention entries for one lookup root when the cache
+    /// entry is still within its TTL window.
+    pub(crate) fn at_mention_index_for_root(
+        &mut self,
+        lookup_root: &Path,
+    ) -> Option<Vec<FileEntry>> {
+        let Some(cached_index) = self.at_mention_indexes.get(lookup_root) else {
+            return None;
+        };
+
+        if self
+            .state
+            .clock
+            .now_instant()
+            .saturating_duration_since(cached_index.created_at)
+            > AT_MENTION_INDEX_TTL
+        {
+            self.at_mention_indexes.remove(lookup_root);
+
+            return None;
+        }
+
+        Some(cached_index.entries.clone())
+    }
+
+    /// Replaces the cached `@`-mention index for one lookup root.
+    pub(crate) fn set_at_mention_index_for_root(
+        &mut self,
+        lookup_root: PathBuf,
+        entries: Vec<FileEntry>,
+    ) {
+        self.at_mention_indexes.insert(
+            lookup_root,
+            AtMentionIndex {
+                created_at: self.state.clock.now_instant(),
+                entries,
+            },
+        );
+    }
+
+    /// Drops the cached `@`-mention index for one lookup root.
+    pub(crate) fn remove_at_mention_index_for_root(&mut self, lookup_root: &Path) {
+        self.at_mention_indexes.remove(lookup_root);
+    }
+
     /// Drops cached prompt transcript blocks for sessions that are no longer
-    /// actively running a turn.
+    /// actively running a turn and prunes expired `@`-mention indexes.
     pub(crate) fn retain_active_prompt_outputs(&mut self) {
         self.active_prompt_outputs.retain(|session_id, _| {
             self.state
@@ -438,6 +495,7 @@ impl SessionManager {
                     )
                 })
         });
+        self.prune_expired_at_mention_indexes();
     }
 
     /// Replaces cached session git-status snapshots from the latest
@@ -453,6 +511,16 @@ impl SessionManager {
     /// Returns cached session git-status snapshots keyed by session id.
     pub(crate) fn session_git_statuses(&self) -> &HashMap<SessionId, SessionGitStatus> {
         &self.state.session_git_statuses
+    }
+
+    /// Removes expired `@`-mention indexes so unused lookup roots do not
+    /// accumulate indefinitely in memory.
+    fn prune_expired_at_mention_indexes(&mut self) {
+        let now = self.state.clock.now_instant();
+
+        self.at_mention_indexes.retain(|_, cached_index| {
+            now.saturating_duration_since(cached_index.created_at) <= AT_MENTION_INDEX_TTL
+        });
     }
 
     /// Replaces cached worktree-availability snapshots from the latest
@@ -670,6 +738,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant, SystemTime};
 
     use tempfile::tempdir;
     use tokio::sync::Barrier;
@@ -745,6 +814,49 @@ mod tests {
             .returning(|path| path.is_dir());
 
         mock_fs_client
+    }
+
+    /// Mutable clock used to test cache TTL behavior without sleeping.
+    struct TestClock {
+        instant: Mutex<Instant>,
+        system_time: Mutex<SystemTime>,
+    }
+
+    impl TestClock {
+        /// Creates a clock pinned to the provided time pair.
+        fn new(instant: Instant, system_time: SystemTime) -> Self {
+            Self {
+                instant: Mutex::new(instant),
+                system_time: Mutex::new(system_time),
+            }
+        }
+
+        /// Advances both clock domains by the provided duration.
+        fn advance(&self, duration: Duration) {
+            if let Ok(mut instant) = self.instant.lock() {
+                *instant += duration;
+            }
+
+            if let Ok(mut system_time) = self.system_time.lock() {
+                *system_time += duration;
+            }
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now_instant(&self) -> Instant {
+            *self
+                .instant
+                .lock()
+                .expect("test clock instant lock should not be poisoned")
+        }
+
+        fn now_system_time(&self) -> SystemTime {
+            *self
+                .system_time
+                .lock()
+                .expect("test clock system-time lock should not be poisoned")
+        }
     }
 
     fn create_mock_backend() -> MockAgentBackend {
@@ -1185,6 +1297,15 @@ mod tests {
         session_id: &str,
         reasoning_level_override: Option<ReasoningLevel>,
     ) -> SessionManager {
+        test_session_manager_with_clock(session_id, reasoning_level_override, Arc::new(RealClock))
+    }
+
+    /// Builds a minimal `SessionManager` using the provided clock.
+    fn test_session_manager_with_clock(
+        session_id: &str,
+        reasoning_level_override: Option<ReasoningLevel>,
+        clock: Arc<dyn Clock>,
+    ) -> SessionManager {
         let mut handles = HashMap::new();
         handles.insert(
             session_id.to_string().into(),
@@ -1221,7 +1342,7 @@ mod tests {
                 updated_at: 0,
             }],
             ratatui::widgets::TableState::default(),
-            Arc::new(RealClock),
+            clock,
             1,
             0,
         );
@@ -1234,6 +1355,76 @@ mod tests {
             state,
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn test_set_and_get_at_mention_index_for_root_cache() {
+        // Arrange
+        let mut session_manager = test_session_manager("session-id", None);
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let lookup_root = temp_dir.path().to_path_buf();
+        let entries = vec![FileEntry {
+            is_dir: false,
+            path: "src/main.rs".to_string(),
+        }];
+
+        // Act
+        session_manager.set_at_mention_index_for_root(lookup_root.clone(), entries.clone());
+
+        // Assert
+        assert_eq!(
+            session_manager
+                .at_mention_index_for_root(&lookup_root)
+                .expect("expected cached entries"),
+            entries
+        );
+    }
+
+    #[test]
+    fn test_at_mention_index_for_root_invalidates_after_ttl_expires() {
+        // Arrange
+        let initial_instant = Instant::now();
+        let initial_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+        let clock = Arc::new(TestClock::new(initial_instant, initial_system_time));
+        let mut session_manager =
+            test_session_manager_with_clock("session-id", None, clock.clone());
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let lookup_root = temp_dir.path().to_path_buf();
+        let entries = vec![FileEntry {
+            is_dir: true,
+            path: "src".to_string(),
+        }];
+        session_manager.set_at_mention_index_for_root(lookup_root.clone(), entries);
+        clock.advance(AT_MENTION_INDEX_TTL + Duration::from_secs(1));
+
+        // Act
+        let cached_entries = session_manager.at_mention_index_for_root(&lookup_root);
+
+        // Assert
+        assert!(cached_entries.is_none());
+    }
+
+    #[test]
+    fn test_remove_at_mention_index_for_root_drops_cached_entries() {
+        // Arrange
+        let mut session_manager = test_session_manager("session-id", None);
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let lookup_root = temp_dir.path().to_path_buf();
+        let entries = vec![FileEntry {
+            is_dir: true,
+            path: "src".to_string(),
+        }];
+        session_manager.set_at_mention_index_for_root(lookup_root.clone(), entries);
+
+        // Act
+        session_manager.remove_at_mention_index_for_root(&lookup_root);
+
+        // Assert
+        assert!(
+            session_manager
+                .at_mention_index_for_root(&lookup_root)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1332,6 +1523,36 @@ mod tests {
             !app.sessions
                 .active_prompt_outputs()
                 .contains_key("review-session")
+        );
+    }
+
+    #[test]
+    fn test_retain_active_prompt_outputs_prunes_expired_at_mention_indexes() {
+        // Arrange
+        let initial_instant = Instant::now();
+        let initial_system_time = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+        let clock = Arc::new(TestClock::new(initial_instant, initial_system_time));
+        let mut session_manager =
+            test_session_manager_with_clock("session-id", None, clock.clone());
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let lookup_root = temp_dir.path().to_path_buf();
+        session_manager.set_at_mention_index_for_root(
+            lookup_root.clone(),
+            vec![FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            }],
+        );
+        clock.advance(AT_MENTION_INDEX_TTL + Duration::from_secs(1));
+
+        // Act
+        session_manager.retain_active_prompt_outputs();
+
+        // Assert
+        assert!(
+            session_manager
+                .at_mention_index_for_root(&lookup_root)
+                .is_none()
         );
     }
 
@@ -2430,6 +2651,13 @@ mod tests {
         let mut app = new_test_app_with_git(dir.path()).await;
         create_and_start_session(&mut app, "A").await;
         let session_folder = app.sessions.sessions[0].folder.clone();
+        app.sessions.set_at_mention_index_for_root(
+            session_folder.clone(),
+            vec![FileEntry {
+                is_dir: false,
+                path: "src/main.rs".to_string(),
+            }],
+        );
 
         // Act
         app.delete_selected_session().await;
@@ -2445,6 +2673,11 @@ mod tests {
             .await
             .expect("failed to load");
         assert!(db_sessions.is_empty());
+        assert!(
+            app.sessions
+                .at_mention_index_for_root(&session_folder)
+                .is_none()
+        );
     }
 
     #[tokio::test]

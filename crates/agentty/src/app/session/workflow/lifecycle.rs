@@ -1053,6 +1053,7 @@ impl SessionManager {
         let session = self.remove_session_at(selected_index)?;
         self.state.handles.remove(&session.id);
         self.remove_session_worktree_availability(&session.id);
+        self.remove_at_mention_index_for_root(&session.folder);
         self.abort_title_generation_task(&session.id);
         self.clear_history_replay_pending(&session.id);
 
