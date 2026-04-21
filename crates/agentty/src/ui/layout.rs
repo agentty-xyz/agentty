@@ -3,8 +3,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 
+use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
-use crate::ui::text_util;
+use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+use crate::icon::Icon;
+use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
+use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
+use crate::ui::{markdown, style, text_util};
 
 /// Maximum number of visible content lines inside the chat input viewport.
 pub const CHAT_INPUT_MAX_VISIBLE_LINES: u16 = 10;
@@ -15,11 +20,26 @@ const CHAT_INPUT_INNER_OFFSET: u16 = 1;
 const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
 const QUESTION_PANEL_HELP_HEIGHT: u16 = 1;
 const QUESTION_PANEL_SPACER_HEIGHT: u16 = 1;
+const SESSION_HEADER_HEIGHT: u16 = 2;
 const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
 /// Foreground color used for chat input `@` lookup tokens.
 const CHAT_INPUT_AT_MENTION_COLOR: Color = Color::LightBlue;
 /// Foreground color used for inline prompt image placeholders.
 const CHAT_INPUT_IMAGE_TOKEN_COLOR: Color = Color::Yellow;
+const SINGLE_LINE_FOOTER_HEIGHT: u16 = 1;
+
+const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
+    help_action::HelpAction::new("stage draft", "Enter", "Stage draft"),
+    help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
+    help_action::HelpAction::new("paste image", "Ctrl+V/Alt+V", "Paste image"),
+    help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
+];
+const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
+    help_action::HelpAction::new("submit", "Enter", "Submit prompt"),
+    help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
+    help_action::HelpAction::new("paste image", "Ctrl+V/Alt+V", "Paste image"),
+    help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
+];
 
 /// Height allocation for question mode's prompt, answer input, and footer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +69,26 @@ pub struct QuestionPanelAreas {
     pub spacer_area: Rect,
 }
 
+/// Top-level frame areas for one rendered session chat page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionChatAreas {
+    /// Area used for the footer/help row below the session transcript.
+    pub bottom_area: Rect,
+    /// Area used for the two-line title and metadata header.
+    pub header_area: Rect,
+    /// Area used for the bordered transcript/output panel.
+    pub output_area: Rect,
+}
+
+/// Sub-areas used to render the prompt composer and its footer help row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptPanelAreas {
+    /// Area used for the footer/help row below the composer.
+    pub footer_area: Rect,
+    /// Area used for the bordered prompt input widget.
+    pub input_area: Rect,
+}
+
 /// Split an area into a centered content column with side gutters.
 pub fn centered_horizontal_layout(area: Rect) -> std::rc::Rc<[Rect]> {
     Layout::default()
@@ -72,6 +112,239 @@ pub fn centered_content_rect(area: Rect, width: u16, height: u16) -> Rect {
     let origin_y = area.y + area.height.saturating_sub(height) / 2;
 
     Rect::new(origin_x, origin_y, width, height)
+}
+
+/// Splits one session chat page into header, transcript, and bottom panel.
+///
+/// The outer frame keeps a one-cell margin, reserves `bottom_height` for the
+/// prompt/help region, and then dedicates a fixed two-row header above the
+/// bordered session output panel.
+pub fn session_chat_areas(area: Rect, bottom_height: u16) -> SessionChatAreas {
+    let vertical_chunks = Layout::default()
+        .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
+        .margin(1)
+        .split(area);
+    let output_chunks = Layout::default()
+        .constraints([
+            Constraint::Length(SESSION_HEADER_HEIGHT),
+            Constraint::Min(0),
+        ])
+        .split(vertical_chunks[0]);
+
+    SessionChatAreas {
+        bottom_area: vertical_chunks[1],
+        header_area: output_chunks[0],
+        output_area: output_chunks[1],
+    }
+}
+
+/// Splits one prompt bottom panel into input and footer rows.
+///
+/// Panels that only have one visible row keep the whole area for the input and
+/// collapse the footer to height `0`.
+pub fn prompt_panel_areas(area: Rect) -> PromptPanelAreas {
+    if area.height <= SINGLE_LINE_FOOTER_HEIGHT {
+        return PromptPanelAreas {
+            footer_area: Rect::new(area.x, area.y.saturating_add(area.height), area.width, 0),
+            input_area: area,
+        };
+    }
+
+    let sections = Layout::default()
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(SINGLE_LINE_FOOTER_HEIGHT),
+        ])
+        .split(area);
+
+    PromptPanelAreas {
+        footer_area: sections[1],
+        input_area: sections[0],
+    }
+}
+
+/// Formats the session title and metadata lines rendered above the output
+/// panel.
+pub fn session_header_lines(
+    session: &Session,
+    header_width: u16,
+    default_reasoning_level: ReasoningLevel,
+    wall_clock_unix_seconds: i64,
+) -> Vec<Line<'static>> {
+    let title_width = usize::from(header_width);
+    let title_text = text_util::inline_text(session.display_title());
+    let base_style = Style::default()
+        .fg(session.status.color())
+        .add_modifier(Modifier::BOLD);
+    let title_spans = markdown::parse_inline_spans(&title_text, base_style);
+    let title_spans = text_util::truncate_spans_with_ellipsis(title_spans, title_width);
+    let metadata_text = session_metadata_text(
+        session,
+        header_width,
+        default_reasoning_level,
+        wall_clock_unix_seconds,
+    );
+
+    vec![
+        Line::from(title_spans),
+        Line::from(Span::styled(
+            metadata_text,
+            Style::default().fg(style::palette::TEXT_MUTED),
+        )),
+    ]
+}
+
+/// Formats the size, timer, token usage, model, and reasoning row shown in
+/// the session header.
+pub fn session_metadata_text(
+    session: &Session,
+    header_width: u16,
+    default_reasoning_level: ReasoningLevel,
+    wall_clock_unix_seconds: i64,
+) -> String {
+    let added_lines = session.stats.added_lines;
+    let deleted_lines = session.stats.deleted_lines;
+    let timer = text_util::format_duration_compact(
+        session.in_progress_duration_seconds(wall_clock_unix_seconds),
+    );
+    let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
+    let input_tokens = text_util::format_token_count(session.stats.input_tokens);
+    let output_tokens = text_util::format_token_count(session.stats.output_tokens);
+    let metadata = format!(
+        "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Model: {}  \
+         Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
+        session.size,
+        session.model.as_str(),
+        reasoning_level.as_str(),
+    );
+    let metadata_width = usize::from(header_width);
+
+    text_util::truncate_with_ellipsis(&metadata, metadata_width)
+}
+
+/// Builds the footer help line shown in session view mode.
+pub fn session_view_footer_line(
+    session: &Session,
+    can_open_worktree: bool,
+    done_session_output_mode: DoneSessionOutputMode,
+) -> Line<'static> {
+    help_action::footer_line(&session_view_footer_actions(
+        session,
+        can_open_worktree,
+        done_session_output_mode,
+    ))
+}
+
+/// Builds the prompt-mode footer help line shown below the composer.
+pub fn prompt_footer_line(session: &Session, attachment_count: usize) -> Line<'static> {
+    let mut footer_line = help_action::footer_line(prompt_footer_actions(session));
+
+    if attachment_count > 0 {
+        let suffix = if attachment_count == 1 { "" } else { "s" };
+        footer_line.spans.push(help_action::footer_separator_span());
+        footer_line
+            .spans
+            .push(help_action::footer_muted_span(format!(
+                "{attachment_count} image{suffix} ready"
+            )));
+    }
+
+    footer_line
+}
+
+/// Builds the question-mode help footer line for the current focus target.
+pub fn question_help_footer_line(focus: QuestionFocus) -> Line<'static> {
+    let is_chat_focused = focus == QuestionFocus::Chat;
+    let mut help_actions = Vec::new();
+
+    if is_chat_focused {
+        help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
+        help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
+        help_actions.push(help_action::HelpAction::new(
+            "answer",
+            "Esc/Enter",
+            "Answer",
+        ));
+    } else {
+        help_actions.push(help_action::HelpAction::new("send", "Enter", "Submit"));
+    }
+
+    let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
+    help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
+
+    if !is_chat_focused {
+        help_actions.push(help_action::HelpAction::new("end turn", "Esc", "End turn"));
+    }
+
+    help_action::footer_line(&help_actions)
+}
+
+/// Returns borders used for the session output panel.
+///
+/// Vertical borders stay hidden so terminal copy/select flows do not pick up
+/// extra gutter characters.
+pub fn session_output_panel_borders() -> Borders {
+    Borders::TOP | Borders::BOTTOM
+}
+
+/// Returns the border style used for the session output panel.
+pub fn session_output_panel_border_style(status: Status) -> Style {
+    Style::default().fg(style::status_color(status))
+}
+
+/// Builds the inline shortcut hint for toggling done-session content.
+pub fn session_output_done_toggle_line(
+    done_session_output_mode: DoneSessionOutputMode,
+) -> Line<'static> {
+    let toggle_target = done_toggle_action_label(done_session_output_mode);
+
+    Line::from(vec![Span::styled(
+        format!("Press t to switch to {toggle_target}."),
+        Style::default().fg(style::palette::TEXT_SUBTLE),
+    )])
+}
+
+/// Builds the active-status line shown at the end of an in-flight session
+/// transcript.
+pub fn session_output_status_line(
+    status: Status,
+    active_progress: Option<&str>,
+    review_status_message: Option<&str>,
+) -> Option<Line<'static>> {
+    if !matches!(
+        status,
+        Status::InProgress
+            | Status::AgentReview
+            | Status::Queued
+            | Status::Rebasing
+            | Status::Merging
+    ) {
+        return None;
+    }
+
+    let status_message =
+        session_output_status_message(status, active_progress, review_status_message);
+
+    Some(Line::from(vec![Span::styled(
+        format!("{} {status_message}", session_output_status_icon(status)),
+        Style::default().fg(style::status_color(status)),
+    )]))
+}
+
+/// Builds the published-branch sync status line appended after transcript
+/// content when auto-push state is available.
+pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Line<'static>> {
+    let sync_message = session.published_branch_sync_message()?;
+
+    Some(Line::from(vec![Span::styled(
+        format!(
+            "{} {sync_message}",
+            session_output_published_branch_sync_icon(session.published_branch_sync_status)
+        ),
+        Style::default().fg(session_output_published_branch_sync_color(
+            session.published_branch_sync_status,
+        )),
+    )]))
 }
 
 /// Calculate the chat input widget height with a capped visible viewport.
@@ -410,11 +683,117 @@ pub fn first_table_column_width(
         .map_or(0, |column| usize::from(column.width))
 }
 
+/// Returns the footer action list for one session view state.
+fn session_view_footer_actions(
+    session: &Session,
+    can_open_worktree: bool,
+    done_session_output_mode: DoneSessionOutputMode,
+) -> Vec<help_action::HelpAction> {
+    let session_state = help_action::session_view_state(session);
+    let mut actions = help_action::view_footer_actions(ViewHelpState {
+        can_open_worktree,
+        publish_pull_request_action: session.publish_pull_request_action(),
+        session_state,
+    });
+
+    if session_state == ViewSessionState::Done {
+        let toggle_action_label = done_toggle_action_label(done_session_output_mode);
+        if let Some(toggle_action_index) = actions.iter().position(|action| action.key == "t") {
+            actions[toggle_action_index] =
+                help_action::HelpAction::new(toggle_action_label, "t", "Switch summary/output");
+        }
+    }
+
+    actions
+}
+
+/// Returns the `t` footer label for `Status::Done` output mode toggling.
+fn done_toggle_action_label(done_session_output_mode: DoneSessionOutputMode) -> &'static str {
+    match done_session_output_mode {
+        DoneSessionOutputMode::Summary => "output",
+        DoneSessionOutputMode::Output | DoneSessionOutputMode::Review => "summary",
+    }
+}
+
+/// Returns the fixed prompt-mode actions rendered in the composer footer.
+fn prompt_footer_actions(session: &Session) -> &'static [help_action::HelpAction] {
+    if session.status == Status::New && session.is_draft_session() {
+        return &NEW_SESSION_PROMPT_FOOTER_ACTIONS;
+    }
+
+    &PROMPT_FOOTER_ACTIONS
+}
+
 /// Returns the wrapped line count for plain text rendered in a paragraph.
 fn wrapped_text_height(text: &str, width: u16) -> u16 {
     let wrapped_line_count = text_util::wrap_lines(text, usize::from(width.max(1))).len();
 
     u16::try_from(wrapped_line_count).unwrap_or(u16::MAX).max(1)
+}
+
+/// Returns the loader label for active session states.
+fn session_output_status_message(
+    status: Status,
+    active_progress: Option<&str>,
+    review_status_message: Option<&str>,
+) -> String {
+    match status {
+        Status::InProgress => active_progress
+            .map(str::trim)
+            .filter(|progress| !progress.is_empty())
+            .map_or_else(
+                || "Working...".to_string(),
+                |progress| format!("Working... {progress}"),
+            ),
+        Status::AgentReview => review_status_message
+            .map(str::trim)
+            .filter(|status_message| !status_message.is_empty())
+            .map_or_else(|| "Preparing review...".to_string(), ToString::to_string),
+        Status::Queued => "Waiting in merge queue...".to_string(),
+        Status::Rebasing => "Rebasing...".to_string(),
+        Status::Merging => "Merging...".to_string(),
+        Status::New | Status::Review | Status::Question | Status::Done | Status::Canceled => {
+            String::new()
+        }
+    }
+}
+
+/// Returns the status indicator icon used for inline session-output messages.
+fn session_output_status_icon(status: Status) -> Icon {
+    match status {
+        Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
+            Icon::current_spinner()
+        }
+        Status::Queued
+        | Status::New
+        | Status::Review
+        | Status::Question
+        | Status::Done
+        | Status::Canceled => Icon::Pending,
+    }
+}
+
+/// Returns the icon used for published-branch sync status lines.
+fn session_output_published_branch_sync_icon(sync_status: PublishedBranchSyncStatus) -> Icon {
+    match sync_status {
+        PublishedBranchSyncStatus::Idle => Icon::Pending,
+        PublishedBranchSyncStatus::InProgress => Icon::current_spinner(),
+        PublishedBranchSyncStatus::Succeeded => Icon::Check,
+        PublishedBranchSyncStatus::Failed => Icon::Warn,
+    }
+}
+
+/// Returns the color used for published-branch sync status lines.
+fn session_output_published_branch_sync_color(
+    sync_status: PublishedBranchSyncStatus,
+) -> ratatui::style::Color {
+    match sync_status {
+        PublishedBranchSyncStatus::Idle => style::palette::TEXT_MUTED,
+        PublishedBranchSyncStatus::InProgress | PublishedBranchSyncStatus::Failed => {
+            style::palette::WARNING
+        }
+        PublishedBranchSyncStatus::Succeeded => style::palette::SUCCESS,
+    }
 }
 
 fn move_input_cursor_vertical(
@@ -671,7 +1050,364 @@ enum VerticalDirection {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use ratatui::style::{Color, Modifier, Style};
+
     use super::*;
+    use crate::domain::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+    use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
+
+    fn session_fixture() -> Session {
+        crate::domain::session::tests::SessionFixtureBuilder::new()
+            .status(Status::New)
+            .build()
+    }
+
+    fn view_footer_text(
+        session: &Session,
+        can_open_worktree: bool,
+        done_session_output_mode: DoneSessionOutputMode,
+    ) -> String {
+        session_view_footer_line(session, can_open_worktree, done_session_output_mode).to_string()
+    }
+
+    #[test]
+    fn test_session_chat_areas_reserve_margin_header_and_bottom_panel() {
+        // Arrange
+        let area = Rect::new(0, 0, 80, 24);
+
+        // Act
+        let chat_areas = session_chat_areas(area, 5);
+
+        // Assert
+        assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 2));
+        assert_eq!(chat_areas.output_area, Rect::new(1, 3, 78, 15));
+        assert_eq!(chat_areas.bottom_area, Rect::new(1, 18, 78, 5));
+    }
+
+    #[test]
+    fn test_prompt_panel_areas_split_input_and_footer_rows() {
+        // Arrange
+        let area = Rect::new(3, 10, 50, 6);
+
+        // Act
+        let panel_areas = prompt_panel_areas(area);
+
+        // Assert
+        assert_eq!(panel_areas.input_area, Rect::new(3, 10, 50, 5));
+        assert_eq!(panel_areas.footer_area, Rect::new(3, 15, 50, 1));
+    }
+
+    #[test]
+    fn test_prompt_panel_areas_collapse_footer_when_only_one_row_fits() {
+        // Arrange
+        let area = Rect::new(3, 10, 50, 1);
+
+        // Act
+        let panel_areas = prompt_panel_areas(area);
+
+        // Assert
+        assert_eq!(panel_areas.input_area, area);
+        assert_eq!(panel_areas.footer_area, Rect::new(3, 11, 50, 0));
+    }
+
+    #[test]
+    fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        session.title = Some("This is a very long timer-aware session header title".to_string());
+        session.model = AgentModel::Gpt54;
+        session.in_progress_started_at = Some(0);
+
+        // Act
+        let header_lines = session_header_lines(&session, 50, ReasoningLevel::default(), 3_660);
+
+        // Assert
+        assert_eq!(header_lines.len(), 2);
+        assert!(header_lines[0].to_string().contains("..."));
+        assert!(header_lines[1].to_string().contains("Timer: 1h1m0s"));
+    }
+
+    #[test]
+    fn test_session_metadata_text_ticks_live_in_progress_timer() {
+        // Arrange
+        let mut session = session_fixture();
+        session.model = AgentModel::Gpt54;
+        session.stats.added_lines = 9;
+        session.stats.deleted_lines = 3;
+        session.status = Status::InProgress;
+        session.in_progress_started_at = Some(60);
+
+        // Act
+        let early_metadata = session_metadata_text(&session, 120, ReasoningLevel::default(), 90);
+        let later_metadata = session_metadata_text(&session, 120, ReasoningLevel::default(), 3_720);
+
+        // Assert
+        assert!(early_metadata.contains("Lines: +9 / -3"));
+        assert!(early_metadata.contains("Timer: 30s"));
+        assert!(early_metadata.contains("Model: gpt-5.4"));
+        assert!(
+            early_metadata.find("Model: gpt-5.4") < early_metadata.find("Reasoning: high"),
+            "model should appear before reasoning in metadata text"
+        );
+        assert!(later_metadata.contains("Timer: 1h1m0s"));
+    }
+
+    #[test]
+    fn test_session_metadata_text_freezes_timer_after_in_progress_ends() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        session.in_progress_total_seconds = 3_660;
+
+        // Act
+        let earlier_metadata =
+            session_metadata_text(&session, 80, ReasoningLevel::default(), 4_000);
+        let later_metadata = session_metadata_text(&session, 80, ReasoningLevel::default(), 40_000);
+
+        // Assert
+        assert_eq!(earlier_metadata, later_metadata);
+        assert!(earlier_metadata.contains("Timer: 1h1m0s"));
+    }
+
+    #[test]
+    fn test_session_view_footer_line_in_progress_shows_stop_and_open_and_hides_diff() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+
+        // Act
+        let help_text = view_footer_text(&session, true, DoneSessionOutputMode::Summary);
+
+        // Assert
+        assert!(help_text.contains("q: back"));
+        assert!(help_text.contains("Ctrl+c: stop"));
+        assert!(help_text.contains("j/k: scroll"));
+        assert!(help_text.contains("o: open"));
+        assert!(!help_text.contains("d: diff"));
+        assert!(!help_text.contains("Enter: reply"));
+    }
+
+    #[test]
+    fn test_session_view_footer_line_merge_queue_statuses_hide_worktree_open_hint() {
+        // Arrange
+        let merge_queue_statuses = [Status::Queued, Status::Merging];
+
+        // Act
+        let help_texts: Vec<String> = merge_queue_statuses
+            .iter()
+            .map(|session_status| {
+                let mut session = session_fixture();
+                session.status = *session_status;
+
+                view_footer_text(&session, true, DoneSessionOutputMode::Summary)
+            })
+            .collect();
+
+        // Assert
+        for help_text in help_texts {
+            assert!(help_text.contains("q: back"));
+            assert!(help_text.contains("j/k: scroll"));
+            assert!(!help_text.contains("o: open"));
+            assert!(!help_text.contains("Ctrl+c: stop"));
+        }
+    }
+
+    #[test]
+    fn test_session_view_footer_line_new_session_shows_draft_and_start_actions() {
+        // Arrange
+        let mut session = session_fixture();
+        session.folder = PathBuf::new();
+        session.is_draft = true;
+
+        // Act
+        let help_text = view_footer_text(&session, false, DoneSessionOutputMode::Summary);
+
+        // Assert
+        assert!(help_text.contains("Enter: add draft"));
+        assert!(help_text.contains("s: start"));
+        assert!(!help_text.contains("o: open"));
+        assert!(help_text.contains("m: add to merge queue"));
+        assert!(help_text.contains("r: rebase"));
+        assert!(help_text.contains("/: commands menu"));
+        assert!(!help_text.contains("d: diff"));
+    }
+
+    #[test]
+    fn test_session_view_footer_line_done_modes_switch_toggle_label() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+
+        // Act
+        let summary_help_text = view_footer_text(&session, true, DoneSessionOutputMode::Summary);
+        let output_help_text = view_footer_text(&session, true, DoneSessionOutputMode::Output);
+        let review_help_text = view_footer_text(&session, true, DoneSessionOutputMode::Review);
+
+        // Assert
+        assert!(summary_help_text.contains("t: output"));
+        assert!(output_help_text.contains("t: summary"));
+        assert!(review_help_text.contains("t: summary"));
+    }
+
+    #[test]
+    fn test_prompt_footer_line_shows_highlighted_actions_and_attachment_count() {
+        // Arrange
+        let session = session_fixture();
+
+        // Act
+        let footer_line = prompt_footer_line(&session, 2);
+
+        // Assert
+        assert_eq!(
+            footer_line.to_string(),
+            "Enter: submit | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: cancel | 2 \
+             images ready"
+        );
+        assert_eq!(
+            footer_line.spans[0].style,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(footer_line.spans[1].style, Style::default().fg(Color::Gray));
+        assert_eq!(
+            footer_line.spans[footer_line.spans.len() - 2].style,
+            Style::default().fg(Color::DarkGray)
+        );
+        assert_eq!(
+            footer_line.spans[footer_line.spans.len() - 1].style,
+            Style::default().fg(Color::Gray)
+        );
+    }
+
+    #[test]
+    fn test_prompt_footer_line_uses_stage_label_for_new_sessions() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::New;
+        session.is_draft = true;
+
+        // Act
+        let footer_line = prompt_footer_line(&session, 0);
+
+        // Assert
+        assert!(footer_line.to_string().contains("Enter: stage draft"));
+        assert!(!footer_line.to_string().contains("Enter: submit"));
+    }
+
+    #[test]
+    fn test_question_help_footer_line_switches_actions_by_focus() {
+        // Arrange
+
+        // Act
+        let chat_focus_line = question_help_footer_line(QuestionFocus::Chat);
+        let answer_focus_line = question_help_footer_line(QuestionFocus::Answer);
+
+        // Assert
+        assert!(chat_focus_line.to_string().contains("j/k: scroll"));
+        assert!(chat_focus_line.to_string().contains("Esc/Enter: answer"));
+        assert!(answer_focus_line.to_string().contains("Enter: send"));
+        assert!(answer_focus_line.to_string().contains("Esc: end turn"));
+    }
+
+    #[test]
+    fn test_session_output_panel_borders_leave_full_inner_width_without_vertical_edges() {
+        // Arrange & Act
+        let inner_width = panel_inner_width(Rect::new(0, 0, 80, 5), session_output_panel_borders());
+        let output_panel_borders = session_output_panel_borders();
+
+        // Assert
+        assert_eq!(inner_width, 80);
+        assert!(!output_panel_borders.intersects(Borders::LEFT));
+        assert!(!output_panel_borders.intersects(Borders::RIGHT));
+    }
+
+    #[test]
+    fn test_session_output_done_toggle_line_switches_targets() {
+        // Arrange
+
+        // Act
+        let summary_line = session_output_done_toggle_line(DoneSessionOutputMode::Summary);
+        let output_line = session_output_done_toggle_line(DoneSessionOutputMode::Output);
+        let review_line = session_output_done_toggle_line(DoneSessionOutputMode::Review);
+
+        // Assert
+        assert_eq!(summary_line.to_string(), "Press t to switch to output.");
+        assert_eq!(output_line.to_string(), "Press t to switch to summary.");
+        assert_eq!(review_line.to_string(), "Press t to switch to summary.");
+    }
+
+    #[test]
+    fn test_session_output_status_line_for_in_progress_includes_progress_text() {
+        // Arrange
+
+        // Act
+        let status_line =
+            session_output_status_line(Status::InProgress, Some("Inspecting changed files"), None)
+                .expect("in-progress sessions should render a status line");
+
+        // Assert
+        assert!(
+            status_line
+                .to_string()
+                .contains("Working... Inspecting changed files")
+        );
+    }
+
+    #[test]
+    fn test_session_output_status_line_for_agent_review_uses_review_loader_text() {
+        // Arrange
+
+        // Act
+        let status_line = session_output_status_line(
+            Status::AgentReview,
+            None,
+            Some("Reviewing changes with gpt-5.4"),
+        )
+        .expect("agent-review sessions should render a status line");
+
+        // Assert
+        assert!(
+            status_line
+                .to_string()
+                .contains("Reviewing changes with gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn test_session_output_status_line_for_merging_uses_status_label() {
+        // Arrange
+
+        // Act
+        let status_line = session_output_status_line(Status::Merging, None, None)
+            .expect("merging sessions should render a status line");
+
+        // Assert
+        assert!(status_line.to_string().contains("Merging..."));
+    }
+
+    #[test]
+    fn test_session_output_published_branch_sync_line_uses_sync_message() {
+        // Arrange
+        let mut session = session_fixture();
+        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
+        session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
+
+        // Act
+        let sync_line = session_output_published_branch_sync_line(&session)
+            .expect("published branch sync should render a status line");
+
+        // Assert
+        assert!(
+            sync_line
+                .to_string()
+                .contains("Auto-pushing published branch after completed turn...")
+        );
+    }
 
     #[test]
     fn test_centered_content_rect_centers_requested_size() {

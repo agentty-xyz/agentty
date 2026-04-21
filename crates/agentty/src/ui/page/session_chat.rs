@@ -1,32 +1,28 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::{self, extract_at_mention_query};
-use crate::domain::session::{Session, Status};
+use crate::domain::session::Session;
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::file_index;
 use crate::ui::component::chat_input::{ChatInput, SuggestionItem, SuggestionList};
 use crate::ui::component::session_output::{SessionOutput, SessionOutputLineContext};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
-use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
 use crate::ui::state::prompt::{
     PromptAtMentionState, PromptSlashState, build_prompt_slash_suggestion_list,
 };
 use crate::ui::util::{
-    calculate_input_height, format_duration_compact, format_token_count, inline_text,
-    overlay_area_above, question_panel_areas, question_panel_reserved_height,
-    suggestion_dropdown_height, truncate_spans_with_ellipsis, truncate_with_ellipsis, wrap_lines,
+    calculate_input_height, overlay_area_above, question_panel_areas,
+    question_panel_reserved_height, suggestion_dropdown_height, wrap_lines,
 };
-use crate::ui::{Component, Page, markdown, style};
+use crate::ui::{Component, Page, layout, markdown, style};
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
-/// Fixed rendered height of the session header above the output panel border.
-const SESSION_HEADER_HEIGHT: u16 = 2;
 
 /// Prompt-panel data prepared once per render pass so layout and painting use
 /// the same suggestion set.
@@ -83,22 +79,6 @@ pub struct SessionChatPageInput<'a> {
 }
 
 impl<'a> SessionChatPage<'a> {
-    /// Fixed prompt-mode actions rendered in the composer help footer while
-    /// staging drafts for an explicit draft session.
-    const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
-        help_action::HelpAction::new("stage draft", "Enter", "Stage draft"),
-        help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
-        help_action::HelpAction::new("paste image", "Ctrl+V/Alt+V", "Paste image"),
-        help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
-    ];
-    /// Fixed prompt-mode actions rendered in the composer help footer.
-    const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
-        help_action::HelpAction::new("submit", "Enter", "Submit prompt"),
-        help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
-        help_action::HelpAction::new("paste image", "Ctrl+V/Alt+V", "Paste image"),
-        help_action::HelpAction::new("cancel", "Esc", "Cancel prompt"),
-    ];
-
     /// Creates a session chat page renderer.
     pub fn new(input: SessionChatPageInput<'a>) -> Self {
         let SessionChatPageInput {
@@ -293,7 +273,7 @@ impl<'a> SessionChatPage<'a> {
         let max_bottom_height = area.height.saturating_sub(1);
 
         Some(PreparedPromptPanel {
-            footer_text: Self::prompt_footer_line(session, attachment_state.attachments.len()),
+            footer_text: layout::prompt_footer_line(session, attachment_state.attachments.len()),
             suggestion_list,
             title: format!(" [{}] ", session.model.as_str()),
             total_height: desired_bottom_height.min(max_bottom_height),
@@ -329,16 +309,7 @@ impl<'a> SessionChatPage<'a> {
             || self.bottom_height(area),
             PreparedPromptPanel::panel_height,
         );
-        let chunks = Layout::default()
-            .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
-            .margin(1)
-            .split(area);
-        let output_chunks = Layout::default()
-            .constraints([
-                Constraint::Length(SESSION_HEADER_HEIGHT),
-                Constraint::Min(0),
-            ])
-            .split(chunks[0]);
+        let session_areas = layout::session_chat_areas(area, bottom_height);
 
         let mut output =
             SessionOutput::new(session).done_session_output_mode(self.done_session_output_mode());
@@ -354,90 +325,26 @@ impl<'a> SessionChatPage<'a> {
         if let Some(active_progress) = self.active_progress {
             output = output.active_progress(active_progress);
         }
-        Self::render_session_header(
+        self.render_session_header(f, session_areas.header_area, session);
+        output.render(f, session_areas.output_area);
+        self.render_bottom_panel(
             f,
-            output_chunks[0],
+            session_areas.bottom_area,
             session,
-            self.default_reasoning_level,
-            self.wall_clock_unix_seconds,
+            prepared_prompt_panel.as_ref(),
         );
-        output.render(f, output_chunks[1]);
-        self.render_bottom_panel(f, chunks[1], session, prepared_prompt_panel.as_ref());
     }
 
     /// Renders a standalone two-line header above the output panel border.
-    fn render_session_header(
-        f: &mut Frame,
-        header_area: Rect,
-        session: &Session,
-        default_reasoning_level: ReasoningLevel,
-        wall_clock_unix_seconds: i64,
-    ) {
-        let header = Paragraph::new(Self::session_header_lines(
+    fn render_session_header(&self, f: &mut Frame, header_area: Rect, session: &Session) {
+        let header = Paragraph::new(layout::session_header_lines(
             session,
             header_area.width,
-            default_reasoning_level,
-            wall_clock_unix_seconds,
+            self.default_reasoning_level,
+            self.wall_clock_unix_seconds,
         ));
 
         f.render_widget(header, header_area);
-    }
-
-    /// Formats the title and metadata lines rendered in the session header.
-    fn session_header_lines(
-        session: &Session,
-        header_width: u16,
-        default_reasoning_level: ReasoningLevel,
-        wall_clock_unix_seconds: i64,
-    ) -> Vec<Line<'static>> {
-        let title_width = usize::from(header_width);
-        let title_text = inline_text(session.display_title());
-        let base_style = Style::default()
-            .fg(session.status.color())
-            .add_modifier(Modifier::BOLD);
-        let title_spans = markdown::parse_inline_spans(&title_text, base_style);
-        let title_spans = truncate_spans_with_ellipsis(title_spans, title_width);
-        let metadata_text = Self::session_metadata_text(
-            session,
-            header_width,
-            default_reasoning_level,
-            wall_clock_unix_seconds,
-        );
-
-        vec![
-            Line::from(title_spans),
-            Line::from(Span::styled(
-                metadata_text,
-                Style::default().fg(style::palette::TEXT_MUTED),
-            )),
-        ]
-    }
-
-    /// Formats the size, timer, token-usage, model, and reasoning summary for
-    /// the second header row.
-    fn session_metadata_text(
-        session: &Session,
-        header_width: u16,
-        default_reasoning_level: ReasoningLevel,
-        wall_clock_unix_seconds: i64,
-    ) -> String {
-        let added_lines = session.stats.added_lines;
-        let deleted_lines = session.stats.deleted_lines;
-        let timer =
-            format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds));
-        let reasoning_level = session.effective_reasoning_level(default_reasoning_level);
-        let input_tokens = format_token_count(session.stats.input_tokens);
-        let output_tokens = format_token_count(session.stats.output_tokens);
-        let metadata = format!(
-            "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Model: {}  \
-             Reasoning: {}  Tokens: {input_tokens}/{output_tokens}",
-            session.size,
-            session.model.as_str(),
-            reasoning_level.as_str(),
-        );
-        let metadata_width = usize::from(header_width);
-
-        truncate_with_ellipsis(&metadata, metadata_width)
     }
 
     /// Returns the reserved bottom-panel height for the active page mode.
@@ -514,14 +421,12 @@ impl<'a> SessionChatPage<'a> {
                 return;
             }
 
-            let sections = Layout::default()
-                .constraints([Constraint::Min(0), Constraint::Length(1)])
-                .split(bottom_area);
+            let panel_areas = layout::prompt_panel_areas(bottom_area);
 
-            chat_input.render(f, sections[0]);
+            chat_input.render(f, panel_areas.input_area);
             f.render_widget(
                 Paragraph::new(prepared_prompt_panel.footer_text.clone()),
-                sections[1],
+                panel_areas.footer_area,
             );
 
             return;
@@ -553,87 +458,12 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let help_actions = Self::view_footer_actions(
+        let help_message = Paragraph::new(layout::session_view_footer_line(
             session,
             self.can_open_worktree,
             self.done_session_output_mode(),
-        );
-        let help_message = Paragraph::new(help_action::footer_line(&help_actions));
+        ));
         f.render_widget(help_message, bottom_area);
-    }
-
-    /// Returns the footer action list for a given session in view mode.
-    ///
-    /// `InProgress` sessions keep worktree access while hiding edit and diff
-    /// actions. `Rebasing` sessions keep worktree access but hide edit and
-    /// diff shortcuts. `Merging` and `Queued` sessions hide worktree shortcuts
-    /// while the merge queue is active. `Review` sessions expose review
-    /// shortcuts with read-only assist generation (`m` opens merge
-    /// confirmation before queueing), and `Done` sessions expose only
-    /// read-only shortcuts. `Canceled` sessions expose only `back`, `scroll`,
-    /// and `help`.
-    fn view_footer_actions(
-        session: &Session,
-        can_open_worktree: bool,
-        done_session_output_mode: DoneSessionOutputMode,
-    ) -> Vec<help_action::HelpAction> {
-        let session_state = help_action::session_view_state(session);
-        let mut actions = help_action::view_footer_actions(ViewHelpState {
-            can_open_worktree,
-            publish_pull_request_action: session.publish_pull_request_action(),
-            session_state,
-        });
-
-        if session_state == ViewSessionState::Done {
-            let toggle_action_label = Self::done_toggle_action_label(done_session_output_mode);
-            if let Some(toggle_action_index) = actions.iter().position(|action| action.key == "t") {
-                actions[toggle_action_index] =
-                    help_action::HelpAction::new(toggle_action_label, "t", "Switch summary/output");
-            }
-        }
-
-        actions
-    }
-
-    /// Returns the `t` footer label for `Status::Done` output mode toggling.
-    fn done_toggle_action_label(done_session_output_mode: DoneSessionOutputMode) -> &'static str {
-        match done_session_output_mode {
-            DoneSessionOutputMode::Summary => "output",
-            DoneSessionOutputMode::Output | DoneSessionOutputMode::Review => "summary",
-        }
-    }
-
-    /// Returns the prompt-mode footer line shown under the composer using the
-    /// same highlighted key styling used by other Agentty help text while
-    /// appending attachment readiness as muted status text.
-    fn prompt_footer_line(session: &Session, attachment_count: usize) -> Line<'static> {
-        let mut footer_line = help_action::footer_line(Self::prompt_footer_actions(session));
-
-        if attachment_count > 0 {
-            let suffix = if attachment_count == 1 { "" } else { "s" };
-            Self::append_prompt_footer_note(
-                &mut footer_line,
-                format!("{attachment_count} image{suffix} ready"),
-            );
-        }
-
-        footer_line
-    }
-
-    /// Returns the fixed prompt-mode actions rendered in the composer help
-    /// footer.
-    fn prompt_footer_actions(session: &Session) -> &'static [help_action::HelpAction] {
-        if session.status == Status::New && session.is_draft_session() {
-            return &Self::NEW_SESSION_PROMPT_FOOTER_ACTIONS;
-        }
-
-        &Self::PROMPT_FOOTER_ACTIONS
-    }
-
-    /// Appends one muted informational note to the prompt footer line.
-    fn append_prompt_footer_note(footer_line: &mut Line<'static>, note: String) {
-        footer_line.spans.push(help_action::footer_separator_span());
-        footer_line.spans.push(help_action::footer_muted_span(note));
     }
 }
 
@@ -760,29 +590,7 @@ fn render_question_help_footer(f: &mut Frame, area: Rect, help_height: u16, focu
         return;
     }
 
-    let is_chat_focused = focus == QuestionFocus::Chat;
-    let mut help_actions = Vec::new();
-
-    if is_chat_focused {
-        help_actions.push(help_action::HelpAction::new("scroll", "j/k", "Scroll chat"));
-        help_actions.push(help_action::HelpAction::new("diff", "d", "Diff"));
-        help_actions.push(help_action::HelpAction::new(
-            "answer",
-            "Esc/Enter",
-            "Answer",
-        ));
-    } else {
-        help_actions.push(help_action::HelpAction::new("send", "Enter", "Submit"));
-    }
-
-    let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
-    help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
-
-    if !is_chat_focused {
-        help_actions.push(help_action::HelpAction::new("end turn", "Esc", "End turn"));
-    }
-
-    let help_para = Paragraph::new(help_action::footer_line(&help_actions))
+    let help_para = Paragraph::new(layout::question_help_footer_line(focus))
         .alignment(ratatui::layout::Alignment::Right);
     f.render_widget(help_para, area);
 }
@@ -922,12 +730,10 @@ impl Page for SessionChatPage<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::agent::AgentModel;
     use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::domain::input::InputState;
+    use crate::domain::session::Status;
     use crate::infra::agent::protocol::QuestionItem;
     use crate::infra::file_index::FileEntry;
     use crate::ui::state::app_mode::QuestionFocus;
@@ -977,19 +783,6 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect()
-    }
-
-    fn view_help_text(
-        session: &Session,
-        can_open_worktree: bool,
-        done_session_output_mode: DoneSessionOutputMode,
-    ) -> String {
-        help_action::footer_line(&SessionChatPage::view_footer_actions(
-            session,
-            can_open_worktree,
-            done_session_output_mode,
-        ))
-        .to_string()
     }
 
     #[test]
@@ -1389,247 +1182,6 @@ mod tests {
     }
 
     #[test]
-    fn test_view_help_text_in_progress_shows_stop_and_open_and_hides_diff() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::InProgress;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(help_text.contains("q: back"));
-        assert!(help_text.contains("Ctrl+c: stop"));
-        assert!(help_text.contains("j/k: scroll"));
-        assert!(help_text.contains("o: open"));
-        assert!(!help_text.contains("d: diff"));
-        assert!(!help_text.contains("Enter: reply"));
-    }
-
-    #[test]
-    fn test_view_help_text_rebasing_keeps_open() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Rebasing;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(help_text.contains("q: back"));
-        assert!(help_text.contains("j/k: scroll"));
-        assert!(help_text.contains("o: open"));
-        assert!(!help_text.contains("Ctrl+c: stop"));
-        assert!(!help_text.contains("Enter: reply"));
-        assert!(!help_text.contains("d: diff"));
-    }
-
-    #[test]
-    fn test_view_help_text_merge_queue_statuses_hide_worktree_open_hint() {
-        // Arrange
-        let merge_queue_statuses = [Status::Queued, Status::Merging];
-
-        // Act
-        let help_texts: Vec<String> = merge_queue_statuses
-            .iter()
-            .map(|session_status| {
-                let mut session = session_fixture();
-                session.status = *session_status;
-
-                view_help_text(&session, true, DoneSessionOutputMode::Summary)
-            })
-            .collect();
-
-        // Assert
-        for help_text in help_texts {
-            assert!(help_text.contains("q: back"));
-            assert!(help_text.contains("j/k: scroll"));
-            assert!(!help_text.contains("o: open"));
-            assert!(!help_text.contains("Ctrl+c: stop"));
-        }
-    }
-
-    #[test]
-    fn test_view_help_text_canceled_shows_only_back_scroll_and_help() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Canceled;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert_eq!(help_text, "q: back | j/k: scroll | ?: help");
-    }
-
-    #[test]
-    fn test_view_help_text_new_session_shows_draft_and_start_actions() {
-        // Arrange
-        let mut session = session_fixture();
-        session.folder = PathBuf::new();
-        session.is_draft = true;
-
-        // Act
-        let help_text = view_help_text(&session, false, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(help_text.contains("Enter: add draft"));
-        assert!(help_text.contains("s: start"));
-        assert!(!help_text.contains("o: open"));
-        assert!(help_text.contains("m: add to merge queue"));
-        assert!(help_text.contains("r: rebase"));
-        assert!(help_text.contains("/: commands menu"));
-        assert!(!help_text.contains("d: diff"));
-    }
-
-    #[test]
-    fn test_view_help_text_review_shows_review_and_hides_diff_hint() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Review;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(!help_text.contains("d: diff"));
-        assert!(help_text.contains("f: review"));
-        assert!(help_text.contains("Enter: reply"));
-        assert!(help_text.contains("/: commands menu"));
-    }
-
-    #[test]
-    fn test_view_help_text_review_without_link_shows_push_branch_hint() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Review;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(help_text.contains("p: PR"));
-    }
-
-    #[test]
-    fn test_view_help_text_agent_review_hides_rebase_hint() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::AgentReview;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(help_text.contains("f: review"));
-        assert!(help_text.contains("Enter: reply"));
-        assert!(help_text.contains("m: add to merge queue"));
-        assert!(help_text.contains("p: PR"));
-        assert!(!help_text.contains("r: rebase"));
-    }
-
-    #[test]
-    fn test_view_help_text_done_hides_open_hint() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Done;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Summary);
-
-        // Assert
-        assert!(!help_text.contains("o: open"));
-        assert!(help_text.contains("t: output"));
-        assert!(help_text.contains("j/k: scroll"));
-    }
-
-    #[test]
-    fn test_view_help_text_done_output_mode_shows_summary_toggle_hint() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Done;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Output);
-
-        // Assert
-        assert!(help_text.contains("t: summary"));
-    }
-
-    #[test]
-    fn test_view_help_text_done_review_mode_shows_summary_toggle_hint() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Done;
-
-        // Act
-        let help_text = view_help_text(&session, true, DoneSessionOutputMode::Review);
-
-        // Assert
-        assert!(help_text.contains("t: summary"));
-    }
-
-    #[test]
-    fn test_bottom_height_caps_prompt_input_panel_to_ten_lines() {
-        // Arrange
-        let session = session_fixture();
-        let mode = AppMode::Prompt {
-            at_mention_state: None,
-            attachment_state: PromptAttachmentState::default(),
-            history_state: PromptHistoryState::default(),
-            review_status_message: None,
-            review_text: None,
-            slash_state: PromptSlashState::new(),
-            session_id: "session-id".into(),
-            input: InputState::with_text("line\n".repeat(80)),
-            scroll_offset: None,
-        };
-        let page = SessionChatPage::new(SessionChatPageInput {
-            active_prompt_output: None,
-            active_progress: None,
-            default_reasoning_level: ReasoningLevel::default(),
-            markdown_render_cache: test_markdown_render_cache(),
-            mode: &mode,
-            scroll_offset: None,
-            session_index: 0,
-            sessions: std::slice::from_ref(&session),
-            wall_clock_unix_seconds: 0,
-        });
-        let area = Rect::new(0, 0, 120, 30);
-
-        // Act
-        let bottom_height = page.bottom_height(area);
-
-        // Assert
-        assert_eq!(bottom_height, CHAT_INPUT_MAX_PANEL_HEIGHT + 1);
-    }
-
-    #[test]
-    fn test_bottom_height_preserves_space_for_output_area() {
-        // Arrange
-        let session = session_fixture();
-        let mode = AppMode::Prompt {
-            at_mention_state: None,
-            attachment_state: PromptAttachmentState::default(),
-            history_state: PromptHistoryState::default(),
-            review_status_message: None,
-            review_text: None,
-            slash_state: PromptSlashState::new(),
-            session_id: "session-id".into(),
-            input: InputState::with_text("line\n".repeat(80)),
-            scroll_offset: None,
-        };
-        let page = test_session_chat_page(&session, &mode);
-        let area = Rect::new(0, 0, 120, 8);
-
-        // Act
-        let bottom_height = page.bottom_height(area);
-
-        // Assert
-        assert_eq!(bottom_height, 7);
-    }
-
-    #[test]
     fn test_review_text_reads_preserved_prompt_review_output() {
         // Arrange
         let session = session_fixture();
@@ -1712,369 +1264,6 @@ mod tests {
 
         // Assert
         assert!(with_review > without_review);
-    }
-
-    #[test]
-    /// Ensures the prompt footer keeps shared help styling while showing image
-    /// attachment readiness.
-    fn test_prompt_footer_line_shows_highlighted_actions_and_attachment_count() {
-        // Arrange
-        let session = session_fixture();
-        let attachment_count = 2;
-
-        // Act
-        let footer_line = SessionChatPage::prompt_footer_line(&session, attachment_count);
-
-        // Assert
-        assert_eq!(
-            footer_line.to_string(),
-            "Enter: submit | Alt+Enter: newline | Ctrl+V/Alt+V: paste image | Esc: cancel | 2 \
-             images ready"
-        );
-        assert_eq!(
-            footer_line.spans[0].style,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        );
-        assert_eq!(footer_line.spans[1].style, Style::default().fg(Color::Gray));
-        assert_eq!(
-            footer_line.spans[footer_line.spans.len() - 2].style,
-            Style::default().fg(Color::DarkGray)
-        );
-        assert_eq!(
-            footer_line.spans[footer_line.spans.len() - 1].style,
-            Style::default().fg(Color::Gray)
-        );
-        assert!(!footer_line.to_string().contains("send images with Codex"));
-    }
-
-    #[test]
-    /// Ensures the prompt footer no longer shows the legacy Codex-only image
-    /// warning.
-    fn test_prompt_footer_line_omits_legacy_backend_warning() {
-        // Arrange
-        let session = session_fixture();
-        let attachment_count = 1;
-
-        // Act
-        let footer_line = SessionChatPage::prompt_footer_line(&session, attachment_count);
-
-        // Assert
-        assert!(footer_line.to_string().contains("1 image ready"));
-        assert!(!footer_line.to_string().contains("send images with Codex"));
-    }
-
-    #[test]
-    fn test_prompt_footer_line_uses_stage_label_for_new_sessions() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::New;
-        session.is_draft = true;
-
-        // Act
-        let footer_line = SessionChatPage::prompt_footer_line(&session, 0);
-
-        // Assert
-        assert!(footer_line.to_string().contains("Enter: stage draft"));
-        assert!(!footer_line.to_string().contains("Enter: submit"));
-    }
-
-    #[test]
-    fn test_bottom_height_question_mode_includes_question_input_and_help_rows() {
-        // Arrange
-        let session = session_fixture();
-        let question = "Need an explicit migration plan?".to_string();
-        let answer = "Use two phases: schema and runtime.";
-        let mode = AppMode::Question {
-            at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
-            session_id: "session-id".into(),
-            questions: vec![QuestionItem {
-                options: Vec::new(),
-                text: question.clone(),
-            }],
-            responses: Vec::new(),
-            current_index: 0,
-            focus: QuestionFocus::Answer,
-            input: InputState::with_text(answer.to_string()),
-            scroll_offset: None,
-            selected_option_index: None,
-        };
-        let page = test_session_chat_page(&session, &mode);
-        let area = Rect::new(0, 0, 120, 30);
-        let expected_height = question_panel_reserved_height(
-            area.width,
-            area.height.saturating_sub(1),
-            &question,
-            answer,
-            0,
-            CHAT_INPUT_MAX_PANEL_HEIGHT,
-        );
-
-        // Act
-        let bottom_height = page.bottom_height(area);
-
-        // Assert
-        assert_eq!(bottom_height, expected_height);
-    }
-
-    #[test]
-    fn test_bottom_height_question_mode_preserves_space_for_output_area() {
-        // Arrange
-        let session = session_fixture();
-        let mode = AppMode::Question {
-            at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
-            session_id: "session-id".into(),
-            questions: vec![QuestionItem {
-                options: Vec::new(),
-                text: "Need details?".to_string(),
-            }],
-            responses: Vec::new(),
-            current_index: 0,
-            focus: QuestionFocus::Answer,
-            input: InputState::with_text("answer\n".repeat(50)),
-            scroll_offset: None,
-            selected_option_index: None,
-        };
-        let page = test_session_chat_page(&session, &mode);
-        let area = Rect::new(0, 0, 120, 8);
-
-        // Act
-        let bottom_height = page.bottom_height(area);
-
-        // Assert
-        assert_eq!(bottom_height, 7);
-    }
-
-    #[test]
-    fn test_bottom_height_question_mode_includes_options_height() {
-        // Arrange
-        let session = session_fixture();
-        let mode = AppMode::Question {
-            at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
-            session_id: "session-id".into(),
-            questions: vec![QuestionItem {
-                options: vec!["Yes".to_string(), "No".to_string()],
-                text: "Continue?".to_string(),
-            }],
-            responses: Vec::new(),
-            current_index: 0,
-            focus: QuestionFocus::Answer,
-            input: InputState::default(),
-            scroll_offset: None,
-            selected_option_index: None,
-        };
-        let page = test_session_chat_page(&session, &mode);
-        let area = Rect::new(0, 0, 80, 20);
-
-        // Act
-        let bottom_height = page.bottom_height(area);
-
-        // Assert — options_height = 2 options + 1 header = 3
-        let expected = question_panel_reserved_height(
-            area.width,
-            area.height.saturating_sub(1),
-            "Continue?",
-            "",
-            2,
-            CHAT_INPUT_MAX_PANEL_HEIGHT,
-        );
-        assert_eq!(bottom_height, expected);
-        assert!(
-            bottom_height > 3,
-            "should have room for question, options, input and help"
-        );
-    }
-
-    #[test]
-    fn test_render_places_session_header_above_output_border() {
-        // Arrange
-        let mut session = session_fixture();
-        session.title = Some("Header Session".to_string());
-        session.model = AgentModel::Gpt54;
-        session.stats.added_lines = 12;
-        session.stats.deleted_lines = 4;
-        session.stats.input_tokens = 1_250;
-        session.stats.output_tokens = 2_500;
-        let mode = AppMode::List;
-        let mut page = test_session_chat_page(&session, &mode);
-        let width = 120;
-        let backend = ratatui::backend::TestBackend::new(width, 20);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw session chat page");
-
-        // Assert
-        let header_row = buffer_row_text(terminal.backend().buffer(), 1, width);
-        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, width);
-        let output_border_row = buffer_row_text(terminal.backend().buffer(), 3, width);
-        assert!(header_row.trim_start().starts_with("Header Session"));
-        assert!(header_row.contains("Header Session"));
-        assert!(metadata_row.trim_start().starts_with("Size: XS"));
-        assert!(metadata_row.contains("Size: XS"));
-        assert!(metadata_row.contains("Lines: +12 / -4"));
-        assert!(metadata_row.contains("Timer: 0s"));
-        assert!(metadata_row.contains("Model: gpt-5.4"));
-        assert!(metadata_row.contains("Reasoning: high"));
-        assert!(metadata_row.contains("Tokens: 1.3k/2.5k"));
-        assert!(
-            metadata_row.find("Model: gpt-5.4") < metadata_row.find("Reasoning: high"),
-            "model should appear before reasoning in the metadata row"
-        );
-        assert!(!output_border_row.contains("Header Session"));
-    }
-
-    #[test]
-    fn test_render_truncates_long_session_header_title() {
-        // Arrange
-        let mut session = session_fixture();
-        let long_title = "This is a very long session title for truncation behavior validation";
-        session.title = Some(long_title.to_string());
-        session.model = AgentModel::Gpt54;
-        let mode = AppMode::List;
-        let mut page = test_session_chat_page(&session, &mode);
-        let backend = ratatui::backend::TestBackend::new(28, 20);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw session chat page");
-
-        // Assert
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(!text.contains(long_title));
-        assert!(text.contains("..."));
-    }
-
-    #[test]
-    fn test_render_keeps_session_header_title_without_review_request_metadata() {
-        // Arrange
-        let mut session = session_fixture();
-        session.title = Some("Header Session".to_string());
-        let mode = AppMode::List;
-        let mut page = test_session_chat_page(&session, &mode);
-        let width = 120;
-        let backend = ratatui::backend::TestBackend::new(width, 20);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw session chat page");
-
-        // Assert
-        let header_row = buffer_row_text(terminal.backend().buffer(), 1, width);
-        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, width);
-        assert!(header_row.contains("Header Session"));
-        assert!(!header_row.contains("GitHub"));
-        assert!(metadata_row.contains("Model: gemini-3-flash-preview"));
-        assert!(metadata_row.contains("Reasoning: high"));
-        assert!(metadata_row.contains("Tokens:"));
-    }
-
-    #[test]
-    fn test_session_metadata_text_ticks_live_in_progress_timer() {
-        // Arrange
-        let mut session = session_fixture();
-        session.model = AgentModel::Gpt54;
-        session.stats.added_lines = 9;
-        session.stats.deleted_lines = 3;
-        session.status = Status::InProgress;
-        session.title = Some("Timer Session".to_string());
-        session.in_progress_started_at = Some(60);
-
-        // Act
-        let early_metadata =
-            SessionChatPage::session_metadata_text(&session, 120, ReasoningLevel::default(), 90);
-        let later_metadata =
-            SessionChatPage::session_metadata_text(&session, 120, ReasoningLevel::default(), 3_720);
-
-        // Assert
-        assert!(early_metadata.contains("Lines: +9 / -3"));
-        assert!(early_metadata.contains("Timer: 30s"));
-        assert!(early_metadata.contains("Model: gpt-5.4"));
-        assert!(early_metadata.contains("Tokens: 0/0"));
-        assert!(
-            early_metadata.find("Model: gpt-5.4") < early_metadata.find("Reasoning: high"),
-            "model should appear before reasoning in metadata text"
-        );
-        assert!(later_metadata.contains("Timer: 1h1m0s"));
-    }
-
-    #[test]
-    fn test_session_metadata_text_freezes_timer_after_in_progress_ends() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Review;
-        session.title = Some("Frozen Timer".to_string());
-        session.in_progress_total_seconds = 3_660;
-
-        // Act
-        let earlier_metadata =
-            SessionChatPage::session_metadata_text(&session, 80, ReasoningLevel::default(), 4_000);
-        let later_metadata =
-            SessionChatPage::session_metadata_text(&session, 80, ReasoningLevel::default(), 40_000);
-
-        // Assert
-        assert_eq!(earlier_metadata, later_metadata);
-        assert!(earlier_metadata.contains("Timer: 1h1m0s"));
-    }
-
-    #[test]
-    fn test_render_truncates_long_session_header_title_and_keeps_timer_visible() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::InProgress;
-        session.title = Some("This is a very long timer-aware session header title".to_string());
-        session.model = AgentModel::Gpt54;
-        session.in_progress_started_at = Some(0);
-        let mode = AppMode::List;
-        let mut page = SessionChatPage::new(SessionChatPageInput {
-            active_prompt_output: None,
-            active_progress: None,
-            default_reasoning_level: ReasoningLevel::default(),
-            markdown_render_cache: test_markdown_render_cache(),
-            mode: &mode,
-            scroll_offset: None,
-            session_index: 0,
-            sessions: std::slice::from_ref(&session),
-            wall_clock_unix_seconds: 3_660,
-        });
-        let backend = ratatui::backend::TestBackend::new(50, 20);
-        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-
-        // Act
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                Page::render(&mut page, frame, area);
-            })
-            .expect("failed to draw session chat page");
-
-        // Assert
-        let header_row = buffer_row_text(terminal.backend().buffer(), 1, 50);
-        let metadata_row = buffer_row_text(terminal.backend().buffer(), 2, 50);
-        assert!(header_row.contains("..."));
-        assert!(metadata_row.contains("Timer: 1h1m0s"));
     }
 
     #[test]

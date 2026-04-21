@@ -2,18 +2,16 @@ use std::fmt::Write as _;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Paragraph};
 use serde_json;
 
-use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
-use crate::icon::Icon;
+use crate::domain::session::{Session, Status};
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
-use crate::ui::{Component, style, text_util};
+use crate::ui::{Component, layout, text_util};
 
 const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
@@ -179,7 +177,7 @@ impl<'a> SessionOutput<'a> {
             Self::transcript_sections(status, &output_text, active_prompt_output);
         let completed_turn_text = Self::output_text_with_spaced_user_input(completed_turn_text);
         let active_turn_text = active_turn_text.map(Self::output_text_with_spaced_user_input);
-        let inner_width = panel_inner_width(output_area, Self::output_panel_borders());
+        let inner_width = panel_inner_width(output_area, layout::session_output_panel_borders());
         let (completed_turn_text, trailing_footer_text) =
             text_util::split_trailing_line_block(&completed_turn_text, TRANSCRIPT_FOOTER_PREFIXES);
         let mut lines = Vec::new();
@@ -214,30 +212,20 @@ impl<'a> SessionOutput<'a> {
         }
         Self::append_published_branch_sync_lines(&mut lines, session);
 
-        if matches!(
-            status,
-            Status::InProgress
-                | Status::AgentReview
-                | Status::Queued
-                | Status::Rebasing
-                | Status::Merging
-        ) {
+        if let Some(status_line) =
+            layout::session_output_status_line(status, active_progress, review_status_message)
+        {
             while lines.last().is_some_and(|line| line.width() == 0) {
                 lines.pop();
             }
 
             lines.push(Line::from(""));
-
-            let status_icon = Self::status_icon(status);
-            let status_message =
-                Self::status_message(status, active_progress, review_status_message);
-            lines.push(Line::from(vec![Span::styled(
-                format!("{status_icon} {status_message}"),
-                Style::default().fg(style::status_color(status)),
-            )]));
+            lines.push(status_line);
         } else if status == Status::Done {
             lines.push(Line::from(""));
-            lines.push(Self::done_output_toggle_line(done_session_output_mode));
+            lines.push(layout::session_output_done_toggle_line(
+                done_session_output_mode,
+            ));
             lines.push(Line::from(""));
         } else {
             lines.push(Line::from(""));
@@ -249,7 +237,7 @@ impl<'a> SessionOutput<'a> {
     /// Appends one automatic published-branch sync status row when the latest
     /// completed turn started, finished, or failed an auto-push.
     fn append_published_branch_sync_lines(lines: &mut Vec<Line<'static>>, session: &Session) {
-        let Some(sync_message) = session.published_branch_sync_message() else {
+        let Some(sync_line) = layout::session_output_published_branch_sync_line(session) else {
             return;
         };
 
@@ -258,15 +246,7 @@ impl<'a> SessionOutput<'a> {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            format!(
-                "{} {sync_message}",
-                Self::published_branch_sync_icon(session.published_branch_sync_status)
-            ),
-            Style::default().fg(Self::published_branch_sync_color(
-                session.published_branch_sync_status,
-            )),
-        )]));
+        lines.push(sync_line);
     }
 
     /// Splits the transcript at the exact active-turn prompt block captured
@@ -296,32 +276,6 @@ impl<'a> SessionOutput<'a> {
             &output_text[..active_prompt_start],
             Some(&output_text[active_prompt_start..]),
         )
-    }
-
-    /// Returns borders used for the session output panel.
-    ///
-    /// Vertical borders stay hidden so terminal copy/select flows do not pick
-    /// up extra gutter characters.
-    fn output_panel_borders() -> Borders {
-        Borders::TOP | Borders::BOTTOM
-    }
-
-    /// Returns the border style used for the session output frame.
-    fn output_panel_border_style(status: Status) -> Style {
-        Style::default().fg(style::status_color(status))
-    }
-
-    /// Returns the inline shortcut hint for toggling done-session content.
-    fn done_output_toggle_line(done_session_output_mode: DoneSessionOutputMode) -> Line<'static> {
-        let toggle_target = match done_session_output_mode {
-            DoneSessionOutputMode::Summary => "output",
-            DoneSessionOutputMode::Output | DoneSessionOutputMode::Review => "summary",
-        };
-
-        Line::from(vec![Span::styled(
-            format!("Press t to switch to {toggle_target}."),
-            Style::default().fg(style::palette::TEXT_SUBTLE),
-        )])
     }
 
     /// Returns the source text shown in the output panel for the current
@@ -707,71 +661,6 @@ impl<'a> SessionOutput<'a> {
 
         start_index
     }
-
-    /// Returns the loader label for active session states.
-    fn status_message(
-        status: Status,
-        active_progress: Option<&str>,
-        review_status_message: Option<&str>,
-    ) -> String {
-        match status {
-            Status::InProgress => active_progress
-                .map(str::trim)
-                .filter(|progress| !progress.is_empty())
-                .map_or_else(
-                    || "Working...".to_string(),
-                    |progress| format!("Working... {progress}"),
-                ),
-            Status::AgentReview => review_status_message
-                .map(str::trim)
-                .filter(|status_message| !status_message.is_empty())
-                .map_or_else(|| "Preparing review...".to_string(), ToString::to_string),
-            Status::Queued => "Waiting in merge queue...".to_string(),
-            Status::Rebasing => "Rebasing...".to_string(),
-            Status::Merging => "Merging...".to_string(),
-            Status::New | Status::Review | Status::Question | Status::Done | Status::Canceled => {
-                String::new()
-            }
-        }
-    }
-
-    /// Returns the status indicator icon used for inline status messages.
-    fn status_icon(status: Status) -> Icon {
-        match status {
-            Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
-                Icon::current_spinner()
-            }
-            Status::Queued
-            | Status::New
-            | Status::Review
-            | Status::Question
-            | Status::Done
-            | Status::Canceled => Icon::Pending,
-        }
-    }
-
-    /// Returns the icon used for published-branch sync status rows.
-    fn published_branch_sync_icon(sync_status: PublishedBranchSyncStatus) -> Icon {
-        match sync_status {
-            PublishedBranchSyncStatus::Idle => Icon::Pending,
-            PublishedBranchSyncStatus::InProgress => Icon::current_spinner(),
-            PublishedBranchSyncStatus::Succeeded => Icon::Check,
-            PublishedBranchSyncStatus::Failed => Icon::Warn,
-        }
-    }
-
-    /// Returns the color used for published-branch sync status rows.
-    fn published_branch_sync_color(
-        sync_status: PublishedBranchSyncStatus,
-    ) -> ratatui::style::Color {
-        match sync_status {
-            PublishedBranchSyncStatus::Idle => style::palette::TEXT_MUTED,
-            PublishedBranchSyncStatus::InProgress | PublishedBranchSyncStatus::Failed => {
-                style::palette::WARNING
-            }
-            PublishedBranchSyncStatus::Succeeded => style::palette::SUCCESS,
-        }
-    }
 }
 
 impl Component for SessionOutput<'_> {
@@ -795,7 +684,7 @@ impl Component for SessionOutput<'_> {
         );
         let final_scroll = bottom_pinned_scroll_offset(
             output_area,
-            Self::output_panel_borders(),
+            layout::session_output_panel_borders(),
             lines.len(),
             self.scroll_offset,
         );
@@ -803,8 +692,8 @@ impl Component for SessionOutput<'_> {
         let paragraph = Paragraph::new(lines)
             .block(
                 Block::default()
-                    .borders(Self::output_panel_borders())
-                    .border_style(Self::output_panel_border_style(status)),
+                    .borders(layout::session_output_panel_borders())
+                    .border_style(layout::session_output_panel_border_style(status)),
             )
             .scroll((final_scroll, 0));
 
@@ -814,7 +703,6 @@ impl Component for SessionOutput<'_> {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Modifier;
     use serde_json;
 
     use super::*;
@@ -835,6 +723,16 @@ mod tests {
             review_text,
         }
     }
+
+    /// Collects one rendered terminal buffer into plain text for assertions.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
     fn summary_fixture() -> String {
         serde_json::to_string(&AgentResponseSummary {
             turn: "- Added the structured protocol summary.".to_string(),
@@ -854,14 +752,6 @@ mod tests {
             .build()
     }
 
-    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
-        buffer
-            .content()
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect()
-    }
-
     #[test]
     fn test_rendered_line_count_counts_wrapped_content() {
         // Arrange
@@ -878,56 +768,6 @@ mod tests {
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
-    }
-
-    #[test]
-    fn test_output_lines_show_published_branch_sync_message() {
-        // Arrange
-        let mut session = session_fixture();
-        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
-        session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
-        session.status = Status::Review;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Auto-pushing published branch after completed turn..."));
-    }
-
-    #[test]
-    fn test_output_lines_show_completed_published_branch_sync_message() {
-        // Arrange
-        let mut session = session_fixture();
-        session.published_upstream_ref = Some("origin/wt/session-id".to_string());
-        session.published_branch_sync_status = PublishedBranchSyncStatus::Succeeded;
-        session.status = Status::Review;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Auto-pushed published branch after completed turn."));
     }
 
     #[test]
@@ -1211,31 +1051,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_lines_done_summary_mode_shows_output_toggle_action() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "streamed output".to_string();
-        session.summary = Some(summary_fixture());
-        session.status = Status::Done;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Press t to switch to output."));
-    }
-
-    #[test]
     /// Verifies the done-summary transition renders the rewritten summary
     /// payload exactly once in summary mode.
     fn test_output_lines_done_summary_transition_renders_rewritten_summary() {
@@ -1282,172 +1097,6 @@ mod tests {
         assert!(done_text.contains("Refine session summary"));
         assert!(!done_text.contains("Change Summary"));
         assert!(!done_text.contains("streamed output"));
-    }
-
-    #[test]
-    fn test_output_lines_done_output_mode_shows_summary_toggle_action() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "streamed output".to_string();
-        session.summary = Some(summary_fixture());
-        session.status = Status::Done;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Output, None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Press t to switch to summary."));
-    }
-
-    #[test]
-    fn test_output_lines_review_mode_keeps_transcript_when_review_output_is_missing() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Review;
-        session.output = "streamed output".to_string();
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Review, None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("streamed output"));
-        assert!(!text.contains("Review is not available."));
-    }
-
-    #[test]
-    fn test_output_lines_done_review_mode_shows_summary_toggle_action() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Done;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Review, None, None, None),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Press t to switch to summary."));
-    }
-
-    #[test]
-    /// Verifies stale focused-review cache text is not shown after a session
-    /// has been merged into its final `Done` state.
-    fn test_output_lines_done_session_hides_cached_review_text() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "merged transcript".to_string();
-        session.status = Status::Done;
-        let assisted_text = "## Review\n\n### Project Impact\n\n- Review summary";
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(
-                DoneSessionOutputMode::Output,
-                Some("Reviewing changes with gpt-5.4"),
-                Some(assisted_text),
-                None,
-            ),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("merged transcript"));
-        assert!(!text.contains("Review summary"));
-        assert!(!text.contains("Project Impact"));
-    }
-
-    #[test]
-    fn test_output_lines_review_mode_prefers_assisted_text() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::Review;
-        let assisted_text = "## Review\n\n- Assisted insight";
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(
-                DoneSessionOutputMode::Review,
-                Some("Reviewing changes with gpt-5.4"),
-                Some(assisted_text),
-                None,
-            ),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Assisted insight"));
-        assert!(!text.contains("Reviewing changes with gpt-5.4"));
-    }
-
-    #[test]
-    fn test_output_lines_agent_review_mode_shows_loader_message() {
-        // Arrange
-        let mut session = session_fixture();
-        session.status = Status::AgentReview;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(
-                DoneSessionOutputMode::Review,
-                Some("Reviewing changes with gpt-5.4"),
-                None,
-                None,
-            ),
-            None,
-        );
-        let text = lines
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(text.contains("Reviewing changes with gpt-5.4"));
-        assert!(!text.contains("Review is not available."));
     }
 
     #[test]
@@ -1504,120 +1153,6 @@ mod tests {
         // Assert
         assert!(!text.contains("Added the structured protocol summary."));
         assert!(text.contains("streamed output"));
-    }
-
-    #[test]
-    fn test_output_lines_render_user_prompt_with_cyan_bold_styling() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = " › /model gemini".to_string();
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-
-        // Assert
-        let prompt_line = lines
-            .iter()
-            .find(|line| line.to_string().trim_end().starts_with(" › "))
-            .expect("expected user prompt line");
-        assert_eq!(prompt_line.to_string().trim_end(), " › /model gemini");
-        assert_eq!(
-            prompt_line.width(),
-            panel_inner_width(
-                Rect::new(0, 0, 80, 5),
-                SessionOutput::output_panel_borders()
-            )
-        );
-        assert_eq!(prompt_line.spans[0].style.fg, Some(style::palette::ACCENT));
-        assert!(
-            prompt_line.spans[0]
-                .style
-                .add_modifier
-                .contains(Modifier::BOLD)
-        );
-    }
-
-    #[test]
-    fn test_output_lines_use_full_panel_width_without_vertical_borders() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "abcdef".to_string();
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 6, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-
-        // Assert
-        assert_eq!(
-            lines.first().expect("expected output line").to_string(),
-            "abcdef"
-        );
-    }
-
-    #[test]
-    fn test_output_panel_borders_leave_full_inner_width_without_vertical_edges() {
-        // Arrange & Act
-        let inner_width = panel_inner_width(
-            Rect::new(0, 0, 80, 5),
-            SessionOutput::output_panel_borders(),
-        );
-        let output_panel_borders = SessionOutput::output_panel_borders();
-
-        // Assert
-        assert_eq!(inner_width, 80);
-        assert!(!output_panel_borders.intersects(Borders::LEFT));
-        assert!(!output_panel_borders.intersects(Borders::RIGHT));
-    }
-
-    #[test]
-    fn test_output_lines_appends_empty_line_when_done() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "some output".to_string();
-        session.status = Status::Done;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-
-        // Assert
-        assert!(lines.last().expect("lines").to_string().is_empty());
-        assert!(lines.len() >= 2);
-    }
-
-    #[test]
-    fn test_output_lines_appends_empty_line_before_spinner() {
-        // Arrange
-        let mut session = session_fixture();
-        session.output = "some output".to_string();
-        session.status = Status::InProgress;
-
-        // Act
-        let lines = SessionOutput::output_lines(
-            &session,
-            Rect::new(0, 0, 80, 5),
-            line_context(DoneSessionOutputMode::Summary, None, None, None),
-            None,
-        );
-
-        // Assert
-        assert!(lines.len() >= 3);
-        let len = lines.len();
-        assert!(lines[len - 2].to_string().is_empty());
-        assert!(lines[len - 1].to_string().contains("Working..."));
     }
 
     #[test]
@@ -1680,37 +1215,6 @@ mod tests {
     }
 
     #[test]
-    fn test_status_message_for_merging() {
-        // Arrange & Act
-        let message = SessionOutput::status_message(Status::Merging, None, None);
-
-        // Assert
-        assert_eq!(message, "Merging...");
-    }
-
-    #[test]
-    fn test_status_message_for_queued() {
-        // Arrange & Act
-        let message = SessionOutput::status_message(Status::Queued, None, None);
-
-        // Assert
-        assert_eq!(message, "Waiting in merge queue...");
-    }
-
-    #[test]
-    fn test_status_message_for_agent_review_uses_review_loader_text() {
-        // Arrange & Act
-        let message = SessionOutput::status_message(
-            Status::AgentReview,
-            None,
-            Some("Reviewing changes with gpt-5.4"),
-        );
-
-        // Assert
-        assert_eq!(message, "Reviewing changes with gpt-5.4");
-    }
-
-    #[test]
     fn test_output_lines_use_generic_in_progress_loader() {
         // Arrange
         let mut session = session_fixture();
@@ -1732,19 +1236,6 @@ mod tests {
 
         // Assert
         assert!(text.contains("Working..."));
-    }
-
-    #[test]
-    fn test_status_message_for_in_progress_includes_progress_text() {
-        // Arrange & Act
-        let message = SessionOutput::status_message(
-            Status::InProgress,
-            Some("Inspecting changed files"),
-            None,
-        );
-
-        // Assert
-        assert_eq!(message, "Working... Inspecting changed files");
     }
 
     #[test]
