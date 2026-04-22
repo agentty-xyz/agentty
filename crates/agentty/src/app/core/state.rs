@@ -481,7 +481,7 @@ impl App {
             review_text: None,
             slash_state: self.prompt_slash_state(),
             session_id: SessionId::from(session_id.as_str()),
-            input: InputState::new(),
+            input: InputState::default(),
             scroll_offset: None,
         };
 

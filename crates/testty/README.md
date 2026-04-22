@@ -331,7 +331,7 @@ let (_frame, report) = scenario.run_with_proof(builder).expect("failed");
 // Render through any backend:
 report.save(&FrameTextBackend, Path::new("proof.txt")).unwrap();
 report.save(&ScreenshotStripBackend, Path::new("proof.png")).unwrap();
-report.save(&GifBackend::new(), Path::new("proof.gif")).unwrap();
+report.save(&GifBackend::default(), Path::new("proof.gif")).unwrap();
 report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
 ```
 

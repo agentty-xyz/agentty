@@ -35,10 +35,12 @@ pub struct GifBackend {
 
 impl GifBackend {
     /// Create a GIF backend with the default frame delay.
+    ///
+    /// Retained as a compatibility constructor for external callers; prefer
+    /// [`GifBackend::default`] in new code.
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            frame_delay_ms: DEFAULT_FRAME_DELAY_MS,
-        }
+        Self::default()
     }
 
     /// Create a GIF backend with a custom frame delay.
@@ -58,8 +60,11 @@ impl GifBackend {
 }
 
 impl Default for GifBackend {
+    /// Create a GIF backend with the default frame delay.
     fn default() -> Self {
-        Self::new()
+        Self {
+            frame_delay_ms: DEFAULT_FRAME_DELAY_MS,
+        }
     }
 }
 
@@ -115,7 +120,7 @@ mod tests {
     #[test]
     fn gif_backend_default_delay() {
         // Arrange / Act
-        let backend = GifBackend::new();
+        let backend = GifBackend::default();
 
         // Assert
         assert_eq!(backend.frame_delay_ms(), DEFAULT_FRAME_DELAY_MS);
@@ -149,7 +154,7 @@ mod tests {
         let output_path = temp_dir.path().join("proof.gif");
 
         // Act
-        let backend = GifBackend::new();
+        let backend = GifBackend::default();
         backend
             .render(&report, &output_path)
             .expect("render should succeed");
@@ -168,7 +173,7 @@ mod tests {
         let output_path = temp_dir.path().join("empty.gif");
 
         // Act
-        let backend = GifBackend::new();
+        let backend = GifBackend::default();
         let result = backend.render(&report, &output_path);
 
         // Assert

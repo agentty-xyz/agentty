@@ -99,15 +99,6 @@ pub struct PromptAttachmentState {
 }
 
 impl PromptAttachmentState {
-    /// Creates empty prompt attachment state.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            attachments: Vec::new(),
-            next_attachment_number: 1,
-        }
-    }
-
     /// Registers a pasted local image and returns the placeholder inserted
     /// into the prompt input text.
     pub fn register_local_image(&mut self, local_image_path: PathBuf) -> String {
@@ -153,8 +144,13 @@ impl PromptAttachmentState {
 }
 
 impl Default for PromptAttachmentState {
+    /// Creates empty prompt attachment state with attachment numbering
+    /// starting at 1.
     fn default() -> Self {
-        Self::new()
+        Self {
+            attachments: Vec::new(),
+            next_attachment_number: 1,
+        }
     }
 }
 
@@ -214,12 +210,6 @@ pub struct PromptSlashState {
 }
 
 impl PromptSlashState {
-    /// Creates a new slash state at command selection.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::with_available_agent_kinds(AgentKind::ALL.to_vec())
-    }
-
     /// Creates a new slash state scoped to the provided locally available
     /// agent kinds.
     #[must_use]
@@ -259,8 +249,10 @@ impl PromptSlashState {
 }
 
 impl Default for PromptSlashState {
+    /// Creates a slash state at command selection with every agent kind
+    /// marked available.
     fn default() -> Self {
-        Self::new()
+        Self::with_available_agent_kinds(AgentKind::ALL.to_vec())
     }
 }
 
@@ -282,7 +274,7 @@ impl PromptComposerState {
     /// Creates a prompt composer with empty input and prompt history.
     #[must_use]
     pub fn new(available_agent_kinds: Vec<AgentKind>) -> Self {
-        Self::with_input_and_history(InputState::new(), available_agent_kinds, Vec::new())
+        Self::with_input_and_history(InputState::default(), available_agent_kinds, Vec::new())
     }
 
     /// Creates a prompt composer with explicit input and history snapshots.
@@ -293,7 +285,7 @@ impl PromptComposerState {
         history_entries: Vec<String>,
     ) -> Self {
         Self {
-            attachment_state: PromptAttachmentState::new(),
+            attachment_state: PromptAttachmentState::default(),
             history_state: PromptHistoryState::new(history_entries),
             input,
             slash_state: PromptSlashState::with_available_agent_kinds(available_agent_kinds),
@@ -894,7 +886,7 @@ mod tests {
     #[test]
     fn test_prompt_attachment_state_registers_images_in_placeholder_order() {
         // Arrange
-        let mut attachment_state = PromptAttachmentState::new();
+        let mut attachment_state = PromptAttachmentState::default();
 
         // Act
         let first_placeholder =
@@ -919,7 +911,7 @@ mod tests {
     #[test]
     fn test_prompt_attachment_state_reset_clears_attachments_and_restarts_numbering() {
         // Arrange
-        let mut attachment_state = PromptAttachmentState::new();
+        let mut attachment_state = PromptAttachmentState::default();
         let _ = attachment_state.register_local_image(PathBuf::from("/tmp/first-image.png"));
 
         // Act

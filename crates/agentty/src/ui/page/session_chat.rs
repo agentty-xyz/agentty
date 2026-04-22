@@ -687,7 +687,7 @@ mod tests {
             history_state: PromptHistoryState::default(),
             review_status_message: None,
             review_text: Some("Focused review".to_string()),
-            slash_state: PromptSlashState::new(),
+            slash_state: PromptSlashState::default(),
             session_id: "session-id".into(),
             input: InputState::default(),
             scroll_offset: None,

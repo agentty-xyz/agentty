@@ -8,8 +8,12 @@ pub enum TabScope {
 }
 
 /// Available top-level tabs in list mode.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// The derived `Default` selects `Tab::Projects` so newly initialized
+/// navigation state starts on the projects tab.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Tab {
+    #[default]
     Projects,
     Sessions,
     Tasks,
@@ -110,18 +114,15 @@ impl Tab {
 }
 
 /// Manages selection state for top-level tabs.
+///
+/// The derived `Default` initializes `current` to `Tab::default()`, which
+/// selects `Tab::Projects` on a freshly constructed manager.
+#[derive(Default)]
 pub struct TabManager {
     current: Tab,
 }
 
 impl TabManager {
-    /// Creates a manager with `Tab::Projects` selected.
-    pub fn new() -> Self {
-        Self {
-            current: Tab::Projects,
-        }
-    }
-
     /// Returns the currently selected tab.
     #[must_use]
     pub fn current(&self) -> Tab {
@@ -151,12 +152,6 @@ impl TabManager {
         if self.current == Tab::Tasks && !has_tasks_tab {
             self.current = Tab::Sessions;
         }
-    }
-}
-
-impl Default for TabManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -299,7 +294,7 @@ mod tests {
         // Arrange
 
         // Act
-        let manager = TabManager::new();
+        let manager = TabManager::default();
 
         // Assert
         assert_eq!(manager.current(), Tab::Projects);
@@ -308,7 +303,7 @@ mod tests {
     #[test]
     fn test_tab_manager_next_cycles_tabs_with_tasks() {
         // Arrange
-        let mut manager = TabManager::new();
+        let mut manager = TabManager::default();
         let mut observed_tabs = Vec::new();
 
         // Act
@@ -341,7 +336,7 @@ mod tests {
     #[test]
     fn test_tab_manager_previous_cycles_tabs_without_tasks() {
         // Arrange
-        let mut manager = TabManager::new();
+        let mut manager = TabManager::default();
         let mut observed_tabs = Vec::new();
 
         // Act
@@ -371,7 +366,7 @@ mod tests {
     #[test]
     fn test_tab_manager_normalize_falls_back_from_hidden_tasks_tab() {
         // Arrange
-        let mut manager = TabManager::new();
+        let mut manager = TabManager::default();
         manager.set(Tab::Tasks);
 
         // Act
@@ -384,7 +379,7 @@ mod tests {
     #[test]
     fn test_tab_manager_set_updates_current_tab() {
         // Arrange
-        let mut manager = TabManager::new();
+        let mut manager = TabManager::default();
 
         // Act
         manager.set(Tab::Settings);

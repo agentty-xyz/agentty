@@ -1,5 +1,8 @@
 /// Editable text input with a character-based cursor index.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The derived `Default` produces an empty input with the cursor at position
+/// `0` and an empty text buffer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InputState {
     /// Cursor position measured in Unicode scalar values from the start.
     pub cursor: usize,
@@ -7,14 +10,6 @@ pub struct InputState {
 }
 
 impl InputState {
-    /// Creates an empty input state with the cursor at position `0`.
-    pub fn new() -> Self {
-        Self {
-            cursor: 0,
-            text: String::new(),
-        }
-    }
-
     /// Creates an input state from existing text with the cursor at the end.
     pub fn with_text(text: String) -> Self {
         let cursor = text.chars().count();
@@ -303,12 +298,6 @@ impl InputState {
         }
 
         (line, column)
-    }
-}
-
-impl Default for InputState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

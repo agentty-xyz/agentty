@@ -1561,7 +1561,7 @@ mod tests {
             history_state: PromptHistoryState::new(Vec::new()),
             review_status_message: None,
             review_text: None,
-            slash_state: PromptSlashState::new(),
+            slash_state: PromptSlashState::default(),
             session_id: session_id.into(),
             input: InputState::with_text(input_text.to_string()),
             scroll_offset: None,
@@ -1732,7 +1732,7 @@ mod tests {
             );
             assert_eq!(history_state.selected_index, None);
             assert_eq!(history_state.draft_text, None);
-            assert_eq!(*slash_state, PromptSlashState::new());
+            assert_eq!(*slash_state, PromptSlashState::default());
             assert!(at_mention_state.is_none());
         }
     }
@@ -1823,7 +1823,7 @@ mod tests {
         // Arrange & Act
         let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
             "/m",
-            &PromptSlashState::new(),
+            &PromptSlashState::default(),
             AgentKind::Codex,
         )
         .expect("expected suggestion list");
@@ -1842,7 +1842,7 @@ mod tests {
         // Arrange & Act
         let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
             "/",
-            &PromptSlashState::new(),
+            &PromptSlashState::default(),
             AgentKind::Codex,
         )
         .expect("expected suggestion list");
@@ -1861,7 +1861,7 @@ mod tests {
         // Arrange & Act
         let suggestion_list = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
             "/s",
-            &PromptSlashState::new(),
+            &PromptSlashState::default(),
             AgentKind::Codex,
         )
         .expect("expected suggestion list");
@@ -1880,7 +1880,7 @@ mod tests {
         // Arrange & Act
         let commands = crate::ui::state::prompt::build_prompt_slash_suggestion_list(
             "/x",
-            &PromptSlashState::new(),
+            &PromptSlashState::default(),
             AgentKind::Codex,
         );
 
@@ -2125,7 +2125,7 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "");
-            assert_eq!(*slash_state, PromptSlashState::new());
+            assert_eq!(*slash_state, PromptSlashState::default());
         }
         assert_eq!(app.sessions.sessions[0].model, expected_model);
     }
@@ -2146,7 +2146,7 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "");
-            assert_eq!(*slash_state, PromptSlashState::new());
+            assert_eq!(*slash_state, PromptSlashState::default());
         }
         assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
     }
@@ -2206,7 +2206,7 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "");
-            assert_eq!(*slash_state, PromptSlashState::new());
+            assert_eq!(*slash_state, PromptSlashState::default());
         }
         assert!(app.sessions.sessions[0].output.contains("## Session Stats"));
     }
@@ -2228,7 +2228,7 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "/x");
-            assert_eq!(*slash_state, PromptSlashState::new());
+            assert_eq!(*slash_state, PromptSlashState::default());
         }
     }
 
@@ -2693,7 +2693,7 @@ mod tests {
             review_text: None,
             input: InputState::with_text("follow up".to_string()),
             session_id: "missing-session".into(),
-            slash_state: PromptSlashState::new(),
+            slash_state: PromptSlashState::default(),
             scroll_offset: Some(2),
         };
 

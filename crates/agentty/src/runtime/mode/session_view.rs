@@ -229,7 +229,7 @@ async fn handle_primary_view_key(
                 PromptHistoryState::new(session_prompt_history_entries(
                     &app.sessions.sessions[view_context.session_index],
                 )),
-                InputState::new(),
+                InputState::default(),
                 pending_update.scroll_offset,
             );
         }

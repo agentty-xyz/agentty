@@ -1710,7 +1710,7 @@ mod tests {
     fn test_prompt_suggestion_list_for_command_stage_has_description() {
         // Arrange
         let input = InputState::with_text("/m".to_string());
-        let slash_state = PromptSlashState::new();
+        let slash_state = PromptSlashState::default();
 
         // Act
         let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
@@ -1729,8 +1729,10 @@ mod tests {
     fn test_prompt_suggestion_list_for_agent_stage_has_agent_descriptions() {
         // Arrange
         let input = InputState::with_text("/model".to_string());
-        let mut slash_state = PromptSlashState::new();
-        slash_state.stage = PromptSlashStage::Agent;
+        let slash_state = PromptSlashState {
+            stage: PromptSlashStage::Agent,
+            ..PromptSlashState::default()
+        };
 
         // Act
         let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
@@ -1765,9 +1767,11 @@ mod tests {
     fn test_prompt_suggestion_list_for_model_stage_has_model_descriptions() {
         // Arrange
         let input = InputState::with_text("/model".to_string());
-        let mut slash_state = PromptSlashState::new();
-        slash_state.stage = PromptSlashStage::Model;
-        slash_state.selected_agent = Some(AgentKind::Codex);
+        let slash_state = PromptSlashState {
+            stage: PromptSlashStage::Model,
+            selected_agent: Some(AgentKind::Codex),
+            ..PromptSlashState::default()
+        };
 
         // Act
         let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
@@ -1788,8 +1792,9 @@ mod tests {
         let input = InputState::with_text("/".to_string());
 
         // Act
-        let menu = prompt_suggestion_list(&input, &PromptSlashState::new(), None, AgentKind::Codex)
-            .expect("expected suggestion list");
+        let menu =
+            prompt_suggestion_list(&input, &PromptSlashState::default(), None, AgentKind::Codex)
+                .expect("expected suggestion list");
         let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
 
         // Assert

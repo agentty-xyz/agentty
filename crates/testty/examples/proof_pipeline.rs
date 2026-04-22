@@ -91,7 +91,7 @@ fn main() {
 
     // 3. Animated GIF backend.
     let gif_path = output_path.join("proof.gif");
-    let gif_backend = GifBackend::new();
+    let gif_backend = GifBackend::default();
     report
         .save(&gif_backend, &gif_path)
         .expect("GIF render failed");

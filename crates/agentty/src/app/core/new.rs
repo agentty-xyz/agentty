@@ -158,7 +158,7 @@ impl App {
             mode: crate::ui::state::app_mode::AppMode::List,
             needs_redraw: true,
             settings,
-            tabs: crate::app::tab::TabManager::new(),
+            tabs: crate::app::tab::TabManager::default(),
             projects,
             services,
             sessions,

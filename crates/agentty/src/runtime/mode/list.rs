@@ -320,7 +320,7 @@ fn open_session_prompt(app: &mut App, session_id: String) {
         review_text: None,
         slash_state: app.prompt_slash_state(),
         session_id: session_id.into(),
-        input: InputState::new(),
+        input: InputState::default(),
         scroll_offset: None,
     };
 }
