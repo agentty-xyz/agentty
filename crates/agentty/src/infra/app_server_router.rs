@@ -70,13 +70,17 @@ impl AppServerClient for RoutingAppServerClient {
         })
     }
 
+    /// Shuts down the session on both provider clients concurrently so one
+    /// slow backend cannot block cleanup of the other.
     fn shutdown_session(&self, session_id: String) -> AppServerFuture<()> {
         let codex_client = Arc::clone(&self.codex_client);
         let gemini_client = Arc::clone(&self.gemini_client);
 
         Box::pin(async move {
-            codex_client.shutdown_session(session_id.clone()).await;
-            gemini_client.shutdown_session(session_id).await;
+            tokio::join!(
+                codex_client.shutdown_session(session_id.clone()),
+                gemini_client.shutdown_session(session_id),
+            );
         })
     }
 }

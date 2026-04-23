@@ -34,15 +34,6 @@ pub struct GifBackend {
 }
 
 impl GifBackend {
-    /// Create a GIF backend with the default frame delay.
-    ///
-    /// Retained as a compatibility constructor for external callers; prefer
-    /// [`GifBackend::default`] in new code.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a GIF backend with a custom frame delay.
     ///
     /// The delay is clamped to the range
