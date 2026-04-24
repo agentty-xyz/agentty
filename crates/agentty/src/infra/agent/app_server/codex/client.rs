@@ -212,14 +212,20 @@ mod tests {
     #[test]
     fn auto_compact_input_token_threshold_uses_400k_limit_for_codex_models() {
         // Arrange
+        let gpt_55_model = AgentModel::Gpt55.as_str();
         let gpt_54_model = AgentModel::Gpt54.as_str();
         let spark_model = AgentModel::Gpt53CodexSpark.as_str();
 
         // Act
+        let gpt_55_threshold = policy::auto_compact_input_token_threshold(gpt_55_model);
         let gpt_54_threshold = policy::auto_compact_input_token_threshold(gpt_54_model);
         let spark_threshold = policy::auto_compact_input_token_threshold(spark_model);
 
         // Assert
+        assert_eq!(
+            gpt_55_threshold,
+            policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT
+        );
         assert_eq!(
             gpt_54_threshold,
             policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_400K_CONTEXT

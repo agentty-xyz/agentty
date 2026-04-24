@@ -1782,7 +1782,7 @@ mod tests {
         assert_eq!(menu.items[0].label, "gpt-5.4");
         assert_eq!(
             menu.items[0].detail,
-            Some("Latest Codex model for coding quality.".to_string())
+            Some("Broadly available Codex model for coding quality.".to_string())
         );
     }
 

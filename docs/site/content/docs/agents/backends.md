@@ -311,8 +311,13 @@ Stored project defaults or session rows that still reference
 
 | Model ID | Description | Default |
 |----------|-------------|---------|
-| `gpt-5.4` | Latest Codex model for coding quality. | Yes |
+| `gpt-5.4` | Broadly available Codex model for coding quality. | Yes |
+| `gpt-5.5` | Newer Codex model with stronger coding performance when available. | |
 | `gpt-5.3-codex-spark` | Codex spark model for quick coding iterations. | |
+
+OpenAI announced GPT‑5.5 rollout to Codex on April 23, 2026, but described the
+availability as gradual, so Agentty keeps `gpt-5.4` as the default until
+`gpt-5.5` access is more consistently available across Codex users.
 
 ## Switching Models
 

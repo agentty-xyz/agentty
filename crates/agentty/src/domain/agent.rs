@@ -15,6 +15,8 @@ pub enum AgentKind {
 /// Supported agent model names across all providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModel {
+    /// Codex model backed by `gpt-5.5`.
+    Gpt55,
     /// Fast Gemini preview model backed by `gemini-3-flash-preview`.
     Gemini3FlashPreview,
     /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
@@ -59,6 +61,7 @@ impl AgentModel {
     /// invocations.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Gpt55 => "gpt-5.5",
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54 => "gpt-5.4",
@@ -85,7 +88,7 @@ impl AgentModel {
     pub fn kind(self) -> AgentKind {
         match self {
             Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
-            Self::Gpt54 | Self::Gpt53CodexSpark => AgentKind::Codex,
+            Self::Gpt55 | Self::Gpt54 | Self::Gpt53CodexSpark => AgentKind::Codex,
             Self::ClaudeOpus47 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
             }
@@ -220,6 +223,7 @@ impl FromStr for AgentModel {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
+            "gpt-5.5" => Ok(Self::Gpt55),
             "gpt-5.4" => Ok(Self::Gpt54),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-4-7" => Ok(Self::ClaudeOpus47),
@@ -237,9 +241,10 @@ impl AgentSelectionMetadata for AgentModel {
 
     fn description(&self) -> &'static str {
         match self {
+            Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
             Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
-            Self::Gpt54 => "Latest Codex model for coding quality.",
+            Self::Gpt54 => "Broadly available Codex model for coding quality.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
             Self::ClaudeOpus47 => "Latest Claude Opus model for complex tasks.",
             Self::ClaudeSonnet46 => "Balanced Claude model for quality and latency.",
@@ -281,7 +286,11 @@ impl AgentKind {
             AgentModel::ClaudeSonnet46,
             AgentModel::ClaudeHaiku4520251001,
         ];
-        const CODEX_MODELS: &[AgentModel] = &[AgentModel::Gpt54, AgentModel::Gpt53CodexSpark];
+        const CODEX_MODELS: &[AgentModel] = &[
+            AgentModel::Gpt54,
+            AgentModel::Gpt55,
+            AgentModel::Gpt53CodexSpark,
+        ];
 
         match self {
             Self::Gemini => GEMINI_MODELS,
@@ -367,6 +376,19 @@ mod tests {
     }
 
     #[test]
+    /// Ensures `gpt-5.5` parses as a Codex model.
+    fn test_parse_model_parses_gpt_55() {
+        // Arrange
+        let codex_kind = AgentKind::Codex;
+
+        // Act
+        let parsed_model = codex_kind.parse_model("gpt-5.5");
+
+        // Assert
+        assert_eq!(parsed_model, Some(AgentModel::Gpt55));
+    }
+
+    #[test]
     /// Ensures `gpt-5.4` parses as a Codex model.
     fn test_parse_model_parses_gpt_54() {
         // Arrange
@@ -439,7 +461,7 @@ mod tests {
     /// Ensures Codex models still resolve their owning provider correctly.
     fn test_codex_model_kind_is_codex() {
         // Arrange
-        let model = AgentModel::Gpt54;
+        let model = AgentModel::Gpt55;
 
         // Act
         let kind = model.kind();
@@ -497,6 +519,7 @@ mod tests {
             selectable_models,
             vec![
                 AgentModel::Gpt54,
+                AgentModel::Gpt55,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31ProPreview,
                 AgentModel::Gemini3FlashPreview,
