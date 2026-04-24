@@ -599,54 +599,26 @@ mod tests {
     #[test]
     fn test_status_bar_fyi_rotates_between_session_chat_messages() {
         // Arrange
+        let expected_messages = [
+            "Press ? to inspect the shortcuts available for the current session state.",
+            "Press / to open slash commands without typing into the composer first.",
+            "Press d to review the current worktree diff for this session.",
+            "Use @ to attach files or project context to the next prompt.",
+            "Press o to open the session worktree when one is available.",
+            "Agentty starts focused review automatically after each turn.",
+            "Press f to open or regenerate focused review output on demand.",
+            "Type /apply after focused review completes to apply its suggestions.",
+        ];
 
         // Act
-        let first_message = crate::ui::page::fyi::rotating_message(
-            crate::ui::page::fyi::session_chat_messages(),
-            0,
-        );
-        let second_message = crate::ui::page::fyi::rotating_message(
-            crate::ui::page::fyi::session_chat_messages(),
-            1,
-        );
-        let third_message = crate::ui::page::fyi::rotating_message(
-            crate::ui::page::fyi::session_chat_messages(),
-            2,
-        );
-        let fourth_message = crate::ui::page::fyi::rotating_message(
-            crate::ui::page::fyi::session_chat_messages(),
-            3,
-        );
-        let fifth_message = crate::ui::page::fyi::rotating_message(
-            crate::ui::page::fyi::session_chat_messages(),
-            4,
-        );
+        let actual_messages = crate::ui::page::fyi::session_chat_messages();
         let wrapped_message = crate::ui::page::fyi::rotating_message(
-            crate::ui::page::fyi::session_chat_messages(),
-            5,
+            actual_messages,
+            u64::try_from(expected_messages.len()).unwrap_or_default(),
         );
 
         // Assert
-        assert_eq!(
-            first_message,
-            Some("Press ? to inspect the shortcuts available for the current session state.")
-        );
-        assert_eq!(
-            second_message,
-            Some("Press / to open slash commands without typing into the composer first.")
-        );
-        assert_eq!(
-            third_message,
-            Some("Agentty starts focused review automatically after each turn.")
-        );
-        assert_eq!(
-            fourth_message,
-            Some("Press f to open or regenerate focused review output on demand.")
-        );
-        assert_eq!(
-            fifth_message,
-            Some("Type /apply after focused review completes to apply its suggestions.")
-        );
+        assert_eq!(actual_messages, expected_messages);
         assert_eq!(
             wrapped_message,
             Some("Press ? to inspect the shortcuts available for the current session state.")

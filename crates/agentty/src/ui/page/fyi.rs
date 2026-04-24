@@ -12,15 +12,12 @@ const SESSION_LIST_FYI_MESSAGES: [&str; 2] = [
 
 /// Rotating FYI messages shown in the top status bar while session chat is
 /// visible.
-///
-/// These preserve the existing help and slash-command reminders while also
-/// calling out the automatic focused-review pass that begins after each turn,
-/// the `f` shortcut for opening or regenerating the same review on demand,
-/// and the `/apply` slash command that applies review suggestions to the
-/// codebase.
-const SESSION_CHAT_FYI_MESSAGES: [&str; 5] = [
+const SESSION_CHAT_FYI_MESSAGES: [&str; 8] = [
     "Press ? to inspect the shortcuts available for the current session state.",
     "Press / to open slash commands without typing into the composer first.",
+    "Press d to review the current worktree diff for this session.",
+    "Use @ to attach files or project context to the next prompt.",
+    "Press o to open the session worktree when one is available.",
     "Agentty starts focused review automatically after each turn.",
     "Press f to open or regenerate focused review output on demand.",
     "Type /apply after focused review completes to apply its suggestions.",
