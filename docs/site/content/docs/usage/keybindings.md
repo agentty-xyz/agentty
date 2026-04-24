@@ -18,7 +18,7 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | `q` | Quit |
 | `a` | Start new session |
 | `Shift+A` | Start draft session |
-| `s` | Sync |
+| `s` | Sync active project branch |
 | `c` | Cancel the selected review session or unstarted draft session (confirmation popup) |
 | `Enter` | Open session |
 | `j` / `k` | Navigate sessions |
@@ -95,8 +95,7 @@ state:
 | `/` | Open the composer with `/` prefilled for slash commands |
 | `s` | Start a staged draft session |
 | `o` | Open worktree in tmux when the session worktree exists |
-| `p` | Publish session branch |
-| `Shift+P` | Create or refresh forge review request |
+| `p` | Publish session branch and create or refresh forge review request |
 | `d` | Show diff |
 | `f` | Append focused review output (regenerate if already present) |
 | `m` | Add to merge queue (confirmation popup) |
@@ -120,15 +119,15 @@ Additional notes:
   If one `Open Commands` entry is configured for the active project, it runs immediately.
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
 - **Draft sessions**: sessions created with `Shift+A` do not create a worktree until you press `s` to start the staged bundle, so `o` stays hidden before the first live turn.
-- **Branch publish**: `p` is available in **Review** and **AgentReview** and opens a publish popup. Press `Enter` with an empty field to keep the default session branch target, or type a custom remote branch name first.
-- **Forge review-request publish**: `Shift+P` is available in **Review** and
-  **AgentReview**. It opens the publish popup, accepts the same optional
-  custom branch name as `p`, then creates or refreshes the linked forge review
-  request after the branch push succeeds. GitHub projects publish pull
+- **Forge review-request publish**: `p` is available in **Review** and
+  **AgentReview** and opens a publish popup. Press `Enter` with an empty field
+  to keep the default session branch target, or type a custom remote branch
+  name first. Agentty pushes the branch, then creates or refreshes the linked
+  forge review request after the push succeeds. GitHub projects publish pull
   requests, while GitLab projects publish merge requests.
 - **Focused review persistence**: when a focused review has already been generated, it stays visible after opening `d` diff mode, returning to the session view, or entering **Question** mode for clarifications.
 - **Branch publish lock**: once a session branch already tracks a remote branch, Agentty locks the popup field and re-publishes to that same remote branch only.
-- **Branch publish auth**: `p` and `Shift+P` always run `git push` first. HTTPS remotes therefore need Git credentials even when the forge CLI is already logged in. `Shift+P` also needs authenticated `gh` access for GitHub repositories and authenticated `glab` access for GitLab repositories. See [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab CLI setup steps.
+- **Branch publish auth**: `p` always runs `git push` first. HTTPS remotes therefore need Git credentials even when the forge CLI is already logged in. Review-request publishing also needs authenticated `gh` access for GitHub repositories and authenticated `glab` access for GitLab repositories. See [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab CLI setup steps.
 - **Question**: opening the session enters Question Input mode until all prompts are answered and submitted, or the clarification turn is ended with `Esc`.
 - **Done**: `c` opens a yes/no confirmation, then creates a new draft composer with the continuation text already staged as the first draft message. When Agentty has the merged hash, that staged message is `Summarize changes from <full-hash> to use it as an initial context for this session`; otherwise it falls back to the saved summary/transcript. `t` toggles between summary and full output.
 - **Canceled**: `c` opens a yes/no confirmation, stages the saved summary or transcript as the first draft message, and focuses an empty composer for follow-up notes.

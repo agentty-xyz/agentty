@@ -20,8 +20,8 @@ The traits below are mocked with `mockall`. Most use
 | Trait | Module | Boundary |
 |-------|--------|----------|
 | `SyncMainRunner` | `app/core.rs` | App-level async sync orchestration trigger used by list-mode sync flows. |
-| `ReviewRequestClient` | `crates/ag-forge/src/client.rs` | GitHub review-request detection and `gh` orchestration boundary. |
-| `ForgeCommandRunner` | `crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to unit-test the GitHub review-request adapter without a live `gh` binary. |
+| `ReviewRequestClient` | `crates/ag-forge/src/client.rs` | GitHub/GitLab review-request detection plus `gh`/`glab` orchestration boundary. |
+| `ForgeCommandRunner` | `crates/ag-forge/src/command.rs` | Provider CLI command execution boundary used to unit-test forge adapters without live `gh` or `glab` binaries. |
 | `GitClient` | `infra/git/client.rs` | Git/process operations (worktree, merge, rebase, diff, push, pull, and ahead/behind comparisons for both upstream-tracking and session-vs-base-branch status). |
 | `FsClient` | `infra/fs.rs` | Async filesystem operations and path probes used by app or runtime orchestration, including non-blocking file reads, existence checks, canonicalization, session worktree cleanup, and prompt-image temp file or directory removal. |
 | `TmuxClient` | `infra/tmux.rs` | Tmux subprocess operations for opening session worktrees and dispatching open commands. |

@@ -272,6 +272,20 @@ Update architecture docs whenever you change:
 - Workspace crate ownership or add/remove workspace members (`docs/site/content/docs/architecture/module-map.md`).
 - Canonical change-path guidance (`docs/site/content/docs/architecture/change-recipes.md`) when contribution workflows change.
 
+### Docs Site Integrity
+
+- Every feature page under `docs/site/content/features/` that declares
+  `[extra].gif` must have the matching GIF committed under
+  `docs/site/static/features/`; if GIF generation is skipped locally, do not
+  add or keep the feature page yet.
+- When keybindings or visible shortcut labels change, verify
+  `docs/site/content/docs/usage/keybindings.md` and
+  `docs/site/content/docs/usage/workflow.md` against the runtime mode handlers
+  and `crates/agentty/src/ui/state/help_action.rs`.
+- When forge review-request support changes, keep the docs phrasing aligned
+  with all supported forge families and their CLIs, including GitHub/`gh` and
+  GitLab/`glab`.
+
 ## Git Conventions
 
 - For all commit preparation and commit message work, use `skills/git-commit/SKILL.md`.

@@ -39,7 +39,8 @@ Use these conventions to keep Agentty documentation maintainable as it grows.
 
 The `/features/` page auto-discovers entries from individual `.md` files in `content/features/`. To add a new feature:
 
-1. Place the GIF in `static/features/` (E2E tests do this automatically via `save_feature_gif()`).
+1. Add an E2E feature test with the `FeatureTest` builder in `crates/agentty/tests/e2e/`.
+1. Place the generated GIF in `static/features/`. `FeatureTest` writes this when VHS is installed; if GIF generation is skipped, do not add or keep the feature page until the matching asset exists.
 1. Create `content/features/<name>.md` with the following front matter:
    ```toml
    +++
@@ -52,7 +53,7 @@ The `/features/` page auto-discovers entries from individual `.md` files in `con
    +++
    ```
 1. Choose a `weight` that slots the entry into the desired display position (lower weights appear first).
-1. Run `zola build` to verify the features page renders the new entry.
+1. Run `zola check` to verify the features page renders the new entry.
 
 The `features.html` template uses `get_section(path="features/_index.md")` and iterates `section.pages` ordered by `weight`. The homepage feature card in `index.html` is hardcoded and curated separately.
 

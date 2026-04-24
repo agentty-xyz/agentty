@@ -23,6 +23,11 @@ Scope: `docs/site/content/docs/` and its child documentation pages.
   sources, or status-driven visibility rules change.
 - Update `usage/workflow.md` and `usage/keybindings.md` when UI behavior or
   controls change.
+- When shortcut behavior changes, compare `usage/keybindings.md` and
+  `usage/workflow.md` against the runtime handlers and rendered help actions
+  before handoff.
+- When forge review-request support changes, keep usage and architecture docs
+  aligned with the supported forge families and CLI names.
 
 ## Docs Sync Notes
 

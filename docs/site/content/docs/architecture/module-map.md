@@ -17,8 +17,8 @@ also writes a machine-readable workspace summary to
 ## Workspace Crates
 
 - `crates/ag-forge/`: Shared forge review-request library crate with
-  normalized review-request types, GitHub remote detection, and the `gh`
-  adapter.
+  normalized review-request types, GitHub/GitLab remote detection, and the
+  `gh`/`glab` adapters.
 - `crates/agentty/`: Main TUI application crate with composition root,
   application, domain, infrastructure, runtime, and UI layers.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with
@@ -33,7 +33,8 @@ also writes a machine-readable workspace summary to
   `App` construction, and runtime launch.
 - `crates/agentty/src/lib.rs`: Public module exports and crate-level re-exports.
 - `crates/ag-forge/src/lib.rs`: Shared workspace crate for forge review-request
-  types, CLI boundaries, GitHub remote detection, and the GitHub adapter.
+  types, CLI boundaries, GitHub/GitLab remote detection, and provider
+  adapters.
 
 ## Application Layer (`app/`)
 
@@ -85,6 +86,8 @@ also writes a machine-readable workspace summary to
 - `crates/agentty/src/app/session/core.rs`: `SessionManager`, session clock
   boundary, shared constants, and session module tests.
 - `crates/agentty/src/app/session/workflow/access.rs`: Session lookup helpers.
+- `crates/agentty/src/app/session/workflow/draft.rs`: Staged draft-session
+  attachment metadata persistence.
 - `crates/agentty/src/app/session/workflow/lifecycle.rs`: Session creation,
   prompt/reply workflows, and forge review-request publication or open helpers.
 - `crates/agentty/src/app/session/workflow/load.rs`: Session snapshot loading,
@@ -228,6 +231,8 @@ also writes a machine-readable workspace summary to
   normalization, and subprocess execution boundary.
 - `crates/ag-forge/src/github.rs`: GitHub pull-request adapter routed through
   `gh`.
+- `crates/ag-forge/src/gitlab.rs`: GitLab merge-request adapter routed through
+  `glab`.
 - `crates/ag-forge/src/model.rs`: Shared forge domain types including
   `ForgeKind`, `ReviewRequestSummary`, errors, and create input.
 - `crates/ag-forge/src/remote.rs`: Repository remote parsing and forge

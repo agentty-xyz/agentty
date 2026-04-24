@@ -15,14 +15,14 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 ## Interface Layout
 
 <a id="usage-interface-layout"></a>
-Agentty organizes its interface into four base tabs, with one conditional
-project tab also accessible with `Tab`:
+Agentty organizes its interface into four primary tabs, with one conditional
+`Tasks` tab also accessible with `Tab` when the active project has a roadmap:
 
 | Tab | Purpose |
 |-----|---------|
+| **Projects** | Select between projects (git repositories) in a split view: Agentty info (ASCII art, version, short description) on top, project table below. Agentty skips stale entries whose project directories no longer exist. |
 | **Sessions** | List, create, and manage agent sessions. When a project is active, this tab appears as `Sessions (<project-name>)`. |
 | **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`, `Queued Next`, and `Parked` task queues. |
-| **Projects** | Select between projects (git repositories) in a split view: Agentty info (ASCII art, version, short description) on top, project table below. Agentty skips stale entries whose project directories no longer exist. |
 | **Stats** | View usage statistics. |
 | **Settings** | Configure the default reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
@@ -169,10 +169,12 @@ For the GitHub and GitLab CLI setup steps, see
 ## Review Request Sync
 
 <a id="usage-review-request-sync"></a>
-After publishing a branch, press `s` in session view to sync the review request
-status from the forge. The `s` shortcut is available when the session
-has a published branch or a linked review request and is in **Review** or
-**AgentReview** status.
+After a branch has been published, Agentty refreshes review-request status in
+the background for **Review** and **AgentReview** sessions that have either a
+published branch or a linked review request. Linked requests are refreshed by
+display id; sessions that only know their published branch are matched by
+source branch. The session-view `s` shortcut is reserved for starting staged
+draft sessions, while list-mode `s` syncs the active project branch.
 
 The session list shows forge indicators next to the status label:
 
