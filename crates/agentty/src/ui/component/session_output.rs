@@ -20,6 +20,8 @@ const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
 const TRANSCRIPT_FOOTER_PREFIXES: &[&str] = &["[Commit]", "[Commit Error]"];
 const USER_PROMPT_PREFIX: &str = " › ";
+/// User prompt prefix when the prompt starts after a transcript newline.
+const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 
 /// Session chat output panel renderer.
@@ -144,10 +146,10 @@ impl<'a> SessionOutput<'a> {
     /// loader row so transcript text stays stable until the turn completes.
     /// Wrapping width follows the configured output panel borders so line
     /// metrics stay in sync with rendered content. Transcript-derived content
-    /// always renders in chronological order: completed-turn transcript,
-    /// trailing commit/footer lines, then the currently active prompt block.
-    /// Synthetic summary sections render only after the transcript so
-    /// generated metadata never jumps above the latest visible user input.
+    /// always renders completed content before the currently active prompt
+    /// block. When a previous-turn summary is available during an active turn,
+    /// that summary stays attached to completed content above the latest user
+    /// prompt until the active turn finishes and persists its replacement.
     /// Focused-review output is appended after transcript content so it reads
     /// like agent-produced session output instead of replacing the transcript
     /// panel, but it is suppressed once the session reaches `Done` because
@@ -189,13 +191,23 @@ impl<'a> SessionOutput<'a> {
             inner_width,
             markdown_render_cache,
         );
+        let shows_summary_block =
+            Self::shows_summary_block(session.status, done_session_output_mode);
+        if shows_summary_block && active_turn_text.is_some() {
+            Self::append_summary_lines(
+                &mut lines,
+                session.summary.as_deref(),
+                inner_width,
+                markdown_render_cache,
+            );
+        }
         Self::append_active_turn_lines(
             &mut lines,
             active_turn_text.as_deref(),
             inner_width,
             markdown_render_cache,
         );
-        if Self::shows_summary_block(session.status, done_session_output_mode) {
+        if shows_summary_block && active_turn_text.is_none() {
             Self::append_summary_lines(
                 &mut lines,
                 session.summary.as_deref(),
@@ -245,8 +257,11 @@ impl<'a> SessionOutput<'a> {
         lines.push(sync_line);
     }
 
-    /// Splits the transcript at the exact active-turn prompt block captured
-    /// when the current turn was submitted.
+    /// Splits the transcript before the current active-turn prompt block.
+    ///
+    /// This keeps the previous-turn summary grouped with completed transcript
+    /// output even when the active prompt has already been appended to the
+    /// persisted transcript.
     fn transcript_sections<'text>(
         status: Status,
         output_text: &'text str,
@@ -258,20 +273,38 @@ impl<'a> SessionOutput<'a> {
         ) {
             return (output_text, None);
         }
-        let Some(active_prompt_output) = active_prompt_output else {
+        let Some(active_prompt_start) =
+            Self::active_prompt_start(output_text, active_prompt_output)
+        else {
             return (output_text, None);
         };
-        let Some(active_prompt_start) = output_text.rfind(active_prompt_output) else {
-            return (output_text, None);
-        };
-        if active_prompt_start == 0 {
-            return (output_text, None);
-        }
-
         (
             &output_text[..active_prompt_start],
             Some(&output_text[active_prompt_start..]),
         )
+    }
+
+    /// Returns the byte index where the active prompt block starts.
+    ///
+    /// The exact captured prompt block is preferred because it distinguishes
+    /// user prompts from assistant text that happens to contain prompt-like
+    /// markers. When that in-memory capture is unavailable, the renderer falls
+    /// back to the last persisted user prompt marker so previous-turn summaries
+    /// still render above the latest prompt after reloads or snapshot misses.
+    fn active_prompt_start(output_text: &str, active_prompt_output: Option<&str>) -> Option<usize> {
+        active_prompt_output
+            .filter(|prompt_output| !prompt_output.is_empty())
+            .and_then(|prompt_output| output_text.rfind(prompt_output))
+            .or_else(|| Self::last_user_prompt_start(output_text))
+    }
+
+    /// Returns the byte index of the last line that starts a persisted user
+    /// prompt block.
+    fn last_user_prompt_start(output_text: &str) -> Option<usize> {
+        output_text
+            .rfind(USER_PROMPT_LINE_PREFIX)
+            .map(|index| index + 1)
+            .or_else(|| output_text.starts_with(USER_PROMPT_PREFIX).then_some(0))
     }
 
     /// Returns the source text shown in the output panel for the current
@@ -732,8 +765,10 @@ mod tests {
         assert!(text.contains("Session output now renders persisted summary markdown."));
     }
 
+    /// Verifies previous-turn summaries stay above the currently active user
+    /// prompt while a reply is running.
     #[test]
-    fn test_output_lines_in_progress_session_keeps_active_prompt_before_summary() {
+    fn test_output_lines_in_progress_session_shows_summary_above_active_prompt() {
         // Arrange
         let mut session = session_fixture();
         session.output =
@@ -767,12 +802,14 @@ mod tests {
             .expect("active prompt should be rendered");
 
         // Assert
-        assert!(commit_index < prompt_index);
-        assert!(prompt_index < summary_index);
+        assert!(commit_index < summary_index);
+        assert!(summary_index < prompt_index);
     }
 
+    /// Verifies an active prompt at the start of the transcript still renders
+    /// below any previous summary.
     #[test]
-    fn test_output_lines_in_progress_single_prompt_keeps_summary_after_transcript() {
+    fn test_output_lines_in_progress_single_prompt_shows_summary_above_prompt() {
         // Arrange
         let mut session = session_fixture();
         session.output = " › add hello world\n\nI added the README change.\n".to_string();
@@ -803,9 +840,50 @@ mod tests {
 
         // Assert
         assert!(text.contains("I added the README change."));
-        assert!(prompt_index < summary_index);
+        assert!(summary_index < prompt_index);
     }
 
+    /// Verifies the latest user prompt is detected when the exact active
+    /// prompt capture is unavailable.
+    #[test]
+    fn test_output_lines_in_progress_without_active_capture_shows_summary_above_last_prompt() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = " › hi\n\nHello!\n\n[Commit] No changes to commit.\n\n › review \
+                          project\n\n"
+            .to_string();
+        session.summary = Some(summary_fixture());
+        session.status = Status::InProgress;
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(DoneSessionOutputMode::Summary, None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let commit_index = text
+            .find("[Commit] No changes to commit.")
+            .expect("commit footer should be rendered");
+        let summary_index = text
+            .find("Change Summary")
+            .expect("structured summary should be rendered");
+        let prompt_index = text
+            .find(" › review project")
+            .expect("latest prompt should be rendered");
+
+        // Assert
+        assert!(commit_index < summary_index);
+        assert!(summary_index < prompt_index);
+    }
+
+    /// Verifies active-turn splitting uses the captured prompt block so
+    /// assistant output that resembles a prompt remains in the active block.
     #[test]
     fn test_output_lines_in_progress_ignores_assistant_lines_that_look_like_prompts() {
         // Arrange
@@ -840,7 +918,7 @@ mod tests {
 
         // Assert
         assert!(text.contains(" › quoted output"));
-        assert!(prompt_index < summary_index);
+        assert!(summary_index < prompt_index);
     }
 
     #[test]
