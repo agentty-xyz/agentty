@@ -22,9 +22,28 @@ pub(crate) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventR
         return EventResult::Continue;
     }
 
+    if handle_toggle_panel_key(app, key) {
+        return EventResult::Continue;
+    }
+
     handle_navigation_key(app, content_area, key);
 
     EventResult::Continue
+}
+
+/// Toggles the diff-mode right-hand panel between diff and comments.
+fn handle_toggle_panel_key(app: &mut App, key: KeyEvent) -> bool {
+    if !is_plain_char_key(key, 'c') {
+        return false;
+    }
+
+    if let AppMode::Diff { right_panel, .. } = &mut app.mode {
+        *right_panel = right_panel.toggled();
+
+        return true;
+    }
+
+    false
 }
 
 /// Opens diff help while preserving the current diff-mode snapshot.
@@ -38,6 +57,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
         diff,
         file_explorer_selected_index,
         restore_question,
+        right_panel,
         session_id,
         scroll_offset,
         ..
@@ -48,6 +68,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) -> bool {
                 diff,
                 file_explorer_selected_index,
                 restore_question,
+                right_panel,
                 session_id,
                 scroll_offset,
             },
@@ -268,6 +289,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -307,6 +329,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -341,6 +364,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -372,6 +396,7 @@ mod tests {
             file_explorer_selected_index: 2,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -404,6 +429,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -435,6 +461,7 @@ mod tests {
             file_explorer_selected_index: 2,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -485,6 +512,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -516,6 +544,7 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -547,6 +576,7 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -578,6 +608,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -609,6 +640,7 @@ mod tests {
             file_explorer_selected_index: 3,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -648,6 +680,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -681,6 +714,7 @@ mod tests {
             file_explorer_selected_index: 0,
             restore_question: None,
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -730,6 +764,7 @@ mod tests {
                 session_id: "session-q".into(),
             }),
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act
@@ -788,6 +823,7 @@ mod tests {
             file_explorer_selected_index: 1,
             restore_question: Some(snapshot),
             scroll_cache: None,
+            right_panel: crate::ui::state::app_mode::DiffRightPanel::Diff,
         };
 
         // Act — open help overlay.
@@ -841,5 +877,56 @@ mod tests {
                 ..
             } if session_id == "session-q"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_c_toggles_diff_right_panel() {
+        use crate::ui::state::app_mode::DiffRightPanel;
+
+        // Arrange
+        let (mut app, _base_dir) = new_test_app().await;
+        app.mode = AppMode::Diff {
+            session_id: "session-id".into(),
+            diff: "diff output".to_string(),
+            scroll_offset: 0,
+            file_explorer_selected_index: 0,
+            restore_question: None,
+            scroll_cache: None,
+            right_panel: DiffRightPanel::Diff,
+        };
+
+        // Act — first `c` flips Diff → Comments.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        );
+
+        // Intermediate assert
+        let first_panel_is_comments = matches!(
+            app.mode,
+            AppMode::Diff {
+                right_panel: DiffRightPanel::Comments,
+                ..
+            }
+        );
+        assert!(first_panel_is_comments);
+
+        // Act — second `c` flips Comments → Diff.
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        let second_panel_is_diff = matches!(
+            app.mode,
+            AppMode::Diff {
+                right_panel: DiffRightPanel::Diff,
+                ..
+            }
+        );
+        assert!(second_panel_is_diff);
     }
 }

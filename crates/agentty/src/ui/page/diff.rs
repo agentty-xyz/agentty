@@ -1,14 +1,19 @@
+use std::sync::Arc;
+
+use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestState};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::domain::session::Session;
+use crate::domain::session::{ReviewRequest, Session};
 use crate::ui::component::file_explorer::FileExplorer;
+use crate::ui::state::app_mode::DiffRightPanel;
 use crate::ui::state::help_action;
+use crate::ui::text_util::wrap_lines_to_rows;
 use crate::ui::util::{DiffLine, DiffLineKind, inline_text, parse_diff_lines, selected_diff_lines};
-use crate::ui::{Component, Page, diff_util, style};
+use crate::ui::{Component, Page, diff_util, markdown, style};
 
 const SCROLL_X_OFFSET: u16 = 0;
 const SCROLLBAR_TRACK_SYMBOL: &str = "│";
@@ -16,26 +21,40 @@ const SCROLLBAR_THUMB_SYMBOL: &str = "█";
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
 
 /// Renders the current session's git diff in a scrollable page.
+///
+/// The right-hand panel shows either the raw git diff or cached review
+/// comments, selected by [`DiffPage::right_panel`]. The left-hand file explorer
+/// is unchanged across panels; the `c` key toggles the right-hand view.
 pub struct DiffPage<'a> {
     pub diff: String,
+    pub file_explorer_selected_index: usize,
+    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    pub review_comment_snapshot: Option<&'a ReviewCommentSnapshot>,
+    pub right_panel: DiffRightPanel,
     pub scroll_offset: u16,
     pub session: &'a Session,
-    pub file_explorer_selected_index: usize,
 }
 
 impl<'a> DiffPage<'a> {
-    /// Creates a diff page for the given session and scroll position.
+    /// Creates a diff page for the given session, scroll position, and right
+    /// panel selection.
     pub fn new(
         session: &'a Session,
         diff: String,
         scroll_offset: u16,
         file_explorer_selected_index: usize,
+        right_panel: DiffRightPanel,
+        markdown_render_cache: &'a markdown::MarkdownRenderCache,
+        review_comment_snapshot: Option<&'a ReviewCommentSnapshot>,
     ) -> Self {
         Self {
             diff,
+            file_explorer_selected_index,
+            markdown_render_cache,
+            review_comment_snapshot,
+            right_panel,
             scroll_offset,
             session,
-            file_explorer_selected_index,
         }
     }
 
@@ -249,18 +268,300 @@ impl Page for DiffPage<'_> {
             .selected_index(self.file_explorer_selected_index)
             .render(f, areas.file_list_area);
 
-        let filtered = selected_diff_lines(&parsed, &tree_items, self.file_explorer_selected_index);
-        self.render_diff_content(
-            f,
-            areas.diff_area,
-            &filtered,
-            self.session.stats.added_lines,
-            self.session.stats.deleted_lines,
-        );
+        match self.right_panel {
+            DiffRightPanel::Diff => {
+                let filtered =
+                    selected_diff_lines(&parsed, &tree_items, self.file_explorer_selected_index);
+                self.render_diff_content(
+                    f,
+                    areas.diff_area,
+                    &filtered,
+                    self.session.stats.added_lines,
+                    self.session.stats.deleted_lines,
+                );
+            }
+            DiffRightPanel::Comments => {
+                self.render_comments_content(f, areas.diff_area);
+            }
+        }
 
-        let help_message =
-            Paragraph::new(help_action::footer_line(&help_action::diff_footer_actions()));
+        let help_message = Paragraph::new(help_action::footer_line(
+            &help_action::diff_footer_actions(self.right_panel),
+        ));
         f.render_widget(help_message, areas.footer_area);
+    }
+}
+
+impl DiffPage<'_> {
+    /// Renders the cached review-request comments into the right panel.
+    ///
+    /// Threads are stacked with a `path:line` header and markdown-rendered
+    /// comment bodies. Pull-request-level conversation comments are shown at
+    /// the top under a "General discussion" header.
+    fn render_comments_content(&self, f: &mut Frame, area: Rect) {
+        let inner_width = area.width.saturating_sub(2);
+        let (thread_count, comment_count) = comment_counts(self.review_comment_snapshot);
+        let lines = self.build_comments_lines(inner_width);
+        let wrapped_lines = wrap_lines_to_rows(lines, inner_width);
+        let viewport_height = area.height.saturating_sub(2);
+        let scroll_offset = diff_util::clamp_diff_scroll_offset(
+            self.scroll_offset,
+            wrapped_lines.len(),
+            viewport_height,
+        );
+        let title = Line::from(vec![
+            Span::styled(" (", Style::default().fg(style::palette::WARNING)),
+            Span::styled(
+                format!("{comment_count}"),
+                Style::default().fg(style::palette::SUCCESS),
+            ),
+            Span::styled(" in ", Style::default().fg(style::palette::WARNING)),
+            Span::styled(
+                format!("{thread_count}"),
+                Style::default().fg(style::palette::SUCCESS),
+            ),
+            Span::styled(
+                format!(
+                    ") Comments — {} ",
+                    inline_text(self.session.display_title())
+                ),
+                Style::default().fg(style::palette::WARNING),
+            ),
+        ]);
+        let paragraph = Paragraph::new(wrapped_lines)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .scroll((scroll_offset, 0));
+
+        f.render_widget(paragraph, area);
+    }
+
+    /// Builds the line sequence that fills the comments right panel.
+    fn build_comments_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let review_request = self.session.review_request.as_ref();
+        let snapshot = self.review_comment_snapshot;
+
+        lines.push(comments_header_line(review_request, snapshot));
+        lines.push(Line::default());
+
+        match (review_request, snapshot) {
+            (None, _) => {
+                lines.push(empty_muted_line("Open a review request to see comments."));
+            }
+            (Some(review_request), None)
+                if review_request.summary.state != ReviewRequestState::Open =>
+            {
+                lines.push(empty_closed_review_request_line(
+                    review_request.summary.state,
+                ));
+            }
+            (Some(_), None) => {
+                lines.push(empty_muted_line(
+                    "Waiting for review-request comments to sync...",
+                ));
+            }
+            (Some(review_request), Some(snapshot)) => {
+                if review_request.summary.state != ReviewRequestState::Open {
+                    lines.push(empty_closed_review_request_line(
+                        review_request.summary.state,
+                    ));
+                    lines.push(Line::default());
+                }
+
+                let has_pr_level = !snapshot.pr_level_comments.is_empty();
+                let has_threads = !snapshot.threads.is_empty();
+
+                if !has_pr_level && !has_threads {
+                    lines.push(empty_muted_line("No review comments yet."));
+                } else {
+                    if has_pr_level {
+                        append_pr_level_comments(
+                            &mut lines,
+                            &snapshot.pr_level_comments,
+                            self.markdown_render_cache,
+                            width,
+                        );
+                    }
+                    for (index, thread) in snapshot.threads.iter().enumerate() {
+                        if index > 0 || has_pr_level {
+                            lines.push(Line::default());
+                        }
+                        append_thread_lines(&mut lines, thread, self.markdown_render_cache, width);
+                    }
+                }
+            }
+        }
+
+        lines
+    }
+}
+
+/// Renders a muted one-line empty state.
+fn empty_muted_line(text: &'static str) -> Line<'static> {
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(style::palette::TEXT_MUTED),
+    ))
+}
+
+/// Returns the top-of-panel summary line for review comments.
+fn comments_header_line(
+    review_request: Option<&ReviewRequest>,
+    snapshot: Option<&ReviewCommentSnapshot>,
+) -> Line<'static> {
+    let label = match review_request {
+        Some(review_request) => format!("Review request {}", review_request.summary.display_id),
+        None => "Review Comments".to_string(),
+    };
+    let (thread_count, comment_count) = comment_counts(snapshot);
+
+    Line::from(vec![
+        Span::styled(
+            label,
+            Style::default()
+                .fg(style::palette::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" — {comment_count} comments in {thread_count} threads"),
+            Style::default().fg(style::palette::TEXT_MUTED),
+        ),
+    ])
+}
+
+/// Returns `(thread_count, comment_count)` totals for a review-comment
+/// snapshot, combining inline-thread comments with pull-request-level
+/// conversation comments.
+fn comment_counts(snapshot: Option<&ReviewCommentSnapshot>) -> (usize, usize) {
+    snapshot.map_or((0, 0), |snapshot| {
+        let thread_count = snapshot.threads.len();
+        let thread_comment_count = snapshot
+            .threads
+            .iter()
+            .map(|thread| thread.comments.len())
+            .sum::<usize>();
+        let comment_count = snapshot.pr_level_comments.len() + thread_comment_count;
+
+        (thread_count, comment_count)
+    })
+}
+
+/// Returns an empty-state line for a merged or closed review request.
+fn empty_closed_review_request_line(state: ReviewRequestState) -> Line<'static> {
+    let label = match state {
+        ReviewRequestState::Merged => {
+            "This review request was merged; no further comments will sync."
+        }
+        ReviewRequestState::Closed => {
+            "This review request was closed; no further comments will sync."
+        }
+        ReviewRequestState::Open => "",
+    };
+
+    Line::from(Span::styled(
+        label.to_string(),
+        Style::default().fg(style::palette::TEXT_MUTED),
+    ))
+}
+
+/// Appends a "General discussion" section containing pull-request-level
+/// conversation comments.
+fn append_pr_level_comments(
+    lines: &mut Vec<Line<'static>>,
+    comments: &[ReviewComment],
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    width: u16,
+) {
+    lines.push(Line::from(Span::styled(
+        "General discussion".to_string(),
+        Style::default()
+            .fg(style::palette::TEXT)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    for (comment_index, comment) in comments.iter().enumerate() {
+        if comment_index > 0 {
+            lines.push(Line::default());
+        }
+
+        append_comment_body(lines, comment, markdown_render_cache, width);
+    }
+}
+
+/// Appends the header and comment bodies for one inline review thread.
+fn append_thread_lines(
+    lines: &mut Vec<Line<'static>>,
+    thread: &ReviewCommentThread,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    width: u16,
+) {
+    lines.push(thread_header_line(thread));
+
+    for (comment_index, comment) in thread.comments.iter().enumerate() {
+        if comment_index > 0 {
+            lines.push(Line::default());
+        }
+
+        append_comment_body(lines, comment, markdown_render_cache, width);
+    }
+}
+
+/// Appends one comment's author header followed by the markdown-rendered body.
+fn append_comment_body(
+    lines: &mut Vec<Line<'static>>,
+    comment: &ReviewComment,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    width: u16,
+) {
+    lines.push(Line::from(Span::styled(
+        comment.author.clone(),
+        Style::default()
+            .fg(style::palette::TEXT)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    let body_width = width.saturating_sub(2).max(1) as usize;
+    let rendered = markdown_render_cache.render(&comment.body, body_width);
+    append_indented_markdown(lines, &rendered);
+}
+
+/// Renders the `path:line · N comments · resolved/unresolved` header for one
+/// inline thread.
+fn thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
+    let anchor = match thread.line {
+        Some(line) => format!("{}:{}", thread.path, line),
+        None => thread.path.clone(),
+    };
+    let comment_count = thread.comments.len();
+    let resolution_tag = if thread.is_resolved {
+        "resolved"
+    } else {
+        "unresolved"
+    };
+    let header_style = if thread.is_resolved {
+        Style::default().fg(style::palette::TEXT_MUTED)
+    } else {
+        Style::default()
+            .fg(style::palette::TEXT)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    Line::from(vec![
+        Span::styled(anchor, header_style),
+        Span::styled(
+            format!("  ·  {comment_count} comments  ·  {resolution_tag}"),
+            Style::default().fg(style::palette::TEXT_MUTED),
+        ),
+    ])
+}
+
+/// Appends rendered markdown lines indented two spaces under a comment header.
+fn append_indented_markdown(lines: &mut Vec<Line<'static>>, rendered: &Arc<[Line<'static>]>) {
+    for source_line in rendered.iter() {
+        let mut spans = Vec::with_capacity(source_line.spans.len() + 1);
+        spans.push(Span::raw("  "));
+        spans.extend(source_line.spans.iter().cloned());
+        lines.push(Line::from(spans));
     }
 }
 
@@ -281,6 +582,24 @@ mod tests {
         SessionFixtureBuilder::new()
             .title(Some("Diff Session".to_string()))
             .build()
+    }
+
+    fn new_diff_page<'a>(
+        session: &'a Session,
+        diff: String,
+        scroll_offset: u16,
+        file_explorer_selected_index: usize,
+        markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    ) -> DiffPage<'a> {
+        DiffPage::new(
+            session,
+            diff,
+            scroll_offset,
+            file_explorer_selected_index,
+            DiffRightPanel::Diff,
+            markdown_render_cache,
+            None,
+        )
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -308,11 +627,13 @@ mod tests {
         let mut session = session_fixture();
         session.stats.added_lines = 1;
         session.stats.deleted_lines = 0;
-        let mut diff_page = DiffPage::new(
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut diff_page = new_diff_page(
             &session,
             "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             0,
             0,
+            &markdown_render_cache,
         );
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -329,7 +650,7 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("(+1 -0) Diff — Diff Session"));
         assert!(text.contains("j/k: select file"));
-        assert!(text.contains("Up/Down: scroll file"));
+        assert!(text.contains("c: Show comments"));
     }
 
     #[test]
@@ -338,11 +659,13 @@ mod tests {
         let mut session = session_fixture();
         session.stats.added_lines = 9;
         session.stats.deleted_lines = 4;
-        let mut diff_page = DiffPage::new(
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut diff_page = new_diff_page(
             &session,
             "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
             0,
             0,
+            &markdown_render_cache,
         );
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -398,7 +721,8 @@ mod tests {
     fn test_render_applies_background_tints_to_changed_lines() {
         // Arrange
         let session = session_fixture();
-        let mut diff_page = DiffPage::new(
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut diff_page = new_diff_page(
             &session,
             concat!(
                 "diff --git a/src/main.rs b/src/main.rs\n",
@@ -409,6 +733,7 @@ mod tests {
             .to_string(),
             0,
             0,
+            &markdown_render_cache,
         );
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -441,7 +766,8 @@ mod tests {
             .map(|index| format!("+line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut diff_page = DiffPage::new(&session, diff, 12, 0);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut diff_page = new_diff_page(&session, diff, 12, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(80, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 
@@ -467,7 +793,8 @@ mod tests {
             .map(|index| format!("+line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut diff_page = DiffPage::new(&session, diff, u16::MAX, 0);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let mut diff_page = new_diff_page(&session, diff, u16::MAX, 0, &markdown_render_cache);
         let backend = ratatui::backend::TestBackend::new(80, 12);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
 

@@ -6,9 +6,10 @@ use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
-    command_output_detail, looks_like_authentication_failure, looks_like_host_resolution_failure,
-    map_spawn_error, normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
+    ForgeRemote, ReviewComment, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError,
+    ReviewRequestState, ReviewRequestSummary, command_output_detail,
+    looks_like_authentication_failure, looks_like_host_resolution_failure, map_spawn_error,
+    normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// GitHub pull-request adapter that normalizes `gh` command output.
@@ -65,6 +66,36 @@ impl GitHubReviewRequestAdapter {
 
         self.refresh_review_request_after_auth(remote, display_id)
             .await
+    }
+
+    /// Fetches the review-comment snapshot for one existing pull request by
+    /// display id through GitHub's GraphQL API.
+    ///
+    /// Returns both inline review threads anchored to diff lines and the
+    /// review-request-wide "conversation" comments that are not anchored to a
+    /// file or line.
+    pub(crate) async fn fetch_review_comment_snapshot(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> Result<ReviewCommentSnapshot, ReviewRequestError> {
+        self.ensure_authenticated(&remote).await?;
+
+        let pull_request_number = parse_display_id(&display_id)?;
+        let output = self
+            .run_review_command(
+                &remote,
+                review_threads_command(&remote, &pull_request_number),
+                "fetch review comments",
+            )
+            .await?;
+
+        parse_review_comment_snapshot_response(&output.stdout).map_err(|message| {
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitHub,
+                message,
+            }
+        })
     }
 
     /// Finds one existing pull request after authentication has been verified.
@@ -269,6 +300,28 @@ fn create_command(remote: &ForgeRemote, input: &CreateReviewRequestInput) -> For
     )
 }
 
+/// Builds one `gh api graphql` command that fetches review threads and
+/// comments for `pull_request_number`.
+fn review_threads_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "graphql".to_string(),
+            "-f".to_string(),
+            format!("query={REVIEW_THREADS_QUERY}"),
+            "-F".to_string(),
+            format!("owner={}", remote.namespace),
+            "-F".to_string(),
+            format!("repo={}", remote.project),
+            "-F".to_string(),
+            format!("number={pull_request_number}"),
+        ],
+    )
+}
+
 /// Builds the `gh pr view` command for one pull-request number.
 fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
     github_command(
@@ -363,10 +416,151 @@ fn review_decision_summary(review_decision: Option<&str>) -> Option<String> {
     }
 }
 
+/// GraphQL query text used to fetch review threads and review-request-wide
+/// conversation comments for one pull request.
+///
+/// Capped at 100 threads per request and 100 comments per thread/PR.
+const REVIEW_THREADS_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
+     $repo) { pullRequest(number: $number) { comments(first: 100) { nodes { author { login } body \
+     } } reviewThreads(first: 100) { nodes { isResolved path line comments(first: 100) { nodes { \
+     author { login } body } } } } } } }";
+
+/// Parses the full review-comment snapshot from a GraphQL response.
+///
+/// Threads are returned in the forge-reported order; callers sort by
+/// `(path, line)` before rendering in the UI. PR-level conversation comments
+/// preserve GitHub's chronological order.
+fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentSnapshot, String> {
+    let response: GitHubReviewThreadsEnvelope = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub review-threads response: {error}"))?;
+
+    let Some(data) = response.data else {
+        return Err("GitHub review-threads response is missing a data payload".to_string());
+    };
+    let Some(pull_request) = data
+        .repository
+        .and_then(|repository| repository.pull_request)
+    else {
+        return Err("GitHub review-threads response is missing a pull request".to_string());
+    };
+
+    let threads = pull_request
+        .review_threads
+        .nodes
+        .into_iter()
+        .map(review_comment_thread_from_node)
+        .collect();
+    let pr_level_comments = pull_request
+        .comments
+        .map(|connection| {
+            connection
+                .nodes
+                .into_iter()
+                .map(review_comment_from_node)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ReviewCommentSnapshot {
+        pr_level_comments,
+        threads,
+    })
+}
+
+/// Converts one GraphQL thread node into the forge-neutral representation.
+fn review_comment_thread_from_node(node: GitHubReviewThreadNode) -> ReviewCommentThread {
+    ReviewCommentThread {
+        comments: node
+            .comments
+            .nodes
+            .into_iter()
+            .map(review_comment_from_node)
+            .collect(),
+        is_resolved: node.is_resolved,
+        line: node.line,
+        path: node.path,
+    }
+}
+
+/// Converts one GraphQL comment node into the forge-neutral representation.
+fn review_comment_from_node(node: GitHubReviewCommentNode) -> ReviewComment {
+    ReviewComment {
+        author: node
+            .author
+            .map_or_else(|| "ghost".to_string(), |author| author.login),
+        body: node.body,
+    }
+}
+
 /// Minimal GitHub API lookup payload used to find an existing pull request.
 #[derive(Deserialize)]
 struct GitHubLookupResponse {
     number: u64,
+}
+
+/// GraphQL response envelope for review-threads queries.
+#[derive(Deserialize)]
+struct GitHubReviewThreadsEnvelope {
+    data: Option<GitHubReviewThreadsData>,
+}
+
+/// GraphQL `data` payload with the repository pull-request tree.
+#[derive(Deserialize)]
+struct GitHubReviewThreadsData {
+    repository: Option<GitHubReviewThreadsRepository>,
+}
+
+/// GraphQL repository node carrying the pull-request field.
+#[derive(Deserialize)]
+struct GitHubReviewThreadsRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GitHubReviewThreadsPullRequest>,
+}
+
+/// GraphQL pull-request node carrying the review-threads connection and the
+/// review-request-wide conversation comments.
+#[derive(Deserialize)]
+struct GitHubReviewThreadsPullRequest {
+    comments: Option<GitHubReviewCommentsConnection>,
+    #[serde(rename = "reviewThreads")]
+    review_threads: GitHubReviewThreadsConnection,
+}
+
+/// GraphQL `reviewThreads` connection carrying the thread `nodes`.
+#[derive(Deserialize)]
+struct GitHubReviewThreadsConnection {
+    nodes: Vec<GitHubReviewThreadNode>,
+}
+
+/// One GraphQL review-thread node.
+#[derive(Deserialize)]
+struct GitHubReviewThreadNode {
+    comments: GitHubReviewCommentsConnection,
+    #[serde(rename = "isResolved")]
+    is_resolved: bool,
+    line: Option<u32>,
+    path: String,
+}
+
+/// GraphQL `comments` connection for one review thread.
+#[derive(Deserialize)]
+struct GitHubReviewCommentsConnection {
+    nodes: Vec<GitHubReviewCommentNode>,
+}
+
+/// One GraphQL review-comment node.
+#[derive(Deserialize)]
+struct GitHubReviewCommentNode {
+    author: Option<GitHubReviewCommentAuthor>,
+    body: String,
+}
+
+/// GraphQL author node for a review comment. The `ghost` author is the only
+/// case where `author` is `null` on GitHub today.
+#[derive(Deserialize)]
+struct GitHubReviewCommentAuthor {
+    login: String,
 }
 
 /// GitHub pull-request JSON payload returned by `gh pr view --json`.
@@ -634,6 +828,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_review_comment_snapshot_parses_graphql_response() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &review_threads_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(github_review_threads_json())) }));
+        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let snapshot = adapter
+            .fetch_review_comment_snapshot(remote, "#42".to_string())
+            .await
+            .expect("GitHub review-comment snapshot fetch should succeed");
+
+        // Assert
+        assert_eq!(snapshot.threads.len(), 2);
+        let unresolved = &snapshot.threads[0];
+        assert_eq!(unresolved.path, "src/foo.rs");
+        assert_eq!(unresolved.line, Some(42));
+        assert!(!unresolved.is_resolved);
+        assert_eq!(unresolved.comments.len(), 2);
+        assert_eq!(unresolved.comments[0].author, "alice");
+        assert_eq!(unresolved.comments[0].body, "Why aren't we handling None?");
+
+        let resolved = &snapshot.threads[1];
+        assert_eq!(resolved.path, "src/bar.rs");
+        assert!(resolved.is_resolved);
+        assert_eq!(resolved.comments.len(), 1);
+        assert_eq!(resolved.comments[0].author, "ghost");
+
+        assert_eq!(snapshot.pr_level_comments.len(), 2);
+        assert_eq!(snapshot.pr_level_comments[0].author, "carol");
+        assert_eq!(snapshot.pr_level_comments[0].body, "Overall looks good.");
+        assert_eq!(snapshot.pr_level_comments[1].author, "ghost");
+    }
+
+    #[test]
+    fn parse_review_comment_snapshot_response_rejects_missing_data() {
+        // Arrange
+        let stdout = "{\"data\": null}";
+
+        // Act
+        let error = parse_review_comment_snapshot_response(stdout)
+            .expect_err("null data payload should be rejected");
+
+        // Assert
+        assert!(
+            error.contains("missing a data payload"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_review_comment_snapshot_response_rejects_missing_pull_request() {
+        // Arrange
+        let stdout = "{\"data\": {\"repository\": {\"pullRequest\": null}}}";
+
+        // Act
+        let error = parse_review_comment_snapshot_response(stdout)
+            .expect_err("null pull request should be rejected");
+
+        // Assert
+        assert!(
+            error.contains("missing a pull request"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_review_comment_snapshot_response_returns_empty_snapshot_on_empty_threads() {
+        // Arrange
+        let stdout = r#"{"data": {"repository": {"pullRequest": {
+            "reviewThreads": { "nodes": [] }
+        }}}}"#;
+
+        // Act
+        let snapshot = parse_review_comment_snapshot_response(stdout)
+            .expect("empty review thread list should parse");
+
+        // Assert
+        assert!(snapshot.threads.is_empty());
+        assert!(snapshot.pr_level_comments.is_empty());
+    }
+
+    #[tokio::test]
     async fn refresh_review_request_maps_authentication_error() {
         // Arrange
         let remote = github_remote();
@@ -685,6 +983,87 @@ mod tests {
             repo_url: "https://github.com/agentty-xyz/agentty.git".to_string(),
             web_url: "https://github.com/agentty-xyz/agentty".to_string(),
         }
+    }
+
+    fn github_review_threads_json() -> String {
+        r#"{
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "nodes": [
+                                {
+                                    "author": {"login": "carol"},
+                                    "body": "Overall looks good."
+                                },
+                                {
+                                    "author": null,
+                                    "body": "Ghost conversation comment."
+                                }
+                            ]
+                        },
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "thread-1",
+                                    "isResolved": false,
+                                    "isOutdated": false,
+                                    "path": "src/foo.rs",
+                                    "line": 42,
+                                    "startLine": null,
+                                    "diffSide": "RIGHT",
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "comment-1",
+                                                "author": {"login": "alice"},
+                                                "body": "Why aren't we handling None?",
+                                                "diffHunk": "@@ -40,3 +40,6 @@\n fn parse(input) {\n+    if raw.is_empty() {",
+                                                "createdAt": "2026-04-19T10:00:00Z",
+                                                "updatedAt": "2026-04-19T10:00:00Z",
+                                                "url": "https://github.com/agentty-xyz/agentty/pull/42#discussion_r1"
+                                            },
+                                            {
+                                                "id": "comment-2",
+                                                "author": {"login": "bob"},
+                                                "body": "Good catch. Will fix.",
+                                                "diffHunk": "@@ -40,3 +40,6 @@\n fn parse(input) {\n+    if raw.is_empty() {",
+                                                "createdAt": "2026-04-19T11:00:00Z",
+                                                "updatedAt": "2026-04-19T11:00:00Z",
+                                                "url": "https://github.com/agentty-xyz/agentty/pull/42#discussion_r2"
+                                            }
+                                        ]
+                                    }
+                                },
+                                {
+                                    "id": "thread-2",
+                                    "isResolved": true,
+                                    "isOutdated": false,
+                                    "path": "src/bar.rs",
+                                    "line": 15,
+                                    "startLine": null,
+                                    "diffSide": null,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "id": "comment-3",
+                                                "author": null,
+                                                "body": "Resolved thread.",
+                                                "diffHunk": "@@ -15 +15 @@\n-old\n+new",
+                                                "createdAt": "2026-04-18T09:00:00Z",
+                                                "updatedAt": "2026-04-18T09:00:00Z",
+                                                "url": "https://github.com/agentty-xyz/agentty/pull/42#discussion_r3"
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }"#
+        .to_string()
     }
 
     fn github_view_json() -> String {

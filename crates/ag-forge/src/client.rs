@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeRemote,
     GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
-    ReviewRequestError, ReviewRequestSummary, detect_remote,
+    ReviewCommentSnapshot, ReviewRequestError, ReviewRequestSummary, detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -61,6 +61,21 @@ pub trait ReviewRequestClient: Send + Sync {
         &self,
         review_request: &ReviewRequestSummary,
     ) -> Result<String, ReviewRequestError>;
+
+    /// Fetches the review-comment snapshot for one open review request.
+    ///
+    /// Returns both inline threads and review-request-wide comments. Threads
+    /// are grouped by `path` and sorted by `(path, line)` by callers; adapters
+    /// return what the forge reports without enforcing an ordering.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when the snapshot fetch
+    /// cannot be completed (including authentication and host failures).
+    fn fetch_review_comment_snapshot(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
 }
 
 /// Production [`ReviewRequestClient`] that routes to forge-specific adapters.
@@ -155,6 +170,30 @@ impl ReviewRequestClient for RealReviewRequestClient {
         }
 
         Ok(review_request.web_url.clone())
+    }
+
+    fn fetch_review_comment_snapshot(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>> {
+        match remote.forge_kind {
+            super::ForgeKind::GitHub => {
+                let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move {
+                    adapter
+                        .fetch_review_comment_snapshot(remote, display_id)
+                        .await
+                })
+            }
+            super::ForgeKind::GitLab => Box::pin(async move {
+                Err(ReviewRequestError::OperationFailed {
+                    forge_kind: remote.forge_kind,
+                    message: "GitLab review-comment preview is not yet supported".to_string(),
+                })
+            }),
+        }
     }
 }
 

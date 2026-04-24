@@ -12,7 +12,7 @@ use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
-    AppMode, DoneSessionOutputMode, QuestionFocus, QuestionModeSnapshot,
+    AppMode, DiffRightPanel, DoneSessionOutputMode, QuestionFocus, QuestionModeSnapshot,
 };
 use crate::ui::state::prompt::PromptAtMentionState;
 
@@ -272,6 +272,7 @@ async fn show_question_diff(app: &mut App, session_id: &str) {
         diff,
         file_explorer_selected_index: 0,
         restore_question: snapshot,
+        right_panel: DiffRightPanel::Diff,
         scroll_cache: None,
         session_id: session_id.into(),
         scroll_offset: 0,

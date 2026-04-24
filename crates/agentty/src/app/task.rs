@@ -21,6 +21,7 @@ use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::session::SessionId;
 use crate::infra::agent;
 use crate::infra::git::GitClient;
+use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::version;
 
 /// Stateless helpers for app-scoped background pollers and app-server
@@ -210,6 +211,7 @@ impl TaskService {
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         git_client: Arc<dyn GitClient>,
         review_request_client: Arc<dyn ReviewRequestClient>,
+        review_comment_cache: ReviewCommentCache,
     ) {
         tokio::spawn(async move {
             loop {
@@ -235,10 +237,37 @@ impl TaskService {
                         return;
                     }
 
+                    let review_comments_sync_action = review_comments_sync_action(
+                        review_request_sync_target.linked_review_request.as_ref(),
+                        result.as_ref().ok(),
+                    );
+
                     let _ = app_event_tx.send(AppEvent::ReviewRequestStatusUpdated {
                         result,
                         session_id: review_request_sync_target.session_id.clone(),
                     });
+
+                    match review_comments_sync_action {
+                        ReviewCommentsSyncAction::Fetch(display_id) => {
+                            sync_review_comments_for_target(
+                                review_request_sync_target,
+                                display_id,
+                                git_client.as_ref(),
+                                review_request_client.as_ref(),
+                                &review_comment_cache,
+                                &app_event_tx,
+                            )
+                            .await;
+                        }
+                        ReviewCommentsSyncAction::Forget => {
+                            forget_review_comments_for_session(
+                                &review_request_sync_target.session_id,
+                                &review_comment_cache,
+                                &app_event_tx,
+                            );
+                        }
+                        ReviewCommentsSyncAction::Skip => {}
+                    }
                 }
 
                 for _ in 0..REVIEW_REQUEST_SYNC_INTERVAL_SECONDS {
@@ -493,6 +522,153 @@ impl TaskService {
     }
 }
 
+/// Decision taken by the review-request status loop for one session's
+/// inline-comment cache after each sync.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ReviewCommentsSyncAction {
+    /// Fetch fresh inline comments for the carried display id and update the
+    /// cache. Used only when the review request is currently known to be
+    /// open.
+    Fetch(String),
+    /// Drop any cached comments for the session. Used when the review request
+    /// transitioned to a non-open state (merged, closed, or no longer linked)
+    /// so the preview stops showing stale or potentially sensitive content.
+    Forget,
+    /// Leave the cache as-is. Used when the sync failed without any stale
+    /// signal that the review request is non-open, so a transient forge
+    /// failure does not blank out previously cached threads.
+    Skip,
+}
+
+/// Decides what to do with the session's inline-comment cache after a status
+/// sync.
+///
+/// The UI only shows inline comments while the review request is still open
+/// and belongs to a forge whose comment-preview adapter is implemented:
+///
+/// - Forge that does not yet support the comments preview (for example a GitLab
+///   merge request) → skip so the poll does not record a doomed failure on
+///   every tick.
+/// - Successful `Open` outcome → fetch fresh comments using the freshly
+///   observed display id.
+/// - Successful non-open outcome (merged, closed, or no review request) →
+///   forget cached comments so the preview stops showing stale threads for a
+///   review request whose upstream state has moved past open.
+/// - Failed sync with a previously linked `Open` review request → fetch using
+///   the stale display id so transient forge failures do not blank out the
+///   comments page.
+/// - Failed sync with a linked non-open review request → forget, because any
+///   cached threads belong to a review request that is no longer open.
+/// - Failed sync with no linked review request → skip, because the loop never
+///   had a reason to populate the cache for this session.
+fn review_comments_sync_action(
+    linked_review_request: Option<&crate::domain::session::ReviewRequest>,
+    sync_result: Option<&SyncReviewRequestTaskResult>,
+) -> ReviewCommentsSyncAction {
+    let observed_forge_kind = sync_result
+        .and_then(|result| result.summary.as_ref())
+        .map(|summary| summary.forge_kind)
+        .or_else(|| linked_review_request.map(|linked| linked.summary.forge_kind));
+    if let Some(forge_kind) = observed_forge_kind
+        && !forge_kind.supports_review_comments_preview()
+    {
+        return ReviewCommentsSyncAction::Skip;
+    }
+
+    if let Some(result) = sync_result {
+        return match &result.outcome {
+            session::SyncReviewRequestOutcome::Open { display_id, .. } => {
+                ReviewCommentsSyncAction::Fetch(display_id.clone())
+            }
+            _ => ReviewCommentsSyncAction::Forget,
+        };
+    }
+
+    let Some(linked) = linked_review_request else {
+        return ReviewCommentsSyncAction::Skip;
+    };
+    if linked.summary.state == ag_forge::ReviewRequestState::Open {
+        return ReviewCommentsSyncAction::Fetch(linked.summary.display_id.clone());
+    }
+
+    ReviewCommentsSyncAction::Forget
+}
+
+/// Drops cached inline review comments for `session_id` and, when an entry
+/// was actually removed, emits a UI refresh event so an open comments preview
+/// redraws its empty state.
+fn forget_review_comments_for_session(
+    session_id: &SessionId,
+    review_comment_cache: &ReviewCommentCache,
+    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+) {
+    if review_comment_cache.forget(session_id) {
+        let _ = app_event_tx.send(AppEvent::ReviewCommentsUpdated {
+            session_id: session_id.clone(),
+        });
+    }
+}
+
+/// Fetches inline review comments for `display_id` and updates the cache.
+///
+/// On success, threads are written to [`ReviewCommentCache`]; if the cached
+/// content changed, an [`AppEvent::ReviewCommentsUpdated`] is emitted so the
+/// UI re-renders. On failure, the cache is left untouched so transient forge
+/// errors do not blank previously cached threads.
+async fn sync_review_comments_for_target(
+    review_request_sync_target: &ReviewRequestSyncTarget,
+    display_id: String,
+    git_client: &dyn GitClient,
+    review_request_client: &dyn ReviewRequestClient,
+    review_comment_cache: &ReviewCommentCache,
+    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+) {
+    let result = fetch_review_comment_snapshot(
+        review_request_sync_target.folder.clone(),
+        display_id,
+        git_client,
+        review_request_client,
+    )
+    .await;
+    let session_id = review_request_sync_target.session_id.clone();
+    match result {
+        Ok(snapshot) => {
+            if review_comment_cache.record_snapshot(session_id.clone(), snapshot) {
+                let _ = app_event_tx.send(AppEvent::ReviewCommentsUpdated { session_id });
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session_id,
+                "failed to fetch review comments: {error}",
+            );
+        }
+    }
+}
+
+/// Resolves the forge remote for `folder` and fetches the full review-comment
+/// snapshot (inline threads and PR-level comments) for `display_id`.
+async fn fetch_review_comment_snapshot(
+    folder: PathBuf,
+    display_id: String,
+    git_client: &dyn GitClient,
+    review_request_client: &dyn ReviewRequestClient,
+) -> Result<ag_forge::ReviewCommentSnapshot, String> {
+    let repo_url = git_client
+        .repo_url(folder.clone())
+        .await
+        .map_err(|error| format!("Failed to resolve repository remote: {error}"))?;
+    let remote = review_request_client
+        .detect_remote(repo_url)
+        .map(|remote| remote.with_command_working_directory(folder))
+        .map_err(|error| error.detail_message())?;
+
+    review_request_client
+        .fetch_review_comment_snapshot(remote, display_id)
+        .await
+        .map_err(|error| error.detail_message())
+}
+
 /// Runs one review-request sync against the forge.
 ///
 /// When the session has a linked review request, this refreshes it by display
@@ -665,9 +841,19 @@ mod tests {
         display_id: &str,
         state: ReviewRequestState,
     ) -> ReviewRequestSummary {
+        test_review_request_summary_with_forge(display_id, state, ForgeKind::GitHub)
+    }
+
+    /// Builds one test review request summary for sync-task tests with a
+    /// caller-specified forge family.
+    fn test_review_request_summary_with_forge(
+        display_id: &str,
+        state: ReviewRequestState,
+        forge_kind: ForgeKind,
+    ) -> ReviewRequestSummary {
         ReviewRequestSummary {
             display_id: display_id.to_string(),
-            forge_kind: ForgeKind::GitHub,
+            forge_kind,
             source_branch: "wt/session-id".to_string(),
             state,
             status_summary: None,
@@ -1135,5 +1321,214 @@ mod tests {
         assert_ne!(in_progress, complete);
         assert_ne!(complete, failed);
         assert_ne!(in_progress, failed);
+    }
+
+    /// Builds one linked `ReviewRequest` fixture for display-id selection
+    /// tests.
+    fn linked_review_request(
+        display_id: &str,
+        state: ReviewRequestState,
+    ) -> crate::domain::session::ReviewRequest {
+        crate::domain::session::ReviewRequest {
+            last_refreshed_at: 0,
+            summary: test_review_request_summary(display_id, state),
+        }
+    }
+
+    #[test]
+    /// Successful `Open` sync result picks the freshly observed display id.
+    fn review_comments_sync_action_fetches_on_open_sync_outcome() {
+        // Arrange
+        let linked = linked_review_request("#1", ReviewRequestState::Open);
+        let sync_result = SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Open {
+                display_id: "#42".to_string(),
+                status_summary: None,
+            },
+            summary: None,
+        };
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), Some(&sync_result));
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Fetch("#42".to_string()));
+    }
+
+    #[test]
+    /// A successful merged sync result drops any stale cache entry so the
+    /// preview stops showing old comments for a PR that is no longer open.
+    fn review_comments_sync_action_forgets_on_successful_merged_sync() {
+        // Arrange
+        let linked = linked_review_request("#7", ReviewRequestState::Open);
+        let sync_result = SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Merged {
+                display_id: "#7".to_string(),
+            },
+            summary: None,
+        };
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), Some(&sync_result));
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Forget);
+    }
+
+    #[test]
+    /// A successful `NoReviewRequest` sync result drops cached comments for a
+    /// session whose linked request has been removed upstream.
+    fn review_comments_sync_action_forgets_on_no_review_request_sync_outcome() {
+        // Arrange
+        let linked = linked_review_request("#21", ReviewRequestState::Open);
+        let sync_result = SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::NoReviewRequest,
+            summary: None,
+        };
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), Some(&sync_result));
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Forget);
+    }
+
+    #[test]
+    /// A failed sync (no sync result) falls back to the previously linked open
+    /// review request so transient forge errors do not blank the page.
+    fn review_comments_sync_action_falls_back_to_linked_open_request_on_sync_failure() {
+        // Arrange
+        let linked = linked_review_request("#11", ReviewRequestState::Open);
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), None);
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Fetch("#11".to_string()));
+    }
+
+    #[test]
+    /// A failed sync with a previously closed review request drops cached
+    /// comments because the UI must not keep showing stale threads for a
+    /// non-open request.
+    fn review_comments_sync_action_forgets_on_failure_when_linked_is_not_open() {
+        // Arrange
+        let linked = linked_review_request("#13", ReviewRequestState::Closed);
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), None);
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Forget);
+    }
+
+    #[test]
+    /// A successful `Open` outcome on an unsupported forge (GitLab) skips the
+    /// comment-thread fetch until a native adapter ships, to avoid recording
+    /// unsupported-forge errors on every sync tick.
+    fn review_comments_sync_action_skips_on_unsupported_forge_open_sync_outcome() {
+        // Arrange
+        let linked = crate::domain::session::ReviewRequest {
+            last_refreshed_at: 0,
+            summary: test_review_request_summary_with_forge(
+                "!42",
+                ReviewRequestState::Open,
+                ForgeKind::GitLab,
+            ),
+        };
+        let sync_result = SyncReviewRequestTaskResult {
+            outcome: session::SyncReviewRequestOutcome::Open {
+                display_id: "!42".to_string(),
+                status_summary: None,
+            },
+            summary: Some(test_review_request_summary_with_forge(
+                "!42",
+                ReviewRequestState::Open,
+                ForgeKind::GitLab,
+            )),
+        };
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), Some(&sync_result));
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Skip);
+    }
+
+    #[test]
+    /// A failed sync with a GitLab-linked review request skips fetching so
+    /// the loop does not keep calling an unsupported forge path.
+    fn review_comments_sync_action_skips_on_unsupported_forge_when_sync_fails() {
+        // Arrange
+        let linked = crate::domain::session::ReviewRequest {
+            last_refreshed_at: 0,
+            summary: test_review_request_summary_with_forge(
+                "!11",
+                ReviewRequestState::Open,
+                ForgeKind::GitLab,
+            ),
+        };
+
+        // Act
+        let action = review_comments_sync_action(Some(&linked), None);
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Skip);
+    }
+
+    #[test]
+    /// A failed sync with no linked review request does nothing, so the loop
+    /// does not churn on sessions that never had a cache entry.
+    fn review_comments_sync_action_skips_on_failure_without_linked_request() {
+        // Arrange / Act
+        let action = review_comments_sync_action(None, None);
+
+        // Assert
+        assert_eq!(action, ReviewCommentsSyncAction::Skip);
+    }
+
+    #[tokio::test]
+    /// Forgetting a cached entry emits a refresh event so an open comments
+    /// preview redraws its empty state when the PR transitions to non-open.
+    async fn forget_review_comments_for_session_emits_update_when_entry_removed() {
+        // Arrange
+        let session_id: SessionId = "session-forget".into();
+        let review_comment_cache = ReviewCommentCache::default();
+        review_comment_cache.record_snapshot(
+            session_id.clone(),
+            ag_forge::ReviewCommentSnapshot::default(),
+        );
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        forget_review_comments_for_session(&session_id, &review_comment_cache, &app_event_tx);
+
+        // Assert
+        let event = app_event_rx
+            .try_recv()
+            .expect("cache removal should emit a refresh event");
+        assert!(matches!(
+            event,
+            AppEvent::ReviewCommentsUpdated { ref session_id } if session_id.as_str() == "session-forget"
+        ));
+    }
+
+    #[tokio::test]
+    /// Forgetting a session with no cached entry does not emit an event, so
+    /// sessions that never had comments do not churn the UI on every tick.
+    async fn forget_review_comments_for_session_stays_silent_when_entry_missing() {
+        // Arrange
+        let session_id: SessionId = "session-missing".into();
+        let review_comment_cache = ReviewCommentCache::default();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+
+        // Act
+        forget_review_comments_for_session(&session_id, &review_comment_cache, &app_event_tx);
+
+        // Assert
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "missing cache entry should not trigger an event"
+        );
     }
 }

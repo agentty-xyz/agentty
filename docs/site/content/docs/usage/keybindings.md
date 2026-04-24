@@ -156,16 +156,29 @@ Additional notes:
 
 ## Diff Mode
 
+Pressing `d` from session view opens diff mode with the right panel showing the
+git diff. Pressing `c` from session view opens the same diff mode but with the
+right panel switched to review-request comments. Within diff mode, press `c` to
+toggle the right panel between the git diff and the cached review-request
+comments without leaving the page.
+
 | Key | Action |
 |-----|--------|
 | `q` / `Esc` | Back to session |
 | `j` / `k` | Select file |
-| `Up` / `Down` | Scroll selected file |
+| `Up` / `Down` | Scroll selected panel |
+| `c` | Toggle right panel between diff and comments |
 | `?` | Help |
 
 <a id="usage-diff-totals"></a>
-The diff panel title shows aggregate line-change totals as `+added` and
-`-removed` counts for the current session diff.
+When the right panel shows the git diff, its title includes aggregate line
+totals as `+added` and `-removed` counts for the current session diff. When the
+right panel shows review-request comments, it lists cached inline threads and
+pull-request-level "General discussion" comments. The comments panel is
+read-only; replies must happen on the forge web UI. GitLab merge requests are
+not yet supported, so the `c` action stays hidden for GitLab-linked sessions.
+Comment threads are fetched by the background review-request sync task and are
+pre-sorted by file path and line.
 
 ## Prompt Input
 

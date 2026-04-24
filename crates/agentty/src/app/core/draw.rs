@@ -128,6 +128,7 @@ impl App {
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
         let projects = self.projects.project_items().to_vec();
+        let review_comment_cache = self.services.review_comment_cache();
         let mode = &self.mode;
         let project_table_state = self.projects.project_table_state_mut();
         let (sessions, stats_activity, table_state) = self.sessions.render_parts();
@@ -148,6 +149,7 @@ impl App {
                 mode,
                 project_table_state,
                 projects: &projects,
+                review_comment_cache: &review_comment_cache,
                 task_roadmap: task_roadmap.as_deref(),
                 task_roadmap_error: task_roadmap_error.as_deref(),
                 task_roadmap_scroll_offset: self.task_roadmap_scroll_offset,

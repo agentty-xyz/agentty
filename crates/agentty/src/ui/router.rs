@@ -9,10 +9,13 @@ use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
+use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::overlay::{
     HelpOverlayRenderContext, SyncBlockedPopupRenderContext, ViewInfoPopupRenderContext,
 };
-use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
+use crate::ui::state::app_mode::{
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel,
+};
 use crate::ui::{Component, Page, RenderContext, component, markdown, overlay, page};
 
 /// Shared borrowed data required to render list-page backgrounds.
@@ -107,6 +110,7 @@ struct RouteAuxContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    review_comment_cache: &'a ReviewCommentCache,
     session_progress_messages: &'a HashMap<SessionId, String>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     wall_clock_unix_seconds: i64,
@@ -123,6 +127,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         mode,
         project_table_state,
         projects,
+        review_comment_cache,
         session_progress_messages,
         session_worktree_availability,
         settings,
@@ -155,6 +160,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         default_reasoning_level: shared.settings.reasoning_level,
         markdown_render_cache,
+        review_comment_cache,
         session_progress_messages,
         session_worktree_availability,
         wall_clock_unix_seconds,
@@ -216,6 +222,7 @@ fn render_list_or_overlay_mode(
                 help_context,
                 list_background: shared.list_background(),
                 markdown_render_cache: aux.markdown_render_cache,
+                review_comment_cache: aux.review_comment_cache,
                 scroll_offset: *scroll_offset,
                 session_progress_messages: aux.session_progress_messages,
                 wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
@@ -501,6 +508,7 @@ fn render_session_or_diff_mode(
             diff,
             file_explorer_selected_index,
             restore_question: _,
+            right_panel,
             scroll_cache: _,
             scroll_offset,
             session_id,
@@ -512,6 +520,9 @@ fn render_session_or_diff_mode(
             diff,
             *scroll_offset,
             *file_explorer_selected_index,
+            *right_panel,
+            aux.markdown_render_cache,
+            aux.review_comment_cache,
         ),
         AppMode::List
         | AppMode::Confirmation { .. }
@@ -625,21 +636,29 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
 }
 
 /// Renders the diff page for a specific session when present.
+#[allow(clippy::too_many_arguments)]
 fn render_diff_mode(
     f: &mut Frame,
     area: Rect,
     sessions: &[Session],
-    session_id: &str,
+    session_id: &SessionId,
     diff: &str,
     scroll_offset: u16,
     file_explorer_selected_index: usize,
+    right_panel: DiffRightPanel,
+    markdown_render_cache: &markdown::MarkdownRenderCache,
+    review_comment_cache: &ReviewCommentCache,
 ) {
-    if let Some(session) = sessions.iter().find(|session| session.id == session_id) {
+    if let Some(session) = sessions.iter().find(|session| &session.id == session_id) {
+        let snapshot = review_comment_cache.snapshot(session_id);
         page::diff::DiffPage::new(
             session,
             diff.to_string(),
             scroll_offset,
             file_explorer_selected_index,
+            right_panel,
+            markdown_render_cache,
+            snapshot.as_ref(),
         )
         .render(f, area);
     }
@@ -758,6 +777,7 @@ mod tests {
         };
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
+        let review_comment_cache = ReviewCommentCache::default();
 
         // Act
         terminal
@@ -771,6 +791,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         markdown_render_cache: &cache,
+                        review_comment_cache: &review_comment_cache,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
@@ -800,6 +821,7 @@ mod tests {
         let progress_messages = HashMap::new();
         let sessions = Vec::new();
         let cache = markdown::MarkdownRenderCache::default();
+        let review_comment_cache = ReviewCommentCache::default();
 
         // Act
         terminal
@@ -815,6 +837,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         markdown_render_cache: &cache,
+                        review_comment_cache: &review_comment_cache,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
@@ -841,12 +864,14 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             restore_question: None,
+            right_panel: DiffRightPanel::Diff,
             scroll_cache: None,
             session_id: session_id.into(),
             scroll_offset: 0,
         };
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
+        let review_comment_cache = ReviewCommentCache::default();
 
         // Act
         terminal
@@ -860,6 +885,7 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         markdown_render_cache: &cache,
+                        review_comment_cache: &review_comment_cache,
                         session_progress_messages: &progress_messages,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,

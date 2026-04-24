@@ -10,6 +10,7 @@ use crate::app::session_state::SessionGitStatus;
 use crate::app::{SettingsManager, Tab, UpdateStatus};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
+use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 use crate::ui::{component, markdown, page, router};
 
@@ -51,6 +52,8 @@ pub struct RenderContext<'a> {
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
     pub projects: &'a [ProjectListItem],
+    /// Shared cache of inline review-request comments keyed by session id.
+    pub review_comment_cache: &'a ReviewCommentCache,
     /// Detected session worktree branch names keyed by session id.
     pub session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id,

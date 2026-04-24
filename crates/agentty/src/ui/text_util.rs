@@ -204,6 +204,47 @@ pub fn wrap_styled_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'st
     wrapped_lines
 }
 
+/// Returns the total number of terminal rows that `lines` occupy when
+/// word-wrapped to `width` columns via [`wrap_styled_line`].
+///
+/// Callers use this to compute a maximum scroll offset before rendering a
+/// [`Paragraph`](ratatui::widgets::Paragraph) with `Wrap { trim: true }` or a
+/// pre-wrapped paragraph. The result saturates at `u16::MAX` so extreme
+/// content never overflows ratatui's scroll offset type.
+pub fn wrapped_line_count(lines: &[Line<'static>], width: u16) -> u16 {
+    lines
+        .iter()
+        .map(|line| {
+            u16::try_from(wrap_styled_line(line.spans.clone(), usize::from(width.max(1))).len())
+                .unwrap_or(u16::MAX)
+        })
+        .fold(0u16, |accumulator, row_count| {
+            accumulator.saturating_add(row_count)
+        })
+}
+
+/// Word-wraps each line to `width` columns and flattens the result so the
+/// returned sequence matches the terminal rows that will be painted.
+///
+/// Use this when scroll clamping needs to count in painted rows but the
+/// widget cannot reliably use ratatui's internal `Wrap { trim: false }` row
+/// count (for example when the content already includes its own indentation).
+pub fn wrap_lines_to_rows(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    let wrap_width = usize::from(width.max(1));
+    let mut wrapped_rows: Vec<Line<'static>> = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        if line.spans.is_empty() {
+            wrapped_rows.push(line);
+            continue;
+        }
+
+        wrapped_rows.extend(wrap_styled_line(line.spans, wrap_width));
+    }
+
+    wrapped_rows
+}
+
 /// Formats a token count for display: "500", "1.5k", "1.5M".
 pub fn format_token_count(count: u64) -> String {
     if count >= 1_000_000 {
@@ -362,6 +403,58 @@ mod tests {
         // Assert
         assert_eq!(wrapped.len(), 1);
         assert_eq!(wrapped[0].to_string(), "hello world");
+    }
+
+    #[test]
+    fn test_wrapped_line_count_sums_wrapped_rows() {
+        // Arrange — "hello world" wraps to 2 rows at width 5, second line fits on 1.
+        let lines = vec![
+            Line::from(vec![Span::raw("hello world".to_string())]),
+            Line::from(vec![Span::raw("hi".to_string())]),
+        ];
+
+        // Act
+        let total = wrapped_line_count(&lines, 5);
+
+        // Assert
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn test_wrap_lines_to_rows_flattens_wrapped_content_and_keeps_blank_lines() {
+        // Arrange
+        let lines = vec![
+            Line::from(vec![Span::raw("hello world".to_string())]),
+            Line::default(),
+            Line::from(vec![Span::raw("last".to_string())]),
+        ];
+
+        // Act
+        let rows = wrap_lines_to_rows(lines, 5);
+
+        // Assert — "hello world" wraps into two rows, blank passes through,
+        // "last" stays on one row.
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].to_string(), "hello");
+        assert_eq!(rows[1].to_string(), "world");
+        assert!(rows[2].spans.is_empty());
+        assert_eq!(rows[3].to_string(), "last");
+    }
+
+    #[test]
+    fn test_wrapped_line_count_zero_width_treats_each_line_as_one_row() {
+        // Arrange
+        let lines = vec![
+            Line::from(vec![Span::raw("alpha".to_string())]),
+            Line::from(vec![Span::raw("beta".to_string())]),
+        ];
+
+        // Act — zero width falls back to width 1 so each line still counts at least
+        // once.
+        let total = wrapped_line_count(&lines, 0);
+
+        // Assert
+        assert!(total >= 2);
     }
 
     #[test]

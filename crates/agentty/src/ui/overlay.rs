@@ -8,9 +8,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
+use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
 use crate::ui::state::app_mode::{
-    AppMode, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
+    AppMode, ConfirmationViewMode, DiffRightPanel, DoneSessionOutputMode, HelpContext,
 };
 use crate::ui::style::palette;
 use crate::ui::{Component, Page, component, markdown, page};
@@ -68,6 +69,9 @@ pub(crate) struct HelpOverlayRenderContext<'a> {
     pub(crate) list_background: ListBackgroundRenderContext<'a>,
     /// Shared markdown cache reused by restored background pages.
     pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Shared review-comment cache used to restore the review-comments page
+    /// behind help overlays opened from that page.
+    pub(crate) review_comment_cache: &'a ReviewCommentCache,
     /// Help overlay vertical scroll position.
     pub(crate) scroll_offset: u16,
     /// Session progress messages keyed by session id.
@@ -207,20 +211,67 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
         help_context,
         list_background,
         markdown_render_cache,
+        review_comment_cache,
         scroll_offset,
         session_progress_messages,
         wall_clock_unix_seconds,
     } = context;
 
-    render_help_background(
-        f,
-        area,
-        help_context,
-        list_background,
-        markdown_render_cache,
-        session_progress_messages,
-        wall_clock_unix_seconds,
-    );
+    let sessions = list_background.sessions;
+    match resolve_help_background(help_context, sessions, review_comment_cache) {
+        Some(ResolvedHelpBackground::List) => {
+            render_list_background(f, area, list_background, wall_clock_unix_seconds);
+        }
+        Some(ResolvedHelpBackground::View {
+            done_session_output_mode,
+            review_status_message,
+            review_text,
+            session_id,
+            session_index,
+            scroll_offset: view_scroll_offset,
+        }) => {
+            let bg_mode = AppMode::View {
+                done_session_output_mode,
+                review_status_message: review_status_message.clone(),
+                review_text: review_text.clone(),
+                session_id: session_id.into(),
+                scroll_offset: view_scroll_offset,
+            };
+            let active_progress = session_progress_messages
+                .get(session_id)
+                .map(std::string::String::as_str);
+            page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
+                active_prompt_output: None,
+                active_progress,
+                default_reasoning_level: list_background.settings.reasoning_level,
+                markdown_render_cache,
+                mode: &bg_mode,
+                scroll_offset: view_scroll_offset,
+                session_index,
+                sessions,
+                wall_clock_unix_seconds,
+            })
+            .render(f, area);
+        }
+        Some(ResolvedHelpBackground::Diff {
+            diff,
+            file_explorer_selected_index,
+            right_panel,
+            session,
+            snapshot,
+            scroll_offset: diff_scroll_offset,
+        }) => page::diff::DiffPage::new(
+            session,
+            diff.to_string(),
+            diff_scroll_offset,
+            file_explorer_selected_index,
+            right_panel,
+            markdown_render_cache,
+            snapshot.as_ref(),
+        )
+        .render(f, area),
+        None => {}
+    }
     render_overlay_backdrop(f, area);
 
     component::help_overlay::HelpOverlay::new(help_context)
@@ -319,8 +370,10 @@ enum ResolvedHelpBackground<'a> {
     Diff {
         diff: &'a str,
         file_explorer_selected_index: usize,
+        right_panel: DiffRightPanel,
         scroll_offset: u16,
         session: &'a Session,
+        snapshot: Option<ag_forge::ReviewCommentSnapshot>,
     },
 }
 
@@ -328,6 +381,7 @@ enum ResolvedHelpBackground<'a> {
 fn resolve_help_background<'a>(
     help_context: &'a HelpContext,
     sessions: &'a [Session],
+    review_comment_cache: &ReviewCommentCache,
 ) -> Option<ResolvedHelpBackground<'a>> {
     match help_context {
         HelpContext::List { .. } => Some(ResolvedHelpBackground::List),
@@ -352,6 +406,7 @@ fn resolve_help_background<'a>(
         HelpContext::Diff {
             diff,
             file_explorer_selected_index,
+            right_panel,
             scroll_offset,
             session_id,
             ..
@@ -361,72 +416,11 @@ fn resolve_help_background<'a>(
             .map(|session| ResolvedHelpBackground::Diff {
                 diff,
                 file_explorer_selected_index: *file_explorer_selected_index,
+                right_panel: *right_panel,
                 scroll_offset: *scroll_offset,
                 session,
+                snapshot: review_comment_cache.snapshot(session_id),
             }),
-    }
-}
-
-/// Renders background content behind help based on the source `HelpContext`.
-fn render_help_background(
-    f: &mut Frame,
-    area: Rect,
-    help_context: &HelpContext,
-    list_background: ListBackgroundRenderContext<'_>,
-    markdown_render_cache: &markdown::MarkdownRenderCache,
-    session_progress_messages: &HashMap<SessionId, String>,
-    wall_clock_unix_seconds: i64,
-) {
-    let sessions = list_background.sessions;
-
-    match resolve_help_background(help_context, sessions) {
-        Some(ResolvedHelpBackground::List) => {
-            render_list_background(f, area, list_background, wall_clock_unix_seconds);
-        }
-        Some(ResolvedHelpBackground::View {
-            done_session_output_mode,
-            review_status_message,
-            review_text,
-            session_id,
-            session_index,
-            scroll_offset,
-        }) => {
-            let bg_mode = AppMode::View {
-                done_session_output_mode,
-                review_status_message: review_status_message.clone(),
-                review_text: review_text.clone(),
-                session_id: session_id.into(),
-                scroll_offset,
-            };
-            let active_progress = session_progress_messages
-                .get(session_id)
-                .map(std::string::String::as_str);
-            page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
-                active_prompt_output: None,
-                active_progress,
-                default_reasoning_level: list_background.settings.reasoning_level,
-                markdown_render_cache,
-                mode: &bg_mode,
-                scroll_offset,
-                session_index,
-                sessions,
-                wall_clock_unix_seconds,
-            })
-            .render(f, area);
-        }
-        Some(ResolvedHelpBackground::Diff {
-            diff,
-            file_explorer_selected_index,
-            session,
-            scroll_offset,
-        }) => page::diff::DiffPage::new(
-            session,
-            diff.to_string(),
-            scroll_offset,
-            file_explorer_selected_index,
-        )
-        .render(f, area),
-        None => {}
     }
 }
 
@@ -598,7 +592,7 @@ mod tests {
         };
 
         // Act
-        let resolved = resolve_help_background(&help_context, &[]);
+        let resolved = resolve_help_background(&help_context, &[], &ReviewCommentCache::default());
 
         // Assert
         assert!(matches!(resolved, Some(ResolvedHelpBackground::List)));
@@ -619,7 +613,7 @@ mod tests {
         };
 
         // Act
-        let resolved = resolve_help_background(&help_context, &[]);
+        let resolved = resolve_help_background(&help_context, &[], &ReviewCommentCache::default());
 
         // Assert
         assert!(resolved.is_none());
@@ -632,12 +626,13 @@ mod tests {
             session_id: "missing-session".into(),
             diff: "diff --git a/file b/file".to_string(),
             restore_question: None,
+            right_panel: DiffRightPanel::Diff,
             scroll_offset: 0,
             file_explorer_selected_index: 0,
         };
 
         // Act
-        let resolved = resolve_help_background(&help_context, &[]);
+        let resolved = resolve_help_background(&help_context, &[], &ReviewCommentCache::default());
 
         // Assert
         assert!(resolved.is_none());

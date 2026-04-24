@@ -1082,6 +1082,10 @@ impl SessionManager {
             );
         }
         self.clear_session_worker(&session.id);
+        // Drop cached inline review comments before the session id is reused,
+        // so we never hold on to stale or potentially sensitive comment bodies
+        // for a deleted session.
+        services.review_comment_cache().forget(&session.id);
         if let Err(error) = services.db().delete_session(&session.id).await {
             warn!(
                 session_id = %session.id,

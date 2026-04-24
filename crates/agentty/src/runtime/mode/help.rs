@@ -38,7 +38,7 @@ mod tests {
 
     use super::*;
     use crate::infra::db::Database;
-    use crate::ui::state::app_mode::{DoneSessionOutputMode, HelpContext};
+    use crate::ui::state::app_mode::{DiffRightPanel, DoneSessionOutputMode, HelpContext};
     use crate::ui::state::help_action::{HelpAction, ViewSessionState};
 
     /// Builds one client bundle with deterministic agent availability for
@@ -202,6 +202,7 @@ mod tests {
                 session_id: "s1".into(),
                 diff: "diff content".to_string(),
                 restore_question: None,
+                right_panel: DiffRightPanel::Diff,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,
             },
@@ -221,6 +222,7 @@ mod tests {
                 ref session_id,
                 ref diff,
                 restore_question: None,
+                right_panel: DiffRightPanel::Diff,
                 scroll_cache: None,
                 scroll_offset: 7,
                 file_explorer_selected_index: 0,

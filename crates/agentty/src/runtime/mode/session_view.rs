@@ -19,7 +19,8 @@ use crate::runtime::mode::input_key::is_insertable_char_key;
 use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
 use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode, HelpContext,
+    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffRightPanel, DoneSessionOutputMode,
+    HelpContext,
 };
 use crate::ui::state::help_action::{self, ViewSessionState};
 use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState};
@@ -996,6 +997,7 @@ async fn show_diff_for_view_session(app: &mut App, view_context: &ViewContext) -
         diff,
         file_explorer_selected_index: 0,
         restore_question: None,
+        right_panel: DiffRightPanel::Diff,
         scroll_cache: None,
         session_id: view_context.session_id.clone(),
         scroll_offset: 0,
@@ -2213,6 +2215,7 @@ mod tests {
                     session_id: ref session_id_in_mode,
                     session_state: ViewSessionState::Review,
                     scroll_offset: Some(3),
+                    ..
                 },
                 scroll_offset: 0,
             } if session_id_in_mode == &session_id

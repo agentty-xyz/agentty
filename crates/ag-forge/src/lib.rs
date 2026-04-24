@@ -22,8 +22,9 @@ pub(crate) use command::{
 pub(crate) use github::GitHubReviewRequestAdapter;
 pub(crate) use gitlab::GitLabReviewRequestAdapter;
 pub use model::{
-    CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, ReviewRequestError,
-    ReviewRequestState, ReviewRequestSummary, is_gitlab_host,
+    CreateReviewRequestInput, ForgeFuture, ForgeKind, ForgeRemote, ReviewComment,
+    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestState,
+    ReviewRequestSummary, is_gitlab_host,
 };
 pub use remote::detect_remote;
 pub(crate) use remote::{parse_remote_url, strip_port};

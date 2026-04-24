@@ -85,7 +85,7 @@ pub(crate) fn rotating_message<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::state::app_mode::DoneSessionOutputMode;
+    use crate::ui::state::app_mode::{DiffRightPanel, DoneSessionOutputMode};
 
     #[test]
     fn rotating_message_cycles_through_messages() {
@@ -153,6 +153,7 @@ mod tests {
             diff: String::new(),
             file_explorer_selected_index: 0,
             restore_question: None,
+            right_panel: DiffRightPanel::Diff,
             scroll_cache: None,
             session_id: "session-id".into(),
             scroll_offset: 0,

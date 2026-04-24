@@ -247,6 +247,7 @@ impl AppStartup {
                 event_tx.clone(),
                 services.git_client(),
                 services.review_request_client(),
+                services.review_comment_cache(),
             );
         }
     }

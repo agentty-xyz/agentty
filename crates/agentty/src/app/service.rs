@@ -15,6 +15,7 @@ use crate::domain::session::SessionId;
 use crate::infra::app_server::AppServerClient;
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
+use crate::infra::review_comment_cache::ReviewCommentCache;
 
 /// Shared per-app session redraw version counters keyed by session id.
 pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
@@ -47,6 +48,7 @@ pub struct AppServices {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     repositories: AppRepositories,
+    review_comment_cache: ReviewCommentCache,
     review_request_client: Arc<dyn ReviewRequestClient>,
     session_update_versions: SessionUpdateVersionMap,
 }
@@ -78,6 +80,7 @@ impl AppServices {
             fs_client,
             git_client,
             repositories,
+            review_comment_cache: ReviewCommentCache::default(),
             review_request_client,
             session_update_versions: Arc::default(),
         }
@@ -132,6 +135,12 @@ impl AppServices {
     /// Returns the shared per-app session update version counters.
     pub(crate) fn session_update_versions(&self) -> SessionUpdateVersionMap {
         Arc::clone(&self.session_update_versions)
+    }
+
+    /// Returns the shared inline-review-comment cache used by the preview page
+    /// and the background sync task.
+    pub(crate) fn review_comment_cache(&self) -> ReviewCommentCache {
+        self.review_comment_cache.clone()
     }
 
     /// Returns the optional app-server client override used by tests and

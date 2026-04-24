@@ -508,6 +508,49 @@ fn review_request_sync_runs_in_background() -> E2eResult {
     Ok(())
 }
 
+/// Verify that opening the diff page from a review-ready session and pressing
+/// `c` toggles the right panel to review-request comments. The panel renders
+/// the "Waiting for review-request comments to sync..." empty-state banner
+/// before the background sync has populated the cache.
+#[test]
+fn review_comments_preview_opens_from_diff_page() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_comments_preview")
+        .with_git()
+        .setup(seed_review_ready_session_with_review_request)
+        .zola(
+            "Review comments preview",
+            "From a review-ready session press `d` to open the diff page, then `c` to toggle the \
+             right panel to inline review-request comments grouped by file.",
+            44,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .sleep(std::time::Duration::from_secs(1))
+                    .press_key("d")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("c")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "review_comments_preview",
+                        "Review comments preview after pressing d then c",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Comments", &full);
+                assertion::assert_text_in_region(frame, "Review request #42", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that typing `/apply` in a review-ready session surfaces the
 /// slash-command suggestion and, when submitted without a cached focused
 /// review, shows the `Run a focused review first (f key)` guidance.

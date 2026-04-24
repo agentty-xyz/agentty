@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Preview review-request comments inside the diff page. Press `d` from a review-ready session to open the diff page, then press `c` inside the page to toggle the right panel between the git diff and the cached comments. The comments panel lists inline threads and pull-request-level "General discussion" comments for GitHub-linked sessions; GitLab support is tracked as a follow-up.
+
 ## [v0.8.0] - 2026-04-21
 
 ### Added

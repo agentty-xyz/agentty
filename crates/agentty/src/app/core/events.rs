@@ -132,6 +132,13 @@ pub(crate) enum AppEvent {
         result: Result<SyncReviewRequestTaskResult, String>,
         session_id: SessionId,
     },
+    /// Indicates that the inline review-comment cache for one session now
+    /// exposes updated thread content.
+    ///
+    /// Emitted only when the background sync task observes a content change
+    /// (see `ReviewCommentCache::record_snapshot`) so the UI can redraw without
+    /// being woken on every 60-second tick.
+    ReviewCommentsUpdated { session_id: SessionId },
 }
 
 /// Reduced representation of all app events currently queued for one tick.
@@ -292,6 +299,11 @@ impl AppEventBatch {
             ),
             AppEvent::ReviewRequestStatusUpdated { result, session_id } => {
                 self.collect_review_request_status_updated(result, session_id);
+            }
+            AppEvent::ReviewCommentsUpdated { session_id: _ } => {
+                // The comments cache is the source of truth; the event only
+                // serves as a wake-up signal so the UI refreshes on the next
+                // draw. No reducer state needs to change here.
             }
         }
     }

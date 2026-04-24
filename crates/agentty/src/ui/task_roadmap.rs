@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::ui::style;
-use crate::ui::text_util::wrap_styled_line;
+use crate::ui::text_util::wrapped_line_count;
 
 /// Supported roadmap queues rendered in the `Tasks` page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -158,17 +158,7 @@ pub(crate) fn roadmap_task_max_scroll_offset(
         return 0;
     }
 
-    let rendered_line_count = lines
-        .iter()
-        .map(|line| {
-            u16::try_from(
-                wrap_styled_line(line.spans.clone(), usize::from(inner_width.max(1))).len(),
-            )
-            .unwrap_or(u16::MAX)
-        })
-        .sum::<u16>();
-
-    rendered_line_count.saturating_sub(viewport_height)
+    wrapped_line_count(lines, inner_width).saturating_sub(viewport_height)
 }
 
 /// Parses one roadmap markdown document into queue cards.

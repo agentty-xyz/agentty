@@ -1098,6 +1098,7 @@ impl App {
             self.services.event_sender(),
             self.services.git_client(),
             self.services.review_request_client(),
+            self.services.review_comment_cache(),
         );
     }
 

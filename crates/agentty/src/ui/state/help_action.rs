@@ -469,25 +469,45 @@ fn prompt_action_help_action(session_state: ViewSessionState) -> HelpAction {
 }
 
 /// Returns help entries for diff-mode actions.
+///
 /// These entries are used by the help overlay and include all available
-/// actions.
-pub(crate) fn diff_actions() -> Vec<HelpAction> {
+/// actions. The `c` shortcut label flips based on `right_panel` so users see
+/// which panel they'd switch to.
+pub(crate) fn diff_actions(right_panel: super::app_mode::DiffRightPanel) -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
         HelpAction::new("select file", "j/k", "Select file"),
-        HelpAction::new("scroll file", "Up/Down", "Scroll selected file"),
+        HelpAction::new("scroll pane", "Up/Down", "Scroll right panel"),
+        HelpAction::new(
+            diff_toggle_comments_label(right_panel),
+            "c",
+            diff_toggle_comments_label(right_panel),
+        ),
         HelpAction::new("help", "?", "Help"),
     ]
 }
 
 /// Returns compact diff footer actions for the page-level hint line.
-pub(crate) fn diff_footer_actions() -> Vec<HelpAction> {
+pub(crate) fn diff_footer_actions(right_panel: super::app_mode::DiffRightPanel) -> Vec<HelpAction> {
     vec![
         HelpAction::new("back", "q/Esc", "Back to session"),
         HelpAction::new("select file", "j/k", "Select file"),
-        HelpAction::new("scroll file", "Up/Down", "Scroll selected file"),
+        HelpAction::new(
+            diff_toggle_comments_label(right_panel),
+            "c",
+            diff_toggle_comments_label(right_panel),
+        ),
         HelpAction::new("help", "?", "Help"),
     ]
+}
+
+/// Returns the user-facing label for the `c` shortcut based on which right
+/// panel is currently active.
+fn diff_toggle_comments_label(right_panel: super::app_mode::DiffRightPanel) -> &'static str {
+    match right_panel {
+        super::app_mode::DiffRightPanel::Diff => "Show comments",
+        super::app_mode::DiffRightPanel::Comments => "Show diff",
+    }
 }
 
 /// Renders one-line footer help as styled spans where keys are emphasized and
