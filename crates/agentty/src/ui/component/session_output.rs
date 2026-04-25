@@ -733,8 +733,8 @@ impl<'a> SessionOutput<'a> {
     /// transcript for the current session view.
     ///
     /// The `### Suggestions` header is annotated with a `(type "/apply" to
-    /// apply)` hint at render time so users discover the apply shortcut
-    /// without polluting the persisted review markdown consumed by
+    /// verify and apply)` hint at render time so users discover the apply
+    /// shortcut without polluting the persisted review markdown consumed by
     /// suggestion extraction.
     fn append_review_lines(
         lines: &mut Vec<Line<'static>>,

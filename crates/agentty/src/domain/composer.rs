@@ -811,7 +811,7 @@ fn resolve_model_stage_agent(
 /// Returns the fixed description text for one slash command label.
 fn command_description(command: &str) -> &'static str {
     match command {
-        "/apply" => "Apply review suggestions to the codebase.",
+        "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
         "/model" => "Choose an agent and model for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
         "/stats" => "Check session stats.",
@@ -1277,7 +1277,7 @@ mod tests {
         assert_eq!(suggestion_list.items[0].label, "/apply");
         assert_eq!(
             suggestion_list.items[0].detail.as_deref(),
-            Some("Apply review suggestions to the codebase.")
+            Some("Verify focused-review suggestions, then apply the correct ones.")
         );
     }
 }

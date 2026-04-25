@@ -515,7 +515,10 @@ impl SessionManager {
             .update_session_prompt(session_id, staged_prompt)
             .await?;
         if let Some(title) = title_to_save {
-            services.db().update_session_title(session_id, title).await?;
+            services
+                .db()
+                .update_session_title(session_id, title)
+                .await?;
         }
         Ok(())
     }

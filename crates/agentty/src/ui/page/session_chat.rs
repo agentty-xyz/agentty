@@ -640,7 +640,7 @@ mod tests {
             "Press o to open the session worktree when one is available.",
             "Agentty starts focused review automatically after each turn.",
             "Press f to open or regenerate focused review output on demand.",
-            "Type /apply after focused review completes to apply its suggestions.",
+            "Type /apply after focused review completes to verify and apply its suggestions.",
         ];
 
         // Act

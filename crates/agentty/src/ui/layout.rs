@@ -29,7 +29,8 @@ const CHAT_INPUT_PROMPT_PREFIX_WIDTH: u16 = 3;
 const QUESTION_PANEL_HELP_HEIGHT: u16 = 1;
 const QUESTION_PANEL_SPACER_HEIGHT: u16 = 1;
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
-const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str = "### Suggestions (type \"/apply\" to apply)";
+const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
+    "### Suggestions (type \"/apply\" to verify and apply)";
 const SESSION_HEADER_HEIGHT: u16 = 2;
 const SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT: &str = "No changes";
 const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
@@ -501,7 +502,8 @@ pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
     )
 }
 
-/// Adds the `/apply` hint to the exact focused-review suggestions header.
+/// Adds the verification-gated `/apply` hint to the exact focused-review
+/// suggestions header.
 pub(crate) fn annotate_review_suggestions_header(review_markdown: &str) -> String {
     let mut annotated_lines = Vec::with_capacity(review_markdown.lines().count());
     for line in review_markdown.lines() {
@@ -2129,7 +2131,7 @@ mod tests {
         let annotated = annotate_review_suggestions_header(review_markdown);
 
         // Assert
-        assert!(annotated.contains("### Suggestions (type \"/apply\" to apply)"));
+        assert!(annotated.contains("### Suggestions (type \"/apply\" to verify and apply)"));
         assert!(!annotated.contains("### Suggestions\n"));
         assert!(annotated.contains("- Fix typo."));
     }

@@ -895,7 +895,7 @@ async fn cleanup_prompt_attachment_state(app: &mut App) {
 }
 
 /// Handles `/apply` by extracting suggestions from the focused review and
-/// submitting them as a prompt to the agent.
+/// submitting them as a verification-gated prompt to the agent.
 ///
 /// Only runs when the session is in `Status::Review` and a `Ready` review is
 /// cached for it so stale or in-flight reviews are not applied. The cached
@@ -1004,9 +1004,7 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
         return;
     };
 
-    let prompt = TurnPrompt::from_text(format!(
-        "Apply the following review suggestions:\n\n{suggestions}"
-    ));
+    let prompt = build_apply_review_prompt(&suggestions);
 
     cleanup_prompt_attachment_state(app).await;
     app.review_cache.remove(prompt_context.session_id.as_str());
@@ -1019,6 +1017,19 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
         session_id: prompt_context.session_id.clone(),
         scroll_offset: None,
     };
+}
+
+/// Builds the agent-facing `/apply` prompt from focused-review suggestions.
+///
+/// The prompt explicitly asks the agent to verify each suggestion against the
+/// current code before making changes, then apply only suggestions that remain
+/// correct and relevant.
+fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
+    TurnPrompt::from_text(format!(
+        "Verify the following focused-review suggestions against the current code before changing \
+         anything. Apply only the suggestions that are still correct and relevant; explain any \
+         suggestions you leave unapplied.\n\n{suggestions}"
+    ))
 }
 
 /// Extracts the `### Suggestions` section content from focused review
@@ -3180,6 +3191,28 @@ mod tests {
         // Assert
         assert!(result.contains("Tokens Usage"));
         assert!(result.contains("No token usage recorded."));
+    }
+
+    #[test]
+    fn test_build_apply_review_prompt_requires_verification_before_apply() {
+        // Arrange
+        let suggestions = "- Fix the typo in `README.md`.";
+
+        // Act
+        let prompt = build_apply_review_prompt(suggestions);
+
+        // Assert
+        assert!(
+            prompt
+                .text
+                .contains("Verify the following focused-review suggestions"),
+        );
+        assert!(
+            prompt
+                .text
+                .contains("Apply only the suggestions that are still correct and relevant"),
+        );
+        assert!(prompt.text.contains(suggestions));
     }
 
     #[test]
