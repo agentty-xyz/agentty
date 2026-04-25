@@ -854,19 +854,18 @@ impl<'a> SessionOutput<'a> {
         !(status == Status::Done && done_session_output_mode == DoneSessionOutputMode::Summary)
     }
 
-    /// Returns whether focused-review output belongs in the current session
+    /// Returns whether focused-review output belongs in a non-terminal session
     /// view.
     ///
-    /// Show review output during active review states and for done sessions
-    /// when a review payload is available. This keeps completed review
-    /// results visible on both transient and finalized session views.
+    /// Terminal session views own their final summary or transcript display, so
+    /// they intentionally avoid appending transient focused-review summaries.
     fn shows_review_lines(
         status: Status,
         review_status_message: Option<&str>,
         review_text: Option<&str>,
     ) -> bool {
-        if status != Status::Done {
-            return true;
+        if matches!(status, Status::Done | Status::Canceled) {
+            return false;
         }
 
         review_status_message
@@ -1737,12 +1736,13 @@ mod tests {
         assert!(text.contains("Session output now renders persisted summary markdown."));
     }
 
-    /// Verifies focused review output remains visible after the session moves
-    /// to a terminal `Done` state.
+    /// Verifies a terminal `Done` session keeps its final summary without
+    /// appending transient focused-review output.
     #[test]
-    fn test_output_lines_done_session_shows_review_text_when_available() {
+    fn test_output_lines_done_session_hides_review_text_when_available() {
         // Arrange
         let mut session = session_fixture();
+        session.summary = Some("# Summary\n\nMerged session work.".to_string());
         session.status = Status::Done;
         let assisted_review = "## Review\n\n- Focused finding";
 
@@ -1765,7 +1765,43 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(text.contains("Focused finding"));
+        assert!(text.contains("Merged session work."));
+        assert!(!text.contains("Focused finding"));
+        assert!(!text.contains("Reviewing changes with gpt-5.4"));
+    }
+
+    /// Verifies a terminal `Canceled` session keeps its interrupted transcript
+    /// without appending transient focused-review output.
+    #[test]
+    fn test_output_lines_canceled_session_hides_review_text_when_available() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "interrupted transcript".to_string();
+        session.status = Status::Canceled;
+        let assisted_review = "## Review\n\n- Focused finding";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(
+                DoneSessionOutputMode::Summary,
+                Some("Reviewing changes with gpt-5.4"),
+                Some(assisted_review),
+                None,
+            ),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("interrupted transcript"));
+        assert!(!text.contains("Focused finding"));
+        assert!(!text.contains("Reviewing changes with gpt-5.4"));
     }
 
     /// Verifies focused-review failures remain visible after the transient
