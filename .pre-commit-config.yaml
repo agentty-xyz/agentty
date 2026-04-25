@@ -80,10 +80,42 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: test-ag-forge-src
+        name: cargo test ag-forge src
+        description: Source tests for `crates/ag-forge/src`.
+        entry: cargo test -q --locked -p ag-forge --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-agentty-src
+        name: cargo test agentty src
+        description: Source tests for `crates/agentty/src`.
+        entry: cargo test -q --locked -p agentty --lib --bin agentty
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-ag-xtask-src
+        name: cargo test ag-xtask src
+        description: Source tests for `crates/ag-xtask/src`.
+        entry: cargo test -q --locked -p ag-xtask --bin ag-xtask
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: test-testty-src
+        name: cargo test testty src
+        description: Source tests for `crates/testty/src`.
+        entry: cargo test -q --locked -p testty --lib
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-agentty-e2e
         name: cargo test agentty e2e
-        description: Run the PTY-driven `agentty` end-to-end feature suite.
-        entry: cargo test -q --locked -p agentty --test e2e -- --test-threads=1
+        description: Postsubmit-only `agentty` integration tests from `crates/agentty/tests`.
+        entry: cargo test -q --locked -p agentty --test showcase --test protocol_compliance_e2e --test e2e -- --test-threads=1
         language: system
         always_run: true
         pass_filenames: false
@@ -98,8 +130,8 @@ repos:
         stages: [manual]
       - id: coverage-lcov
         name: coverage lcov
-        description: Generate the workspace LCOV report for CI upload.
-        entry: cargo llvm-cov --workspace --lcov --output-path coverage.lcov --locked
+        description: Postsubmit-only workspace LCOV report for CI upload, excluding `crates/agentty/tests`.
+        entry: cargo llvm-cov --workspace --lib --bins --lcov --ignore-filename-regex '^crates/agentty/tests/' --output-path coverage.lcov --locked
         language: system
         always_run: true
         pass_filenames: false

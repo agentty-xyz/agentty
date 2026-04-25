@@ -18,7 +18,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
+  source-tests:
+    name: Source tests (${{ matrix.member }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - member: ag-forge
+            hook: test-ag-forge-src
+          - member: agentty
+            hook: test-agentty-src
+          - member: ag-xtask
+            hook: test-ag-xtask-src
+          - member: testty
+            hook: test-testty-src
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup `uv`
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Install `prek`
+        run: uv tool install prek
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run source tests
+        run: uv tool run prek run ${{ matrix.hook }} --all-files --hook-stage manual
+
+  coverage:
     runs-on: ubuntu-latest
 
     steps:
@@ -82,3 +117,25 @@ jobs:
           fail_ci_if_error: true
           files: coverage.lcov
           use_oidc: true
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup `uv`
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Install `prek`
+        run: uv tool install prek
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run end-to-end feature suite
+        run: uv tool run prek run test-agentty-e2e --all-files --hook-stage manual

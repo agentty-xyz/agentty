@@ -197,7 +197,10 @@ repository suite instead.
 - **Rust sources:** Run `prek run rustfmt-fix --files <paths> --hook-stage manual`
   while iterating, then run `prek run cargo-check --files <paths>`. Add focused
   tests for the changed crate and dependent crates, using the narrowest matching
-  hook when one exists.
+  hook when one exists. Source-test hooks such as `test-ag-forge-src`,
+  `test-agentty-src`, `test-ag-xtask-src`, and `test-testty-src` are appropriate
+  local checks when the touched Rust code maps cleanly to those workspace
+  members.
 - **Cargo manifests and lockfile:** Run `prek run cargo-check --files <paths>`,
   `prek run clippy --files <paths> --hook-stage manual`, and tests for
   affected workspace crates plus dependents. Use `prek run test-workspace --all-files --hook-stage manual` when dependency impact is broad or
@@ -207,8 +210,9 @@ repository suite instead.
 - **Planning docs:** Run `prek run check-roadmap --all-files` when `docs/plan/`
   changes.
 - **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml` when `.pre-commit-config.yaml` changes.
-- **User-visible UI behavior:** Add or update the required `FeatureTest` coverage,
-  then run the focused E2E hook, usually `prek run test-agentty-e2e --all-files --hook-stage manual`.
+- **User-visible UI behavior:** Add or update the required `FeatureTest` coverage.
+  Do not run the end-to-end feature suite locally; `.github/workflows/postsubmit.yml`
+  runs `test-agentty-e2e` on GitHub after merge to `main`.
 
 ### Autofix Discipline
 
@@ -234,7 +238,9 @@ confidence:
 Use these slower hygiene checks in CI or when making broader changes:
 
 1. **Coverage Summary:** `prek run coverage --all-files --hook-stage manual`
-1. **Coverage Upload:** `prek run coverage-lcov --all-files --hook-stage manual`
+1. **Member source tests:** Run locally when they cover touched Rust code; `.github/workflows/postsubmit.yml` also runs one source-test hook per workspace member (`test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, and `test-testty-src`) after merge to `main`.
+1. **Coverage Upload (GitHub-only):** Do not run locally; `.github/workflows/postsubmit.yml` runs `coverage-lcov` on GitHub after merge to `main`. Keep `coverage-lcov` excluding `crates/agentty/tests` because `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` separately and those tests do not contribute to coverage.
+1. **End-to-end feature suite (GitHub-only):** Do not run locally; `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub after merge to `main`, and that hook owns the `crates/agentty/tests` targets.
 1. **Docs Site:** `prek run zola-check --all-files --hook-stage manual`
 1. **Dependency Hygiene:** `prek run cargo-shear --all-files --hook-stage manual`
 
