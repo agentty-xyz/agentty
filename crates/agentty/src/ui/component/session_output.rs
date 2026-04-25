@@ -11,7 +11,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
 
-use crate::domain::session::{Session, SessionId, Status};
+use crate::domain::session::{PublishedBranchSyncStatus, Session, SessionId, Status};
+use crate::icon::Icon;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
@@ -35,9 +36,9 @@ const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 /// The key is intentionally tied to the session identifier plus observable
 /// update version and `updated_at` timestamp instead of hashing the full
 /// transcript on every frame. Width, selected done-session mode, active prompt,
-/// review text/status, progress text, and markdown style version cover the
-/// transient inputs that can alter rendered lines without changing the stored
-/// session row.
+/// review text/status, progress text, spinner frame, and markdown style
+/// version cover the transient inputs that can alter rendered lines without
+/// changing the stored session row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
@@ -50,6 +51,7 @@ struct SessionOutputLayoutCacheKey {
     session_id: SessionId,
     session_update_version: u64,
     session_updated_at: i64,
+    spinner_frame: Option<usize>,
     status: Status,
 }
 
@@ -103,10 +105,10 @@ struct SessionOutputLayoutCacheEntry {
 ///
 /// This sits above [`markdown::MarkdownRenderCache`] so the scroll-metric path
 /// and render path share one derivation for the same session/update version,
-/// width, output mode, active prompt, review text/status, and progress text.
-/// Entries are invalidated by key changes; the markdown render-cache version is
-/// part of the key so style-bearing lines are not reused after markdown cache
-/// invalidation.
+/// width, output mode, active prompt, review text/status, progress text, and
+/// active spinner frame. Entries are invalidated by key changes; the markdown
+/// render-cache version is part of the key so style-bearing lines are not
+/// reused after markdown cache invalidation.
 pub struct SessionOutputLayoutCache {
     entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
 }
@@ -212,6 +214,8 @@ pub(crate) struct SessionOutputLineContext<'a> {
     pub(crate) review_text: Option<&'a str>,
     /// Current observable update version for this session snapshot.
     pub(crate) session_update_version: u64,
+    /// Spinner frame used by active loader rows during this render pass.
+    pub(crate) spinner_frame: usize,
 }
 
 impl<'a> SessionOutput<'a> {
@@ -377,8 +381,33 @@ impl<'a> SessionOutput<'a> {
             session_id: session.id.clone(),
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
+            spinner_frame: Self::layout_cache_spinner_frame(session, context),
             status: session.status,
         }
+    }
+
+    /// Returns the spinner frame when this session output includes a dynamic
+    /// loader glyph; otherwise returns `None` so stable layouts remain cached
+    /// across frame ticks.
+    fn layout_cache_spinner_frame(
+        session: &Session,
+        context: SessionOutputLineContext<'_>,
+    ) -> Option<usize> {
+        if Self::status_renders_spinner(session.status)
+            || session.published_branch_sync_status == PublishedBranchSyncStatus::InProgress
+        {
+            return Some(context.spinner_frame);
+        }
+
+        None
+    }
+
+    /// Returns whether the inline status row uses an animated spinner.
+    fn status_renders_spinner(status: Status) -> bool {
+        matches!(
+            status,
+            Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging
+        )
     }
 
     /// Builds rendered markdown lines and contextual status/help rows for the
@@ -410,6 +439,7 @@ impl<'a> SessionOutput<'a> {
             review_status_message,
             review_text,
             session_update_version: _,
+            spinner_frame,
         } = context;
         let status = session.status;
         let output_text = Self::output_text(session, done_session_output_mode);
@@ -462,11 +492,14 @@ impl<'a> SessionOutput<'a> {
         if Self::shows_review_lines(session.status) {
             Self::append_review_lines(&mut lines, review_text, inner_width, markdown_render_cache);
         }
-        Self::append_published_branch_sync_lines(&mut lines, session);
+        Self::append_published_branch_sync_lines(&mut lines, session, spinner_frame);
 
-        if let Some(status_line) =
-            layout::session_output_status_line(status, active_progress, review_status_message)
-        {
+        if let Some(status_line) = layout::session_output_status_line(
+            status,
+            active_progress,
+            review_status_message,
+            spinner_frame,
+        ) {
             while lines.last().is_some_and(|line| line.width() == 0) {
                 lines.pop();
             }
@@ -488,8 +521,14 @@ impl<'a> SessionOutput<'a> {
 
     /// Appends one automatic published-branch sync status row when the latest
     /// completed turn started, finished, or failed an auto-push.
-    fn append_published_branch_sync_lines(lines: &mut Vec<Line<'static>>, session: &Session) {
-        let Some(sync_line) = layout::session_output_published_branch_sync_line(session) else {
+    fn append_published_branch_sync_lines(
+        lines: &mut Vec<Line<'static>>,
+        session: &Session,
+        spinner_frame: usize,
+    ) {
+        let Some(sync_line) =
+            layout::session_output_published_branch_sync_line(session, spinner_frame)
+        else {
             return;
         };
 
@@ -829,6 +868,7 @@ impl Component for SessionOutput<'_> {
                 review_status_message: self.review_status_message,
                 review_text: self.review_text,
                 session_update_version: self.session_update_version,
+                spinner_frame: Icon::current_spinner_frame(),
             },
             self.markdown_render_cache,
             self.output_layout_cache,
@@ -876,6 +916,7 @@ mod tests {
             review_status_message,
             review_text,
             session_update_version: 0,
+            spinner_frame: 0,
         }
     }
 
@@ -978,6 +1019,60 @@ mod tests {
         // Assert
         assert!(review_layout.line_count > base_layout.line_count);
         assert!(!Arc::ptr_eq(&base_layout.lines, &review_layout.lines));
+    }
+
+    #[test]
+    fn test_output_layout_cache_keys_active_loader_spinner_frame() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "active output".to_string();
+        session.status = Status::InProgress;
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let first_frame_context = line_context(DoneSessionOutputMode::Summary, None, None, None);
+        let second_frame_context = SessionOutputLineContext {
+            spinner_frame: 1,
+            ..first_frame_context
+        };
+
+        // Act
+        let first_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            first_frame_context,
+            Some(&markdown_render_cache),
+        );
+        let repeated_first_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            first_frame_context,
+            Some(&markdown_render_cache),
+        );
+        let second_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            second_frame_context,
+            Some(&markdown_render_cache),
+        );
+
+        // Assert
+        assert!(Arc::ptr_eq(
+            &first_layout.lines,
+            &repeated_first_layout.lines
+        ));
+        assert!(!Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+        assert!(
+            first_layout
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains(Icon::Spinner(0).as_str()))
+        );
+        assert!(
+            second_layout
+                .lines
+                .iter()
+                .any(|line| line.to_string().contains(Icon::Spinner(1).as_str()))
+        );
     }
 
     #[test]

@@ -588,6 +588,7 @@ pub fn session_output_status_line(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
+    spinner_frame: usize,
 ) -> Option<Line<'static>> {
     if !matches!(
         status,
@@ -604,20 +605,29 @@ pub fn session_output_status_line(
         session_output_status_message(status, active_progress, review_status_message);
 
     Some(Line::from(vec![Span::styled(
-        format!("{} {status_message}", session_output_status_icon(status)),
+        format!(
+            "{} {status_message}",
+            session_output_status_icon(status, spinner_frame)
+        ),
         Style::default().fg(style::status_color(status)),
     )]))
 }
 
 /// Builds the published-branch sync status line appended after transcript
 /// content when auto-push state is available.
-pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Line<'static>> {
+pub fn session_output_published_branch_sync_line(
+    session: &Session,
+    spinner_frame: usize,
+) -> Option<Line<'static>> {
     let sync_message = session.published_branch_sync_message()?;
 
     Some(Line::from(vec![Span::styled(
         format!(
             "{} {sync_message}",
-            session_output_published_branch_sync_icon(session.published_branch_sync_status)
+            session_output_published_branch_sync_icon(
+                session.published_branch_sync_status,
+                spinner_frame
+            )
         ),
         Style::default().fg(session_output_published_branch_sync_color(
             session.published_branch_sync_status,
@@ -1117,10 +1127,10 @@ fn session_output_status_message(
 }
 
 /// Returns the status indicator icon used for inline session-output messages.
-fn session_output_status_icon(status: Status) -> Icon {
+fn session_output_status_icon(status: Status, spinner_frame: usize) -> Icon {
     match status {
         Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
-            Icon::current_spinner()
+            Icon::Spinner(spinner_frame)
         }
         Status::Queued
         | Status::New
@@ -1132,10 +1142,13 @@ fn session_output_status_icon(status: Status) -> Icon {
 }
 
 /// Returns the icon used for published-branch sync status lines.
-fn session_output_published_branch_sync_icon(sync_status: PublishedBranchSyncStatus) -> Icon {
+fn session_output_published_branch_sync_icon(
+    sync_status: PublishedBranchSyncStatus,
+    spinner_frame: usize,
+) -> Icon {
     match sync_status {
         PublishedBranchSyncStatus::Idle => Icon::Pending,
-        PublishedBranchSyncStatus::InProgress => Icon::current_spinner(),
+        PublishedBranchSyncStatus::InProgress => Icon::Spinner(spinner_frame),
         PublishedBranchSyncStatus::Succeeded => Icon::Check,
         PublishedBranchSyncStatus::Failed => Icon::Warn,
     }
@@ -2189,9 +2202,13 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line =
-            session_output_status_line(Status::InProgress, Some("Inspecting changed files"), None)
-                .expect("in-progress sessions should render a status line");
+        let status_line = session_output_status_line(
+            Status::InProgress,
+            Some("Inspecting changed files"),
+            None,
+            0,
+        )
+        .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(
@@ -2210,6 +2227,7 @@ mod tests {
             Status::AgentReview,
             None,
             Some("Reviewing changes with gpt-5.4"),
+            0,
         )
         .expect("agent-review sessions should render a status line");
 
@@ -2226,7 +2244,7 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::Merging, None, None)
+        let status_line = session_output_status_line(Status::Merging, None, None, 0)
             .expect("merging sessions should render a status line");
 
         // Assert
@@ -2241,7 +2259,7 @@ mod tests {
         session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
 
         // Act
-        let sync_line = session_output_published_branch_sync_line(&session)
+        let sync_line = session_output_published_branch_sync_line(&session, 0)
             .expect("published branch sync should render a status line");
 
         // Assert

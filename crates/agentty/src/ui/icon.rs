@@ -28,11 +28,22 @@ impl Icon {
     /// Returns a `Spinner` icon with the frame index calculated based on
     /// current time.
     pub fn current_spinner() -> Self {
+        Icon::Spinner(Self::current_spinner_frame())
+    }
+
+    /// Returns the current spinner frame index derived from wall-clock time.
+    pub fn current_spinner_frame() -> usize {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        Icon::Spinner((now / 100) as usize)
+
+        Self::spinner_frame_from_millis(now)
+    }
+
+    /// Returns the spinner frame index for a millisecond timestamp.
+    pub fn spinner_frame_from_millis(timestamp_millis: u128) -> usize {
+        (timestamp_millis / 100) as usize
     }
 
     /// Returns the string representation of the icon.
@@ -79,6 +90,14 @@ mod tests {
 
         // Assert
         assert!(matches!(icon, Icon::Spinner(_)));
+    }
+
+    #[test]
+    fn test_spinner_frame_from_millis() {
+        // Arrange, Act, Assert
+        assert_eq!(Icon::spinner_frame_from_millis(0), 0);
+        assert_eq!(Icon::spinner_frame_from_millis(99), 0);
+        assert_eq!(Icon::spinner_frame_from_millis(100), 1);
     }
 
     #[test]

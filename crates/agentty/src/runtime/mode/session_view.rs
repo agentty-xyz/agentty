@@ -13,6 +13,7 @@ use crate::app::{
 use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
+use crate::icon::Icon;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
@@ -817,6 +818,7 @@ fn view_total_lines(
                     review_status_message,
                     review_text,
                     session_update_version: app.session_update_version(session_id),
+                    spinner_frame: Icon::current_spinner_frame(),
                 },
                 app.markdown_render_cache(),
                 app.session_output_layout_cache(),
