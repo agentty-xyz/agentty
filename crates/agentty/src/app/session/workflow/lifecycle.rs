@@ -496,6 +496,30 @@ impl SessionManager {
         Ok(PathBuf::from(project_row.path))
     }
 
+    async fn persist_staged_draft(
+        services: &AppServices,
+        session_id: &str,
+        staged_attachments: &[TurnPromptAttachment],
+        staged_prompt: &str,
+        title_to_save: Option<&str>,
+    ) -> Result<(), SessionError> {
+        draft::store_staged_draft_attachments(
+            services.fs_client().as_ref(),
+            services.base_path(),
+            session_id,
+            staged_attachments,
+        )
+        .await?;
+        services
+            .db()
+            .update_session_prompt(session_id, staged_prompt)
+            .await?;
+        if let Some(title) = title_to_save {
+            services.db().update_session_title(session_id, title).await?;
+        }
+        Ok(())
+    }
+
     /// Appends one staged draft message to a `New` session without launching
     /// the agent yet.
     ///
@@ -581,23 +605,14 @@ impl SessionManager {
             project_working_dir
         };
 
-        draft::store_staged_draft_attachments(
-            services.fs_client().as_ref(),
-            services.base_path(),
+        Self::persist_staged_draft(
+            services,
             &persisted_session_id,
             &staged_attachments,
+            &staged_prompt,
+            title_to_save.as_deref(),
         )
         .await?;
-        services
-            .db()
-            .update_session_prompt(&persisted_session_id, &staged_prompt)
-            .await?;
-        if let Some(title_to_save) = title_to_save.as_deref() {
-            services
-                .db()
-                .update_session_title(&persisted_session_id, title_to_save)
-                .await?;
-        }
 
         let title_generation_prompt = staged_prompt.clone();
 
