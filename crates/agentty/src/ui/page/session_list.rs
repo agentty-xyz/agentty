@@ -567,6 +567,10 @@ mod tests {
             crate::ui::page::fyi::session_list_messages(),
             1,
         );
+        let third_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_list_messages(),
+            2,
+        );
         let wrapped_message = crate::ui::page::fyi::rotating_message(
             crate::ui::page::fyi::session_list_messages(),
             3,
@@ -579,11 +583,15 @@ mod tests {
         );
         assert_eq!(
             second_message,
+            Some("Go to Settings to specify commands that can open within a session."),
+        );
+        assert_eq!(
+            third_message,
             Some("Agentty refreshes PR statuses every minute.")
         );
         assert_eq!(
             wrapped_message,
-            Some("Agentty refreshes PR statuses every minute.")
+            Some("Press Enter to open the selected session.")
         );
     }
 

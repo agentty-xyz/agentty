@@ -5,8 +5,9 @@ use crate::ui::state::app_mode::{AppMode, HelpContext};
 
 /// Rotating FYI messages shown in the top status bar while the sessions list
 /// is visible.
-const SESSION_LIST_FYI_MESSAGES: [&str; 2] = [
+const SESSION_LIST_FYI_MESSAGES: [&str; 3] = [
     "Press Enter to open the selected session.",
+    "Go to Settings to specify commands that can open within a session.",
     "Agentty refreshes PR statuses every minute.",
 ];
 

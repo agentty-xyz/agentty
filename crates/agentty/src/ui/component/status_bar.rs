@@ -204,7 +204,11 @@ mod tests {
 
         // Assert
         let text = buffer_text(&terminal);
-        assert!(text.contains("FYI: Agentty refreshes PR statuses every minute."));
+        assert!(
+            text.contains(
+                "FYI: Go to Settings to specify commands that can open within a session."
+            )
+        );
     }
 
     #[test]
