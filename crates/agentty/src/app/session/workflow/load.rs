@@ -15,6 +15,22 @@ use crate::infra::db::{AppRepositories, SessionDetailRow, SessionListRow};
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
+/// Mutable context threaded through the per-row session-load helper.
+///
+/// Keeps the per-row helper signature short while still letting it append
+/// loaded sessions, mutate handles, and update worktree availability.
+struct LoadSessionContext<'a> {
+    active_session_id: Option<&'a str>,
+    base: &'a Path,
+    db: &'a AppRepositories,
+    follow_up_tasks_by_session: &'a mut HashMap<SessionId, Vec<SessionFollowUpTask>>,
+    fs_client: &'a dyn FsClient,
+    handles: &'a mut HashMap<SessionId, SessionHandles>,
+    project_name: &'a str,
+    session_worktree_availability: &'a mut HashMap<SessionId, bool>,
+    sessions: &'a mut Vec<Session>,
+}
+
 /// Precomputed fields needed to assemble one loaded session snapshot.
 struct LoadedSessionInput {
     draft_attachments: Vec<crate::infra::channel::TurnPromptAttachment>,
@@ -28,6 +44,7 @@ struct LoadedSessionInput {
     session_id: SessionId,
     session_output: String,
     session_prompt: String,
+    session_queued_messages: Vec<String>,
     session_questions: Vec<QuestionItem>,
     session_summary: Option<String>,
     session_status: Status,
@@ -89,90 +106,125 @@ impl SessionManager {
                 .or_default()
                 .push(persisted_follow_up_task.into_session_follow_up_task());
         }
+        let mut load_context = LoadSessionContext {
+            base,
+            db,
+            project_name: &project_name,
+            handles,
+            fs_client,
+            active_session_id,
+            sessions: &mut sessions,
+            follow_up_tasks_by_session: &mut follow_up_tasks_by_session,
+            session_worktree_availability: &mut session_worktree_availability,
+        };
         for row in db_rows {
-            let session_id = SessionId::from(row.id.clone());
-            let folder = session_folder(base, &session_id);
-            let persisted_status = row.status.parse::<Status>().unwrap_or(Status::Done);
-            let persisted_size = row.size.parse::<SessionSize>().unwrap_or_default();
-            let has_session_folder = fs_client.is_dir(folder.clone());
-            let live_handle_status = handles
-                .get(&session_id)
-                .and_then(|existing| existing.status.lock().ok().map(|status| *status));
-
-            if should_skip_missing_folder_session(
-                has_session_folder,
-                row.is_draft,
-                persisted_status,
-                live_handle_status,
-            ) {
-                continue;
-            }
-            session_worktree_availability.insert(session_id.clone(), has_session_folder);
-            let session_model = AgentModel::parse_persisted(&row.model)
-                .unwrap_or_else(|_| AgentKind::Gemini.default_model());
-
-            let session_detail = if active_session_id.is_some_and(|active_id| active_id == row.id) {
-                db.load_session_detail(&row.id).await.ok().flatten()
-            } else {
-                None
-            };
-
-            let (session_output, session_status) =
-                if let Some(existing_handle) = handles.get(&session_id) {
-                    output_and_status_from_existing_handle(
-                        existing_handle,
-                        persisted_status,
-                        session_detail.as_ref(),
-                    )
-                } else {
-                    let output = insert_loaded_session_handle(
-                        handles,
-                        session_id.clone(),
-                        persisted_status,
-                        session_detail.as_ref(),
-                    );
-
-                    (output, persisted_status)
-                };
-
-            let review_request = parse_review_request(&row);
-            let draft_attachments =
-                draft::load_staged_draft_attachments(fs_client, base, &session_id).await;
-            let questions = session_detail
-                .as_ref()
-                .and_then(|detail| detail.questions.as_deref())
-                .and_then(parse_questions_json)
-                .unwrap_or_default();
-            let reasoning_level_override = row
-                .reasoning_level_override
-                .as_deref()
-                .and_then(|value| value.parse::<ReasoningLevel>().ok());
-            let follow_up_tasks = follow_up_tasks_by_session
-                .remove(&session_id)
-                .unwrap_or_default();
-            sessions.push(Self::build_loaded_session(LoadedSessionInput {
-                draft_attachments,
-                follow_up_tasks,
-                folder,
-                project_name: project_name.clone(),
-                reasoning_level_override,
-                review_request,
-                row,
-                session_model,
-                session_id,
-                session_output,
-                session_prompt: session_detail
-                    .as_ref()
-                    .map(|detail| detail.prompt.clone())
-                    .unwrap_or_default(),
-                session_questions: questions,
-                session_summary: session_detail.and_then(|detail| detail.summary),
-                session_status,
-                size: persisted_size,
-            }));
+            Self::push_loaded_session_row(&mut load_context, row).await;
         }
 
         (sessions, stats_activity, session_worktree_availability)
+    }
+
+    /// Loads one persisted session row into `sessions`, reusing existing
+    /// handles when present and registering a new handle otherwise.
+    async fn push_loaded_session_row(
+        load_context: &mut LoadSessionContext<'_>,
+        row: SessionListRow,
+    ) {
+        let LoadSessionContext {
+            base,
+            db,
+            project_name,
+            handles,
+            fs_client,
+            active_session_id,
+            sessions,
+            follow_up_tasks_by_session,
+            session_worktree_availability,
+        } = load_context;
+        let session_id = SessionId::from(row.id.clone());
+        let folder = session_folder(base, &session_id);
+        let persisted_status = row.status.parse::<Status>().unwrap_or(Status::Done);
+        let persisted_size = row.size.parse::<SessionSize>().unwrap_or_default();
+        let has_session_folder = fs_client.is_dir(folder.clone());
+        let live_handle_status = handles
+            .get(&session_id)
+            .and_then(|existing| existing.status.lock().ok().map(|status| *status));
+
+        if should_skip_missing_folder_session(
+            has_session_folder,
+            row.is_draft,
+            persisted_status,
+            live_handle_status,
+        ) {
+            return;
+        }
+        session_worktree_availability.insert(session_id.clone(), has_session_folder);
+        let session_model = AgentModel::parse_persisted(&row.model)
+            .unwrap_or_else(|_| AgentKind::Gemini.default_model());
+
+        let session_detail = if active_session_id.is_some_and(|active_id| active_id == row.id) {
+            db.load_session_detail(&row.id).await.ok().flatten()
+        } else {
+            None
+        };
+
+        let (session_output, session_status) =
+            if let Some(existing_handle) = handles.get(&session_id) {
+                output_and_status_from_existing_handle(
+                    existing_handle,
+                    persisted_status,
+                    session_detail.as_ref(),
+                )
+            } else {
+                let output = insert_loaded_session_handle(
+                    handles,
+                    session_id.clone(),
+                    persisted_status,
+                    session_detail.as_ref(),
+                );
+
+                (output, persisted_status)
+            };
+        let review_request = parse_review_request(&row);
+        let draft_attachments =
+            draft::load_staged_draft_attachments(*fs_client, base, &session_id).await;
+        let questions = session_detail
+            .as_ref()
+            .and_then(|detail| detail.questions.as_deref())
+            .and_then(parse_questions_json)
+            .unwrap_or_default();
+        let reasoning_level_override = row
+            .reasoning_level_override
+            .as_deref()
+            .and_then(|value| value.parse::<ReasoningLevel>().ok());
+        let follow_up_tasks = follow_up_tasks_by_session
+            .remove(&session_id)
+            .unwrap_or_default();
+        let session_queued_messages = handles
+            .get(&session_id)
+            .map(SessionHandles::queued_message_transcripts)
+            .unwrap_or_default();
+        sessions.push(Self::build_loaded_session(LoadedSessionInput {
+            draft_attachments,
+            follow_up_tasks,
+            folder,
+            project_name: (*project_name).to_string(),
+            reasoning_level_override,
+            review_request,
+            row,
+            session_model,
+            session_id,
+            session_output,
+            session_prompt: session_detail
+                .as_ref()
+                .map(|detail| detail.prompt.clone())
+                .unwrap_or_default(),
+            session_queued_messages,
+            session_questions: questions,
+            session_summary: session_detail.and_then(|detail| detail.summary),
+            session_status,
+            size: persisted_size,
+        }));
     }
 
     /// Computes diff-derived session size and line-count totals from one
@@ -231,6 +283,7 @@ impl SessionManager {
             output: input.session_output,
             project_name: input.project_name,
             prompt: input.session_prompt,
+            queued_messages: input.session_queued_messages,
             reasoning_level_override: input.reasoning_level_override,
             published_upstream_ref: input.row.published_upstream_ref,
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,

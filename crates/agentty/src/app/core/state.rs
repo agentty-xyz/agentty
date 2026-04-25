@@ -678,6 +678,22 @@ impl App {
             .await;
     }
 
+    /// Queues one chat prompt for an existing `InProgress` session so the
+    /// session worker dispatches it as the next turn once the running turn
+    /// finishes.
+    ///
+    /// # Errors
+    /// Returns the underlying [`crate::app::session::SessionError`] when
+    /// the session does not exist or the payload is empty.
+    pub fn enqueue_message(
+        &mut self,
+        session_id: &str,
+        prompt: impl Into<TurnPrompt>,
+    ) -> Result<(), crate::app::session::SessionError> {
+        self.sessions
+            .enqueue_message(&self.services, session_id, prompt)
+    }
+
     /// Returns the focused-review output state that should be shown when one
     /// session view is reopened.
     pub(crate) fn review_view_state(&self, session_id: &str) -> (Option<String>, Option<String>) {
@@ -1582,6 +1598,7 @@ mod tests {
             output: String::new(),
             project_name: "test-project".to_string(),
             prompt: "test prompt".to_string(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,

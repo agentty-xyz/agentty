@@ -1,6 +1,6 @@
 //! Per-session async worker orchestration for serialized command execution.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -116,10 +116,49 @@ struct SessionWorkerContext {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     output: Arc<Mutex<String>>,
+    /// In-memory queue of prompts staged while the session is `InProgress`.
+    ///
+    /// Shared with [`SessionHandles::queued_messages`]. The worker drains
+    /// this queue between turns; the lifecycle pushes new entries when a
+    /// user submits a chat message during a running turn.
+    queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
     session_id: SessionId,
+    session_model: AgentModel,
     status: Arc<Mutex<Status>>,
+}
+
+impl SessionWorkerContext {
+    /// Pops the next queued prompt for dispatch as a follow-up turn.
+    fn pop_queued_prompt(&self) -> Option<TurnPrompt> {
+        // Sync critical section (single pop, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
+        self.queued_messages
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.pop_front())
+    }
+
+    /// Removes every queued prompt without dispatching it.
+    fn clear_queued_messages(&self) {
+        // Sync critical section (single clear, no `.await`);
+        // `std::sync::Mutex` is the correct choice per CLAUDE.md §"Mutex
+        // Selection".
+        if let Ok(mut guard) = self.queued_messages.lock() {
+            guard.clear();
+        }
+    }
+
+    /// Returns the current shared session status.
+    fn current_status(&self) -> Status {
+        // Sync critical section (single read, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
+        self.status
+            .lock()
+            .map(|guard| *guard)
+            .unwrap_or(Status::Review)
+    }
 }
 
 /// Applies one successful turn result to persistence and returns the
@@ -135,6 +174,7 @@ pub(super) struct SessionWorkerRuntime {
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
     output: Arc<Mutex<String>>,
+    queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Per-app session update versions shared with the main runtime.
     session_update_versions: SessionUpdateVersionMap,
     session_id: SessionId,
@@ -272,8 +312,10 @@ impl SessionWorkerService {
             fs_client: services.fs_client(),
             git_client: services.git_client(),
             output: Arc::clone(&runtime.output),
+            queued_messages: Arc::clone(&runtime.queued_messages),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
             session_id: runtime.session_id.clone(),
+            session_model: runtime.session_model,
             status: Arc::clone(&runtime.status),
         };
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -285,40 +327,29 @@ impl SessionWorkerService {
     }
 
     /// Spawns the background loop that executes queued session commands.
+    ///
+    /// After each command completes the worker drains
+    /// [`SessionWorkerContext::queued_messages`] inline so user prompts
+    /// submitted while a turn was running dispatch as follow-up turns
+    /// without bouncing the session through `Review` between them. Drainage
+    /// pauses while the session is in `Question` state and resumes once
+    /// status returns to a runnable state. A turn stopped by the user
+    /// (`Ctrl+C`) clears the queue so canceled work does not silently leak
+    /// into the next session activity.
     fn spawn_session_worker(
         context: SessionWorkerContext,
         mut receiver: mpsc::UnboundedReceiver<SessionCommand>,
     ) {
         tokio::spawn(async move {
             while let Some(command) = receiver.recv().await {
-                let operation_id = command.operation_id().to_string();
-                if Self::should_skip_worker_command(&context, &operation_id).await {
-                    continue;
-                }
-                // Best-effort: operation tracking metadata is non-critical.
-                let _ = context
-                    .db
-                    .mark_session_operation_running(&operation_id)
-                    .await;
-                if Self::should_skip_worker_command(&context, &operation_id).await {
+                let result = Self::process_session_command(&context, command).await;
+                if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
+                    context.clear_queued_messages();
+                    let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
                     continue;
                 }
 
-                let result = Self::execute_session_command(&context, command).await;
-
-                match result {
-                    Ok(()) => {
-                        // Best-effort: operation tracking metadata is non-critical.
-                        let _ = context.db.mark_session_operation_done(&operation_id).await;
-                    }
-                    Err(error) => {
-                        // Best-effort: operation tracking metadata is non-critical.
-                        let _ = context
-                            .db
-                            .mark_session_operation_failed(&operation_id, &error.to_string())
-                            .await;
-                    }
-                }
+                Self::drain_queued_messages(&context).await;
             }
 
             // Best-effort: session transport may already be torn down.
@@ -333,6 +364,96 @@ impl SessionWorkerService {
                 *guard = None;
             }
         });
+    }
+
+    /// Executes one queued session command including its operation
+    /// bookkeeping. Returns `None` when the command was skipped before
+    /// execution (already finished or cancelled) and `Some(result)` when the
+    /// turn ran.
+    async fn process_session_command(
+        context: &SessionWorkerContext,
+        command: SessionCommand,
+    ) -> Option<Result<(), SessionError>> {
+        let operation_id = command.operation_id().to_string();
+        if Self::should_skip_worker_command(context, &operation_id).await {
+            return None;
+        }
+        // Best-effort: operation tracking metadata is non-critical.
+        let _ = context
+            .db
+            .mark_session_operation_running(&operation_id)
+            .await;
+        if Self::should_skip_worker_command(context, &operation_id).await {
+            return None;
+        }
+
+        let result = Self::execute_session_command(context, command).await;
+        match &result {
+            Ok(()) => {
+                // Best-effort: operation tracking metadata is non-critical.
+                let _ = context.db.mark_session_operation_done(&operation_id).await;
+            }
+            Err(error) => {
+                // Best-effort: operation tracking metadata is non-critical.
+                let _ = context
+                    .db
+                    .mark_session_operation_failed(&operation_id, &error.to_string())
+                    .await;
+            }
+        }
+
+        Some(result)
+    }
+
+    /// Pops queued prompts and dispatches them as follow-up `SessionResume`
+    /// turns until the queue is empty or the session enters `Question`
+    /// state.
+    ///
+    /// Each drained turn is persisted as its own `reply` operation with a
+    /// fresh identifier so cancellation, retry, and operation tracking
+    /// behave the same as a normal reply. The drain stops on the first
+    /// user-stopped turn and clears the remaining queue so `Ctrl+C` cancels
+    /// the queued work cleanly.
+    async fn drain_queued_messages(context: &SessionWorkerContext) {
+        loop {
+            if matches!(context.current_status(), Status::Question) {
+                return;
+            }
+            let Some(prompt) = context.pop_queued_prompt() else {
+                return;
+            };
+
+            // Mirror the queue change into render snapshots so the inline
+            // "queued" rows disappear as soon as drainage starts the
+            // follow-up turn.
+            let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
+
+            let operation_id = Uuid::new_v4().to_string();
+            // Best-effort: operation tracking metadata is non-critical.
+            let _ = context
+                .db
+                .insert_session_operation(&operation_id, &context.session_id, "reply")
+                .await;
+            append_drained_prompt_to_output(context, &prompt).await;
+            let command = SessionCommand::Run {
+                operation_id,
+                request_kind: AgentRequestKind::SessionResume {
+                    session_output: None,
+                },
+                prompt,
+                turn_metadata: TurnMetadata {
+                    published_upstream_ref: None,
+                    session_model: context.session_model,
+                },
+            };
+            let result = Self::process_session_command(context, command).await;
+            if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
+                context.clear_queued_messages();
+                let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
+
+                return;
+            }
+        }
     }
 
     /// Executes the queued command through the session's agent channel.
@@ -605,6 +726,7 @@ impl SessionManager {
             child_pid: Arc::clone(&handles.child_pid),
             folder: session.folder.clone(),
             output: Arc::clone(&handles.output),
+            queued_messages: Arc::clone(&handles.queued_messages),
             session_update_versions: services.session_update_versions(),
             session_id: session.id.clone(),
             session_model: session.model,
@@ -1250,6 +1372,44 @@ async fn consume_turn_events(
     }
 }
 
+/// Appends one drained queued prompt to the session transcript and shared
+/// output buffer so it renders alongside the normal reply prompt line once
+/// the queued turn starts running.
+///
+/// Mirrors the formatting used by [`SessionManager::formatted_prompt_output`]
+/// from the live reply path: the first line uses `USER_PROMPT_PREFIX` and
+/// continuation lines use `USER_PROMPT_CONTINUATION_PREFIX` so blank lines
+/// inside the prompt do not look like a transcript boundary.
+async fn append_drained_prompt_to_output(context: &SessionWorkerContext, prompt: &TurnPrompt) {
+    const USER_PROMPT_PREFIX: &str = " › ";
+    const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
+
+    let prompt_text = prompt.transcript_text();
+    let prompt_lines = prompt_text.split('\n').collect::<Vec<_>>();
+    let mut formatted_lines = Vec::with_capacity(prompt_lines.len());
+    for (line_index, prompt_line) in prompt_lines.into_iter().enumerate() {
+        let prefix = if line_index == 0 {
+            USER_PROMPT_PREFIX
+        } else {
+            USER_PROMPT_CONTINUATION_PREFIX
+        };
+
+        formatted_lines.push(format!("{prefix}{prompt_line}"));
+    }
+    let prompt_block = formatted_lines.join("\n");
+    let message = format!("\n{prompt_block}\n\n");
+
+    SessionTaskService::append_session_output(
+        &context.output,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &message,
+    )
+    .await;
+}
+
 /// Returns one normalized thinking text line.
 fn normalize_thinking_stream_text(text: &str) -> Option<String> {
     let trimmed_text = text.trim();
@@ -1560,8 +1720,10 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1674,8 +1836,11 @@ mod tests {
             fs_client: Arc::new(mock_fs_client_with_existing_directories()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1731,8 +1896,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess-preturn".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1796,8 +1964,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess-timeout".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1858,8 +2029,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess-term".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1895,8 +2069,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess-nopid".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -1982,8 +2159,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2075,8 +2255,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2178,8 +2361,10 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2265,8 +2450,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2355,8 +2543,10 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::clone(&output),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2424,8 +2614,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
         let turn_result = Ok(TurnResult {
@@ -2543,8 +2736,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2603,8 +2799,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2675,8 +2874,11 @@ mod tests {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+
             session_update_versions: Arc::default(),
             session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
             status: Arc::new(Mutex::new(Status::InProgress)),
         };
 
@@ -2690,5 +2892,187 @@ mod tests {
             !should_skip,
             "new operation should not be skipped by stale cancel on older operation"
         );
+    }
+
+    /// Builds one [`SessionWorkerContext`] backed by the supplied
+    /// [`MockAgentChannel`], a fresh in-memory database, and the queued
+    /// prompt list. The session row is pre-inserted as `InProgress` so the
+    /// worker reaches drainage without first transitioning status.
+    async fn queue_test_context(
+        channel: MockAgentChannel,
+        queued_messages: VecDeque<TurnPrompt>,
+        status: Status,
+    ) -> (
+        SessionWorkerContext,
+        AppRepositories,
+        Arc<Mutex<VecDeque<TurnPrompt>>>,
+        tempfile::TempDir,
+    ) {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert");
+        db.insert_session(
+            "sess1",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_is_worktree_clean()
+            .returning(|_| Box::pin(async { Ok(true) }));
+
+        let queue_handle = Arc::new(Mutex::new(queued_messages));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::new(Mutex::new(String::new())),
+            queued_messages: Arc::clone(&queue_handle),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
+            status: Arc::new(Mutex::new(status)),
+        };
+
+        (context, db, queue_handle, base_dir)
+    }
+
+    /// Builds one [`SessionWorkerContext`] whose only meaningful state is the
+    /// shared `queued_messages` mutex; every other field is wired with a stub
+    /// value because these tests only exercise the queue helpers.
+    async fn queue_helper_context(queue: Arc<Mutex<VecDeque<TurnPrompt>>>) -> SessionWorkerContext {
+        SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(MockAgentChannel::new()),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
+            db: AppRepositories::in_memory().await,
+            folder: PathBuf::new(),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(MockGitClient::new()),
+            output: Arc::new(Mutex::new(String::new())),
+            queued_messages: queue,
+            session_update_versions: Arc::default(),
+            session_id: "sess".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pop_queued_prompt_returns_messages_in_submission_order() {
+        // Arrange
+        let queue: Arc<Mutex<VecDeque<TurnPrompt>>> = Arc::new(Mutex::new(VecDeque::from([
+            TurnPrompt::from_text("first".to_string()),
+            TurnPrompt::from_text("second".to_string()),
+        ])));
+        let context = queue_helper_context(Arc::clone(&queue)).await;
+
+        // Act
+        let first_pop = context.pop_queued_prompt();
+        let second_pop = context.pop_queued_prompt();
+        let empty_pop = context.pop_queued_prompt();
+
+        // Assert
+        assert_eq!(first_pop.expect("first prompt").text, "first");
+        assert_eq!(second_pop.expect("second prompt").text, "second");
+        assert!(empty_pop.is_none());
+        assert!(queue.lock().expect("queue lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clear_queued_messages_drops_all_pending_prompts() {
+        // Arrange
+        let queue: Arc<Mutex<VecDeque<TurnPrompt>>> = Arc::new(Mutex::new(VecDeque::from([
+            TurnPrompt::from_text("alpha".to_string()),
+            TurnPrompt::from_text("beta".to_string()),
+        ])));
+        let context = queue_helper_context(Arc::clone(&queue)).await;
+
+        // Act
+        context.clear_queued_messages();
+
+        // Assert
+        assert!(queue.lock().expect("queue lock").is_empty());
+    }
+
+    #[tokio::test]
+    /// Verifies that drainage holds while the session is in `Question` state
+    /// so queued prompts wait for the clarification flow to resolve before
+    /// dispatching as new turns.
+    async fn test_drain_queued_messages_pauses_while_status_is_question() {
+        // Arrange
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel.expect_run_turn().never().returning(|_, _, _| {
+            Box::pin(async { unreachable!("drain must not dispatch while status is Question") })
+        });
+        let queued = VecDeque::from([TurnPrompt::from_text("queued reply".to_string())]);
+        let (context, _db, queue_handle, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::Question).await;
+
+        // Act
+        SessionWorkerService::drain_queued_messages(&context).await;
+
+        // Assert — queued prompt remains untouched until status becomes
+        // runnable again.
+        let queue = queue_handle.lock().expect("queue lock");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.front().expect("queued head").text, "queued reply");
+    }
+
+    #[tokio::test]
+    /// Verifies that drainage stops and clears every queued prompt once the
+    /// running queued turn returns `StoppedByUser`, matching the `Ctrl+C`
+    /// expectation that cancellation drops pending follow-ups together with
+    /// the active turn.
+    async fn test_drain_queued_messages_clears_queue_when_user_stops_running_turn() {
+        // Arrange
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .times(1)
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(AgentError::InterruptedByUser(
+                        "[Stopped] Session interrupted by user.".to_string(),
+                    ))
+                })
+            });
+        mock_channel
+            .expect_shutdown_session()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let queued = VecDeque::from([
+            TurnPrompt::from_text("queued first".to_string()),
+            TurnPrompt::from_text("queued second".to_string()),
+        ]);
+        let (context, _db, queue_handle, _base_dir) =
+            queue_test_context(mock_channel, queued, Status::InProgress).await;
+
+        // Act
+        SessionWorkerService::drain_queued_messages(&context).await;
+
+        // Assert — first prompt was dispatched, the StoppedByUser result
+        // propagated, and the remaining queued prompt was cleared.
+        let queue = queue_handle.lock().expect("queue lock");
+        assert!(queue.is_empty(), "queue should be cleared on Ctrl+C");
     }
 }

@@ -61,7 +61,7 @@ Session statuses and what you can do in each state:
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
 | **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first and only create their worktree when the staged bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree after the session has started, scroll, help |
-| **InProgress** | Agent is actively working. | `Ctrl+c` stop the current turn and return to **Review**, `o` open worktree, scroll, help |
+| **InProgress** | Agent is actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c` stop the current turn (also clears any queued chat messages), `o` open worktree, scroll, help |
 | **Review** | Agent finished; changes are ready for review. Linked pull requests / merge requests refresh in the background; merged requests move the session to `Done`, and closed requests move it to `Canceled`. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
 | **AgentReview** | Agentty is generating the focused review output in the background. Linked pull requests / merge requests continue refreshing in the background. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) |
@@ -284,6 +284,19 @@ While a session is **InProgress**, Agentty keeps an animated loader row in the
 session output panel and may update its transient loader text from provider
 thought or tool-status events until the turn completes. The chat transcript
 itself is updated only after the final turn result is parsed and persisted.
+
+While the running turn is still active, pressing `Enter` opens the chat
+composer (the `/` slash-command composer remains gated to **Review** and
+**AgentReview**). Submitting a non-slash message during **InProgress** stages
+the prompt onto an in-memory queue rendered inline beneath the running turn
+with a `queued ›` prefix. Once the running turn finishes, Agentty dispatches
+queued messages one-by-one as new turns without bouncing the session through
+**Review** between them. Drainage pauses while the session sits in
+**Question** state and resumes only after the clarification flow returns to a
+runnable state. Pressing `Ctrl+c` clears the queue alongside cancelling the
+active turn. The queue is session-local and lives only for the active app
+session, so queued messages are discarded if `agentty` restarts before they
+dispatch.
 
 The session-chat timer measures only cumulative **active work** across
 `InProgress` intervals. That differs from `/stats`, whose `Session Time`

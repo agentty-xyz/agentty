@@ -1273,6 +1273,7 @@ mod tests {
             output: String::new(),
             project_name: String::new(),
             prompt: prompt.to_string(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
@@ -1327,6 +1328,7 @@ mod tests {
                 output: String::new(),
                 project_name: "project".to_string(),
                 prompt: String::new(),
+                queued_messages: Vec::new(),
                 reasoning_level_override,
                 published_upstream_ref: None,
                 published_branch_sync_status:
@@ -2642,6 +2644,72 @@ mod tests {
             .expect("failed to load session activity timestamps");
         assert!(output.contains("Reply"));
         assert_eq!(activity_timestamps.len(), 1);
+    }
+
+    #[tokio::test]
+    /// Verifies that submitting a chat message while the session is
+    /// `InProgress` pushes the prompt onto the in-memory queue and mirrors
+    /// it into the render snapshot so the row appears inline in the
+    /// transcript before the running turn finishes.
+    async fn test_enqueue_message_pushes_prompt_onto_in_memory_queue() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        create_and_start_session(&mut app, "Initial").await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        wait_for_status(&mut app, &session_id, Status::Review).await;
+        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+
+        // Act
+        app.enqueue_message(&session_id, "queued reply")
+            .expect("enqueue_message should succeed for InProgress session");
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session present");
+        assert_eq!(session.queued_messages, vec!["queued reply".to_string()]);
+        let handles = app
+            .sessions
+            .handles
+            .get(session_id.as_str())
+            .expect("handles present");
+        let queued_len = handles.queued_messages.lock().expect("queue lock").len();
+        assert_eq!(queued_len, 1);
+    }
+
+    #[tokio::test]
+    /// Verifies that empty payloads are rejected without mutating the queue
+    /// so accidentally submitting an empty composer does not stage a noop
+    /// turn.
+    async fn test_enqueue_message_rejects_empty_payload() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        create_and_start_session(&mut app, "Initial").await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        wait_for_status(&mut app, &session_id, Status::Review).await;
+        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+
+        // Act
+        let outcome = app.enqueue_message(&session_id, "");
+
+        // Assert
+        let error = outcome.expect_err("empty payload should error");
+        assert!(matches!(
+            error,
+            crate::app::session::SessionError::Workflow(_)
+        ));
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session present");
+        assert!(session.queued_messages.is_empty());
     }
 
     #[tokio::test]

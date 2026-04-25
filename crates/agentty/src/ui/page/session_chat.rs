@@ -237,12 +237,21 @@ impl<'a> SessionChatPage<'a> {
             return None;
         };
 
-        let suggestion_list = layout::prompt_suggestion_list(
-            input,
-            slash_state,
-            at_mention_state.as_ref(),
-            session.model.kind(),
-        );
+        // While the session is `InProgress` the composer queues a leading
+        // `/` as plain text instead of running a slash command, so suppress
+        // the slash dropdown to avoid implying the menu is actionable. The
+        // `@` mention dropdown is still useful for editing queued messages.
+        let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
+        let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
+            None
+        } else {
+            layout::prompt_suggestion_list(
+                input,
+                slash_state,
+                at_mention_state.as_ref(),
+                session.model.kind(),
+            )
+        };
         let dropdown_row_count = layout::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
         let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
             .min(CHAT_INPUT_MAX_PANEL_HEIGHT);

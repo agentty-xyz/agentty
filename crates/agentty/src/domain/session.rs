@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::collections::VecDeque;
 use std::fmt;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::agent::{AgentModel, ReasoningLevel};
 use crate::infra::agent::protocol::QuestionItem;
-use crate::infra::channel::TurnPromptAttachment;
+use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
 
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";
@@ -509,6 +510,9 @@ pub struct Session {
     pub project_name: String,
     /// Initial user prompt used to create the session.
     pub prompt: String,
+    /// Transcript text for each chat message queued while the active turn is
+    /// running, mirrored from [`SessionHandles::queued_messages`] for render.
+    pub queued_messages: Vec<String>,
     /// Session-scoped reasoning override selected through prompt slash
     /// commands.
     pub reasoning_level_override: Option<ReasoningLevel>,
@@ -744,6 +748,12 @@ pub struct SessionHandles {
     pub child_pid: Arc<Mutex<Option<u32>>>,
     /// Shared output buffer mirrored to persistence/UI.
     pub output: Arc<Mutex<String>>,
+    /// In-memory queue of prompts staged while the current turn is running.
+    ///
+    /// Pushed by the chat composer when the user submits while the session is
+    /// `InProgress`; popped by the session worker between turns. The queue is
+    /// session-local and discarded on app restart.
+    pub queued_messages: Arc<Mutex<VecDeque<TurnPrompt>>>,
     /// Shared mutable status synchronized with persistence/UI.
     pub status: Arc<Mutex<Status>>,
 }
@@ -755,6 +765,7 @@ impl SessionHandles {
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
             child_pid: Arc::new(Mutex::new(None)),
             output: Arc::new(Mutex::new(output)),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             status: Arc::new(Mutex::new(status)),
         }
     }
@@ -766,6 +777,23 @@ impl SessionHandles {
         if let Ok(mut buf) = self.output.lock() {
             buf.push_str(message);
         }
+    }
+
+    /// Returns the transcript text for each queued message in submission
+    /// order so callers can mirror queue contents into render snapshots.
+    pub fn queued_message_transcripts(&self) -> Vec<String> {
+        // Sync critical section (read-only clone, no `.await`);
+        // `std::sync::Mutex` is the correct choice per CLAUDE.md §"Mutex
+        // Selection".
+        self.queued_messages
+            .lock()
+            .map(|guard| {
+                guard
+                    .iter()
+                    .map(TurnPrompt::transcript_text)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -802,6 +830,7 @@ pub(crate) mod tests {
                     output: String::new(),
                     project_name: "project".to_string(),
                     prompt: String::new(),
+                    queued_messages: Vec::new(),
                     reasoning_level_override: None,
                     published_upstream_ref: None,
                     published_branch_sync_status: PublishedBranchSyncStatus::Idle,
@@ -1295,6 +1324,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,
@@ -1332,6 +1362,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,
@@ -1369,6 +1400,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,
@@ -1406,6 +1438,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: Some("origin/wt/session-id".to_string()),
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,
@@ -1443,6 +1476,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,
@@ -1480,6 +1514,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             output: String::new(),
             project_name: "project".to_string(),
             prompt: String::new(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,

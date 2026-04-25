@@ -639,6 +639,7 @@ impl<'a> SessionOutput<'a> {
             inner_width,
             markdown_render_cache,
         );
+        Self::append_queued_message_lines(&mut lines, &session.queued_messages);
         if shows_summary_block && active_turn_text.is_none() {
             Self::append_summary_lines(
                 &mut lines,
@@ -985,6 +986,47 @@ impl<'a> SessionOutput<'a> {
             inner_width,
             markdown_render_cache,
         );
+    }
+
+    /// Appends one transcript row per chat message currently queued for
+    /// dispatch.
+    ///
+    /// Queued rows render in submission order beneath the running turn with
+    /// a muted style and a `queued ›` prefix so users can distinguish staged
+    /// follow-ups from completed transcript content while the active turn is
+    /// still running.
+    fn append_queued_message_lines(lines: &mut Vec<Line<'static>>, queued_messages: &[String]) {
+        if queued_messages.is_empty() {
+            return;
+        }
+
+        while lines.last().is_some_and(|line| line.width() == 0) {
+            lines.pop();
+        }
+        lines.push(Line::from(""));
+
+        let queued_style = ratatui::style::Style::default()
+            .fg(style::palette::text_subtle())
+            .add_modifier(ratatui::style::Modifier::ITALIC);
+        for queued_text in queued_messages {
+            let trimmed = queued_text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            for (line_index, message_line) in trimmed.split('\n').enumerate() {
+                let prefix = if line_index == 0 {
+                    "queued › "
+                } else {
+                    "        "
+                };
+
+                lines.push(Line::styled(
+                    format!("{prefix}{message_line}"),
+                    queued_style,
+                ));
+            }
+        }
+        lines.push(Line::from(""));
     }
 
     /// Appends the currently active prompt-led transcript block after earlier
@@ -1781,7 +1823,7 @@ mod tests {
         let assisted_review = "## Review\n\n- Focused finding";
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(

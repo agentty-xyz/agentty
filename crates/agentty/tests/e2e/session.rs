@@ -177,7 +177,7 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
 
 /// Seeds one in-progress session so the session view can show the active
 /// Tachyonfx loader without launching a live agent backend.
-fn seed_in_progress_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+fn seed_in_progress_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -242,6 +242,57 @@ fn session_list_empty_state() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "No sessions", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that pressing `Enter` while a session is `InProgress` opens the
+/// chat composer, queues the typed message inline beneath the running
+/// turn, and that `Ctrl+c` clears the queue alongside cancelling the
+/// active turn.
+#[test]
+fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_queue_chat_messages")
+        .with_git()
+        .setup(seed_in_progress_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("queued reply")
+                    .wait_for_text("queued reply", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("queued ›", 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "queued_message_visible",
+                        "Queued chat message rendered inline beneath the running turn",
+                    )
+                    .press_key("ctrl+c")
+                    .wait_for_text("Enter: reply", 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "queue_cleared_after_cancel",
+                        "Session view after Ctrl+c clears the queued chat message",
+                    )
+            },
+            |frame, report| {
+                let queued_frame = common::frame_from_capture(&report.captures[0]);
+                let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
+                assertion::assert_text_in_region(&queued_frame, "queued ›", &queued_full);
+                assertion::assert_text_in_region(&queued_frame, "queued reply", &queued_full);
+
+                let cleared_full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: reply", &cleared_full);
+                assertion::assert_not_visible(frame, "queued ›");
             },
         )?;
 
@@ -488,7 +539,7 @@ fn session_open_and_return_to_list() -> E2eResult {
 fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_active_loader")
-        .setup(seed_in_progress_session)
+        .setup(seed_in_progress_loader_session)
         .run(
             |scenario| {
                 scenario

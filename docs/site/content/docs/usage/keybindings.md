@@ -92,7 +92,7 @@ state:
 | Key | Action |
 |-----|--------|
 | `q` | Back to list |
-| `Enter` | Compose the first prompt or reply; in draft sessions it adds a draft |
+| `Enter` | Compose the first prompt or reply; in draft sessions it adds a draft; while the session is **InProgress** it opens the composer to queue the next chat message inline with a `queued ›` prefix |
 | `/` | Open the composer with `/` prefilled for slash commands |
 | `s` | Start a staged draft session |
 | `o` | Open worktree in tmux when the session worktree exists |
@@ -106,7 +106,7 @@ state:
 | `G` | Scroll to bottom |
 | `Ctrl+d` | Half page down |
 | `Ctrl+u` | Half page up |
-| `Ctrl+c` | Stop the current turn and return to **Review** (InProgress only) |
+| `Ctrl+c` | Stop the current turn and return to **Review** (InProgress only); also clears any chat messages queued during the running turn |
 | `?` | Help |
 
 During **AgentReview**, Agentty keeps the same review-oriented shortcuts but

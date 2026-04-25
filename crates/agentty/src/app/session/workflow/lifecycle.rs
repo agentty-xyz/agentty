@@ -828,6 +828,51 @@ impl SessionManager {
             .await;
     }
 
+    /// Stages one chat prompt into the in-memory queue for the running turn.
+    ///
+    /// The queue is owned by [`SessionHandles::queued_messages`] and lives
+    /// only for the active app session, so queued prompts are discarded on
+    /// `agentty` restart. The session worker drains the queue between turns
+    /// without bouncing through `Review` and pauses drainage while the
+    /// session sits in `Question`. `Ctrl+C` on the running turn clears the
+    /// queue alongside cancelling the active turn.
+    ///
+    /// # Errors
+    /// Returns [`SessionError::NotFound`] when the session id does not
+    /// resolve to a known session, or [`SessionError::Workflow`] when the
+    /// payload is empty after trimming.
+    pub fn enqueue_message(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        prompt: impl Into<TurnPrompt>,
+    ) -> Result<(), SessionError> {
+        let prompt = prompt.into();
+        if prompt.is_empty() {
+            return Err(SessionError::Workflow(
+                "Cannot queue an empty chat message".to_string(),
+            ));
+        }
+
+        let session_index = self.session_index_or_err(session_id)?;
+        let handles = self.session_handles_or_err(session_id)?;
+        let queued_text = prompt.transcript_text();
+
+        // Sync critical section (single push, no `.await`); `std::sync::Mutex`
+        // is the correct choice per CLAUDE.md §"Mutex Selection".
+        if let Ok(mut guard) = handles.queued_messages.lock() {
+            guard.push_back(prompt);
+        }
+
+        if let Some(session) = self.state.sessions.get_mut(session_index) {
+            session.queued_messages.push(queued_text);
+        }
+
+        services.emit_app_event(AppEvent::RefreshSessions);
+
+        Ok(())
+    }
+
     /// Updates and persists the model for a single session.
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
@@ -2413,6 +2458,7 @@ mod tests {
             output: output.to_string(),
             project_name: "project".to_string(),
             prompt: prompt.to_string(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,

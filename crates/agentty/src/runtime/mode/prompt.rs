@@ -66,7 +66,7 @@ impl PromptContext {
 }
 
 /// Active prompt input sub-mode used for specialized key routing.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PromptInputMode {
     /// Prompt text is editing an active file `@` mention.
     AtMention,
@@ -276,28 +276,32 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
         return None;
     };
 
-    let session_mode =
-        app.sessions
-            .sessions
-            .get(session_index)
-            .map_or(PromptSessionMode::Existing, |session| {
-                let is_new_session = session.status == crate::domain::session::Status::New;
+    let session = app.sessions.sessions.get(session_index);
+    let session_mode = session.map_or(PromptSessionMode::Existing, |session| {
+        let is_new_session = session.status == crate::domain::session::Status::New;
 
-                match (
-                    is_new_session,
-                    session.is_draft_session(),
-                    session.has_staged_drafts(),
-                ) {
-                    (true, true, _) => PromptSessionMode::NewDraft,
-                    (true, false, false) => PromptSessionMode::NewDeletable,
-                    (true, false, true) => PromptSessionMode::NewRegular,
-                    (false, _, _) => PromptSessionMode::Existing,
-                }
-            });
-    let input_mode = match (is_at_mention, is_slash_command) {
-        (true, _) => PromptInputMode::AtMention,
-        (false, true) => PromptInputMode::SlashCommand,
-        (false, false) => PromptInputMode::Text,
+        match (
+            is_new_session,
+            session.is_draft_session(),
+            session.has_staged_drafts(),
+        ) {
+            (true, true, _) => PromptSessionMode::NewDraft,
+            (true, false, false) => PromptSessionMode::NewDeletable,
+            (true, false, true) => PromptSessionMode::NewRegular,
+            (false, _, _) => PromptSessionMode::Existing,
+        }
+    });
+    // While the session is `InProgress` the composer queues the next chat
+    // message instead of dispatching it. Demote a leading `/` to plain text
+    // so slash commands cannot run while the active turn is still in flight
+    // and so arrow-key navigation behaves as text editing rather than slash
+    // menu selection.
+    let session_is_in_progress =
+        session.is_some_and(|session| session.status == crate::domain::session::Status::InProgress);
+    let input_mode = match (is_at_mention, is_slash_command, session_is_in_progress) {
+        (true, _, _) => PromptInputMode::AtMention,
+        (false, true, false) => PromptInputMode::SlashCommand,
+        (false, _, _) => PromptInputMode::Text,
     };
 
     Some(PromptContext {
@@ -535,10 +539,24 @@ fn advance_prompt_slash_selection(app: &mut App) {
     }
 }
 
+/// Returns whether the targeted session is currently `InProgress`, used to
+/// route non-slash submissions into the in-memory message queue instead of
+/// the live reply path.
+fn session_is_in_progress(app: &App, session_id: &str) -> bool {
+    app.sessions
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .is_some_and(|session| session.status == crate::domain::session::Status::InProgress)
+}
+
 /// Submits the active prompt when it passes prompt-mode validation.
 ///
 /// A submitted prompt clears any cached focused-review output for the session
-/// so the next turn starts from the raw transcript again.
+/// so the next turn starts from the raw transcript again. While the session
+/// is `InProgress`, slash command mode is already demoted to text in
+/// [`prompt_context`], so any leading `/` falls through to the queue path
+/// instead of executing a slash command against the running turn.
 async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext) {
     if prompt_context.is_slash_command() {
         handle_prompt_slash_submit(app, prompt_context).await;
@@ -569,6 +587,15 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
                 app,
                 &prompt_context.session_id,
                 &format!("\n[Error] {error}\n"),
+            )
+            .await;
+        }
+    } else if session_is_in_progress(app, &prompt_context.session_id) {
+        if let Err(error) = app.enqueue_message(&prompt_context.session_id, prompt) {
+            append_output_for_session(
+                app,
+                &prompt_context.session_id,
+                &format!("\n[Queue Error] {error}\n"),
             )
             .await;
         }
@@ -3473,6 +3500,89 @@ mod tests {
                 Some(crate::app::ReviewCacheEntry::Ready { diff_hash: 42, .. }),
             ),
             "cached review must survive a transient git diff error",
+        );
+    }
+
+    #[tokio::test]
+    /// Verifies that when the active session is `InProgress`, a leading `/`
+    /// is demoted from slash-command mode to plain text so submission
+    /// queues the prompt instead of executing a slash command against the
+    /// running turn.
+    async fn test_prompt_context_demotes_slash_command_to_text_when_session_is_in_progress() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::InProgress;
+
+        // Act
+        let context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Assert
+        assert!(
+            !context.is_slash_command(),
+            "slash command mode must be demoted while session is InProgress"
+        );
+        assert_eq!(context.input_mode, PromptInputMode::Text);
+    }
+
+    #[tokio::test]
+    /// Verifies that the slash-command gate only fires for `InProgress`
+    /// sessions: when status is `Review`, a leading `/` is still recognized
+    /// as a slash command so the existing slash submit path keeps working.
+    async fn test_prompt_context_keeps_slash_command_when_session_is_review() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+
+        // Act
+        let context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Assert
+        assert!(
+            context.is_slash_command(),
+            "slash command mode must remain active when session is not InProgress"
+        );
+        assert_eq!(context.input_mode, PromptInputMode::SlashCommand);
+    }
+
+    #[tokio::test]
+    /// Verifies that submitting a `/`-prefixed prompt while the session is
+    /// `InProgress` queues the raw text via [`App::enqueue_message`] instead
+    /// of invoking the slash command path.
+    async fn test_handle_prompt_submit_key_queues_slash_text_when_session_is_in_progress() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/model gpt-5", None).await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.sessions.handles.insert(
+            session_id.clone(),
+            crate::domain::session::SessionHandles::new(
+                String::new(),
+                crate::domain::session::Status::InProgress,
+            ),
+        );
+        app.sessions.sessions[0].status = crate::domain::session::Status::InProgress;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_submit_key(&mut app, &prompt_context).await;
+
+        // Assert
+        let queued_len = app
+            .sessions
+            .handles
+            .get(session_id.as_str())
+            .expect("handles for in-progress session")
+            .queued_messages
+            .lock()
+            .expect("queue lock")
+            .len();
+        assert_eq!(
+            queued_len, 1,
+            "slash-prefixed input must be queued as plain text while turn runs"
+        );
+        assert_eq!(app.sessions.sessions[0].queued_messages.len(), 1);
+        assert_eq!(
+            app.sessions.sessions[0].queued_messages[0], "/model gpt-5",
+            "queued message preserves the original slash-prefixed text"
         );
     }
 

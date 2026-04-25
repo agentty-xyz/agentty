@@ -15,7 +15,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Chained session workflow | Follow-up tasks can already launch sibling sessions, but each new session still starts from the active project base branch and published review requests always target that same base branch instead of another session branch. | Missing |
 | Terminal session continuation | `Done` and `Canceled` sessions now expose a `c` continuation shortcut that opens a fresh draft session whose first staged message is seeded from the source session's persisted summary or transcript context. | Landed |
-| Queued chat messages | Session chat blocks the composer while a turn is `InProgress`, so users cannot stage follow-up prompts before the agent returns to `Review`. | Missing |
+| Queued chat messages | Session chat now keeps the composer open while a turn is `InProgress` and renders submitted messages inline as `queued ›` rows that the worker dispatches one-by-one between turns; queue dispatch pauses while the session sits in `Question` and `Ctrl+C` clears the queue alongside cancelling the running turn. The queue is in-memory only and discarded on app restart. | Landed |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
 
@@ -69,7 +69,7 @@ Users can view and change a project's landing strategy in Agentty settings, and 
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/getting-started/overview.md` to explain the new per-project delivery strategy setting without claiming session actions consume it yet.
 
-### [e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs
+### [7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C
 
 #### Assignee
 
@@ -77,24 +77,23 @@ Users can view and change a project's landing strategy in Agentty settings, and 
 
 #### Why now
 
-Session chat blocks the composer while a turn is `InProgress`, so users have to wait for `Review` before they can stage the next instruction; allowing typed messages to queue and dispatch automatically removes that wait without changing the worker's serial execution model.
+The chat composer now queues messages while a turn is running, but a single `Ctrl+C` cancels the active turn and clears every queued message at once; users need a way to drop staged follow-ups without losing the running turn so they can correct an over-eager queue without restarting the agent.
 
 #### Usable outcome
 
-While a session is `InProgress`, users can press `Enter` to open the composer, submit additional messages that render inline in the transcript as `queued` entries, and have them dispatched one-by-one as new turns once the running turn finishes; queued messages pause while the session is in `Question` state and resume only after the clarification path returns to a runnable state, and canceling the running turn (`Ctrl+C`) clears the queue. Queued messages live in memory for the active app session, so they are discarded on app restart.
+While a turn is running with a non-empty queue, the first `Ctrl+C` press clears only the queued chat messages and lets the running turn finish, while a second `Ctrl+C` cancels the running turn as it does today.
 
 #### Substeps
 
-- [ ] **Maintain an in-memory queue and dispatch between turns with a `Question`-aware pause.** Add a runtime `queued_messages` field to the session worker state in `crates/agentty/src/app/session/workflow/worker.rs`, drain the queue between turns so each pop becomes the next `SessionCommand::Run` while status stays `InProgress`, hold draining while the session is in `Question` state and resume dispatch only after status returns to a runnable state, and clear the queue on `Ctrl+C` cancellation.
-- [ ] **Allow Enter-to-queue and render queued chat messages inline.** Relax the `is_view_action_allowed()` gate in `crates/agentty/src/runtime/mode/session_view.rs` so `Enter` (but not `/`) opens the composer during `InProgress`, route the submission in `crates/agentty/src/runtime/mode/prompt.rs` through a new `SessionManager::enqueue_message()` orchestrator on `crates/agentty/src/app/session/workflow/lifecycle.rs` that pushes onto the in-memory queue and emits `AppEvent::RefreshSessions`, and render queued rows inline in the session transcript with a `queued` style so they appear in submission order beneath the running turn.
+- [ ] **Branch the running-turn `Ctrl+C` handler on queue contents.** In `crates/agentty/src/runtime/mode/session_view.rs::end_in_progress_turn`, when the targeted session is `InProgress` with a non-empty queue, drop the queued prompts on `SessionHandles::queued_messages`, mirror the change into the snapshot's `queued_messages`, emit `AppEvent::RefreshSessions`, and leave the running turn untouched; only when the queue is already empty fall through to the existing cancel path that cancels the active turn and transitions to `Review`.
 
 #### Tests
 
-- [ ] Add unit coverage in `crates/agentty/src/app/session/workflow/worker.rs` and `crates/agentty/src/app/session/workflow/lifecycle.rs` for in-memory queueing, between-turn dispatch, the `Question`-state pause and resume, and cancel-clears-queue; add an E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` covering enqueue-while-running → inline pending render → dispatch-after-turn → cancel-clears-queue.
+- [ ] Add runtime coverage in `crates/agentty/src/runtime/mode/session_view.rs` exercising the two-stage `Ctrl+C` handler against a seeded `InProgress` session: one press with a non-empty queue clears only the queue and keeps status as `InProgress`, while a follow-up press with an empty queue still routes through the existing cancel path and transitions to `Review`. Extend the existing `session_queue_chat_messages` E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` (or add a sibling) to assert that the first `Ctrl+C` removes the `queued ›` rows without leaving InProgress, and the second `Ctrl+C` produces `Enter: reply`.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to document message queueing during `InProgress`, the `Enter`-only composer entry, the `Question`-state pause behavior, cancel-clears-queue, and that queued messages are session-local and discarded on app restart.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` so the `Ctrl+C` notes describe the new two-stage behavior: the first press clears only the queued chat messages while a non-empty queue exists, and the second press cancels the running turn and returns the session to `Review`.
 
 ## Ready Now Execution Order
 
@@ -107,13 +106,11 @@ flowchart TD
     end
 
     subgraph WorkflowLane["Workflow - @andagaev"]
-        W1["[e26bb561] Queue chat messages"]
-        W2["[b8c92f4d] Persist queued messages"]
         W3["[7684c30b] Two-stage Ctrl+C"]
+        W2["[b8c92f4d] Persist queued messages"]
         W4["[c9469d77] Delete queued messages"]
-        W1 -. queued follow-up .-> W2
-        W1 -. queued follow-up .-> W3
-        W1 -. queued follow-up .-> W4
+        W3 -. queued follow-up .-> W2
+        W3 -. queued follow-up .-> W4
     end
 
     subgraph LaterLanes["Queued independent streams"]
@@ -134,27 +131,12 @@ Queued chat messages survive `agentty` restart by persisting in the database, an
 
 #### Promote when
 
-Promote when `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`, `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory`, and `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract` all land, and the shared `crates/agentty/src/infra/db.rs` and `crates/agentty/migrations/` surfaces are no longer in active flight.
+Promote when `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory` and `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract` both land, and the shared `crates/agentty/src/infra/db.rs` and `crates/agentty/migrations/` surfaces are no longer in active flight.
 
 #### Depends on
 
-- `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`
 - `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory`
 - `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract`
-
-### [7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C
-
-#### Outcome
-
-While a turn is running with a non-empty queue, the first `Ctrl+C` press clears only the queued messages and lets the running turn finish, while a second `Ctrl+C` cancels the running turn as today.
-
-#### Promote when
-
-Promote when `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs` lands and the Workflow stream is ready for the next chat-input refinement.
-
-#### Depends on
-
-`[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`
 
 ### [c9469d77-97c3-4d5b-a035-497a83752bd1] Workflow: Delete individual queued chat messages
 
@@ -164,11 +146,11 @@ Users can focus a queued chat entry in the transcript and remove it with a dedic
 
 #### Promote when
 
-Promote when `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs` lands and the team is ready for per-item queue editing affordances.
+Promote when `[7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C` lands and the team is ready for per-item queue editing affordances.
 
 #### Depends on
 
-`[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`
+`[7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C`
 
 ### [d9d93e21-2d9a-45af-9d44-61eb68e64ea7] Delivery: Apply landing strategy to session actions
 

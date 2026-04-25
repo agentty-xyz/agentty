@@ -224,7 +224,7 @@ async fn handle_primary_view_key(
         KeyCode::Char(']') if app.has_multiple_follow_up_tasks(&view_context.session_id) => {
             app.select_next_follow_up_task(&view_context.session_id);
         }
-        KeyCode::Enter if is_view_action_allowed(view_session_snapshot.session_status) => {
+        KeyCode::Enter if is_view_chat_allowed(view_session_snapshot.session_status) => {
             switch_view_to_prompt(
                 app,
                 view_context,
@@ -535,7 +535,7 @@ fn is_view_worktree_open_allowed(status: Status) -> bool {
 
 /// Returns whether non-navigation view shortcuts are available.
 ///
-/// This covers `Enter` and `m`.
+/// This covers `m` and the `/` slash-command shortcut.
 fn is_view_action_allowed(status: Status) -> bool {
     !matches!(
         status,
@@ -546,6 +546,17 @@ fn is_view_action_allowed(status: Status) -> bool {
             | Status::Queued
             | Status::Canceled
     )
+}
+
+/// Returns whether `Enter` can open the chat composer.
+///
+/// Allowing `Enter` during `InProgress` lets users queue follow-up chat
+/// messages without waiting for the running turn to return to `Review`.
+/// Slash-command shortcuts and other action keys still require
+/// [`is_view_action_allowed`] so terminal or rebasing sessions are not
+/// accidentally re-driven.
+fn is_view_chat_allowed(status: Status) -> bool {
+    is_view_action_allowed(status) || matches!(status, Status::InProgress)
 }
 
 /// Returns whether the `d` shortcut can open the diff view.
@@ -631,10 +642,17 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         return;
     }
 
-    if let Some(handles) = app.sessions.handles.get(session_id)
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
+    if let Some(handles) = app.sessions.handles.get(session_id) {
+        if let Ok(mut handle_status) = handles.status.lock() {
+            *handle_status = Status::Review;
+        }
+        // Clear queued chat messages alongside cancelling the running
+        // turn so `Ctrl+C` cancels the queue together with the active
+        // turn, regardless of whether the worker drain path observes the
+        // cancellation first.
+        if let Ok(mut queued) = handles.queued_messages.lock() {
+            queued.clear();
+        }
     }
 
     if let Some(session) = app
@@ -644,6 +662,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         .find(|session| session.id == session_id)
     {
         session.status = Status::Review;
+        session.queued_messages.clear();
     }
 
     suppress_auto_review_for_stopped_turn(app, session_id).await;

@@ -442,6 +442,7 @@ mod tests {
             output: String::new(),
             project_name: "project".to_string(),
             prompt: "Implement forge review support".to_string(),
+            queued_messages: Vec::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
             published_branch_sync_status: crate::domain::session::PublishedBranchSyncStatus::Idle,
