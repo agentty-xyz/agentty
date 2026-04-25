@@ -564,7 +564,8 @@ fn is_view_rebase_allowed(status: Status) -> bool {
     is_view_action_allowed(status) && status != Status::AgentReview
 }
 
-/// Interrupts a running `InProgress` session and transitions it to `Canceled`.
+/// Interrupts the active turn of a running `InProgress` session and returns it
+/// to `Review`.
 ///
 /// Cancels queued operations in the database, then fires the per-turn
 /// [`CancellationToken`] so the worker's `select!` branch triggers
@@ -573,9 +574,10 @@ fn is_view_rebase_allowed(status: Status) -> bool {
 /// (where the child is guaranteed alive because `run_turn` has not
 /// returned yet), and app-server channels shut down through
 /// `shutdown_session`. Both paths converge on the worker returning a
-/// `[Stopped]` error. After signalling, the persisted status is
-/// updated to `Canceled`, the in-memory snapshot and shared handle are
-/// refreshed, and UI events are emitted.
+/// `[Stopped]` error. After signalling, the persisted status is updated to
+/// `Review`, the in-memory snapshot and shared handle are refreshed, and UI
+/// events are emitted so the user can inspect or continue the session instead
+/// of treating it as canceled.
 async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     let timestamp_seconds =
         app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
@@ -615,7 +617,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         .db()
         .update_session_status_with_timing_at(
             session_id,
-            &Status::Canceled.to_string(),
+            &Status::Review.to_string(),
             timestamp_seconds,
         )
         .await
@@ -623,7 +625,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         warn!(
             session_id = session_id,
             error = %error,
-            "failed to persist canceled status after interrupting session"
+            "failed to persist review status after interrupting session turn"
         );
 
         return;
@@ -632,8 +634,19 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     if let Some(handles) = app.sessions.handles.get(session_id)
         && let Ok(mut handle_status) = handles.status.lock()
     {
-        *handle_status = Status::Canceled;
+        *handle_status = Status::Review;
     }
+
+    if let Some(session) = app
+        .sessions
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = Status::Review;
+    }
+
+    suppress_auto_review_for_stopped_turn(app, session_id).await;
 
     app.services.emit_app_event(AppEvent::SessionUpdated {
         session_id: session_id.into(),
@@ -643,15 +656,56 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         ),
     });
     app.services.emit_app_event(AppEvent::RefreshSessions);
+}
 
-    if let Some(session) = app
+/// Records the current diff hash as auto-review-suppressed after a user stops
+/// one active turn.
+///
+/// The session remains review-ready, but the reducer's automatic focused
+/// review pass should not immediately start an agent review for the partially
+/// stopped turn. Pressing `f` later still starts manual focused review because
+/// the suppressed cache entry is treated as absent by view-mode review
+/// handling.
+async fn suppress_auto_review_for_stopped_turn(app: &mut App, session_id: &str) {
+    let Some(session) = app
         .sessions
         .sessions
-        .iter_mut()
+        .iter()
         .find(|session| session.id == session_id)
+    else {
+        return;
+    };
+    let session_folder = session.folder.clone();
+    let base_branch = session.base_branch.clone();
+
+    let diff = match app
+        .services
+        .git_client()
+        .diff(session_folder, base_branch)
+        .await
     {
-        session.status = Status::Canceled;
+        Ok(diff) => diff,
+        Err(error) => {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to load stopped-turn diff for auto-review suppression"
+            );
+
+            return;
+        }
+    };
+
+    if diff.trim().is_empty() {
+        return;
     }
+
+    app.review_cache.insert(
+        SessionId::from(session_id),
+        ReviewCacheEntry::Suppressed {
+            diff_hash: diff_content_hash(&diff),
+        },
+    );
 }
 
 /// Switches the TUI mode from session view to the prompt input.
@@ -942,9 +996,12 @@ async fn open_review_output_mode(
                     Some(format!("Review assist unavailable: {}", error.trim()));
                 *review_text = None;
             }
+            ReviewCacheEntry::Suppressed { .. } => {}
         }
 
-        return;
+        if !matches!(cached, ReviewCacheEntry::Suppressed { .. }) {
+            return;
+        }
     }
 
     let Some(session) = app.sessions.sessions.get(view_context.session_index) else {
@@ -2993,7 +3050,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_end_in_progress_turn_transitions_session_to_canceled() {
+    async fn test_end_in_progress_turn_transitions_session_to_review() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions[0].status = Status::InProgress;
@@ -3011,7 +3068,7 @@ mod tests {
         end_in_progress_turn(&mut app, &session_id).await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::Canceled);
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
         let handle_status = *app
             .sessions
             .handles
@@ -3020,7 +3077,7 @@ mod tests {
             .status
             .lock()
             .expect("lock failed");
-        assert_eq!(handle_status, Status::Canceled);
+        assert_eq!(handle_status, Status::Review);
     }
 
     #[tokio::test]
@@ -3097,7 +3154,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_end_in_progress_turn_sets_canceled_even_for_review_session() {
+    async fn test_end_in_progress_turn_keeps_review_session_review_ready() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions[0].status = Status::Review;
@@ -3114,9 +3171,8 @@ mod tests {
         // Act
         end_in_progress_turn(&mut app, &session_id).await;
 
-        // Assert — status changes to Canceled so a stopped review-session run
-        // does not auto-trigger a new focused review.
-        assert_eq!(app.sessions.sessions[0].status, Status::Canceled);
+        // Assert
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
         let handle_status = *app
             .sessions
             .handles
@@ -3125,6 +3181,6 @@ mod tests {
             .status
             .lock()
             .expect("lock failed");
-        assert_eq!(handle_status, Status::Canceled);
+        assert_eq!(handle_status, Status::Review);
     }
 }

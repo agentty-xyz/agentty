@@ -284,7 +284,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
     append_view_prompt_actions(&mut actions, state.session_state, can_edit_session);
 
     if can_stop_session {
-        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop running session"));
+        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop current turn"));
     }
 
     if state.session_state == ViewSessionState::NewSession {
@@ -377,7 +377,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     append_view_footer_edit_actions(&mut actions, state.session_state, can_edit_session);
 
     if can_stop_session {
-        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop session"));
+        actions.push(HelpAction::new("stop", "Ctrl+c", "Stop current turn"));
     }
 
     if can_open_worktree {

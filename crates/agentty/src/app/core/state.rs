@@ -5119,6 +5119,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-1";
+        app.sessions
+            .push_session(test_session(PathBuf::from("/tmp/session-suppressed-skip")));
+        app.sessions.sessions[0].status = Status::Review;
+
+        let diff_text = "diff --git a/file.rs b/file.rs\n+stopped turn";
+        let hash = diff_content_hash(diff_text);
+        app.review_cache.insert(
+            session_id.to_string().into(),
+            ReviewCacheEntry::Suppressed { diff_hash: hash },
+        );
+        let session_ids = HashSet::from([session_id.into()]);
+
+        let mut mock_git_client = crate::infra::git::MockGitClient::new();
+        mock_git_client
+            .expect_diff()
+            .returning(move |_, _| Box::pin(async move { Ok(diff_text.to_string()) }));
+        install_mock_git_client(&mut app, mock_git_client);
+
+        // Act
+        app.auto_start_reviews(&session_ids).await;
+
+        // Assert
+        assert!(matches!(
+            app.review_cache.get(session_id),
+            Some(ReviewCacheEntry::Suppressed { diff_hash }) if *diff_hash == hash
+        ));
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+    }
+
+    #[tokio::test]
     async fn auto_start_reviews_starts_loading_for_review_session() {
         // Arrange
         let mut app = new_test_app().await;

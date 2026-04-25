@@ -61,7 +61,7 @@ Session statuses and what you can do in each state:
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
 | **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first and only create their worktree when the staged bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree after the session has started, scroll, help |
-| **InProgress** | Agent is actively working. | `o` open worktree, scroll, help |
+| **InProgress** | Agent is actively working. | `Ctrl+c` stop the current turn and return to **Review**, `o` open worktree, scroll, help |
 | **Review** | Agent finished; changes are ready for review. Linked pull requests / merge requests refresh in the background; merged requests move the session to `Done`, and closed requests move it to `Canceled`. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
 | **AgentReview** | Agentty is generating the focused review output in the background. Linked pull requests / merge requests continue refreshing in the background. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) |
@@ -84,6 +84,10 @@ in the background. While that review-assist job is running, the session
 temporarily shows **AgentReview** and keeps the review-oriented shortcuts
 available, except `r`, which stays hidden until the session returns to
 **Review**.
+If you stop an active turn with `Ctrl+c`, Agentty returns the session to
+**Review** without completing the turn and does not automatically start focused
+review for that stopped turn; press `f` if you still want a manual focused
+review.
 Pressing `f` appends the cached review directly into the normal session output
 panel when it is ready, or shows a loading message there while generation is
 still running. That appended review remains visible when you leave and reopen
@@ -258,7 +262,7 @@ flowchart TB
 
   in_progress -->|turn completes| review
   in_progress -->|needs clarification| question
-  in_progress -->|stop running session| canceled
+  in_progress -->|stop current turn| review
   question -->|submit clarifications| in_progress
   question -->|Esc end turn| review
 

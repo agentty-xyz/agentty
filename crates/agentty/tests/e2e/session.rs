@@ -17,6 +17,9 @@ use crate::common::{BuilderEnv, FeatureTest};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
+/// Stable id for the seeded running session used by stop-turn tests.
+const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
+
 /// Seeds one review-ready session and propagates setup errors to the caller.
 fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
@@ -50,6 +53,44 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     })?;
 
     std::fs::create_dir_all(env.agentty_root.join("wt").join("review-s"))?;
+
+    Ok(())
+}
+
+/// Seeds one running session so `Ctrl+c` can exercise the turn-stop path
+/// without needing a live agent backend.
+fn seed_in_progress_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .await?;
+
+        database.touch_project_last_opened(project_id).await?;
+        database
+            .insert_session(
+                RUNNING_STOP_SESSION_ID,
+                "gpt-5.4",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await?;
+        database
+            .update_session_title(RUNNING_STOP_SESSION_ID, "Running session stop")
+            .await
+    })?;
+
+    // Match `session_folder()` so the seeded row has the worktree path the
+    // runtime expects for this session id.
+    let worktree_name = &RUNNING_STOP_SESSION_ID[..8];
+    std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
     Ok(())
 }
@@ -159,6 +200,48 @@ fn session_list_empty_state() -> E2eResult {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "No sessions", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that `Ctrl+c` in a running session stops only the current turn and
+/// returns the session to review-ready controls.
+#[test]
+fn session_stop_turn_returns_to_review() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_stop_turn_returns_to_review")
+        .with_git()
+        .setup(seed_in_progress_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Ctrl+c: stop", 5000)
+                    .viewing_pause_ms(1200)
+                    .capture_labeled(
+                        "running_session",
+                        "Running session before stopping the turn",
+                    )
+                    .press_key("ctrl+c")
+                    .wait_for_text("Enter: reply", 5000)
+                    .viewing_pause_ms(1200)
+                    .capture_labeled(
+                        "review_after_stop",
+                        "Session view after Ctrl+c stops only the active turn",
+                    )
+            },
+            |frame, report| {
+                let running_frame = common::frame_from_capture(&report.captures[0]);
+                let running_full = Region::full(running_frame.cols(), running_frame.rows());
+                assertion::assert_text_in_region(&running_frame, "Ctrl+c: stop", &running_full);
+
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Enter: reply", &full);
+                assertion::assert_not_visible(frame, "Ctrl+c: stop");
             },
         )?;
 

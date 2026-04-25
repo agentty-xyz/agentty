@@ -829,9 +829,9 @@ async fn apply_turn_result(
 /// Returns the status transition the worker should emit after a turn result.
 ///
 /// User-stopped turns are finalized by the UI cancellation path, which has
-/// already requested `Canceled` and signaled the worker. The worker therefore
-/// skips its normal error fallback to `Review`; otherwise a late stopped-turn
-/// result can briefly re-enter `Review` and start automatic focused review.
+/// already requested `Review` and signaled the worker. The worker therefore
+/// skips its normal error fallback so the stopped turn cannot race with the
+/// explicit UI status transition.
 fn status_update_after_turn_result(result: &Result<Status, SessionError>) -> Option<Status> {
     match result {
         Ok(status) => Some(*status),

@@ -38,6 +38,13 @@ pub(crate) enum ReviewCacheEntry {
         /// Human-readable error description.
         error: String,
     },
+    /// Automatic focused review is intentionally suppressed for this diff.
+    ///
+    /// Manual focused review can still replace this entry with `Loading`.
+    Suppressed {
+        /// Hash of the diff text that should not auto-start review assist.
+        diff_hash: u64,
+    },
 }
 
 impl ReviewCacheEntry {
@@ -46,7 +53,8 @@ impl ReviewCacheEntry {
         match self {
             Self::Loading { diff_hash }
             | Self::Ready { diff_hash, .. }
-            | Self::Failed { diff_hash, .. } => *diff_hash,
+            | Self::Failed { diff_hash, .. }
+            | Self::Suppressed { diff_hash } => *diff_hash,
         }
     }
 
@@ -126,6 +134,7 @@ pub(crate) fn review_view_state(
             Some(format!("Review assist unavailable: {}", error.trim())),
             None,
         ),
+        ReviewCacheEntry::Suppressed { .. } => (None, None),
     }
 }
 
@@ -273,7 +282,9 @@ fn apply_review_update(
         return;
     };
 
-    if cache_entry.diff_hash() != diff_hash {
+    if !matches!(cache_entry, ReviewCacheEntry::Loading { .. })
+        || cache_entry.diff_hash() != diff_hash
+    {
         return;
     }
 
@@ -510,6 +521,24 @@ mod tests {
         assert_eq!(review_text, None);
     }
 
+    #[test]
+    fn review_view_state_hides_suppressed_auto_review() {
+        // Arrange
+        let mut review_cache = HashMap::new();
+        review_cache.insert(
+            "session-id".into(),
+            ReviewCacheEntry::Suppressed { diff_hash: 7 },
+        );
+
+        // Act
+        let (review_status_message, review_text) =
+            review_view_state(&review_cache, "session-id", AgentModel::ClaudeSonnet46);
+
+        // Assert
+        assert_eq!(review_status_message, None);
+        assert_eq!(review_text, None);
+    }
+
     /// Verifies completed review output updates preserved prompt-mode render
     /// fields so the session output panel can show the result while the
     /// composer remains open.
@@ -606,6 +635,50 @@ mod tests {
                 review_text: Some(ref rendered_review_text),
                 ..
             } if rendered_review_text == review_text
+        ));
+    }
+
+    #[test]
+    fn apply_review_updates_ignores_suppressed_auto_review_entry() {
+        // Arrange
+        let session_id = SessionId::from("session-suppressed-review");
+        let diff_hash = 23;
+        let mut review_cache = HashMap::from([(
+            session_id.clone(),
+            ReviewCacheEntry::Suppressed { diff_hash },
+        )]);
+        let mut mode = AppMode::View {
+            done_session_output_mode: crate::ui::state::app_mode::DoneSessionOutputMode::Summary,
+            review_status_message: None,
+            review_text: None,
+            scroll_offset: None,
+            session_id: session_id.clone(),
+        };
+        let mut session_state = empty_session_state();
+        let review_updates =
+            successful_review_update(&session_id, diff_hash, "## Review\nShould not be rendered.");
+
+        // Act
+        apply_review_updates(
+            &mut review_cache,
+            &mut mode,
+            &mut session_state,
+            review_updates,
+        );
+
+        // Assert
+        assert!(matches!(
+            review_cache.get(session_id.as_str()),
+            Some(ReviewCacheEntry::Suppressed { diff_hash: cached_hash })
+                if *cached_hash == diff_hash
+        ));
+        assert!(matches!(
+            mode,
+            AppMode::View {
+                review_status_message: None,
+                review_text: None,
+                ..
+            }
         ));
     }
 }

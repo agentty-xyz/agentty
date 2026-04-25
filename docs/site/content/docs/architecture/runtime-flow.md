@@ -478,7 +478,7 @@ explicit cancellation paths:
 - `Review -> Queued -> Merging -> Done` (merge queue path)
 - `Review -> Rebasing -> Review/Question` (rebase path)
 - `Review/Question -> Canceled`
-- `InProgress -> Canceled` (user stops a running session)
+- `InProgress -> Review` (user stops the current turn)
 - `InProgress/Rebasing -> Review/Question` (post-turn or post-rebase)
 
 ## Agent Channel Architecture
