@@ -16,7 +16,7 @@ Use `Context7` via MCP so Codex can access up-to-date library documentation.
 For the simplest setup from the official Codex MCP docs, run:
 
 ```bash
-codex mcp add context7 -- npx -y @upstash/context7-mcp
+npx ctx7@latest setup
 ```
 
 <a id="context7-verify-server"></a>
