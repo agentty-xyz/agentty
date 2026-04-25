@@ -7,9 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.8.1] - 2026-04-24
+
 ### Added
 
 - Preview review-request comments inside the diff page. Press `d` from a review-ready session to open the diff page, then press `c` inside the page to toggle the right panel between the git diff and the cached comments. The comments panel lists inline threads and pull-request-level "General discussion" comments for GitHub-linked sessions; GitLab support is tracked as a follow-up.
+- Add theme setting and theme-aware palette rendering.
+- Add `gpt-5.5` Codex model support.
+- Render session summary above active prompt during in-progress turns.
+- Add session chat FYI action hints.
+
+### Changed
+
+- Share session-output layout caching across render and metric paths.
+- Load session transcript details lazily.
+- Refine roadmap linting and planning conventions.
+
+### Fixed
+
+- Harden pre-commit validation and fix compile errors.
+- Shut down router sessions concurrently.
+
+### Contributors
+
+- @andagaev
+- @dependabot[bot]
+- @minev-dev
 
 ## [v0.8.0] - 2026-04-21
 
