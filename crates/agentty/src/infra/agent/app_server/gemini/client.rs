@@ -141,7 +141,7 @@ impl GeminiSessionRuntime {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use agent_client_protocol::{InitializeResponse, ProtocolVersion};
+    use agent_client_protocol::schema::{InitializeResponse, ProtocolVersion};
     use mockall::Sequence;
     use serde_json::Value;
     use tempfile::tempdir;

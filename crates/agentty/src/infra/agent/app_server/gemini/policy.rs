@@ -1,6 +1,6 @@
 //! Gemini ACP permission policy helpers.
 
-use agent_client_protocol::{
+use agent_client_protocol::schema::{
     CLIENT_METHOD_NAMES, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
 };

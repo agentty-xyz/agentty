@@ -310,22 +310,22 @@ impl DiffPage<'_> {
             viewport_height,
         );
         let title = Line::from(vec![
-            Span::styled(" (", Style::default().fg(style::palette::WARNING)),
+            Span::styled(" (", Style::default().fg(style::palette::warning())),
             Span::styled(
                 format!("{comment_count}"),
-                Style::default().fg(style::palette::SUCCESS),
+                Style::default().fg(style::palette::success()),
             ),
-            Span::styled(" in ", Style::default().fg(style::palette::WARNING)),
+            Span::styled(" in ", Style::default().fg(style::palette::warning())),
             Span::styled(
                 format!("{thread_count}"),
-                Style::default().fg(style::palette::SUCCESS),
+                Style::default().fg(style::palette::success()),
             ),
             Span::styled(
                 format!(
                     ") Comments — {} ",
                     inline_text(self.session.display_title())
                 ),
-                Style::default().fg(style::palette::WARNING),
+                Style::default().fg(style::palette::warning()),
             ),
         ]);
         let paragraph = Paragraph::new(wrapped_lines)
@@ -400,7 +400,7 @@ impl DiffPage<'_> {
 fn empty_muted_line(text: &'static str) -> Line<'static> {
     Line::from(Span::styled(
         text,
-        Style::default().fg(style::palette::TEXT_MUTED),
+        Style::default().fg(style::palette::text_muted()),
     ))
 }
 
@@ -419,12 +419,12 @@ fn comments_header_line(
         Span::styled(
             label,
             Style::default()
-                .fg(style::palette::TEXT)
+                .fg(style::palette::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" — {comment_count} comments in {thread_count} threads"),
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ),
     ])
 }
@@ -460,7 +460,7 @@ fn empty_closed_review_request_line(state: ReviewRequestState) -> Line<'static> 
 
     Line::from(Span::styled(
         label.to_string(),
-        Style::default().fg(style::palette::TEXT_MUTED),
+        Style::default().fg(style::palette::text_muted()),
     ))
 }
 
@@ -475,7 +475,7 @@ fn append_pr_level_comments(
     lines.push(Line::from(Span::styled(
         "General discussion".to_string(),
         Style::default()
-            .fg(style::palette::TEXT)
+            .fg(style::palette::text())
             .add_modifier(Modifier::BOLD),
     )));
 
@@ -516,7 +516,7 @@ fn append_comment_body(
     lines.push(Line::from(Span::styled(
         comment.author.clone(),
         Style::default()
-            .fg(style::palette::TEXT)
+            .fg(style::palette::text())
             .add_modifier(Modifier::BOLD),
     )));
 
@@ -539,10 +539,10 @@ fn thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
         "unresolved"
     };
     let header_style = if thread.is_resolved {
-        Style::default().fg(style::palette::TEXT_MUTED)
+        Style::default().fg(style::palette::text_muted())
     } else {
         Style::default()
-            .fg(style::palette::TEXT)
+            .fg(style::palette::text())
             .add_modifier(Modifier::BOLD)
     };
 
@@ -550,7 +550,7 @@ fn thread_header_line(thread: &ReviewCommentThread) -> Line<'static> {
         Span::styled(anchor, header_style),
         Span::styled(
             format!("  ·  {comment_count} comments  ·  {resolution_tag}"),
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ),
     ])
 }

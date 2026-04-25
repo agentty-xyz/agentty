@@ -1,5 +1,6 @@
 //! Gemini ACP stream parsing helpers.
 
+use agent_client_protocol::schema::CLIENT_METHOD_NAMES;
 use serde_json::Value;
 
 use super::usage;
@@ -93,7 +94,7 @@ pub(super) fn extract_session_update_kind<'value>(
     expected_session_id: &str,
 ) -> Option<&'value str> {
     if response_value.get("method").and_then(Value::as_str)
-        != Some(agent_client_protocol::CLIENT_METHOD_NAMES.session_update)
+        != Some(CLIENT_METHOD_NAMES.session_update)
     {
         return None;
     }

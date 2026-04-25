@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::{
-    AGENT_METHOD_NAMES, ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, ProtocolVersion, TextContent,
+use agent_client_protocol::schema::{
+    AGENT_METHOD_NAMES, ContentBlock, ImageContent, InitializeRequest, InitializeResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, ProtocolVersion, TextContent,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -407,9 +407,10 @@ pub(super) fn build_image_content_block(
     })?;
     let mime_type = prompt_image_mime_type(&attachment.local_image_path);
 
-    Ok(ContentBlock::Image(
-        agent_client_protocol::ImageContent::new(BASE64_STANDARD.encode(image_bytes), mime_type),
-    ))
+    Ok(ContentBlock::Image(ImageContent::new(
+        BASE64_STANDARD.encode(image_bytes),
+        mime_type,
+    )))
 }
 
 /// Returns the MIME type Gemini should use for one persisted prompt image.
