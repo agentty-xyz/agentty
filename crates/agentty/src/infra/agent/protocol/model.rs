@@ -14,6 +14,28 @@ use serde::{Deserialize, Serialize};
 /// sync automatically.
 pub(crate) const MAX_QUESTIONS: usize = 5;
 
+/// Returns the canonical JSON Schema description for the `questions` field.
+///
+/// This is the single source of truth for the runtime-injected schema
+/// description and the matching test expectation. The static `schemars`
+/// metadata on `AgentResponse::questions` is overwritten by
+/// `inject_dynamic_schema_guidance` before any consumer observes the schema,
+/// so all schema-facing call sites must route through this helper to stay in
+/// sync.
+pub(crate) fn questions_field_description() -> String {
+    format!(
+        "Ordered clarification questions emitted for this turn. Emit at most {MAX_QUESTIONS} \
+         items, and use an empty array when no user input is required. Defaults to an empty array \
+         when omitted. Only ask questions that resolve a genuinely ambiguous requirement or an \
+         unresolved design decision that blocks progress. Do NOT ask permission or approval to \
+         perform agreed-upon work (for example, \"Should I commit the changes?\", \"Want me to \
+         push?\", \"Should I proceed?\", \"Ready for me to apply the fix?\"), satisfaction or \
+         sign-off check-ins (for example, \"Are you satisfied with the changes?\", \"Does this \
+         look good?\", \"Anything else you want me to adjust?\"), or rhetorical status \
+         confirmations. Execute the agreed work and report results in `answer` instead."
+    )
+}
+
 /// Protocol-owned request family preserved across prompt submission and repair
 /// retries.
 ///
@@ -129,13 +151,14 @@ pub struct AgentResponse {
     )]
     pub answer: String,
     /// Ordered clarification questions emitted for this turn.
+    ///
+    /// The canonical JSON Schema description for this field is produced by
+    /// [`questions_field_description`] and injected at schema generation time
+    /// by `inject_dynamic_schema_guidance`. The static `schemars` metadata
+    /// here only sets the field title; the description is intentionally
+    /// omitted so the helper is the single source of truth.
     #[serde(default)]
-    #[schemars(
-        title = "questions",
-        description = "Ordered clarification questions emitted for this turn. Emit at most \
-                       `MAX_QUESTIONS` items, and use an empty array when no user input is \
-                       required. Defaults to an empty array when omitted."
-    )]
+    #[schemars(title = "questions")]
     pub questions: Vec<QuestionItem>,
     /// Structured summary for session-discussion turns, or `None` for legacy
     /// payloads and one-shot prompts.

@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::model::{AgentResponse, MAX_QUESTIONS};
+use super::model::{AgentResponse, questions_field_description};
 
 /// Returns the JSON Schema used for structured assistant output.
 ///
@@ -72,11 +72,7 @@ fn inject_dynamic_schema_guidance(schema: &mut Value) {
 
     questions_property.insert(
         "description".to_string(),
-        Value::String(format!(
-            "Ordered clarification questions emitted for this turn. Emit at most {MAX_QUESTIONS} \
-             items, and use an empty array when no user input is required. Defaults to an empty \
-             array when omitted."
-        )),
+        Value::String(questions_field_description()),
     );
 }
 
@@ -469,11 +465,7 @@ mod tests {
             .get("properties")
             .and_then(Value::as_object)
             .expect("summary properties should exist");
-        let expected_questions_description = format!(
-            "Ordered clarification questions emitted for this turn. Emit at most {MAX_QUESTIONS} \
-             items, and use an empty array when no user input is required. Defaults to an empty \
-             array when omitted."
-        );
+        let expected_questions_description = questions_field_description();
 
         // Assert
         assert_schema_property_title_and_description(
