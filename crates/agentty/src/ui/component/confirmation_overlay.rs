@@ -54,10 +54,10 @@ impl Component for ConfirmationOverlay<'_> {
         let message = truncate_with_ellipsis(self.message, message_width);
 
         let selected_option_style = Style::default()
-            .fg(palette::SURFACE_OVERLAY)
-            .bg(palette::ACCENT)
+            .fg(palette::surface_overlay())
+            .bg(palette::accent())
             .add_modifier(Modifier::BOLD);
-        let unselected_option_style = Style::default().fg(palette::TEXT);
+        let unselected_option_style = Style::default().fg(palette::text());
         let yes_option_style = if self.selected_yes {
             selected_option_style
         } else {
@@ -70,7 +70,7 @@ impl Component for ConfirmationOverlay<'_> {
         };
 
         let paragraph = Paragraph::new(vec![
-            Line::from(Span::styled(message, Style::default().fg(palette::TEXT))),
+            Line::from(Span::styled(message, Style::default().fg(palette::text()))),
             Line::from(""),
             Line::from(vec![
                 Span::styled(" Yes ", yes_option_style),
@@ -79,7 +79,7 @@ impl Component for ConfirmationOverlay<'_> {
             ]),
         ])
         .alignment(Alignment::Center)
-        .block(overlay::overlay_block(self.title, palette::WARNING));
+        .block(overlay::overlay_block(self.title, palette::warning()));
 
         f.render_widget(Clear, popup_area);
         f.render_widget(paragraph, popup_area);

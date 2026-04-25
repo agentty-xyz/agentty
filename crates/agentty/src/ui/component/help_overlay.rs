@@ -76,18 +76,18 @@ impl Component for HelpOverlay<'_> {
                 Span::styled(
                     format!("{:>key_width$}", binding.key),
                     Style::default()
-                        .fg(palette::ACCENT)
+                        .fg(palette::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(": ", Style::default().fg(palette::TEXT)),
-                Span::styled(binding.popup_label, Style::default().fg(palette::TEXT)),
+                Span::styled(": ", Style::default().fg(palette::text())),
+                Span::styled(binding.popup_label, Style::default().fg(palette::text())),
             ]));
         }
 
         let paragraph = Paragraph::new(lines)
             .block(overlay::overlay_block(
                 self.context.title(),
-                palette::ACCENT,
+                palette::accent(),
             ))
             .scroll((self.scroll_offset, SCROLL_X_OFFSET));
 

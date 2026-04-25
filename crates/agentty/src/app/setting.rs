@@ -4,6 +4,7 @@ use crate::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::app::AppServices;
 use crate::domain::input::InputState;
 use crate::domain::setting::SettingName;
+use crate::domain::theme::ColorTheme;
 
 /// Loads the persisted smart-model default used for new sessions.
 ///
@@ -64,16 +65,18 @@ enum SettingRow {
     DefaultReviewModel,
     IncludeCoauthoredByAgentty,
     OpenCommand,
+    Theme,
 }
 
 impl SettingRow {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::ReasoningLevel,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
         Self::OpenCommand,
+        Self::Theme,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -94,6 +97,7 @@ impl SettingRow {
             Self::DefaultReviewModel => "Default Review Model",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::OpenCommand => "Open Commands",
+            Self::Theme => "Theme",
         }
     }
 
@@ -104,7 +108,8 @@ impl SettingRow {
             | Self::DefaultSmartModel
             | Self::DefaultFastModel
             | Self::DefaultReviewModel
-            | Self::IncludeCoauthoredByAgentty => SettingControl::Selector,
+            | Self::IncludeCoauthoredByAgentty
+            | Self::Theme => SettingControl::Selector,
             Self::OpenCommand => SettingControl::TextInput,
         }
     }
@@ -118,6 +123,7 @@ impl SettingRow {
             Self::DefaultReviewModel => SettingName::DefaultReviewModel,
             Self::IncludeCoauthoredByAgentty => SettingName::IncludeCoauthoredByAgentty,
             Self::OpenCommand => SettingName::OpenCommand,
+            Self::Theme => SettingName::Theme,
         }
     }
 }
@@ -139,6 +145,8 @@ pub struct SettingsManager {
     pub reasoning_level: ReasoningLevel,
     /// Table selection state for the settings page.
     pub table_state: TableState,
+    /// Active terminal color theme for the whole application.
+    pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
     editing_text_row: Option<SettingRow>,
     /// Whether generated session commit messages append the Agentty coauthor
@@ -196,6 +204,7 @@ impl SettingsManager {
             false,
         )
         .await;
+        let theme = load_theme_setting(services).await;
 
         let mut table_state = TableState::default();
         table_state.select(Some(0));
@@ -207,6 +216,7 @@ impl SettingsManager {
             open_command,
             reasoning_level,
             table_state,
+            theme,
             available_agent_kinds,
             editing_text_row: None,
             include_coauthored_by_agentty,
@@ -484,6 +494,7 @@ impl SettingsManager {
                     self.open_command.clone()
                 }
             }
+            SettingRow::Theme => self.theme.label().to_string(),
         }
     }
 
@@ -517,6 +528,9 @@ impl SettingsManager {
                 self.toggle_include_coauthored_by_agentty_selector(services)
                     .await;
             }
+            SettingName::Theme => {
+                self.cycle_theme_selector(services).await;
+            }
             SettingName::ActiveProjectId
             | SettingName::OpenCommand
             | SettingName::LastUsedModelAsDefault => {}
@@ -547,7 +561,8 @@ impl SettingsManager {
             | SettingName::DefaultReviewModel
             | SettingName::DefaultSmartModel
             | SettingName::IncludeCoauthoredByAgentty
-            | SettingName::LastUsedModelAsDefault => {}
+            | SettingName::LastUsedModelAsDefault
+            | SettingName::Theme => {}
         }
     }
 
@@ -624,6 +639,13 @@ impl SettingsManager {
             .await;
     }
 
+    /// Cycles the terminal color theme selector through all available themes.
+    async fn cycle_theme_selector(&mut self, services: &AppServices) {
+        self.theme = self.theme.next();
+
+        self.persist_theme_setting(services).await;
+    }
+
     /// Persists smart-model selector values (`DefaultSmartModel` and
     /// `LastUsedModelAsDefault`).
     async fn persist_default_smart_model_settings(&self, services: &AppServices) {
@@ -697,6 +719,15 @@ impl SettingsManager {
                 SettingName::IncludeCoauthoredByAgentty,
                 &include_coauthored_by_agentty,
             )
+            .await;
+    }
+
+    /// Persists the global terminal color theme selection.
+    async fn persist_theme_setting(&self, services: &AppServices) {
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = services
+            .db()
+            .upsert_setting(SettingName::Theme, self.theme.as_str())
             .await;
     }
 }
@@ -848,6 +879,20 @@ async fn load_reasoning_level_setting(
         .unwrap_or_default()
 }
 
+/// Loads the persisted terminal color theme.
+///
+/// Unknown or missing values fall back to [`ColorTheme::default`], preserving
+/// the existing palette for current users.
+async fn load_theme_setting(services: &AppServices) -> ColorTheme {
+    services
+        .db()
+        .get_setting(SettingName::Theme)
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| ColorTheme::parse_persisted(&setting_value))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -902,6 +947,7 @@ mod tests {
             open_command: String::new(),
             reasoning_level: ReasoningLevel::High,
             table_state,
+            theme: ColorTheme::Current,
             available_agent_kinds: AgentKind::ALL.to_vec(),
             editing_text_row: None,
             include_coauthored_by_agentty: false,
@@ -986,6 +1032,17 @@ mod tests {
 
         // Assert
         assert_eq!(setting_name, "LastUsedModelAsDefault");
+    }
+
+    #[test]
+    fn setting_name_as_str_returns_theme() {
+        // Arrange
+
+        // Act
+        let setting_name = SettingName::Theme.as_str();
+
+        // Assert
+        assert_eq!(setting_name, "Theme");
     }
 
     #[tokio::test]
@@ -1139,6 +1196,11 @@ mod tests {
             .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "true")
             .await
             .expect("failed to persist last-used-model flag");
+        services
+            .db()
+            .upsert_setting(SettingName::Theme, ColorTheme::Hacker.as_str())
+            .await
+            .expect("failed to persist theme setting");
 
         // Act
         let manager = SettingsManager::new(&services, project_id).await;
@@ -1149,6 +1211,7 @@ mod tests {
         assert_eq!(manager.default_review_model, AgentModel::ClaudeOpus47);
         assert_eq!(manager.open_command, "nvim .");
         assert_eq!(manager.reasoning_level, ReasoningLevel::Low);
+        assert_eq!(manager.theme, ColorTheme::Hacker);
         assert!(!manager.include_coauthored_by_agentty);
         assert!(manager.use_last_used_model_as_default);
     }
@@ -1195,6 +1258,23 @@ mod tests {
         assert!(!manager.include_coauthored_by_agentty);
     }
 
+    #[tokio::test]
+    async fn settings_manager_new_defaults_invalid_theme_to_current() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        services
+            .db()
+            .upsert_setting(SettingName::Theme, "invalid-theme")
+            .await
+            .expect("failed to persist invalid theme");
+
+        // Act
+        let manager = SettingsManager::new(&services, project_id).await;
+
+        // Assert
+        assert_eq!(manager.theme, ColorTheme::Current);
+    }
+
     #[test]
     fn next_moves_selection_to_default_smart_model_row() {
         // Arrange
@@ -1208,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_open_command_row_from_reasoning_level_row() {
+    fn previous_wraps_to_theme_row_from_reasoning_level_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -1216,7 +1296,7 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(5));
+        assert_eq!(manager.table_state.selected(), Some(6));
     }
 
     #[test]
@@ -1240,13 +1320,14 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), 7);
         assert_eq!(rows[0].0, "Default Reasoning Level");
         assert_eq!(rows[1].0, "Default Smart Model");
         assert_eq!(rows[2].0, "Default Fast Model");
         assert_eq!(rows[3].0, "Default Review Model");
         assert_eq!(rows[4].0, "Coauthored by Agentty");
         assert_eq!(rows[5].0, "Open Commands");
+        assert_eq!(rows[6].0, "Theme");
     }
 
     #[test]
@@ -1415,6 +1496,19 @@ mod tests {
         assert_eq!(rows[0].1, "xhigh");
     }
 
+    #[test]
+    fn settings_rows_show_theme_value() {
+        // Arrange
+        let mut manager = new_settings_manager();
+        manager.theme = ColorTheme::Hacker;
+
+        // Act
+        let rows = manager.settings_rows();
+
+        // Assert
+        assert_eq!(rows[6].1, "Hacker");
+    }
+
     #[tokio::test]
     async fn handle_enter_toggles_open_command_editing_state() {
         // Arrange
@@ -1515,6 +1609,28 @@ mod tests {
                 .await
                 .expect("failed to load coauthor setting"),
             Some("true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_enter_cycles_theme_setting_and_persists_value() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        let mut manager = SettingsManager::new(&services, project_id).await;
+        select_row(&mut manager, 6);
+
+        // Act
+        manager.handle_enter(&services).await;
+
+        // Assert
+        assert_eq!(manager.theme, ColorTheme::Hacker);
+        assert_eq!(
+            services
+                .db()
+                .get_setting(SettingName::Theme)
+                .await
+                .expect("failed to load theme setting"),
+            Some(ColorTheme::Hacker.as_str().to_string())
         );
     }
 

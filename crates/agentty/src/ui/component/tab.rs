@@ -45,7 +45,7 @@ impl Component for Tabs<'_> {
         let paragraph = Paragraph::new(line).block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(style::palette::BORDER))
+                .border_style(Style::default().fg(style::palette::border()))
                 .padding(Padding::top(1)),
         );
         f.render_widget(paragraph, area);
@@ -76,7 +76,7 @@ fn tab_spans(
 
 /// Returns one styled separator span between tabs.
 fn tab_separator_span() -> Span<'static> {
-    Span::styled("|", Style::default().fg(style::palette::BORDER))
+    Span::styled("|", Style::default().fg(style::palette::border()))
 }
 
 /// Returns one styled tab span with active/inactive affordance treatment.
@@ -87,13 +87,13 @@ fn tab_span(tab: Tab, current_tab: Tab) -> Span<'static> {
         return Span::styled(
             label,
             Style::default()
-                .bg(style::palette::SURFACE)
-                .fg(style::palette::WARNING)
+                .bg(style::palette::surface())
+                .fg(style::palette::warning())
                 .add_modifier(Modifier::BOLD),
         );
     }
 
-    Span::styled(label, Style::default().fg(style::palette::TEXT_MUTED))
+    Span::styled(label, Style::default().fg(style::palette::text_muted()))
 }
 
 /// Returns a styled span describing the active project for project-scoped tabs.
@@ -103,14 +103,14 @@ fn project_context_span(active_project_id: i64, projects: &[ProjectListItem]) ->
             || {
                 (
                     "None".to_string(),
-                    Style::default().fg(style::palette::TEXT_SUBTLE),
+                    Style::default().fg(style::palette::text_subtle()),
                 )
             },
             |project_name| {
                 (
                     project_name,
                     Style::default()
-                        .fg(style::palette::ACCENT_SOFT)
+                        .fg(style::palette::accent_soft())
                         .add_modifier(Modifier::BOLD),
                 )
             },
@@ -169,12 +169,12 @@ mod tests {
         let spans = tab_spans(current_tab, 0, false, &[]);
 
         // Assert
-        assert_eq!(spans[0].style.fg, Some(style::palette::TEXT_MUTED));
-        assert_eq!(spans[2].style.fg, Some(style::palette::TEXT_SUBTLE));
-        assert_eq!(spans[4].style.fg, Some(style::palette::TEXT_MUTED));
-        assert_eq!(spans[6].style.fg, Some(style::palette::WARNING));
-        assert_eq!(spans[6].style.bg, Some(style::palette::SURFACE));
-        assert_eq!(spans[8].style.fg, Some(style::palette::TEXT_MUTED));
+        assert_eq!(spans[0].style.fg, Some(style::palette::text_muted()));
+        assert_eq!(spans[2].style.fg, Some(style::palette::text_subtle()));
+        assert_eq!(spans[4].style.fg, Some(style::palette::text_muted()));
+        assert_eq!(spans[6].style.fg, Some(style::palette::warning()));
+        assert_eq!(spans[6].style.bg, Some(style::palette::surface()));
+        assert_eq!(spans[8].style.fg, Some(style::palette::text_muted()));
         assert!(spans[6].style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -200,10 +200,10 @@ mod tests {
             rendered_tabs,
             " Projects | Project: Primary | Sessions | Stats | Settings "
         );
-        assert_eq!(spans[2].style.fg, Some(style::palette::ACCENT_SOFT));
+        assert_eq!(spans[2].style.fg, Some(style::palette::accent_soft()));
         assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(spans[4].style.fg, Some(style::palette::WARNING));
-        assert_eq!(spans[4].style.bg, Some(style::palette::SURFACE));
+        assert_eq!(spans[4].style.fg, Some(style::palette::warning()));
+        assert_eq!(spans[4].style.bg, Some(style::palette::surface()));
     }
 
     #[test]
@@ -219,10 +219,10 @@ mod tests {
         assert_eq!(spans[3].content.as_ref(), "|");
         assert_eq!(spans[5].content.as_ref(), "|");
         assert_eq!(spans[7].content.as_ref(), "|");
-        assert_eq!(spans[1].style.fg, Some(style::palette::BORDER));
-        assert_eq!(spans[3].style.fg, Some(style::palette::BORDER));
-        assert_eq!(spans[5].style.fg, Some(style::palette::BORDER));
-        assert_eq!(spans[7].style.fg, Some(style::palette::BORDER));
+        assert_eq!(spans[1].style.fg, Some(style::palette::border()));
+        assert_eq!(spans[3].style.fg, Some(style::palette::border()));
+        assert_eq!(spans[5].style.fg, Some(style::palette::border()));
+        assert_eq!(spans[7].style.fg, Some(style::palette::border()));
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
 
         // Assert
         assert_eq!(spans[2].content.as_ref(), " Project: None ");
-        assert_eq!(spans[2].style.fg, Some(style::palette::TEXT_SUBTLE));
+        assert_eq!(spans[2].style.fg, Some(style::palette::text_subtle()));
     }
 
     #[test]
@@ -256,8 +256,8 @@ mod tests {
             rendered_tabs,
             " Projects | Project: None | Sessions | Tasks | Stats | Settings "
         );
-        assert_eq!(spans[6].style.fg, Some(style::palette::WARNING));
-        assert_eq!(spans[6].style.bg, Some(style::palette::SURFACE));
+        assert_eq!(spans[6].style.fg, Some(style::palette::warning()));
+        assert_eq!(spans[6].style.bg, Some(style::palette::surface()));
     }
 
     /// Creates a `ProjectListItem` for tab-label rendering tests.

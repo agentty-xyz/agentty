@@ -9,6 +9,7 @@ use crate::app::tab::Tab;
 use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
 use crate::ui;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
+use crate::ui::style;
 
 impl App {
     /// Returns the active project identifier.
@@ -90,8 +91,9 @@ impl App {
         }
     }
 
-    /// Renders a complete UI frame by assembling a [`ui::RenderContext`] from
-    /// current app state and dispatching to the UI render pipeline.
+    /// Renders a complete UI frame by applying the active color theme,
+    /// assembling a [`ui::RenderContext`] from current app state, and
+    /// dispatching to the UI render pipeline.
     pub fn draw(&mut self, frame: &mut Frame) {
         let has_tasks_tab = self.active_project_has_tasks_tab();
         self.tabs.normalize(has_tasks_tab);
@@ -133,6 +135,7 @@ impl App {
         let project_table_state = self.projects.project_table_state_mut();
         let (sessions, stats_activity, table_state) = self.sessions.render_parts();
         let settings = &mut self.settings;
+        style::set_active_theme(settings.theme);
 
         ui::render(
             frame,

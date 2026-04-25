@@ -1,7 +1,8 @@
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::domain::session::{PublishBranchAction, Session, Status};
+use crate::ui::style;
 
 /// One user-visible shortcut entry that can be rendered in the footer and
 /// in the help popup.
@@ -533,19 +534,22 @@ pub(crate) fn footer_key_span(key: &'static str) -> Span<'static> {
     Span::styled(
         key.to_string(),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(style::palette::accent())
             .add_modifier(Modifier::BOLD),
     )
 }
 
 /// Returns one muted footer text span for labels and informational notes.
 pub(crate) fn footer_muted_span(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), Style::default().fg(Color::Gray))
+    Span::styled(
+        text.into(),
+        Style::default().fg(style::palette::text_muted()),
+    )
 }
 
 /// Returns the shared separator span used between footer help items.
 pub(crate) fn footer_separator_span() -> Span<'static> {
-    Span::styled(" | ", Style::default().fg(Color::DarkGray))
+    Span::styled(" | ", Style::default().fg(style::palette::text_subtle()))
 }
 
 /// Returns list-mode actions shared by all tabs.
@@ -1027,16 +1031,25 @@ mod tests {
         assert_eq!(
             line.spans[0].style,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(style::palette::accent())
                 .add_modifier(Modifier::BOLD)
         );
-        assert_eq!(line.spans[1].style, Style::default().fg(Color::Gray));
-        assert_eq!(line.spans[2].style, Style::default().fg(Color::Gray));
-        assert_eq!(line.spans[3].style, Style::default().fg(Color::DarkGray));
+        assert_eq!(
+            line.spans[1].style,
+            Style::default().fg(style::palette::text_muted())
+        );
+        assert_eq!(
+            line.spans[2].style,
+            Style::default().fg(style::palette::text_muted())
+        );
+        assert_eq!(
+            line.spans[3].style,
+            Style::default().fg(style::palette::text_subtle())
+        );
         assert_eq!(
             line.spans[4].style,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(style::palette::accent())
                 .add_modifier(Modifier::BOLD)
         );
     }
@@ -1100,7 +1113,10 @@ mod tests {
 
         // Assert
         assert_eq!(span.content, "note");
-        assert_eq!(span.style, Style::default().fg(Color::Gray));
+        assert_eq!(
+            span.style,
+            Style::default().fg(style::palette::text_muted())
+        );
     }
 
     #[test]
@@ -1111,6 +1127,9 @@ mod tests {
 
         // Assert
         assert_eq!(span.content, " | ");
-        assert_eq!(span.style, Style::default().fg(Color::DarkGray));
+        assert_eq!(
+            span.style,
+            Style::default().fg(style::palette::text_subtle())
+        );
     }
 }

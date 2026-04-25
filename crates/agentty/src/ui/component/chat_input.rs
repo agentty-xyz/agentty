@@ -103,25 +103,25 @@ impl<'a> ChatInput<'a> {
     /// prominent.
     fn focused_border_style() -> Style {
         Style::default()
-            .fg(style::palette::ACCENT)
+            .fg(style::palette::accent())
             .add_modifier(Modifier::BOLD)
     }
 
     /// Returns the title style used by the focused prompt input frame.
     fn focused_title_style() -> Style {
         Style::default()
-            .fg(style::palette::ACCENT)
+            .fg(style::palette::accent())
             .add_modifier(Modifier::BOLD)
     }
 
     /// Returns the border style for an inactive (dimmed) prompt input frame.
     fn inactive_border_style() -> Style {
-        Style::default().fg(style::palette::BORDER)
+        Style::default().fg(style::palette::border())
     }
 
     /// Returns the title style for an inactive (dimmed) prompt input frame.
     fn inactive_title_style() -> Style {
-        Style::default().fg(style::palette::BORDER)
+        Style::default().fg(style::palette::border())
     }
 
     /// Returns the shared block styling for prompt suggestion dropdowns.
@@ -131,10 +131,10 @@ impl<'a> ChatInput<'a> {
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(style::palette::ACCENT_SOFT))
+            .border_style(Style::default().fg(style::palette::accent_soft()))
             .title(Span::styled(
                 title,
-                Style::default().fg(style::palette::ACCENT_SOFT),
+                Style::default().fg(style::palette::accent_soft()),
             ))
     }
 
@@ -156,15 +156,15 @@ impl<'a> ChatInput<'a> {
                 let prefix = if is_selected { ">" } else { " " };
                 let label_style = if is_selected {
                     Style::default()
-                        .fg(style::palette::ACCENT)
+                        .fg(style::palette::accent())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(style::palette::TEXT_MUTED)
+                    Style::default().fg(style::palette::text_muted())
                 };
                 let description_style = if is_selected {
-                    Style::default().fg(style::palette::TEXT_MUTED)
+                    Style::default().fg(style::palette::text_muted())
                 } else {
-                    Style::default().fg(style::palette::TEXT_SUBTLE)
+                    Style::default().fg(style::palette::text_subtle())
                 };
 
                 let mut spans = Vec::new();
@@ -201,10 +201,10 @@ impl<'a> ChatInput<'a> {
         if self.input.is_empty() {
             let prefix_style = if self.active {
                 Style::default()
-                    .fg(style::palette::ACCENT)
+                    .fg(style::palette::accent())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(style::palette::BORDER)
+                Style::default().fg(style::palette::border())
             };
             let prefix = " › ";
             let display_lines = vec![Line::from(vec![
@@ -212,7 +212,7 @@ impl<'a> ChatInput<'a> {
                 Span::raw("  "),
                 Span::styled(
                     self.placeholder,
-                    Style::default().fg(style::palette::TEXT_SUBTLE),
+                    Style::default().fg(style::palette::text_subtle()),
                 ),
             ])];
 
@@ -378,7 +378,7 @@ mod tests {
         // Assert — border is rendered with the muted BORDER color, not ACCENT.
         let buffer = terminal.backend().buffer();
         let top_left_cell = &buffer.content()[0];
-        assert_eq!(top_left_cell.fg, style::palette::BORDER);
+        assert_eq!(top_left_cell.fg, style::palette::border());
     }
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
         // Assert — border still uses muted BORDER color.
         let buffer = terminal.backend().buffer();
         let top_left_cell = &buffer.content()[0];
-        assert_eq!(top_left_cell.fg, style::palette::BORDER);
+        assert_eq!(top_left_cell.fg, style::palette::border());
     }
 
     #[test]

@@ -143,7 +143,7 @@ impl Component for FooterBar {
         let left_text = Span::styled(
             format!(" {display_path}"),
             Style::default()
-                .fg(style::palette::TEXT)
+                .fg(style::palette::text())
                 .add_modifier(Modifier::DIM),
         );
 
@@ -157,7 +157,7 @@ impl Component for FooterBar {
 
             let branch_span = Span::styled(
                 format!("{} {branch_text}", Icon::GitBranch),
-                Style::default().fg(style::palette::SUCCESS),
+                Style::default().fg(style::palette::success()),
             );
             let branch_width = branch_span.width();
 
@@ -179,8 +179,8 @@ impl Component for FooterBar {
 
         let footer = Paragraph::new(Line::from(spans)).style(
             Style::default()
-                .bg(style::palette::SURFACE)
-                .fg(style::palette::TEXT),
+                .bg(style::palette::surface())
+                .fg(style::palette::text()),
         );
 
         f.render_widget(footer, area);

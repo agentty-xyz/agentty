@@ -226,7 +226,7 @@ impl FileExplorer {
         if file_list_lines.is_empty() {
             file_list_lines.push(Line::from(Span::styled(
                 NO_FILES_LABEL,
-                Style::default().fg(style::palette::TEXT_SUBTLE),
+                Style::default().fg(style::palette::text_subtle()),
             )));
         }
 
@@ -326,7 +326,7 @@ impl FileExplorer {
 
             lines.push(Line::from(Span::styled(
                 line_text,
-                Style::default().fg(style::palette::WARNING),
+                Style::default().fg(style::palette::warning()),
             )));
             items.push(FileTreeItem::Folder(folder_path.clone()));
 
@@ -351,13 +351,13 @@ impl FileExplorer {
             let file_path = format!("{path_prefix}{}", file.name);
             let mut spans = vec![Span::styled(
                 file_name,
-                Style::default().fg(style::palette::ACCENT),
+                Style::default().fg(style::palette::accent()),
             )];
 
             if let Some(rename_from) = &file.rename_from {
                 spans.push(Span::styled(
                     format!("{RENAME_ORIGIN_PREFIX}{rename_from}"),
-                    Style::default().fg(style::palette::TEXT_SUBTLE),
+                    Style::default().fg(style::palette::text_subtle()),
                 ));
             }
 
@@ -379,9 +379,9 @@ impl Component for FileExplorer {
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title(Span::styled(
                 FILE_EXPLORER_TITLE,
-                Style::default().fg(style::palette::ACCENT),
+                Style::default().fg(style::palette::accent()),
             )))
-            .highlight_style(Style::default().bg(style::palette::SURFACE));
+            .highlight_style(Style::default().bg(style::palette::surface()));
 
         let mut state = ListState::default();
         state.select(Some(self.selected_index));

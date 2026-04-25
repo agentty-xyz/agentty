@@ -33,9 +33,9 @@ impl RoadmapQueue {
     /// Returns the accent color used for one queue heading.
     fn color(self) -> ratatui::style::Color {
         match self {
-            Self::ReadyNow => style::palette::WARNING,
-            Self::QueuedNext => style::palette::ACCENT,
-            Self::Parked => style::palette::TEXT_MUTED,
+            Self::ReadyNow => style::palette::warning(),
+            Self::QueuedNext => style::palette::accent(),
+            Self::Parked => style::palette::text_muted(),
         }
     }
 }
@@ -91,7 +91,7 @@ pub(crate) fn roadmap_task_lines(content: &str) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             "Source: docs/plan/roadmap.md",
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         )),
         Line::from(vec![
             Span::styled(
@@ -101,7 +101,7 @@ pub(crate) fn roadmap_task_lines(content: &str) -> Vec<Line<'static>> {
             Span::styled(
                 overview.ready_now.len().to_string(),
                 Style::default()
-                    .fg(style::palette::TEXT)
+                    .fg(style::palette::text())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -112,7 +112,7 @@ pub(crate) fn roadmap_task_lines(content: &str) -> Vec<Line<'static>> {
             Span::styled(
                 overview.queued_next.len().to_string(),
                 Style::default()
-                    .fg(style::palette::TEXT)
+                    .fg(style::palette::text())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -120,7 +120,7 @@ pub(crate) fn roadmap_task_lines(content: &str) -> Vec<Line<'static>> {
             Span::styled(
                 overview.parked.len().to_string(),
                 Style::default()
-                    .fg(style::palette::TEXT)
+                    .fg(style::palette::text())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -133,7 +133,7 @@ pub(crate) fn roadmap_task_lines(content: &str) -> Vec<Line<'static>> {
         if overview.items(queue).is_empty() {
             lines.push(indented_line(
                 "No roadmap items.",
-                Style::default().fg(style::palette::TEXT_MUTED),
+                Style::default().fg(style::palette::text_muted()),
             ));
 
             continue;
@@ -370,7 +370,7 @@ fn queue_header_line(queue: RoadmapQueue, item_count: usize) -> Line<'static> {
         ),
         Span::styled(
             format!(" ({item_count} {noun})"),
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ),
     ])
 }
@@ -390,7 +390,7 @@ fn card_lines(queue: RoadmapQueue, card: &RoadmapCard) -> Vec<Line<'static>> {
     if let Some(detail) = card.detail.as_deref() {
         lines.push(indented_line(
             detail,
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ));
     }
 
@@ -400,7 +400,7 @@ fn card_lines(queue: RoadmapQueue, card: &RoadmapCard) -> Vec<Line<'static>> {
     {
         lines.push(indented_line(
             &format!("Roadmap id: {card_id}"),
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ));
     }
 
@@ -416,7 +416,7 @@ fn card_heading_line(card: &RoadmapCard) -> Line<'static> {
         Span::styled(
             card.stream.clone(),
             Style::default()
-                .fg(style::palette::ACCENT_SOFT)
+                .fg(style::palette::accent_soft())
                 .add_modifier(Modifier::BOLD),
         ),
     ];
@@ -428,7 +428,7 @@ fn card_heading_line(card: &RoadmapCard) -> Line<'static> {
     spans.push(Span::styled(
         card.title.clone(),
         Style::default()
-            .fg(style::palette::TEXT)
+            .fg(style::palette::text())
             .add_modifier(Modifier::BOLD),
     ));
 
@@ -453,7 +453,7 @@ fn card_metadata_line(card: &RoadmapCard) -> Option<Line<'static>> {
 
     Some(indented_line(
         &segments.join("  "),
-        Style::default().fg(style::palette::TEXT_MUTED),
+        Style::default().fg(style::palette::text_muted()),
     ))
 }
 
@@ -463,7 +463,7 @@ fn indented_label_line(label: &str, content: &str) -> Line<'static> {
         Span::raw("  "),
         Span::styled(
             format!("{label}: "),
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ),
         Span::raw(content.to_string()),
     ])

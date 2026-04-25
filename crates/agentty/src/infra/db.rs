@@ -730,7 +730,6 @@ impl AppRepositories {
         self.setting.load_project_reasoning_level(project_id).await
     }
 
-    #[cfg(test)]
     /// Looks up a setting value by name.
     pub(crate) async fn get_setting(
         &self,
@@ -782,7 +781,6 @@ impl AppRepositories {
             .await
     }
 
-    #[cfg(test)]
     /// Inserts or updates a setting by name.
     pub(crate) async fn upsert_setting(
         &self,

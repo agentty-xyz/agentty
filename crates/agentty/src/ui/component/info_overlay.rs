@@ -168,9 +168,9 @@ impl<'a> InfoOverlay<'a> {
     /// complete.
     fn border_color(&self) -> Color {
         if self.is_loading {
-            palette::ACCENT
+            palette::accent()
         } else {
-            palette::WARNING
+            palette::warning()
         }
     }
 
@@ -271,15 +271,15 @@ impl Component for InfoOverlay<'_> {
 /// Style for the `OK` confirmation button.
 fn ok_button_style() -> Style {
     Style::default()
-        .fg(palette::SURFACE_OVERLAY)
-        .bg(palette::ACCENT)
+        .fg(palette::surface_overlay())
+        .bg(palette::accent())
         .add_modifier(Modifier::BOLD)
 }
 
 /// Style for the loading spinner text.
 fn loading_indicator_style() -> Style {
     Style::default()
-        .fg(palette::ACCENT)
+        .fg(palette::accent())
         .add_modifier(Modifier::BOLD)
 }
 
@@ -449,7 +449,7 @@ mod tests {
             message_lines[0]
                 .spans
                 .iter()
-                .any(|span| span.style.fg == Some(Color::Yellow))
+                .any(|span| span.style.fg == Some(palette::warning()))
         );
     }
 

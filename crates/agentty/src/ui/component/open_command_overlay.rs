@@ -47,7 +47,7 @@ impl<'a> OpenCommandOverlay<'a> {
             Line::from(vec![Span::styled(
                 "Select open command",
                 Style::default()
-                    .fg(palette::WARNING)
+                    .fg(palette::warning())
                     .add_modifier(Modifier::BOLD),
             )])
             .alignment(Alignment::Center),
@@ -63,14 +63,14 @@ impl<'a> OpenCommandOverlay<'a> {
                 Line::from(Span::styled(
                     selected_label,
                     Style::default()
-                        .fg(palette::SURFACE_OVERLAY)
-                        .bg(palette::ACCENT)
+                        .fg(palette::surface_overlay())
+                        .bg(palette::accent())
                         .add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(vec![
-                    Span::styled(" ", Style::default().fg(palette::TEXT_SUBTLE)),
-                    Span::styled(command_label, Style::default().fg(palette::TEXT)),
+                    Span::styled(" ", Style::default().fg(palette::text_subtle())),
+                    Span::styled(command_label, Style::default().fg(palette::text())),
                 ])
             };
 
@@ -81,7 +81,7 @@ impl<'a> OpenCommandOverlay<'a> {
         lines.push(
             Line::from(vec![Span::styled(
                 "j/k: move | Enter: open | Esc: cancel",
-                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(palette::text_muted()),
             )])
             .alignment(Alignment::Center),
         );
@@ -112,7 +112,7 @@ impl Component for OpenCommandOverlay<'_> {
         let paragraph = Paragraph::new(lines)
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
-            .block(overlay::overlay_block("Open Command", palette::ACCENT));
+            .block(overlay::overlay_block("Open Command", palette::accent()));
 
         f.render_widget(Clear, popup_area);
         f.render_widget(paragraph, popup_area);
@@ -200,7 +200,7 @@ mod tests {
             selected_line
                 .spans
                 .iter()
-                .all(|span| span.style.bg == Some(palette::ACCENT))
+                .all(|span| span.style.bg == Some(palette::accent()))
         );
     }
 

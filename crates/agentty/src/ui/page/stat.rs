@@ -77,8 +77,8 @@ impl StatsPage<'_> {
     /// Renders per-session token statistics using the shared table palette.
     fn render_table(&self, f: &mut Frame, area: Rect) {
         let header_style = Style::default()
-            .bg(style::palette::SURFACE)
-            .fg(style::palette::TEXT_MUTED)
+            .bg(style::palette::surface())
+            .fg(style::palette::text_muted())
             .add_modifier(Modifier::BOLD);
         let header_cells = ["Session", "Project", "Model", "Input", "Output"]
             .iter()
@@ -148,7 +148,7 @@ impl StatsPage<'_> {
             output_display
         );
         let stats = Paragraph::new(summary)
-            .style(Style::default().fg(style::palette::TEXT_MUTED))
+            .style(Style::default().fg(style::palette::text_muted()))
             .alignment(Alignment::Right);
         f.render_widget(stats, footer_chunks[1]);
     }
@@ -171,13 +171,13 @@ impl StatsPage<'_> {
         );
         lines.push(Line::from(Span::styled(
             month_row,
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         )));
 
         for (day_index, day_label) in DAY_LABELS.iter().enumerate() {
             let mut spans = vec![Span::styled(
                 format!("{day_label} "),
-                Style::default().fg(style::palette::TEXT_MUTED),
+                Style::default().fg(style::palette::text_muted()),
             )];
 
             let first_visible_week = grid[day_index].len().saturating_sub(visible_week_count);
@@ -195,7 +195,7 @@ impl StatsPage<'_> {
         if content_width < 24 {
             lines.push(Line::from(Span::styled(
                 format!("Max/day: {max_count}"),
-                Style::default().fg(style::palette::TEXT_MUTED),
+                Style::default().fg(style::palette::text_muted()),
             )));
 
             return lines;
@@ -203,7 +203,7 @@ impl StatsPage<'_> {
 
         let mut legend = vec![Span::styled(
             "Less ",
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         )];
         for intensity in 0_u8..=4 {
             legend.push(Span::styled(
@@ -214,7 +214,7 @@ impl StatsPage<'_> {
         }
         legend.push(Span::styled(
             "More",
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         ));
         if content_width >= 36 {
             legend.push(Span::raw(format!(" | Max/day: {max_count}")));

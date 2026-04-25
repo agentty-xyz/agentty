@@ -1,67 +1,257 @@
+//! Theme-aware semantic color helpers for Agentty's terminal UI.
+
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use ratatui::style::Color;
 
 use super::icon::Icon;
 use crate::domain::session::{ReviewRequestState, Status};
+use crate::domain::theme::ColorTheme;
+
+static ACTIVE_THEME: AtomicU8 = AtomicU8::new(theme_index(ColorTheme::Current));
 
 /// Shared semantic color tokens for the terminal UI.
 pub mod palette {
     use ratatui::style::Color;
 
+    use super::{active_palette, token_color};
+
     /// Primary accent color used for focused UI elements and titles.
-    pub const ACCENT: Color = Color::Cyan;
+    #[must_use]
+    pub fn accent() -> Color {
+        token_color(|palette| palette.accent)
+    }
+
     /// Brighter accent used for secondary emphasis.
-    pub const ACCENT_SOFT: Color = Color::LightCyan;
+    #[must_use]
+    pub fn accent_soft() -> Color {
+        token_color(|palette| palette.accent_soft)
+    }
+
     /// Subtle border and separator color.
-    pub const BORDER: Color = Color::DarkGray;
+    #[must_use]
+    pub fn border() -> Color {
+        token_color(|palette| palette.border)
+    }
+
     /// Error/danger color for destructive or failed states.
-    pub const DANGER: Color = Color::Red;
+    #[must_use]
+    pub fn danger() -> Color {
+        token_color(|palette| palette.danger)
+    }
+
     /// Softer danger tone used for graded severity scales.
-    pub const DANGER_SOFT: Color = Color::LightRed;
+    #[must_use]
+    pub fn danger_soft() -> Color {
+        token_color(|palette| palette.danger_soft)
+    }
+
     /// Informational color used for neutral-highlight states.
-    pub const INFO: Color = Color::LightBlue;
+    #[must_use]
+    pub fn info() -> Color {
+        token_color(|palette| palette.info)
+    }
+
     /// Color used for question-status emphasis.
-    pub const QUESTION: Color = Color::LightMagenta;
+    #[must_use]
+    pub fn question() -> Color {
+        token_color(|palette| palette.question)
+    }
+
     /// Base surface color for bars and selected rows.
-    pub const SURFACE: Color = Color::DarkGray;
+    #[must_use]
+    pub fn surface() -> Color {
+        token_color(|palette| palette.surface)
+    }
+
     /// Subtle danger-tinted surface used behind removed diff lines.
-    pub const SURFACE_DANGER: Color = Color::Rgb(48, 24, 24);
+    #[must_use]
+    pub fn surface_danger() -> Color {
+        token_color(|palette| palette.surface_danger)
+    }
+
     /// Elevated surface color for table headers.
-    pub const SURFACE_ELEVATED: Color = Color::Gray;
+    #[must_use]
+    pub fn surface_elevated() -> Color {
+        token_color(|palette| palette.surface_elevated)
+    }
+
     /// Subtle success-tinted surface used behind added diff lines.
-    pub const SURFACE_SUCCESS: Color = Color::Rgb(18, 44, 26);
+    #[must_use]
+    pub fn surface_success() -> Color {
+        token_color(|palette| palette.surface_success)
+    }
+
     /// Dark surface used to dim background content behind modal overlays.
-    pub const SURFACE_OVERLAY: Color = Color::Black;
+    #[must_use]
+    pub fn surface_overlay() -> Color {
+        token_color(|palette| palette.surface_overlay)
+    }
+
     /// Primary readable text color.
-    pub const TEXT: Color = Color::White;
+    #[must_use]
+    pub fn text() -> Color {
+        token_color(|palette| palette.text)
+    }
+
     /// Muted text color for secondary copy.
-    pub const TEXT_MUTED: Color = Color::Gray;
+    #[must_use]
+    pub fn text_muted() -> Color {
+        token_color(|palette| palette.text_muted)
+    }
+
     /// Extra-muted text color for placeholders and hints.
-    pub const TEXT_SUBTLE: Color = Color::DarkGray;
+    #[must_use]
+    pub fn text_subtle() -> Color {
+        token_color(|palette| palette.text_subtle)
+    }
+
     /// Success color for positive states.
-    pub const SUCCESS: Color = Color::Green;
+    #[must_use]
+    pub fn success() -> Color {
+        token_color(|palette| palette.success)
+    }
+
     /// Softer success tone used for graded severity scales.
-    pub const SUCCESS_SOFT: Color = Color::LightGreen;
+    #[must_use]
+    pub fn success_soft() -> Color {
+        token_color(|palette| palette.success_soft)
+    }
+
     /// Warning color for in-progress and caution states.
-    pub const WARNING: Color = Color::Yellow;
+    #[must_use]
+    pub fn warning() -> Color {
+        token_color(|palette| palette.warning)
+    }
+
     /// Softer warning tone used for graded severity scales.
-    pub const WARNING_SOFT: Color = Color::LightYellow;
+    #[must_use]
+    pub fn warning_soft() -> Color {
+        token_color(|palette| palette.warning_soft)
+    }
+
+    /// Returns the active theme's complete palette for tests and diagnostics.
+    #[must_use]
+    pub fn active() -> super::ThemePalette {
+        active_palette()
+    }
+}
+
+/// Complete set of semantic colors resolved for one UI theme.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ThemePalette {
+    /// Primary accent color used for focused UI elements and titles.
+    pub accent: Color,
+    /// Brighter accent used for secondary emphasis.
+    pub accent_soft: Color,
+    /// Subtle border and separator color.
+    pub border: Color,
+    /// Error/danger color for destructive or failed states.
+    pub danger: Color,
+    /// Softer danger tone used for graded severity scales.
+    pub danger_soft: Color,
+    /// Informational color used for neutral-highlight states.
+    pub info: Color,
+    /// Color used for question-status emphasis.
+    pub question: Color,
+    /// Base surface color for bars and selected rows.
+    pub surface: Color,
+    /// Subtle danger-tinted surface used behind removed diff lines.
+    pub surface_danger: Color,
+    /// Elevated surface color for table headers.
+    pub surface_elevated: Color,
+    /// Subtle success-tinted surface used behind added diff lines.
+    pub surface_success: Color,
+    /// Dark surface used to dim background content behind modal overlays.
+    pub surface_overlay: Color,
+    /// Primary readable text color.
+    pub text: Color,
+    /// Muted text color for secondary copy.
+    pub text_muted: Color,
+    /// Extra-muted text color for placeholders and hints.
+    pub text_subtle: Color,
+    /// Success color for positive states.
+    pub success: Color,
+    /// Softer success tone used for graded severity scales.
+    pub success_soft: Color,
+    /// Warning color for in-progress and caution states.
+    pub warning: Color,
+    /// Softer warning tone used for graded severity scales.
+    pub warning_soft: Color,
+}
+
+const CURRENT_PALETTE: ThemePalette = ThemePalette {
+    accent: Color::Cyan,
+    accent_soft: Color::LightCyan,
+    border: Color::DarkGray,
+    danger: Color::Red,
+    danger_soft: Color::LightRed,
+    info: Color::LightBlue,
+    question: Color::LightMagenta,
+    surface: Color::DarkGray,
+    surface_danger: Color::Rgb(48, 24, 24),
+    surface_elevated: Color::Gray,
+    surface_success: Color::Rgb(18, 44, 26),
+    surface_overlay: Color::Black,
+    text: Color::White,
+    text_muted: Color::Gray,
+    text_subtle: Color::DarkGray,
+    success: Color::Green,
+    success_soft: Color::LightGreen,
+    warning: Color::Yellow,
+    warning_soft: Color::LightYellow,
+};
+
+const HACKER_PALETTE: ThemePalette = ThemePalette {
+    accent: Color::Rgb(61, 221, 106),
+    accent_soft: Color::Rgb(42, 179, 85),
+    border: Color::Rgb(27, 61, 32),
+    danger: Color::Rgb(255, 94, 94),
+    danger_soft: Color::Rgb(214, 88, 88),
+    info: Color::Rgb(80, 122, 92),
+    question: Color::Rgb(184, 255, 198),
+    surface: Color::Rgb(13, 22, 13),
+    surface_danger: Color::Rgb(48, 20, 20),
+    surface_elevated: Color::Rgb(27, 61, 32),
+    surface_success: Color::Rgb(18, 44, 26),
+    surface_overlay: Color::Black,
+    text: Color::Rgb(224, 255, 230),
+    text_muted: Color::Rgb(80, 122, 92),
+    text_subtle: Color::Rgb(42, 89, 53),
+    success: Color::Rgb(61, 221, 106),
+    success_soft: Color::Rgb(42, 179, 85),
+    warning: Color::Rgb(230, 219, 116),
+    warning_soft: Color::Rgb(250, 245, 160),
+};
+
+/// Sets the process-wide active color theme used by semantic palette tokens.
+pub fn set_active_theme(theme: ColorTheme) {
+    ACTIVE_THEME.store(theme_index(theme), Ordering::Relaxed);
+}
+
+/// Returns a stable cache discriminator for the active color theme.
+#[must_use]
+pub(crate) fn active_theme_cache_version() -> u64 {
+    u64::from(ACTIVE_THEME.load(Ordering::Relaxed))
 }
 
 /// Returns the terminal color used for one session status label.
+#[must_use]
 pub fn status_color(status: Status) -> Color {
     match status {
-        Status::New => palette::TEXT_MUTED,
-        Status::InProgress => palette::WARNING,
-        Status::Review | Status::AgentReview => palette::INFO,
-        Status::Question => palette::QUESTION,
-        Status::Queued => palette::ACCENT_SOFT,
-        Status::Rebasing | Status::Merging => palette::ACCENT,
-        Status::Done => palette::SUCCESS,
-        Status::Canceled => palette::DANGER,
+        Status::New => palette::text_muted(),
+        Status::InProgress => palette::warning(),
+        Status::Review | Status::AgentReview => palette::info(),
+        Status::Question => palette::question(),
+        Status::Queued => palette::accent_soft(),
+        Status::Rebasing | Status::Merging => palette::accent(),
+        Status::Done => palette::success(),
+        Status::Canceled => palette::danger(),
     }
 }
 
 /// Returns the icon used for one session status indicator.
+#[must_use]
 pub fn status_icon(status: Status) -> Icon {
     match status {
         Status::New | Status::Review | Status::Question | Status::Queued => Icon::Pending,
@@ -77,12 +267,36 @@ pub fn status_icon(status: Status) -> Icon {
 ///
 /// The color reflects the review-request lifecycle state when one is linked,
 /// or a soft accent when only a published branch exists (`None`).
+#[must_use]
 pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
     match state {
-        Some(ReviewRequestState::Open) => palette::WARNING,
-        Some(ReviewRequestState::Merged) => palette::SUCCESS,
-        Some(ReviewRequestState::Closed) => palette::DANGER,
-        None => palette::ACCENT_SOFT,
+        Some(ReviewRequestState::Open) => palette::warning(),
+        Some(ReviewRequestState::Merged) => palette::success(),
+        Some(ReviewRequestState::Closed) => palette::danger(),
+        None => palette::accent_soft(),
+    }
+}
+
+/// Returns the complete color palette for the active theme.
+#[must_use]
+fn active_palette() -> ThemePalette {
+    match ACTIVE_THEME.load(Ordering::Relaxed) {
+        1 => HACKER_PALETTE,
+        _ => CURRENT_PALETTE,
+    }
+}
+
+/// Applies one semantic color selector to the active palette.
+#[must_use]
+fn token_color(selector: impl FnOnce(ThemePalette) -> Color) -> Color {
+    selector(active_palette())
+}
+
+/// Returns the stable numeric storage for one theme in the active-theme atom.
+const fn theme_index(theme: ColorTheme) -> u8 {
+    match theme {
+        ColorTheme::Current => 0,
+        ColorTheme::Hacker => 1,
     }
 }
 
@@ -92,56 +306,88 @@ mod tests {
 
     #[test]
     fn status_color_returns_muted_text_for_new() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = status_color(Status::New);
 
         // Assert
-        assert_eq!(color, palette::TEXT_MUTED);
+        assert_eq!(color, palette::text_muted());
     }
 
     #[test]
     fn status_color_returns_success_for_done() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = status_color(Status::Done);
 
         // Assert
-        assert_eq!(color, palette::SUCCESS);
+        assert_eq!(color, palette::success());
     }
 
     #[test]
     fn status_color_returns_danger_for_canceled() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = status_color(Status::Canceled);
 
         // Assert
-        assert_eq!(color, palette::DANGER);
+        assert_eq!(color, palette::danger());
     }
 
     #[test]
     fn status_color_returns_warning_for_in_progress() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = status_color(Status::InProgress);
 
         // Assert
-        assert_eq!(color, palette::WARNING);
+        assert_eq!(color, palette::warning());
     }
 
     #[test]
     fn status_color_returns_info_for_review() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = status_color(Status::Review);
 
         // Assert
-        assert_eq!(color, palette::INFO);
+        assert_eq!(color, palette::info());
     }
 
     #[test]
     fn status_color_returns_accent_for_merging() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = status_color(Status::Merging);
 
         // Assert
-        assert_eq!(color, palette::ACCENT);
+        assert_eq!(color, palette::accent());
+    }
+
+    #[test]
+    fn status_color_uses_hacker_palette_when_active() {
+        // Arrange
+        set_active_theme(ColorTheme::Hacker);
+
+        // Act
+        let color = status_color(Status::Merging);
+
+        // Assert
+        assert_eq!(color, HACKER_PALETTE.accent);
+
+        set_active_theme(ColorTheme::Current);
     }
 
     #[test]
@@ -173,37 +419,49 @@ mod tests {
 
     #[test]
     fn forge_indicator_color_returns_warning_for_open() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = forge_indicator_color(Some(ReviewRequestState::Open));
 
         // Assert
-        assert_eq!(color, palette::WARNING);
+        assert_eq!(color, palette::warning());
     }
 
     #[test]
     fn forge_indicator_color_returns_success_for_merged() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = forge_indicator_color(Some(ReviewRequestState::Merged));
 
         // Assert
-        assert_eq!(color, palette::SUCCESS);
+        assert_eq!(color, palette::success());
     }
 
     #[test]
     fn forge_indicator_color_returns_danger_for_closed() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = forge_indicator_color(Some(ReviewRequestState::Closed));
 
         // Assert
-        assert_eq!(color, palette::DANGER);
+        assert_eq!(color, palette::danger());
     }
 
     #[test]
     fn forge_indicator_color_returns_accent_soft_for_published_only() {
-        // Arrange / Act
+        // Arrange
+        set_active_theme(ColorTheme::Current);
+
+        // Act
         let color = forge_indicator_color(None);
 
         // Assert
-        assert_eq!(color, palette::ACCENT_SOFT);
+        assert_eq!(color, palette::accent_soft());
     }
 }

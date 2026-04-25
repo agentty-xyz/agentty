@@ -79,7 +79,7 @@ impl Page for ProjectListPage<'_> {
         let info_panel_block = Block::default()
             .borders(Borders::ALL)
             .title("Agentty")
-            .border_style(Style::default().fg(style::palette::BORDER));
+            .border_style(Style::default().fg(style::palette::border()));
         let info_panel_inner_area = info_panel_block.inner(info_area);
         let info_panel_chunks = Layout::horizontal([
             Constraint::Percentage(AGENTTY_INFO_ASCII_WIDTH_PERCENT),
@@ -94,18 +94,18 @@ impl Page for ProjectListPage<'_> {
             AGENTTY_ASCII_ART_LINE_COUNT,
         );
         let logo_panel = Paragraph::new(AGENTTY_ASCII_ART)
-            .style(Style::default().fg(style::palette::TEXT))
+            .style(Style::default().fg(style::palette::text()))
             .wrap(Wrap { trim: false });
         let details_panel = Paragraph::new(agentty_info_details_text())
-            .style(Style::default().fg(style::palette::TEXT))
+            .style(Style::default().fg(style::palette::text()))
             .wrap(Wrap { trim: true });
 
-        let selected_style = Style::default().bg(style::palette::SURFACE);
+        let selected_style = Style::default().bg(style::palette::surface());
         let header = Row::new(["Project", "Branch", "Sessions", "Last Opened", "Path"])
             .style(
                 Style::default()
-                    .bg(style::palette::SURFACE)
-                    .fg(style::palette::TEXT_MUTED)
+                    .bg(style::palette::surface())
+                    .fg(style::palette::text_muted())
                     .add_modifier(Modifier::BOLD),
             )
             .height(1)
@@ -187,7 +187,7 @@ fn project_row_values(
 /// Returns style for one project row, emphasizing the active project.
 fn project_row_style(project_item: &ProjectListItem, active_project_id: i64) -> Style {
     if project_item.project.id == active_project_id {
-        return Style::default().fg(style::palette::ACCENT_SOFT);
+        return Style::default().fg(style::palette::accent_soft());
     }
 
     Style::default()
@@ -211,7 +211,7 @@ fn session_count_line(total: u32, active: u32) -> Line<'static> {
             Span::raw(format!("{total} ")),
             Span::styled(
                 format!("▶ {active}"),
-                Style::default().fg(style::palette::WARNING),
+                Style::default().fg(style::palette::warning()),
             ),
         ]);
     }
@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(line.spans.len(), 2);
         assert_eq!(line.spans[0].content.as_ref(), "5 ");
         assert_eq!(line.spans[1].content.as_ref(), "▶ 2");
-        assert_eq!(line.spans[1].style.fg, Some(style::palette::WARNING));
+        assert_eq!(line.spans[1].style.fg, Some(style::palette::warning()));
     }
 
     #[test]
@@ -430,7 +430,7 @@ mod tests {
         let style = project_row_style(&project_item, 42);
 
         // Assert
-        assert_eq!(style.fg, Some(style::palette::ACCENT_SOFT));
+        assert_eq!(style.fg, Some(style::palette::accent_soft()));
     }
 
     #[test]

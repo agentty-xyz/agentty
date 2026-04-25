@@ -345,8 +345,8 @@ pub(crate) fn overlay_block(title: &str, border_color: Color) -> Block<'static> 
 /// Returns the dimmed backdrop style applied behind overlay popups.
 fn overlay_backdrop_style() -> Style {
     Style::default()
-        .bg(palette::SURFACE_OVERLAY)
-        .fg(palette::TEXT_MUTED)
+        .bg(palette::surface_overlay())
+        .fg(palette::text_muted())
 }
 
 /// Returns the shared title text style for overlay frame headers.
@@ -659,7 +659,7 @@ mod tests {
             .content()
             .first()
             .expect("buffer should contain at least one cell");
-        assert_eq!(first_cell.bg, palette::SURFACE_OVERLAY);
-        assert_eq!(first_cell.fg, palette::TEXT_MUTED);
+        assert_eq!(first_cell.bg, palette::surface_overlay());
+        assert_eq!(first_cell.fg, palette::text_muted());
     }
 }

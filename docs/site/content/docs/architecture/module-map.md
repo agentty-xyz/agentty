@@ -122,6 +122,8 @@ also writes a machine-readable workspace summary to
   and re-exports of shared forge review-request types from `ag-forge`.
 - `crates/agentty/src/domain/setting.rs`: Shared persisted setting keys used
   across app and infrastructure layers.
+- `crates/agentty/src/domain/theme.rs`: Terminal color theme values,
+  persistence strings, and settings selector ordering.
 
 ## Infrastructure Layer (`infra/`)
 
@@ -288,8 +290,8 @@ also writes a machine-readable workspace summary to
   pages.
 - `crates/agentty/src/ui/state.rs`: Router-only UI-state module exposing mode,
   help, and prompt state.
-- `crates/agentty/src/ui/style.rs`: Shared semantic color palette and session
-  status styling helpers.
+- `crates/agentty/src/ui/style.rs`: Theme-aware semantic color palette and
+  session status styling helpers.
 - `crates/agentty/src/ui/text_util.rs`: Text manipulation helpers.
 - `crates/agentty/src/ui/activity_heatmap.rs`: Activity heatmap visualization.
 - `crates/agentty/src/ui/util.rs`: General UI utilities.

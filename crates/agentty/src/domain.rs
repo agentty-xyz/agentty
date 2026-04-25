@@ -7,3 +7,4 @@ pub mod permission;
 pub mod project;
 pub mod session;
 pub mod setting;
+pub mod theme;

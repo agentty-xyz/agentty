@@ -22,6 +22,8 @@ pub(crate) enum SettingName {
     OpenCommand,
     /// Persists whether the last used model should become the default.
     LastUsedModelAsDefault,
+    /// Persists the active terminal color theme.
+    Theme,
 }
 
 impl SettingName {
@@ -36,6 +38,7 @@ impl SettingName {
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::OpenCommand => "OpenCommand",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
+            Self::Theme => "Theme",
         }
     }
 }
@@ -69,6 +72,7 @@ mod tests {
                 SettingName::LastUsedModelAsDefault,
                 "LastUsedModelAsDefault",
             ),
+            (SettingName::Theme, "Theme"),
         ];
 
         // Act & Assert
@@ -90,6 +94,7 @@ mod tests {
             SettingName::IncludeCoauthoredByAgentty,
             SettingName::OpenCommand,
             SettingName::LastUsedModelAsDefault,
+            SettingName::Theme,
         ];
 
         // Act & Assert

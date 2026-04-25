@@ -84,6 +84,8 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Open Commands", &full);
+                assertion::assert_text_in_region(frame, "Theme", &full);
+                assertion::assert_text_in_region(frame, "Current", &full);
             },
         )
         .expect("feature test failed");
@@ -206,6 +208,60 @@ fn settings_enter_cycles_value() {
                 let after_frame = common::frame_from_capture(&report.captures[1]);
                 let after_full = Region::full(after_frame.cols(), after_frame.rows());
                 assertion::assert_text_in_region(&after_frame, "xhigh", &after_full);
+            },
+        )
+        .expect("feature test failed");
+}
+
+/// Verify that the `Theme` settings row switches from `Current` to `Hacker`.
+#[test]
+fn settings_theme_switch() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_theme_switch")
+        .zola(
+            "Settings theme switch",
+            "Switch Agentty between the current palette and the Hacker theme.",
+            155,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Stats"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .viewing_pause_ms(2000)
+                    .capture_labeled("before_theme_switch", "Theme setting before switching")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(2500)
+                    .capture_labeled("after_theme_switch", "Hacker theme selected")
+            },
+            |frame, report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Theme", &full);
+                assertion::assert_text_in_region(frame, "Hacker", &full);
+
+                assert_eq!(
+                    report.captures.len(),
+                    2,
+                    "Expected 2 captures (before and after switching theme)"
+                );
+
+                let before_frame = common::frame_from_capture(&report.captures[0]);
+                let before_full = Region::full(before_frame.cols(), before_frame.rows());
+                assertion::assert_text_in_region(&before_frame, "Current", &before_full);
+
+                let after_frame = common::frame_from_capture(&report.captures[1]);
+                let after_full = Region::full(after_frame.cols(), after_frame.rows());
+                assertion::assert_text_in_region(&after_frame, "Hacker", &after_full);
             },
         )
         .expect("feature test failed");

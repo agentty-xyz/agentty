@@ -35,10 +35,10 @@ impl Page for SettingsPage<'_> {
         let main_area = chunks[0];
         let footer_area = chunks[1];
 
-        let selected_style = Style::default().bg(style::palette::SURFACE);
+        let selected_style = Style::default().bg(style::palette::surface());
         let header_style = Style::default()
-            .bg(style::palette::SURFACE)
-            .fg(style::palette::TEXT_MUTED)
+            .bg(style::palette::surface())
+            .fg(style::palette::text_muted())
             .add_modifier(Modifier::BOLD);
         let header_cells = ["Setting", "Value"].iter().map(|h| Cell::from(*h));
         let header = Row::new(header_cells)

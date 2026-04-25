@@ -69,19 +69,19 @@ impl<'a> DiffPage<'a> {
         total_removed_lines: u64,
     ) {
         let title = Line::from(vec![
-            Span::styled(" (", Style::default().fg(style::palette::WARNING)),
+            Span::styled(" (", Style::default().fg(style::palette::warning())),
             Span::styled(
                 format!("+{total_added_lines}"),
-                Style::default().fg(style::palette::SUCCESS),
+                Style::default().fg(style::palette::success()),
             ),
-            Span::styled(" ", Style::default().fg(style::palette::WARNING)),
+            Span::styled(" ", Style::default().fg(style::palette::warning())),
             Span::styled(
                 format!("-{total_removed_lines}"),
-                Style::default().fg(style::palette::DANGER),
+                Style::default().fg(style::palette::danger()),
             ),
             Span::styled(
                 format!(") Diff — {} ", inline_text(self.session.display_title())),
-                Style::default().fg(style::palette::WARNING),
+                Style::default().fg(style::palette::warning()),
             ),
         ]);
 
@@ -124,15 +124,15 @@ impl<'a> DiffPage<'a> {
     /// Returns the style used for added diff lines.
     fn addition_line_style() -> Style {
         Style::default()
-            .fg(style::palette::SUCCESS)
-            .bg(style::palette::SURFACE_SUCCESS)
+            .fg(style::palette::success())
+            .bg(style::palette::surface_success())
     }
 
     /// Returns the style used for removed diff lines.
     fn deletion_line_style() -> Style {
         Style::default()
-            .fg(style::palette::DANGER)
-            .bg(style::palette::SURFACE_DANGER)
+            .fg(style::palette::danger())
+            .bg(style::palette::surface_danger())
     }
 
     /// Builds wrapped diff lines for the diff panel, optionally reserving one
@@ -141,7 +141,7 @@ impl<'a> DiffPage<'a> {
         parsed: &[DiffLine<'line>],
         layout: diff_util::DiffRenderLayout,
     ) -> Vec<Line<'line>> {
-        let gutter_style = Style::default().fg(style::palette::TEXT_SUBTLE);
+        let gutter_style = Style::default().fg(style::palette::text_subtle());
         let mut lines: Vec<Line<'line>> = Vec::with_capacity(parsed.len());
 
         for diff_line in parsed {
@@ -152,7 +152,7 @@ impl<'a> DiffPage<'a> {
                     }
                     lines.push(Line::from(Span::styled(
                         diff_line.content,
-                        Style::default().fg(style::palette::WARNING),
+                        Style::default().fg(style::palette::warning()),
                     )));
 
                     continue;
@@ -160,14 +160,14 @@ impl<'a> DiffPage<'a> {
                 DiffLineKind::HunkHeader => {
                     lines.push(Line::from(Span::styled(
                         diff_line.content,
-                        Style::default().fg(style::palette::ACCENT),
+                        Style::default().fg(style::palette::accent()),
                     )));
 
                     continue;
                 }
                 DiffLineKind::Addition => ("+", Self::addition_line_style()),
                 DiffLineKind::Deletion => ("-", Self::deletion_line_style()),
-                DiffLineKind::Context => (" ", Style::default().fg(style::palette::TEXT_MUTED)),
+                DiffLineKind::Context => (" ", Style::default().fg(style::palette::text_muted())),
             };
 
             let old_str = match diff_line.old_line {
@@ -241,12 +241,12 @@ impl<'a> DiffPage<'a> {
             let (symbol, symbol_style) = if is_thumb_line {
                 (
                     SCROLLBAR_THUMB_SYMBOL,
-                    Style::default().fg(style::palette::WARNING),
+                    Style::default().fg(style::palette::warning()),
                 )
             } else {
                 (
                     SCROLLBAR_TRACK_SYMBOL,
-                    Style::default().fg(style::palette::TEXT_SUBTLE),
+                    Style::default().fg(style::palette::text_subtle()),
                 )
             };
 
@@ -749,11 +749,11 @@ mod tests {
         // Assert
         let buffer = terminal.backend().buffer();
         assert!(
-            background_cell_count(buffer, style::palette::SURFACE_SUCCESS) > 0,
+            background_cell_count(buffer, style::palette::surface_success()) > 0,
             "expected added lines to include success background tint"
         );
         assert!(
-            background_cell_count(buffer, style::palette::SURFACE_DANGER) > 0,
+            background_cell_count(buffer, style::palette::surface_danger()) > 0,
             "expected removed lines to include danger background tint"
         );
     }

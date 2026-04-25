@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 use serde_json;
@@ -36,10 +36,6 @@ const SLASH_MENU_BORDER_HEIGHT: u16 = 2;
 const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
-/// Foreground color used for chat input `@` lookup tokens.
-const CHAT_INPUT_AT_MENTION_COLOR: Color = Color::LightBlue;
-/// Foreground color used for inline prompt image placeholders.
-const CHAT_INPUT_IMAGE_TOKEN_COLOR: Color = Color::Yellow;
 const SINGLE_LINE_FOOTER_HEIGHT: u16 = 1;
 const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
 
@@ -204,7 +200,7 @@ pub fn session_header_lines(
         Line::from(title_spans),
         Line::from(Span::styled(
             metadata_text,
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         )),
     ]
 }
@@ -407,14 +403,14 @@ pub(crate) fn question_panel_lines(
     width: u16,
 ) -> Vec<Line<'static>> {
     let title_color = if is_chat_focused {
-        style::palette::TEXT_MUTED
+        style::palette::text_muted()
     } else {
-        style::palette::QUESTION
+        style::palette::question()
     };
     let text_color = if is_chat_focused {
-        style::palette::TEXT_MUTED
+        style::palette::text_muted()
     } else {
-        Color::Yellow
+        style::palette::warning()
     };
     let mut lines = vec![Line::from(Span::styled(
         question_title.to_string(),
@@ -438,9 +434,9 @@ pub(crate) fn question_option_lines(
     dimmed: bool,
 ) -> Vec<Line<'static>> {
     let header_color = if dimmed {
-        style::palette::TEXT_MUTED
+        style::palette::text_muted()
     } else {
-        Color::Yellow
+        style::palette::warning()
     };
     let mut lines = Vec::with_capacity(options.len() + 1);
     lines.push(Line::from(Span::styled(
@@ -453,14 +449,14 @@ pub(crate) fn question_option_lines(
         let prefix = if is_selected { "▸ " } else { "  " };
         let label = format!("{prefix}{}. {option_text}", option_index + 1);
         let style = if dimmed {
-            Style::default().fg(style::palette::TEXT_MUTED)
+            Style::default().fg(style::palette::text_muted())
         } else if is_selected {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(style::palette::surface_overlay())
+                .bg(style::palette::warning())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(style::palette::text())
         };
 
         lines.push(Line::from(Span::styled(label, style)));
@@ -582,7 +578,7 @@ pub fn session_output_done_toggle_line(
 
     Line::from(vec![Span::styled(
         format!("Press 't' to switch to {toggle_target}. Press 'c' to continue in a new session."),
-        Style::default().fg(style::palette::TEXT_SUBTLE),
+        Style::default().fg(style::palette::text_subtle()),
     )])
 }
 
@@ -1150,11 +1146,11 @@ fn session_output_published_branch_sync_color(
     sync_status: PublishedBranchSyncStatus,
 ) -> ratatui::style::Color {
     match sync_status {
-        PublishedBranchSyncStatus::Idle => style::palette::TEXT_MUTED,
+        PublishedBranchSyncStatus::Idle => style::palette::text_muted(),
         PublishedBranchSyncStatus::InProgress | PublishedBranchSyncStatus::Failed => {
-            style::palette::WARNING
+            style::palette::warning()
         }
-        PublishedBranchSyncStatus::Succeeded => style::palette::SUCCESS,
+        PublishedBranchSyncStatus::Succeeded => style::palette::success(),
     }
 }
 
@@ -1194,7 +1190,7 @@ fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
     let prefix_span = Span::styled(
         prefix,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(style::palette::accent())
             .add_modifier(Modifier::BOLD),
     );
     let prefix_width = prefix_span.width();
@@ -1262,10 +1258,10 @@ fn compute_input_layout_data(input: &str, width: u16) -> InputLayout {
 
         let style = if is_image_token {
             Style::default()
-                .fg(CHAT_INPUT_IMAGE_TOKEN_COLOR)
+                .fg(style::palette::warning())
                 .add_modifier(Modifier::BOLD)
         } else if in_mention {
-            Style::default().fg(CHAT_INPUT_AT_MENTION_COLOR)
+            Style::default().fg(style::palette::info())
         } else {
             Style::default()
         };
@@ -1414,7 +1410,7 @@ enum VerticalDirection {
 mod tests {
     use std::path::PathBuf;
 
-    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::style::{Modifier, Style};
 
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
@@ -1677,17 +1673,20 @@ mod tests {
         assert_eq!(
             footer_line.spans[0].style,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(style::palette::accent())
                 .add_modifier(Modifier::BOLD)
         );
-        assert_eq!(footer_line.spans[1].style, Style::default().fg(Color::Gray));
+        assert_eq!(
+            footer_line.spans[1].style,
+            Style::default().fg(style::palette::text_muted())
+        );
         assert_eq!(
             footer_line.spans[footer_line.spans.len() - 2].style,
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(style::palette::text_subtle())
         );
         assert_eq!(
             footer_line.spans[footer_line.spans.len() - 1].style,
-            Style::default().fg(Color::Gray)
+            Style::default().fg(style::palette::text_muted())
         );
     }
 
@@ -1996,7 +1995,7 @@ mod tests {
         // Assert
         assert_eq!(lines[0].to_string(), title);
         assert!(lines.len() > 2);
-        assert_eq!(lines[0].spans[0].style.fg, Some(style::palette::QUESTION));
+        assert_eq!(lines[0].spans[0].style.fg, Some(style::palette::question()));
     }
 
     #[test]
@@ -2010,7 +2009,7 @@ mod tests {
         // Assert
         assert_eq!(lines[0].to_string(), "Options:");
         assert_eq!(lines[2].to_string(), "▸ 2. No");
-        assert_eq!(lines[2].spans[0].style.bg, Some(Color::Yellow));
+        assert_eq!(lines[2].spans[0].style.bg, Some(style::palette::warning()));
     }
 
     #[test]
@@ -2830,7 +2829,7 @@ mod tests {
 
         // "@file" (indices 7..12) should be highlighted
         for span in spans.iter().take(12).skip(7) {
-            assert_eq!(span.style.fg, Some(CHAT_INPUT_AT_MENTION_COLOR));
+            assert_eq!(span.style.fg, Some(style::palette::info()));
         }
 
         // " world" (indices 12..18) should be normal style
@@ -2853,7 +2852,7 @@ mod tests {
         let spans = &line.spans;
 
         for span in spans.iter().take(12).skip(7) {
-            assert_eq!(span.style.fg, Some(CHAT_INPUT_AT_MENTION_COLOR));
+            assert_eq!(span.style.fg, Some(style::palette::info()));
         }
         assert_eq!(spans[12].content, ",");
         assert_eq!(spans[12].style.fg, None);
@@ -2873,7 +2872,7 @@ mod tests {
         let spans = &line.spans;
 
         for span in spans.iter().take(12).skip(7) {
-            assert_eq!(span.style.fg, Some(CHAT_INPUT_AT_MENTION_COLOR));
+            assert_eq!(span.style.fg, Some(style::palette::info()));
         }
         assert_eq!(spans[12].content, ")");
         assert_eq!(spans[12].style.fg, None);
@@ -2893,7 +2892,7 @@ mod tests {
         let spans = &line.spans;
 
         for span in spans.iter().take(21).skip(9) {
-            assert_eq!(span.style.fg, Some(CHAT_INPUT_AT_MENTION_COLOR));
+            assert_eq!(span.style.fg, Some(style::palette::info()));
         }
         assert_eq!(spans[21].content, ")");
         assert_eq!(spans[21].style.fg, None);
@@ -2933,7 +2932,7 @@ mod tests {
         let image_end = image_start + "[Image #12]".chars().count();
 
         for span in spans.iter().take(image_end).skip(image_start) {
-            assert_eq!(span.style.fg, Some(CHAT_INPUT_IMAGE_TOKEN_COLOR));
+            assert_eq!(span.style.fg, Some(style::palette::warning()));
             assert!(span.style.add_modifier.contains(Modifier::BOLD));
         }
     }

@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use rustc_hash::FxHasher;
 use unicode_width::UnicodeWidthChar;
 
+use crate::ui::style;
 use crate::ui::util::wrap_styled_line;
 
 const USER_PROMPT_PREFIX: &str = " › ";
@@ -83,8 +84,8 @@ impl MarkdownRenderCache {
 
     /// Bumps the cache version and drops all rendered entries.
     ///
-    /// Theme mutations call this so cached styled lines never outlive the
-    /// palette they were rendered with.
+    /// Callers use this when non-content render settings change; the active
+    /// theme is already part of each cache key.
     pub fn bump_version(&self) {
         self.version.set(self.version.get().wrapping_add(1));
         self.entries.borrow_mut().clear();
@@ -95,7 +96,10 @@ impl MarkdownRenderCache {
         MarkdownRenderCacheKey {
             content_hash: Self::hash_text(text),
             content_len: text.len(),
-            version: self.version.get(),
+            version: self
+                .version
+                .get()
+                .wrapping_add(style::active_theme_cache_version()),
             width: u16::try_from(width).unwrap_or(u16::MAX),
         }
     }
@@ -426,7 +430,7 @@ fn render_markdown_line(raw_line: &str, width: usize) -> Vec<Line<'static>> {
             "│ ",
             content,
             blockquote_prefix_style(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(style::palette::text_muted()),
             width,
         );
     }
@@ -1058,44 +1062,46 @@ fn horizontal_rule_line(width: usize) -> Line<'static> {
 
 fn heading_style(level: usize) -> Style {
     let color = match level {
-        1 => Color::Cyan,
-        2 => Color::Blue,
-        3 => Color::Green,
-        _ => Color::Yellow,
+        1 => style::palette::accent(),
+        2 => style::palette::info(),
+        3 => style::palette::success(),
+        _ => style::palette::warning(),
     };
 
     Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
 fn list_prefix_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    Style::default().fg(style::palette::text_subtle())
 }
 
 fn blockquote_prefix_style() -> Style {
     Style::default()
-        .fg(Color::DarkGray)
+        .fg(style::palette::text_subtle())
         .add_modifier(Modifier::DIM)
 }
 
 fn horizontal_rule_style() -> Style {
     Style::default()
-        .fg(Color::DarkGray)
+        .fg(style::palette::text_subtle())
         .add_modifier(Modifier::DIM)
 }
 
 fn code_block_style() -> Style {
-    Style::default().fg(Color::Gray).bg(Color::Black)
+    Style::default()
+        .fg(style::palette::text_muted())
+        .bg(style::palette::surface_overlay())
 }
 
 fn stats_metric_style() -> Style {
     Style::default()
-        .fg(Color::Cyan)
+        .fg(style::palette::accent())
         .add_modifier(Modifier::BOLD)
 }
 
 fn stats_section_style() -> Style {
     Style::default()
-        .fg(Color::Green)
+        .fg(style::palette::success())
         .add_modifier(Modifier::BOLD)
 }
 
@@ -1105,13 +1111,13 @@ fn stats_value_style() -> Style {
 
 /// Returns the background color used for clarification prompt blocks.
 fn clarification_background_color() -> Color {
-    Color::Rgb(28, 38, 48)
+    style::palette::surface_elevated()
 }
 
 /// Returns the style for the visible `CLARIFICATION_PROMPT_PREFIX` marker.
 fn clarification_prompt_prefix_style() -> Style {
     Style::default()
-        .fg(Color::Yellow)
+        .fg(style::palette::warning())
         .bg(clarification_background_color())
         .add_modifier(Modifier::BOLD)
 }
@@ -1119,7 +1125,7 @@ fn clarification_prompt_prefix_style() -> Style {
 /// Returns the style for clarification heading text.
 fn clarification_header_style() -> Style {
     Style::default()
-        .fg(Color::LightYellow)
+        .fg(style::palette::warning_soft())
         .bg(clarification_background_color())
         .add_modifier(Modifier::BOLD)
 }
@@ -1127,7 +1133,7 @@ fn clarification_header_style() -> Style {
 /// Returns the style for numbered clarification question indexes.
 fn clarification_question_index_style() -> Style {
     Style::default()
-        .fg(Color::White)
+        .fg(style::palette::text())
         .bg(clarification_background_color())
         .add_modifier(Modifier::BOLD)
 }
@@ -1135,7 +1141,7 @@ fn clarification_question_index_style() -> Style {
 /// Returns the style for `Q:` labels in clarification blocks.
 fn clarification_question_label_style() -> Style {
     Style::default()
-        .fg(Color::Cyan)
+        .fg(style::palette::accent())
         .bg(clarification_background_color())
         .add_modifier(Modifier::BOLD)
 }
@@ -1143,7 +1149,7 @@ fn clarification_question_label_style() -> Style {
 /// Returns the style for `A:` labels in clarification blocks.
 fn clarification_answer_label_style() -> Style {
     Style::default()
-        .fg(Color::Green)
+        .fg(style::palette::success())
         .bg(clarification_background_color())
         .add_modifier(Modifier::BOLD)
 }
@@ -1151,19 +1157,19 @@ fn clarification_answer_label_style() -> Style {
 /// Returns the style for clarification text content.
 fn clarification_content_style() -> Style {
     Style::default()
-        .fg(Color::Gray)
+        .fg(style::palette::text_muted())
         .bg(clarification_background_color())
 }
 
 /// Returns the background color used for rendered user prompt blocks.
 fn user_prompt_background_color() -> Color {
-    Color::DarkGray
+    style::palette::surface()
 }
 
 /// Returns the style for the visible `USER_PROMPT_PREFIX` marker.
 fn user_prompt_prefix_style() -> Style {
     Style::default()
-        .fg(Color::Cyan)
+        .fg(style::palette::accent())
         .bg(user_prompt_background_color())
         .add_modifier(Modifier::BOLD)
 }
@@ -1176,7 +1182,7 @@ fn user_prompt_content_style() -> Style {
 /// Returns the style for one `@` lookup token within user prompt content.
 fn user_prompt_lookup_style() -> Style {
     Style::default()
-        .fg(Color::LightBlue)
+        .fg(style::palette::info())
         .bg(user_prompt_background_color())
 }
 
@@ -1186,7 +1192,7 @@ fn prompt_block_continuation_padding() -> String {
 }
 
 fn inline_code_style() -> Style {
-    Style::default().fg(Color::Yellow)
+    Style::default().fg(style::palette::warning())
 }
 
 fn find_matching_backtick(characters: &[char], start_index: usize) -> Option<usize> {

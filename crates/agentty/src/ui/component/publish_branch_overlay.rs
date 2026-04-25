@@ -88,13 +88,13 @@ impl<'a> PublishBranchOverlay<'a> {
             .border_type(BorderType::Rounded)
             .border_style(
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(palette::accent())
                     .add_modifier(Modifier::BOLD),
             )
             .title(Span::styled(
                 title,
                 Style::default()
-                    .fg(palette::ACCENT)
+                    .fg(palette::accent())
                     .add_modifier(Modifier::BOLD),
             ));
         let paragraph = Paragraph::new(self.input.text()).block(block);
@@ -107,7 +107,7 @@ impl<'a> PublishBranchOverlay<'a> {
 impl Component for PublishBranchOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
         let popup_area = Self::popup_area(area);
-        let block = overlay::overlay_block(REVIEW_REQUEST_TITLE, palette::ACCENT);
+        let block = overlay::overlay_block(REVIEW_REQUEST_TITLE, palette::accent());
         let inner_area = block.inner(popup_area);
         let sections = Layout::vertical([
             Constraint::Min(2),
@@ -117,13 +117,13 @@ impl Component for PublishBranchOverlay<'_> {
         .split(inner_area);
         let message = Paragraph::new(Line::from(vec![Span::styled(
             self.message_text(),
-            Style::default().fg(palette::TEXT_MUTED),
+            Style::default().fg(palette::text_muted()),
         )]))
         .wrap(Wrap { trim: true });
         let help = Paragraph::new(
             Line::from(vec![Span::styled(
                 self.help_text(),
-                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(palette::text_muted()),
             )])
             .alignment(Alignment::Center),
         );

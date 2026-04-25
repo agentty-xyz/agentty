@@ -51,7 +51,7 @@ impl Page for TasksPage<'_> {
                 Block::default()
                     .borders(Borders::ALL)
                     .title("Roadmap Tasks")
-                    .border_style(Style::default().fg(style::palette::BORDER)),
+                    .border_style(Style::default().fg(style::palette::border())),
             )
             .scroll((self.scroll_offset.min(max_scroll_offset), 0))
             .wrap(Wrap { trim: true });
@@ -65,7 +65,7 @@ fn roadmap_error_lines(error: &str) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
             "Unable to load roadmap tasks.",
-            Style::default().fg(style::palette::DANGER),
+            Style::default().fg(style::palette::danger()),
         )),
         Line::default(),
         Line::from(error.to_string()),
@@ -79,7 +79,7 @@ fn roadmap_missing_lines() -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
             "No roadmap data available for the active project.",
-            Style::default().fg(style::palette::TEXT_MUTED),
+            Style::default().fg(style::palette::text_muted()),
         )),
         Line::default(),
         Line::from("Add `docs/plan/roadmap.md` to expose roadmap tasks here."),

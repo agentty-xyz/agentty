@@ -65,12 +65,13 @@ impl<'a> StatusBar<'a> {
     /// to the manual update hint.
     fn update_progress_text(&self) -> Option<(String, ratatui::style::Color)> {
         match &self.update_status {
-            Some(UpdateStatus::InProgress { version }) => {
-                Some((format!("Updating to {version}..."), style::palette::ACCENT))
-            }
+            Some(UpdateStatus::InProgress { version }) => Some((
+                format!("Updating to {version}..."),
+                style::palette::accent(),
+            )),
             Some(UpdateStatus::Complete { version }) => Some((
                 format!("Updated to {version} — restart to use new version"),
-                style::palette::SUCCESS,
+                style::palette::success(),
             )),
             Some(UpdateStatus::Failed { .. }) | None => None,
         }
@@ -89,7 +90,7 @@ impl Component for StatusBar<'_> {
         let mut version_spans = vec![Span::styled(
             format!(" Agentty {}", self.current_version),
             Style::default()
-                .fg(style::palette::ACCENT)
+                .fg(style::palette::accent())
                 .add_modifier(Modifier::BOLD),
         )];
 
@@ -107,7 +108,7 @@ impl Component for StatusBar<'_> {
                      agentty@latest"
                 ),
                 Style::default()
-                    .fg(style::palette::WARNING)
+                    .fg(style::palette::warning())
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -116,14 +117,14 @@ impl Component for StatusBar<'_> {
             version_spans.push(Span::raw(" | "));
             version_spans.push(Span::styled(
                 format!("FYI: {page_fyi_text}"),
-                Style::default().fg(style::palette::TEXT_MUTED),
+                Style::default().fg(style::palette::text_muted()),
             ));
         }
 
         let status_bar = Paragraph::new(Line::from(version_spans)).style(
             Style::default()
-                .bg(style::palette::SURFACE)
-                .fg(style::palette::TEXT),
+                .bg(style::palette::surface())
+                .fg(style::palette::text()),
         );
         f.render_widget(status_bar, area);
     }

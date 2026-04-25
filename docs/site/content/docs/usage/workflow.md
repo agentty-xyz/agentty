@@ -24,7 +24,7 @@ Agentty organizes its interface into four primary tabs, with one conditional
 | **Sessions** | List, create, and manage agent sessions. When a project is active, this tab appears as `Sessions (<project-name>)`. |
 | **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`, `Queued Next`, and `Parked` task queues. |
 | **Stats** | View usage statistics. |
-| **Settings** | Configure the default reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
+| **Settings** | Configure the color theme, default reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status-colored session title renders in a dedicated
 header row above the output panel. A second metadata row shows the persisted
@@ -71,11 +71,13 @@ Session statuses and what you can do in each state:
 | **Done** | Session completed, merged, and its worktree checkout was removed. | `c` confirm continuation into a new draft, `t` toggle summary/output, scroll, help |
 | **Canceled** | Session was canceled by the user and its worktree checkout was removed. | `c` confirm continuation into a new draft, read-only view (`q`, scroll, help) |
 
-Settings values are stored per active project. Switching projects reloads that
-project's `Default Reasoning Level`, `Default Smart Model` mode (explicit model or
+Settings values for models, reasoning, commit trailers, and open commands are
+stored per active project. Switching projects reloads that project's
+`Default Reasoning Level`, `Default Smart Model` mode (explicit model or
 `Last used model as default`), `Default Fast Model`, `Default Review Model`,
-`Coauthored by Agentty` toggle, and `Open Commands`. New projects default the
-coauthor toggle to disabled until you enable it.
+`Coauthored by Agentty` toggle, and `Open Commands`. The global `Theme` setting
+switches between `Current` and `Hacker`, with `Current` used by default. New
+projects default the coauthor toggle to disabled until you enable it.
 
 When a session enters **Review**, Agentty starts generating the focused review
 in the background. While that review-assist job is running, the session

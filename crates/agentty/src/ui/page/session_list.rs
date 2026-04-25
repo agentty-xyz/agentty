@@ -61,10 +61,10 @@ impl Page for SessionListPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let (main_area, footer_area) = Self::content_chunks(area);
 
-        let selected_style = Style::default().bg(style::palette::SURFACE);
+        let selected_style = Style::default().bg(style::palette::surface());
         let header_style = Style::default()
-            .bg(style::palette::SURFACE)
-            .fg(style::palette::TEXT_MUTED)
+            .bg(style::palette::surface())
+            .fg(style::palette::text_muted())
             .add_modifier(Modifier::BOLD);
         let header_cells = ["Session", "Model", "Size", "Status", "Timer"]
             .iter()
@@ -277,7 +277,7 @@ fn render_table_row(
 /// Renders a non-selectable group label row.
 fn render_group_label_row(group: SessionGroup) -> Row<'static> {
     let cells = vec![
-        Cell::from(group.label()).style(Style::default().fg(style::palette::ACCENT)),
+        Cell::from(group.label()).style(Style::default().fg(style::palette::accent())),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -290,7 +290,8 @@ fn render_group_label_row(group: SessionGroup) -> Row<'static> {
 /// Renders a non-selectable placeholder row for empty groups.
 fn render_empty_group_placeholder_row() -> Row<'static> {
     let cells = vec![
-        Cell::from(GROUP_EMPTY_PLACEHOLDER).style(Style::default().fg(style::palette::TEXT_SUBTLE)),
+        Cell::from(GROUP_EMPTY_PLACEHOLDER)
+            .style(Style::default().fg(style::palette::text_subtle())),
         Cell::from(""),
         Cell::from(""),
         Cell::from(""),
@@ -412,12 +413,12 @@ fn timer_column_width(sessions: &[Session], wall_clock_unix_seconds: i64) -> Con
 /// Returns the palette color representing each session size bucket.
 fn size_color(size: SessionSize) -> Color {
     match size {
-        SessionSize::Xs => style::palette::SUCCESS,
-        SessionSize::S => style::palette::SUCCESS_SOFT,
-        SessionSize::M => style::palette::WARNING,
-        SessionSize::L => style::palette::WARNING_SOFT,
-        SessionSize::Xl => style::palette::DANGER_SOFT,
-        SessionSize::Xxl => style::palette::DANGER,
+        SessionSize::Xs => style::palette::success(),
+        SessionSize::S => style::palette::success_soft(),
+        SessionSize::M => style::palette::warning(),
+        SessionSize::L => style::palette::warning_soft(),
+        SessionSize::Xl => style::palette::danger_soft(),
+        SessionSize::Xxl => style::palette::danger(),
     }
 }
 
@@ -868,12 +869,12 @@ mod tests {
     fn test_size_color_uses_expected_palette() {
         // Arrange
         let test_cases = [
-            (SessionSize::Xs, style::palette::SUCCESS),
-            (SessionSize::S, style::palette::SUCCESS_SOFT),
-            (SessionSize::M, style::palette::WARNING),
-            (SessionSize::L, style::palette::WARNING_SOFT),
-            (SessionSize::Xl, style::palette::DANGER_SOFT),
-            (SessionSize::Xxl, style::palette::DANGER),
+            (SessionSize::Xs, style::palette::success()),
+            (SessionSize::S, style::palette::success_soft()),
+            (SessionSize::M, style::palette::warning()),
+            (SessionSize::L, style::palette::warning_soft()),
+            (SessionSize::Xl, style::palette::danger_soft()),
+            (SessionSize::Xxl, style::palette::danger()),
         ];
 
         // Act & Assert
@@ -1043,8 +1044,8 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
         let new_cell = find_text_start_cell(buffer, "New").unwrap_or(fallback_cell);
-        assert_eq!(new_cell.fg, style::palette::TEXT_MUTED);
-        assert_eq!(new_cell.bg, style::palette::SURFACE);
+        assert_eq!(new_cell.fg, style::palette::text_muted());
+        assert_eq!(new_cell.bg, style::palette::surface());
         assert_ne!(new_cell.fg, new_cell.bg);
     }
 }
