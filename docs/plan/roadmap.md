@@ -14,7 +14,8 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Header guidance FYIs | The top status bar now rotates page-specific `FYI:` guidance for the sessions list and session chat once per minute while keeping version and update-state text visible. | Landed |
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Chained session workflow | Follow-up tasks can already launch sibling sessions, but each new session still starts from the active project base branch and published review requests always target that same base branch instead of another session branch. | Missing |
-| Terminal session continuation | `Done` and `Canceled` sessions keep their transcript and summary context, but users still cannot launch a fresh session that reuses that closed session as the initial context source. | Missing |
+| Terminal session continuation | `Done` and `Canceled` sessions now expose a `c` continuation shortcut that opens a fresh draft session whose first staged message is seeded from the source session's persisted summary or transcript context. | Landed |
+| Queued chat messages | Session chat blocks the composer while a turn is `InProgress`, so users cannot stage follow-up prompts before the agent returns to `Review`. | Missing |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
 
@@ -22,7 +23,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 
 - `Delivery`: project-level landing strategy, forge-aware review-request publishing, and chained-session delivery for review-ready sessions, including direct-merge vs. review-request expectations.
 - `Protocol`: provider session continuity and compact context replay so resumed chats stay responsive without losing guidance.
-- `Workflow`: continuation entry points for `Done` and `Canceled` sessions so follow-on work can start from prior session context instead of manual copy-paste.
+- `Workflow`: session chat input flow including queueing follow-up messages while the agent is running, dispatching them between turns, and clearing them on cancel or interrupted-run recovery.
 - `Session Output`: per-turn execution digests that summarize the commands, changed files, and skill activity users need to review directly in the chat transcript.
 
 ## Planning Model
@@ -68,7 +69,7 @@ Users can view and change a project's landing strategy in Agentty settings, and 
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/getting-started/overview.md` to explain the new per-project delivery strategy setting without claiming session actions consume it yet.
 
-### [c40593d1-8707-48ff-b282-15234fcef2a2] Workflow: Continue terminal sessions from saved context
+### [e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs
 
 #### Assignee
 
@@ -76,24 +77,24 @@ Users can view and change a project's landing strategy in Agentty settings, and 
 
 #### Why now
 
-Terminal sessions already persist the transcript and structured summary users need for follow-on work, but Agentty still makes them manually copy that context into a brand-new session before they can continue.
+Session chat blocks the composer while a turn is `InProgress`, so users have to wait for `Review` before they can stage the next instruction; allowing typed messages to queue and dispatch automatically removes that wait without changing the worker's serial execution model.
 
 #### Usable outcome
 
-From a `Done` or `Canceled` session view, users can launch a fresh session whose initial composer is seeded from the closed session's persisted context.
+While a session is `InProgress`, users can press `Enter` to open the composer, submit additional messages that render inline in the transcript as `queued` entries, and have them dispatched one-by-one as new turns once the running turn finishes; queued messages pause while the session is in `Question` state and resume only after the clarification path returns to a runnable state, and canceling the running turn (`Ctrl+C`) clears the queue. Queued messages live in memory for the active app session, so they are discarded on app restart.
 
 #### Substeps
 
-- [ ] **Build a continuation seed from one terminal session's persisted context.** Update `crates/agentty/src/domain/session.rs`, `crates/agentty/src/app/core/state.rs`, `crates/agentty/src/app/session/workflow/lifecycle.rs`, and related session-state helpers so Agentty can create a fresh session from a `Done` or `Canceled` source and prefill the first prompt or composer with the source session's persisted summary or transcript context without reopening the closed session.
-- [ ] **Expose the continue flow in terminal session view only.** Update `crates/agentty/src/runtime/key_handler.rs`, `crates/agentty/src/runtime/mode/session_view.rs`, `crates/agentty/src/ui/state/help_action.rs`, and any touched session-view rendering helpers so `Done` and `Canceled` sessions surface one continue action that opens the seeded new-session composer while leaving non-terminal session shortcuts unchanged.
+- [ ] **Maintain an in-memory queue and dispatch between turns with a `Question`-aware pause.** Add a runtime `queued_messages` field to the session worker state in `crates/agentty/src/app/session/workflow/worker.rs`, drain the queue between turns so each pop becomes the next `SessionCommand::Run` while status stays `InProgress`, hold draining while the session is in `Question` state and resume dispatch only after status returns to a runnable state, and clear the queue on `Ctrl+C` cancellation.
+- [ ] **Allow Enter-to-queue and render queued chat messages inline.** Relax the `is_view_action_allowed()` gate in `crates/agentty/src/runtime/mode/session_view.rs` so `Enter` (but not `/`) opens the composer during `InProgress`, route the submission in `crates/agentty/src/runtime/mode/prompt.rs` through a new `SessionManager::enqueue_message()` orchestrator on `crates/agentty/src/app/session/workflow/lifecycle.rs` that pushes onto the in-memory queue and emits `AppEvent::RefreshSessions`, and render queued rows inline in the session transcript with a `queued` style so they appear in submission order beneath the running turn.
 
 #### Tests
 
-- [ ] Add or extend coverage in `crates/agentty/src/app/core/state.rs` and `crates/agentty/src/runtime/key_handler.rs` for terminal-session continuation seed generation, allowed-status gating, and the view-mode shortcut flow, and add an E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` that proves a `Done` or `Canceled` session can open the continuation composer with the expected seeded context.
+- [ ] Add unit coverage in `crates/agentty/src/app/session/workflow/worker.rs` and `crates/agentty/src/app/session/workflow/lifecycle.rs` for in-memory queueing, between-turn dispatch, the `Question`-state pause and resume, and cancel-clears-queue; add an E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` covering enqueue-while-running → inline pending render → dispatch-after-turn → cancel-clears-queue.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to explain how terminal-session continuation works from session view and which shortcut starts the seeded follow-on session.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` to document message queueing during `InProgress`, the `Enter`-only composer entry, the `Question`-state pause behavior, cancel-clears-queue, and that queued messages are session-local and discarded on app restart.
 
 ## Ready Now Execution Order
 
@@ -106,16 +107,68 @@ flowchart TD
     end
 
     subgraph WorkflowLane["Workflow - @andagaev"]
-        W1["[c40593d1] Continue terminal sessions"]
+        W1["[e26bb561] Queue chat messages"]
+        W2["[b8c92f4d] Persist queued messages"]
+        W3["[7684c30b] Two-stage Ctrl+C"]
+        W4["[c9469d77] Delete queued messages"]
+        W1 -. queued follow-up .-> W2
+        W1 -. queued follow-up .-> W3
+        W1 -. queued follow-up .-> W4
     end
 
     subgraph LaterLanes["Queued independent streams"]
         P1["[84aa58cc] Compact reset memory"]
+        P2["[a1b75e5c] Route provider restarts through compact memory"]
         S1["[eff3638c] Turn activity storage"]
+        P1 -. queued follow-up .-> P2
     end
 ```
 
 ## Queued Next
+
+### [b8c92f4d-3a1e-4d7c-9f2a-5b6e8c1d2a3f] Workflow: Persist queued chat messages across restarts
+
+#### Outcome
+
+Queued chat messages survive `agentty` restart by persisting in the database, and an app restart that interrupts a running turn discards the queue with a one-line operation-log note explaining that the queued messages were dropped because the previous turn was interrupted.
+
+#### Promote when
+
+Promote when `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`, `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory`, and `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract` all land, and the shared `crates/agentty/src/infra/db.rs` and `crates/agentty/migrations/` surfaces are no longer in active flight.
+
+#### Depends on
+
+- `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`
+- `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory`
+- `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract`
+
+### [7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C
+
+#### Outcome
+
+While a turn is running with a non-empty queue, the first `Ctrl+C` press clears only the queued messages and lets the running turn finish, while a second `Ctrl+C` cancels the running turn as today.
+
+#### Promote when
+
+Promote when `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs` lands and the Workflow stream is ready for the next chat-input refinement.
+
+#### Depends on
+
+`[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`
+
+### [c9469d77-97c3-4d5b-a035-497a83752bd1] Workflow: Delete individual queued chat messages
+
+#### Outcome
+
+Users can focus a queued chat entry in the transcript and remove it with a dedicated shortcut without clearing the rest of the queue or canceling the running turn.
+
+#### Promote when
+
+Promote when `[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs` lands and the team is ready for per-item queue editing affordances.
+
+#### Depends on
+
+`[e26bb561-acd2-46e7-898a-3324711686f4] Workflow: Queue messages while a turn runs`
 
 ### [d9d93e21-2d9a-45af-9d44-61eb68e64ea7] Delivery: Apply landing strategy to session actions
 
@@ -153,7 +206,7 @@ Restarted provider sessions can serialize one compact structured memory summary 
 
 #### Promote when
 
-Promote when the team has capacity for provider-continuity work and can keep the first compact-memory slice limited to the shared prompt and protocol contract.
+Promote when `[17a9e2ba-0b7d-407d-9cd4-72807ef7bc1f] Delivery: Edit project landing strategy in settings` lands so the shared `crates/agentty/src/infra/db.rs` and `crates/agentty/migrations/` surfaces are no longer in active flight.
 
 #### Depends on
 
@@ -249,9 +302,10 @@ No parked user-facing cards right now.
 
 ## Context Notes
 
+- `Workflow: Queue messages while a turn runs` should keep the queue in memory only so the first slice does not touch `crates/agentty/src/infra/db.rs` while Delivery is in active flight there, pause dispatch while the session is in `Question` state so the existing clarification flow is preserved, and keep `Ctrl+C` as a one-shot that cancels the running turn and clears the queue together; persistence with interrupted-run recovery, two-stage cancellation, and per-item delete affordances live in the queued follow-ups.
+- `Workflow: Persist queued chat messages across restarts` spans runtime, persistence, and transcript surfaces, so its interrupted-run recovery messaging should reuse the restart-detection contract from `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory` for "previous turn was interrupted" detection and target the shared transcript/operation-log shape from `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract` for the one-line drop note instead of inventing a parallel restart signal or transcript entry format.
 - `Delivery: Edit project landing strategy in settings` should stop at persisted settings UI; the session-action behavior belongs to the queued follow-up so the first Delivery slice remains reviewable.
 - `Delivery: Chain sessions for stacked review requests` should build on the existing follow-up-task sibling-session flow, persist session lineage, and let review-request publishing target the parent session branch instead of always targeting the project base branch.
-- `Workflow: Continue terminal sessions from saved context` should create a new session instead of reopening the closed one, reuse persisted summary or transcript context when available, and keep the source-session linkage visible enough that users can tell what the continuation came from.
 - `Protocol: Define compact restart session memory` should stay restart-specific, preserve the first-turn bootstrap prompt, and reuse the already-compact steady-state follow-up path instead of inventing another session-memory format.
 - `Session Output: Define turn activity storage contract` should introduce the shared DB and protocol shape once; git-derived rendering and provider capture cards should land as follow-up slices that target the same stored summary contract.
 - Internal `FeatureTest` migration work should be folded into future user-facing E2E changes that touch the same files instead of occupying a standalone roadmap card.
