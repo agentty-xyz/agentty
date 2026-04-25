@@ -336,6 +336,18 @@ fn review_mode_target<'a>(mode: &'a mut AppMode, session_id: &str) -> Option<Rev
             review_text,
             session_id: view_session_id,
             ..
+        }
+        | AppMode::Prompt {
+            review_status_message,
+            review_text,
+            session_id: view_session_id,
+            ..
+        }
+        | AppMode::Question {
+            review_status_message,
+            review_text,
+            session_id: view_session_id,
+            ..
         } if view_session_id == session_id => Some(ReviewModeTarget {
             review_status_message,
             review_text,
@@ -405,8 +417,53 @@ fn apply_review_result(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use ratatui::widgets::TableState;
 
     use super::*;
+    use crate::app::session::RealClock;
+    use crate::app::session_state::SessionState;
+    use crate::domain::input::InputState;
+    use crate::infra::agent::protocol::QuestionItem;
+    use crate::ui::state::app_mode::QuestionFocus;
+    use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
+
+    /// Builds empty session state for review reducer tests that only need mode
+    /// field updates.
+    fn empty_session_state() -> SessionState {
+        SessionState::new(
+            HashMap::new(),
+            Vec::new(),
+            TableState::default(),
+            Arc::new(RealClock),
+            0,
+            0,
+        )
+    }
+
+    /// Builds a single loading review cache entry for one session.
+    fn loading_review_cache(
+        session_id: &SessionId,
+        diff_hash: u64,
+    ) -> HashMap<SessionId, ReviewCacheEntry> {
+        HashMap::from([(session_id.clone(), ReviewCacheEntry::Loading { diff_hash })])
+    }
+
+    /// Builds a single successful review update for one session.
+    fn successful_review_update(
+        session_id: &SessionId,
+        diff_hash: u64,
+        review_text: &str,
+    ) -> HashMap<SessionId, ReviewUpdate> {
+        HashMap::from([(
+            session_id.clone(),
+            ReviewUpdate {
+                diff_hash,
+                result: Ok(review_text.to_string()),
+            },
+        )])
+    }
 
     #[test]
     fn review_loading_message_uses_requested_model_name() {
@@ -451,5 +508,104 @@ mod tests {
             Some("Reviewing changes with claude-sonnet-4-6")
         );
         assert_eq!(review_text, None);
+    }
+
+    /// Verifies completed review output updates preserved prompt-mode render
+    /// fields so the session output panel can show the result while the
+    /// composer remains open.
+    #[test]
+    fn apply_review_updates_writes_success_to_prompt_mode() {
+        // Arrange
+        let session_id = SessionId::from("session-prompt-review");
+        let diff_hash = 11;
+        let review_text = "## Review\nPrompt-mode finding.";
+        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let mut mode = AppMode::Prompt {
+            at_mention_state: None,
+            attachment_state: PromptAttachmentState::default(),
+            history_state: PromptHistoryState::default(),
+            input: InputState::default(),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_text: None,
+            scroll_offset: None,
+            session_id: session_id.clone(),
+            slash_state: PromptSlashState::default(),
+        };
+        let mut session_state = empty_session_state();
+        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
+
+        // Act
+        apply_review_updates(
+            &mut review_cache,
+            &mut mode,
+            &mut session_state,
+            review_updates,
+        );
+
+        // Assert
+        assert!(matches!(
+            review_cache.get(session_id.as_str()),
+            Some(ReviewCacheEntry::Ready { text, .. }) if text == review_text
+        ));
+        assert!(matches!(
+            mode,
+            AppMode::Prompt {
+                review_status_message: None,
+                review_text: Some(ref rendered_review_text),
+                ..
+            } if rendered_review_text == review_text
+        ));
+    }
+
+    /// Verifies completed review output updates question-mode render fields so
+    /// clarification sessions keep the focused review visible above the
+    /// question panel.
+    #[test]
+    fn apply_review_updates_writes_success_to_question_mode() {
+        // Arrange
+        let session_id = SessionId::from("session-question-review");
+        let diff_hash = 17;
+        let review_text = "## Review\nQuestion-mode finding.";
+        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let mut mode = AppMode::Question {
+            at_mention_state: None,
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Need more detail?".to_string(),
+            }],
+            responses: Vec::new(),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_text: None,
+            scroll_offset: None,
+            selected_option_index: None,
+            session_id: session_id.clone(),
+        };
+        let mut session_state = empty_session_state();
+        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
+
+        // Act
+        apply_review_updates(
+            &mut review_cache,
+            &mut mode,
+            &mut session_state,
+            review_updates,
+        );
+
+        // Assert
+        assert!(matches!(
+            review_cache.get(session_id.as_str()),
+            Some(ReviewCacheEntry::Ready { text, .. }) if text == review_text
+        ));
+        assert!(matches!(
+            mode,
+            AppMode::Question {
+                review_status_message: None,
+                review_text: Some(ref rendered_review_text),
+                ..
+            } if rendered_review_text == review_text
+        ));
     }
 }

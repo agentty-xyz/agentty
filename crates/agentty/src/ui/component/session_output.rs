@@ -424,8 +424,8 @@ impl<'a> SessionOutput<'a> {
     /// prompt until the active turn finishes and persists its replacement.
     /// Focused-review output is appended after transcript content so it reads
     /// like agent-produced session output instead of replacing the transcript
-    /// panel, but it is suppressed once the session reaches `Done` because
-    /// merged sessions should only show final summary or transcript content.
+    /// panel, and it is shown for completed review payloads even when the
+    /// session has reached `Done`.
     fn output_lines(
         session: &Session,
         output_area: Rect,
@@ -489,7 +489,7 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
-        if Self::shows_review_lines(session.status) {
+        if Self::shows_review_lines(session.status, review_status_message, review_text) {
             Self::append_review_lines(&mut lines, review_text, inner_width, markdown_render_cache);
         }
         Self::append_published_branch_sync_lines(&mut lines, session, spinner_frame);
@@ -690,10 +690,24 @@ impl<'a> SessionOutput<'a> {
     /// Returns whether focused-review output belongs in the current session
     /// view.
     ///
-    /// Merged sessions enter `Status::Done`, and at that point any cached
-    /// review text is stale next to the final summary or transcript view.
-    fn shows_review_lines(status: Status) -> bool {
-        status != Status::Done
+    /// Show review output during active review states and for done sessions
+    /// when a review payload is available. This keeps completed review
+    /// results visible on both transient and finalized session views.
+    fn shows_review_lines(
+        status: Status,
+        review_status_message: Option<&str>,
+        review_text: Option<&str>,
+    ) -> bool {
+        if status != Status::Done {
+            return true;
+        }
+
+        review_status_message
+            .map(str::trim)
+            .is_some_and(|status_message| !status_message.is_empty())
+            || review_text
+                .map(str::trim)
+                .is_some_and(|review_text| !review_text.is_empty())
     }
 
     /// Appends focused-review output to the transcript when review text is
@@ -1215,6 +1229,37 @@ mod tests {
         assert!(text.contains("streamed output"));
         assert!(text.contains("Added the structured protocol summary."));
         assert!(text.contains("Session output now renders persisted summary markdown."));
+    }
+
+    /// Verifies focused review output remains visible after the session moves
+    /// to a terminal `Done` state.
+    #[test]
+    fn test_output_lines_done_session_shows_review_text_when_available() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Done;
+        let assisted_review = "## Review\n\n- Focused finding";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(
+                DoneSessionOutputMode::Summary,
+                Some("Reviewing changes with gpt-5.4"),
+                Some(assisted_review),
+                None,
+            ),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains("Focused finding"));
     }
 
     #[test]
