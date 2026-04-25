@@ -377,7 +377,7 @@ impl SessionState {
     }
 
     /// Returns one mutable session snapshot by identifier.
-    fn session_mut_for_id(&mut self, session_id: &str) -> Option<&mut Session> {
+    pub(crate) fn session_mut_for_id(&mut self, session_id: &str) -> Option<&mut Session> {
         let session_index = self.session_index_by_id.get(session_id).copied()?;
 
         self.sessions.get_mut(session_index)

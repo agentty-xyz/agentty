@@ -116,6 +116,7 @@ impl SessionManager {
                 projects.working_dir(),
                 &mut self.state.handles,
                 services.fs_client().as_ref(),
+                selected_session_id.as_deref(),
             )
             .await;
         self.state.replace_sessions(sessions);

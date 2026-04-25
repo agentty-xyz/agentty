@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT output AS \"output!\",\n       prompt AS \"prompt!\",\n       questions,\n       summary\nFROM session\nWHERE id = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "output!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "prompt!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "questions",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "summary",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "96f1496f65f00d77e6b97e527f6742c33202ebd8bcf09dabe15879366abb1804"
+}

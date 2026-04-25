@@ -2965,6 +2965,7 @@ mod tests {
             &working_dir,
             &mut handles,
             &fs_client,
+            None,
         )
         .await;
 
@@ -3009,6 +3010,7 @@ mod tests {
             &working_dir,
             &mut handles,
             &fs_client,
+            None,
         )
         .await;
 
@@ -3253,6 +3255,7 @@ mod tests {
             app.projects.working_dir(),
             &mut app.sessions.handles,
             &fs_client,
+            None,
         )
         .await;
         let db_sessions = app
@@ -3377,6 +3380,7 @@ mod tests {
             app.projects.working_dir(),
             &mut app.sessions.handles,
             &fs_client,
+            None,
         )
         .await;
         let db_sessions = app

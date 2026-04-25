@@ -58,6 +58,65 @@ pub struct SessionRow {
     pub updated_at: i64,
 }
 
+/// Lightweight row returned when loading session-list metadata.
+///
+/// Omits transcript-scale fields (`output`, `prompt`, `questions`, and
+/// `summary`) so list refreshes scale with visible metadata instead of the
+/// cumulative size of every saved conversation.
+pub struct SessionListRow {
+    /// Persisted added-line count from the latest diff stats refresh.
+    pub added_lines: i64,
+    /// Base branch used to create the session worktree.
+    pub base_branch: String,
+    /// Session creation timestamp in Unix seconds.
+    pub created_at: i64,
+    /// Persisted deleted-line count from the latest diff stats refresh.
+    pub deleted_lines: i64,
+    /// Stable session identifier.
+    pub id: String,
+    /// Open active-work interval start timestamp, if any.
+    pub in_progress_started_at: Option<i64>,
+    /// Completed active-work duration in whole seconds.
+    pub in_progress_total_seconds: i64,
+    /// Total input tokens accumulated for the session.
+    pub input_tokens: i64,
+    /// Whether the session is still an explicit draft.
+    pub is_draft: bool,
+    /// Persisted agent model identifier.
+    pub model: String,
+    /// Total output tokens accumulated for the session.
+    pub output_tokens: i64,
+    /// Owning project identifier, when present.
+    pub project_id: Option<i64>,
+    /// Persisted session-specific reasoning override, when present.
+    pub reasoning_level_override: Option<String>,
+    /// Published upstream branch reference, when present.
+    pub published_upstream_ref: Option<String>,
+    /// Joined forge review-request metadata, when present and complete.
+    pub review_request: Option<SessionReviewRequestRow>,
+    /// Persisted size bucket string.
+    pub size: String,
+    /// Persisted lifecycle status string.
+    pub status: String,
+    /// Optional display title.
+    pub title: Option<String>,
+    /// Last update timestamp in Unix seconds.
+    pub updated_at: i64,
+}
+
+/// Transcript-detail row loaded lazily for the session being viewed.
+#[derive(sqlx::FromRow)]
+pub struct SessionDetailRow {
+    /// Captured provider transcript text.
+    pub output: String,
+    /// Initial or staged prompt text.
+    pub prompt: String,
+    /// Serialized clarification-question payload, when present.
+    pub questions: Option<String>,
+    /// Persisted structured summary text, when present.
+    pub summary: Option<String>,
+}
+
 /// Row returned when loading one persisted `session_follow_up_task`.
 #[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
 pub(crate) struct SessionFollowUpTaskRow {
@@ -134,8 +193,18 @@ pub(crate) trait SessionRepository: Send + Sync {
     /// Loads all sessions ordered by most recent update.
     async fn load_sessions(&self) -> Result<Vec<SessionRow>, DbError>;
 
-    /// Loads all sessions ordered by most recent update for one project.
-    async fn load_sessions_for_project(&self, project_id: i64) -> Result<Vec<SessionRow>, DbError>;
+    /// Loads lightweight session-list metadata ordered by most recent update
+    /// for one project.
+    async fn load_sessions_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionListRow>, DbError>;
+
+    /// Loads transcript-scale detail for one session when it becomes active.
+    async fn load_session_detail(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionDetailRow>, DbError>;
 
     /// Loads all persisted session follow-up-task rows in stable display
     /// order.
@@ -350,6 +419,7 @@ struct SessionTimestampsRow {
 
 /// Row returned when loading one `session` plus aliased
 /// `session_review_request` join columns.
+#[cfg(test)]
 pub(crate) struct SessionJoinRow {
     added_lines: i64,
     base_branch: String,
@@ -384,6 +454,7 @@ pub(crate) struct SessionJoinRow {
     updated_at: i64,
 }
 
+#[cfg(test)]
 impl SessionJoinRow {
     /// Converts the macro-mapped join row into the public `SessionRow` model.
     pub(crate) fn into_session_row(self) -> SessionRow {
@@ -498,6 +569,110 @@ impl SessionJoinRow {
             summary: Some("Summary text".to_string()),
             title: Some("Review session".to_string()),
             updated_at: 200,
+        }
+    }
+}
+
+/// Row returned when loading one lightweight `session` list entry plus aliased
+/// `session_review_request` join columns.
+#[derive(sqlx::FromRow)]
+struct SessionListJoinRow {
+    added_lines: i64,
+    base_branch: String,
+    created_at: i64,
+    deleted_lines: i64,
+    id: String,
+    in_progress_started_at: Option<i64>,
+    in_progress_total_seconds: i64,
+    input_tokens: i64,
+    is_draft: bool,
+    model: String,
+    output_tokens: i64,
+    project_id: Option<i64>,
+    reasoning_level_override: Option<String>,
+    published_upstream_ref: Option<String>,
+    review_request_display_id: Option<String>,
+    review_request_forge_kind: Option<String>,
+    review_request_last_refreshed_at: Option<i64>,
+    review_request_source_branch: Option<String>,
+    review_request_state: Option<String>,
+    review_request_status_summary: Option<String>,
+    review_request_target_branch: Option<String>,
+    review_request_title: Option<String>,
+    review_request_web_url: Option<String>,
+    size: String,
+    status: String,
+    title: Option<String>,
+    updated_at: i64,
+}
+
+impl SessionListJoinRow {
+    /// Converts the macro-mapped list join row into a lightweight
+    /// `SessionListRow`.
+    fn into_session_list_row(self) -> SessionListRow {
+        let Self {
+            added_lines,
+            base_branch,
+            created_at,
+            deleted_lines,
+            id,
+            in_progress_started_at,
+            in_progress_total_seconds,
+            input_tokens,
+            is_draft,
+            model,
+            output_tokens,
+            project_id,
+            reasoning_level_override,
+            published_upstream_ref,
+            review_request_display_id,
+            review_request_forge_kind,
+            review_request_last_refreshed_at,
+            review_request_source_branch,
+            review_request_state,
+            review_request_status_summary,
+            review_request_target_branch,
+            review_request_title,
+            review_request_web_url,
+            size,
+            status,
+            title,
+            updated_at,
+        } = self;
+
+        let review_request = SessionReviewRequestJoinRow {
+            display_id: review_request_display_id,
+            forge_kind: review_request_forge_kind,
+            last_refreshed_at: review_request_last_refreshed_at,
+            source_branch: review_request_source_branch,
+            state: review_request_state,
+            status_summary: review_request_status_summary,
+            target_branch: review_request_target_branch,
+            title: review_request_title,
+            web_url: review_request_web_url,
+        }
+        .into_review_request_row();
+
+        SessionListRow {
+            added_lines,
+            base_branch,
+            created_at,
+            deleted_lines,
+            id,
+            in_progress_started_at,
+            in_progress_total_seconds,
+            input_tokens,
+            is_draft,
+            model,
+            output_tokens,
+            project_id,
+            reasoning_level_override,
+            published_upstream_ref,
+            review_request,
+            size,
+            status,
+            title,
+            updated_at,
         }
     }
 }
@@ -717,9 +892,12 @@ ORDER BY session.updated_at DESC, session.id
             .collect())
     }
 
-    async fn load_sessions_for_project(&self, project_id: i64) -> Result<Vec<SessionRow>, DbError> {
+    async fn load_sessions_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionListRow>, DbError> {
         let rows = sqlx::query_as!(
-            SessionJoinRow,
+            SessionListJoinRow,
             r#"
 SELECT session.base_branch AS "base_branch!",
        session.added_lines AS "added_lines!",
@@ -731,13 +909,10 @@ SELECT session.base_branch AS "base_branch!",
        session.input_tokens AS "input_tokens!",
        session.is_draft AS "is_draft!: bool",
        session.model AS "model!",
-       session.output AS "output!",
        session.output_tokens AS "output_tokens!",
        session.project_id,
-       session.prompt AS "prompt!",
        session.reasoning_level AS "reasoning_level_override?",
        session.published_upstream_ref,
-       session.questions,
        session_review_request.display_id AS "review_request_display_id?",
        session_review_request.forge_kind AS "review_request_forge_kind?",
        session_review_request.last_refreshed_at AS "review_request_last_refreshed_at?",
@@ -749,7 +924,6 @@ SELECT session.base_branch AS "base_branch!",
        session_review_request.web_url AS "review_request_web_url?",
        session.size AS "size!",
        session.status AS "status!",
-       session.summary,
        session.title,
        session.updated_at AS "updated_at!"
 FROM session
@@ -765,8 +939,30 @@ ORDER BY session.updated_at DESC, session.id
 
         Ok(rows
             .into_iter()
-            .map(SessionJoinRow::into_session_row)
+            .map(SessionListJoinRow::into_session_list_row)
             .collect())
+    }
+
+    async fn load_session_detail(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionDetailRow>, DbError> {
+        let row = sqlx::query_as!(
+            SessionDetailRow,
+            r#"
+SELECT output AS "output!",
+       prompt AS "prompt!",
+       questions,
+       summary
+FROM session
+WHERE id = ?
+"#,
+            session_id
+        )
+        .fetch_optional(&self.0)
+        .await?;
+
+        Ok(row)
     }
 
     async fn load_session_follow_up_tasks(&self) -> Result<Vec<SessionFollowUpTaskRow>, DbError> {

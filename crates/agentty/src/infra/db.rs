@@ -25,7 +25,7 @@ pub use review::SessionReviewRequestRow;
 pub(crate) use review::{ReviewRepository, SqliteReviewRepository};
 #[cfg(test)]
 pub(crate) use session::SessionJoinRow;
-pub use session::SessionRow;
+pub use session::{SessionDetailRow, SessionListRow, SessionRow};
 pub(crate) use session::{SessionRepository, SessionTurnMetadata, SqliteSessionRepository};
 pub(crate) use setting::{SettingRepository, SqliteSettingRepository};
 pub use usage::SessionUsageRow;
@@ -438,12 +438,21 @@ impl AppRepositories {
         self.session.load_sessions().await
     }
 
-    /// Loads all sessions ordered by most recent update for one project.
+    /// Loads lightweight session-list metadata ordered by most recent update
+    /// for one project.
     pub(crate) async fn load_sessions_for_project(
         &self,
         project_id: i64,
-    ) -> Result<Vec<SessionRow>, DbError> {
+    ) -> Result<Vec<SessionListRow>, DbError> {
         self.session.load_sessions_for_project(project_id).await
+    }
+
+    /// Loads transcript-scale detail for one active session.
+    pub(crate) async fn load_session_detail(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionDetailRow>, DbError> {
+        self.session.load_session_detail(session_id).await
     }
 
     /// Loads lightweight session metadata used for cheap change detection.

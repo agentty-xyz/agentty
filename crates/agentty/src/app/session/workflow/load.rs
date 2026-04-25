@@ -11,7 +11,7 @@ use crate::domain::session::{
     SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::infra::agent::protocol::QuestionItem;
-use crate::infra::db::{AppRepositories, SessionRow};
+use crate::infra::db::{AppRepositories, SessionDetailRow, SessionListRow};
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
 
@@ -21,13 +21,15 @@ struct LoadedSessionInput {
     follow_up_tasks: Vec<SessionFollowUpTask>,
     folder: std::path::PathBuf,
     project_name: String,
-    questions: Vec<QuestionItem>,
     reasoning_level_override: Option<ReasoningLevel>,
     review_request: Option<ReviewRequest>,
-    row: SessionRow,
+    row: SessionListRow,
     session_model: AgentModel,
     session_id: SessionId,
     session_output: String,
+    session_prompt: String,
+    session_questions: Vec<QuestionItem>,
+    session_summary: Option<String>,
     session_status: Status,
     size: SessionSize,
 }
@@ -50,6 +52,9 @@ impl SessionManager {
     ///
     /// New handles are inserted for sessions that don't have entries yet.
     ///
+    /// Transcript-scale fields are loaded only for `active_session_id`; other
+    /// rows receive empty detail fields until the session is opened.
+    ///
     /// Returns loaded sessions, local-day activity counts aggregated from
     /// persisted session-creation activity history, and cached worktree
     /// availability keyed by session id.
@@ -60,6 +65,7 @@ impl SessionManager {
         working_dir: &Path,
         handles: &mut HashMap<SessionId, SessionHandles>,
         fs_client: &dyn FsClient,
+        active_session_id: Option<&str>,
     ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>) {
         let project_name = working_dir
             .file_name()
@@ -105,41 +111,36 @@ impl SessionManager {
             let session_model = AgentModel::parse_persisted(&row.model)
                 .unwrap_or_else(|_| AgentKind::Gemini.default_model());
 
-            let (session_output, session_status) = if let Some(existing) = handles.get(&session_id)
-            {
-                let output_from_handle = existing
-                    .output
-                    .lock()
-                    .ok()
-                    .map_or_else(|| row.output.clone(), |output| output.clone());
-                let status_from_handle = existing
-                    .status
-                    .lock()
-                    .ok()
-                    .map_or(persisted_status, |status| *status);
-                let merged_status =
-                    merge_loaded_session_status(persisted_status, status_from_handle);
-
-                if let Ok(mut handle_status) = existing.status.lock() {
-                    *handle_status = merged_status;
-                }
-
-                (output_from_handle, merged_status)
+            let session_detail = if active_session_id.is_some_and(|active_id| active_id == row.id) {
+                db.load_session_detail(&row.id).await.ok().flatten()
             } else {
-                handles.insert(
-                    session_id.clone(),
-                    SessionHandles::new(row.output.clone(), persisted_status),
-                );
-
-                (row.output.clone(), persisted_status)
+                None
             };
+
+            let (session_output, session_status) =
+                if let Some(existing_handle) = handles.get(&session_id) {
+                    output_and_status_from_existing_handle(
+                        existing_handle,
+                        persisted_status,
+                        session_detail.as_ref(),
+                    )
+                } else {
+                    let output = insert_loaded_session_handle(
+                        handles,
+                        session_id.clone(),
+                        persisted_status,
+                        session_detail.as_ref(),
+                    );
+
+                    (output, persisted_status)
+                };
 
             let review_request = parse_review_request(&row);
             let draft_attachments =
                 draft::load_staged_draft_attachments(fs_client, base, &session_id).await;
-            let questions = row
-                .questions
-                .as_deref()
+            let questions = session_detail
+                .as_ref()
+                .and_then(|detail| detail.questions.as_deref())
                 .and_then(parse_questions_json)
                 .unwrap_or_default();
             let reasoning_level_override = row
@@ -154,13 +155,18 @@ impl SessionManager {
                 follow_up_tasks,
                 folder,
                 project_name: project_name.clone(),
-                questions,
                 reasoning_level_override,
                 review_request,
                 row,
                 session_model,
                 session_id,
                 session_output,
+                session_prompt: session_detail
+                    .as_ref()
+                    .map(|detail| detail.prompt.clone())
+                    .unwrap_or_default(),
+                session_questions: questions,
+                session_summary: session_detail.and_then(|detail| detail.summary),
                 session_status,
                 size: persisted_size,
             }));
@@ -194,6 +200,20 @@ impl SessionManager {
         (SessionSize::from_diff(&diff), added_lines, deleted_lines)
     }
 
+    /// Loads transcript-scale detail for one session into the in-memory
+    /// snapshot and runtime handles when the user opens that session.
+    pub(crate) async fn load_session_detail_into_state(
+        &mut self,
+        db: &AppRepositories,
+        session_id: &str,
+    ) {
+        let Some(detail) = db.load_session_detail(session_id).await.ok().flatten() else {
+            return;
+        };
+
+        self.apply_session_detail(session_id, detail);
+    }
+
     /// Builds one in-memory session snapshot from a database row plus the
     /// transient fields computed during reload.
     fn build_loaded_session(input: LoadedSessionInput) -> Session {
@@ -210,11 +230,11 @@ impl SessionManager {
             model: input.session_model,
             output: input.session_output,
             project_name: input.project_name,
-            prompt: input.row.prompt,
+            prompt: input.session_prompt,
             reasoning_level_override: input.reasoning_level_override,
             published_upstream_ref: input.row.published_upstream_ref,
             published_branch_sync_status: PublishedBranchSyncStatus::Idle,
-            questions: input.questions,
+            questions: input.session_questions,
             review_request: input.review_request,
             size: input.size,
             stats: SessionStats {
@@ -224,11 +244,92 @@ impl SessionManager {
                 output_tokens: input.row.output_tokens.cast_unsigned(),
             },
             status: input.session_status,
-            summary: input.row.summary,
+            summary: input.session_summary,
             title: input.row.title,
             updated_at: input.row.updated_at,
         }
     }
+
+    /// Applies one lazily loaded detail row to the session snapshot and its
+    /// shared runtime handle without clobbering live in-process output.
+    fn apply_session_detail(&mut self, session_id: &str, detail: SessionDetailRow) {
+        let session_output = if let Some(handles) = self.state.handles.get(session_id)
+            && let Ok(mut handle_output) = handles.output.lock()
+        {
+            if handle_output.is_empty() {
+                handle_output.clone_from(&detail.output);
+            }
+
+            handle_output.clone()
+        } else {
+            detail.output.clone()
+        };
+
+        let Some(session) = self.state.session_mut_for_id(session_id) else {
+            return;
+        };
+
+        session.prompt = detail.prompt;
+        if let Some(questions) = detail.questions {
+            session.questions = parse_questions_json(&questions).unwrap_or_default();
+        }
+        session.summary = detail.summary;
+        session.output = session_output;
+    }
+}
+
+/// Reads output/status from an existing handle while hydrating empty output
+/// from lazily loaded detail when the session has become active.
+fn output_and_status_from_existing_handle(
+    existing_handle: &SessionHandles,
+    persisted_status: Status,
+    session_detail: Option<&SessionDetailRow>,
+) -> (String, Status) {
+    let output_from_handle =
+        existing_handle
+            .output
+            .lock()
+            .ok()
+            .map_or_else(String::new, |mut output| {
+                if output.is_empty()
+                    && let Some(detail) = session_detail
+                {
+                    output.push_str(&detail.output);
+                }
+
+                output.clone()
+            });
+    let status_from_handle = existing_handle
+        .status
+        .lock()
+        .ok()
+        .map_or(persisted_status, |status| *status);
+    let merged_status = merge_loaded_session_status(persisted_status, status_from_handle);
+
+    if let Ok(mut handle_status) = existing_handle.status.lock() {
+        *handle_status = merged_status;
+    }
+
+    (output_from_handle, merged_status)
+}
+
+/// Inserts a new runtime handle using active-session detail when it is
+/// available and returns the output snapshot stored in that handle.
+fn insert_loaded_session_handle(
+    handles: &mut HashMap<SessionId, SessionHandles>,
+    session_id: SessionId,
+    persisted_status: Status,
+    session_detail: Option<&SessionDetailRow>,
+) -> String {
+    let output = session_detail
+        .map(|detail| detail.output.clone())
+        .unwrap_or_default();
+    handles.insert(
+        session_id,
+        SessionHandles::new(output.clone(), persisted_status),
+    );
+
+    output
 }
 
 /// Returns whether one persisted session row should be skipped because its
@@ -275,7 +376,7 @@ fn merge_loaded_session_status(status_from_db: Status, status_from_handle: Statu
 ///
 /// Incomplete or invalid persisted metadata is ignored so stale partial rows do
 /// not block session loading.
-fn parse_review_request(row: &SessionRow) -> Option<ReviewRequest> {
+fn parse_review_request(row: &SessionListRow) -> Option<ReviewRequest> {
     let review_request_row = row.review_request.as_ref()?;
     let forge_kind = parse_optional_enum(Some(review_request_row.forge_kind.as_str())).ok()?;
     let state = parse_optional_enum(Some(review_request_row.state.as_str())).ok()?;
@@ -404,6 +505,7 @@ mod tests {
             Path::new("/tmp/test"),
             &mut handles,
             &mock_fs_client,
+            None,
         )
         .await;
 
@@ -472,6 +574,7 @@ mod tests {
             Path::new("/tmp/test"),
             &mut handles,
             &mock_fs_client,
+            None,
         )
         .await;
 
@@ -506,9 +609,21 @@ mod tests {
         )
         .await
         .expect("failed to insert session");
+        db.update_session_prompt(session_id, "persisted prompt")
+            .await
+            .expect("failed to update session prompt");
+        db.update_session_questions(
+            session_id,
+            r#"[{"text":"persisted question?","options":["Yes"]}]"#,
+        )
+        .await
+        .expect("failed to update session questions");
         db.update_session_summary(session_id, "persisted summary")
             .await
             .expect("failed to update session summary");
+        db.append_session_output(session_id, "persisted output")
+            .await
+            .expect("failed to append session output");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -528,6 +643,7 @@ mod tests {
             Path::new("/tmp/test"),
             &mut handles,
             &mock_fs_client,
+            Some(session_id),
         )
         .await;
 
@@ -536,7 +652,139 @@ mod tests {
             .iter()
             .find(|session| session.id == session_id)
             .expect("missing reloaded session");
+        assert_eq!(session.output, "Live Output");
+        assert_eq!(session.prompt, "persisted prompt");
+        assert_eq!(
+            session.questions,
+            vec![QuestionItem {
+                options: vec!["Yes".to_string()],
+                text: "persisted question?".to_string(),
+            }]
+        );
         assert_eq!(session.summary.as_deref(), Some("persisted summary"));
+    }
+
+    /// Ensures inactive session refresh skips transcript-scale fields.
+    #[tokio::test]
+    async fn test_load_sessions_defers_persisted_detail_for_inactive_session() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+
+        let session_id = "inactive-session";
+        db.insert_session(
+            session_id,
+            "gemini-3-flash-preview",
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        db.update_session_prompt(session_id, "large prompt")
+            .await
+            .expect("failed to update prompt");
+        db.update_session_questions(session_id, r#"["Need detail?"]"#)
+            .await
+            .expect("failed to update questions");
+        db.update_session_summary(session_id, "large summary")
+            .await
+            .expect("failed to update summary");
+        db.append_session_output(session_id, "large output")
+            .await
+            .expect("failed to append output");
+
+        let base_path = Path::new("/virtual/session-base");
+        let session_dir = session_folder(base_path, session_id);
+        let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
+
+        // Act
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+            base_path,
+            &db,
+            project_id,
+            Path::new("/tmp/test"),
+            &mut handles,
+            &mock_fs_client,
+            None,
+        )
+        .await;
+
+        // Assert
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        assert!(session.output.is_empty());
+        assert!(session.prompt.is_empty());
+        assert!(session.questions.is_empty());
+        assert!(session.summary.is_none());
+
+        let handle = handles.get(session_id).expect("missing runtime handle");
+        let handle_output = handle.output.lock().expect("failed to lock output");
+        assert!(handle_output.is_empty());
+    }
+
+    /// Ensures active reload hydrates an existing empty handle from persisted
+    /// transcript detail.
+    #[tokio::test]
+    async fn test_load_sessions_hydrates_empty_handle_for_active_session() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .upsert_project("/tmp/test", None)
+            .await
+            .expect("failed to upsert project");
+
+        let session_id = "active-session";
+        db.insert_session(
+            session_id,
+            "gemini-3-flash-preview",
+            "main",
+            "Review",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+        db.append_session_output(session_id, "persisted output")
+            .await
+            .expect("failed to append output");
+
+        let base_path = Path::new("/virtual/session-base");
+        let session_dir = session_folder(base_path, session_id);
+        let mock_fs_client = create_folder_lookup_mock(vec![session_dir]);
+        let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
+        handles.insert(
+            session_id.to_string().into(),
+            SessionHandles::new(String::new(), Status::Review),
+        );
+
+        // Act
+        let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+            base_path,
+            &db,
+            project_id,
+            Path::new("/tmp/test"),
+            &mut handles,
+            &mock_fs_client,
+            Some(session_id),
+        )
+        .await;
+
+        // Assert
+        let session = sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing reloaded session");
+        assert_eq!(session.output, "persisted output");
+
+        let handle = handles.get(session_id).expect("missing runtime handle");
+        let handle_output = handle.output.lock().expect("failed to lock output");
+        assert_eq!(handle_output.as_str(), "persisted output");
     }
 
     /// Ensures terminal persisted statuses replace stale active handle status
@@ -579,6 +827,7 @@ mod tests {
             Path::new("/tmp/test"),
             &mut handles,
             &mock_fs_client,
+            None,
         )
         .await;
 
@@ -646,6 +895,7 @@ mod tests {
             Path::new("/tmp/test"),
             &mut handles,
             &mock_fs_client,
+            None,
         )
         .await;
 
@@ -752,7 +1002,7 @@ mod tests {
     /// Verifies invalid review-request rows are ignored during session load.
     fn parse_review_request_returns_none_for_invalid_row() {
         // Arrange
-        let row = SessionRow {
+        let row = SessionListRow {
             added_lines: 0,
             base_branch: "main".to_string(),
             created_at: 0,
@@ -763,13 +1013,10 @@ mod tests {
             input_tokens: 0,
             is_draft: false,
             model: "gpt-5.4".to_string(),
-            output: String::new(),
             output_tokens: 0,
             project_id: Some(1),
-            prompt: String::new(),
             reasoning_level_override: None,
             published_upstream_ref: None,
-            questions: None,
             review_request: Some(SessionReviewRequestRow {
                 display_id: "#42".to_string(),
                 forge_kind: "UnknownForge".to_string(),
@@ -783,7 +1030,6 @@ mod tests {
             }),
             size: "XS".to_string(),
             status: "Review".to_string(),
-            summary: None,
             title: None,
             updated_at: 0,
         };

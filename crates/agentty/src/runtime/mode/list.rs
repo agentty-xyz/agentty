@@ -118,12 +118,23 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
             }
         }
         Tab::Sessions => {
-            if let Some(session_index) = app.sessions.table_state.selected()
-                && let Some(session) = app.sessions.sessions.get(session_index)
-            {
-                let session_id = session.id.clone();
+            if let Some(session_index) = app.sessions.table_state.selected() {
+                let Some(session_id) = app
+                    .sessions
+                    .sessions
+                    .get(session_index)
+                    .map(|session| session.id.clone())
+                else {
+                    return Ok(EventResult::Continue);
+                };
 
-                if session.status == Status::Question {
+                app.sessions
+                    .load_session_detail_into_state(app.services.db(), session_id.as_str())
+                    .await;
+
+                if let Some(session) = app.sessions.sessions.get(session_index)
+                    && session.status == Status::Question
+                {
                     let questions = session.questions.clone();
                     let selected_option_index = question::default_option_index(&questions, 0);
                     let (review_status_message, review_text) = app.review_view_state(&session_id);
