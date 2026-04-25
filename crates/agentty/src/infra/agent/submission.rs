@@ -122,7 +122,7 @@ pub(crate) async fn submit_one_shot_with_app_server_client(
         folder: request.folder.to_path_buf(),
         live_session_output: None,
         model: request.model.as_str().to_string(),
-        prompt: crate::infra::channel::TurnPrompt::from_text(request.prompt.to_string()),
+        prompt: crate::infra::channel::TurnPrompt::from_agent_data(request.prompt.to_string()),
         request_kind: request.request_kind.clone(),
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
@@ -272,7 +272,7 @@ async fn attempt_one_shot_app_server_repair(
         folder: request.folder.to_path_buf(),
         live_session_output: None,
         model: request.model.as_str().to_string(),
-        prompt: crate::infra::channel::TurnPrompt::from_text(repair_prompt),
+        prompt: crate::infra::channel::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
         provider_conversation_id: provider_conversation_id.map(String::from),
         persisted_instruction_conversation_id: None,
@@ -312,7 +312,7 @@ async fn execute_one_shot_command(
     prompt: &str,
     request: OneShotRequest<'_>,
 ) -> Result<ParsedResponse, String> {
-    let prompt_payload = crate::infra::channel::TurnPrompt::from_text(prompt.to_string());
+    let prompt_payload = crate::infra::channel::TurnPrompt::from_agent_data(prompt.to_string());
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder: request.folder,

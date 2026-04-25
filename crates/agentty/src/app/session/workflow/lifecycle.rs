@@ -20,7 +20,9 @@ use crate::app::{
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, SessionId, Status};
 use crate::domain::setting::SettingName;
-use crate::infra::channel::{AgentRequestKind, TurnPrompt, TurnPromptAttachment};
+use crate::infra::channel::{
+    AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+};
 use crate::infra::fs::FsClient;
 use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
@@ -612,6 +614,7 @@ impl SessionManager {
             TurnPrompt {
                 attachments: session.draft_attachments.clone(),
                 text: session.prompt.clone(),
+                text_source: TurnPromptTextSource::UserPrompt,
             }
         };
 
@@ -2290,7 +2293,7 @@ mod tests {
         ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles, SessionSize,
         SessionStats,
     };
-    use crate::infra::channel::TurnPromptAttachment;
+    use crate::infra::channel::{TurnPromptAttachment, TurnPromptTextSource};
     use crate::infra::db::{self, AppRepositories};
     use crate::infra::{app_server, fs};
 
@@ -2761,6 +2764,7 @@ mod tests {
                 local_image_path: PathBuf::from("/tmp/image-1.png"),
             }],
             text: "Review [Image #1]".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act
@@ -3135,6 +3139,7 @@ mod tests {
                 local_image_path: PathBuf::from("/tmp/image-1.png"),
             }],
             text: "Review [Image #1]".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act
@@ -3153,6 +3158,7 @@ mod tests {
                 local_image_path: PathBuf::from("/tmp/image-1.png"),
             }],
             text: "Attach [Image #1] but keep literal [Image #1] text".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act

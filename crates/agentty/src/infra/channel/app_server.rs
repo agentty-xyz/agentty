@@ -233,7 +233,7 @@ async fn parse_or_repair_app_server_response(
         folder: repair_request.folder,
         live_session_output: None,
         model: repair_request.model,
-        prompt: crate::infra::channel::TurnPrompt::from_text(repair_prompt),
+        prompt: crate::infra::channel::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: repair_request.request_kind,
         provider_conversation_id: repair_provider_conversation_id,
         persisted_instruction_conversation_id: None,

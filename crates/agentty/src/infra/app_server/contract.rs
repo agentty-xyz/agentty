@@ -56,7 +56,7 @@ pub struct AppServerTurnRequest {
     pub live_session_output: Option<Arc<Mutex<String>>>,
     /// Provider-specific model identifier.
     pub model: String,
-    /// Structured user prompt for this turn.
+    /// Structured prompt payload for this turn.
     pub prompt: TurnPrompt,
     /// Canonical request kind that drives transport behavior and protocol
     /// semantics for this turn.

@@ -341,7 +341,7 @@ async fn execute_cli_repair_turn(
     reasoning_level: crate::domain::agent::ReasoningLevel,
     repair_prompt: &str,
 ) -> Result<String, String> {
-    let prompt_payload = TurnPrompt::from_text(repair_prompt.to_string());
+    let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.to_string());
     let build_request = BuildCommandRequest {
         attachments: &prompt_payload.attachments,
         folder,
@@ -437,7 +437,9 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentKind, ReasoningLevel};
     use crate::infra::agent::tests::MockAgentBackend;
-    use crate::infra::channel::{AgentRequestKind, TurnPrompt, TurnPromptAttachment};
+    use crate::infra::channel::{
+        AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+    };
 
     fn make_turn_request(folder: PathBuf) -> TurnRequest {
         TurnRequest {
@@ -725,6 +727,7 @@ mod tests {
                 local_image_path: image_path.clone(),
             }],
             text: "Review [Image #1]".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act

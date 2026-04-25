@@ -442,7 +442,7 @@ mod tests {
     use super::*;
     use crate::infra::agent::app_server::gemini::MockGeminiRuntimeTransport;
     use crate::infra::app_server_transport::AppServerTransportError;
-    use crate::infra::channel::TurnPromptAttachment;
+    use crate::infra::channel::{TurnPromptAttachment, TurnPromptTextSource};
 
     /// Captures the dynamic JSON-RPC `id` from a written payload through the
     /// supplied mutex so the response side of a mock can echo it back.
@@ -660,6 +660,7 @@ mod tests {
                 local_image_path: attachment_path,
             }],
             text: "Look at [Image #1] now".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act

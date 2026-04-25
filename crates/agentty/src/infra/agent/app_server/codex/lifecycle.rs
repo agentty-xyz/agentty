@@ -811,7 +811,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::infra::agent::app_server::codex::MockCodexRuntimeTransport;
-    use crate::infra::channel::TurnPromptAttachment;
+    use crate::infra::channel::{TurnPromptAttachment, TurnPromptTextSource};
 
     /// Captures the dynamic JSON-RPC `id` from a written payload through the
     /// supplied mutex so the response side of a mock can echo it back.
@@ -945,6 +945,7 @@ mod tests {
                 local_image_path: attachment_path.clone(),
             }],
             text: "Describe [Image #1] please".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act

@@ -29,8 +29,23 @@ pub struct TurnPromptAttachment {
 pub struct TurnPrompt {
     /// Ordered local image attachments referenced by `text`.
     pub attachments: Vec<TurnPromptAttachment>,
-    /// Prompt text submitted by the user, including inline placeholders.
+    /// Prompt text payload, including inline placeholders when present.
     pub text: String,
+    /// Source classification that controls prompt-only text rewrites.
+    #[serde(default)]
+    pub text_source: TurnPromptTextSource,
+}
+
+/// Source classification for one turn prompt text payload.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum TurnPromptTextSource {
+    /// User-authored prompt text where `@path` lookup tokens should be
+    /// converted before transport delivery.
+    #[default]
+    UserPrompt,
+    /// Agent-facing generated data such as utility prompts, protocol repair
+    /// prompts, diffs, and transcript previews that must be sent unchanged.
+    AgentData,
 }
 
 /// Ordered content piece produced when serializing one turn prompt.
@@ -51,6 +66,18 @@ impl TurnPrompt {
         Self {
             attachments: Vec::new(),
             text,
+            text_source: TurnPromptTextSource::UserPrompt,
+        }
+    }
+
+    /// Creates a generated-data prompt payload that is sent to the agent
+    /// without user prompt `@path` lookup rewriting.
+    #[must_use]
+    pub fn from_agent_data(text: String) -> Self {
+        Self {
+            attachments: Vec::new(),
+            text,
+            text_source: TurnPromptTextSource::AgentData,
         }
     }
 
@@ -87,12 +114,15 @@ impl TurnPrompt {
 
     /// Returns the prompt text as it should be sent to an agent runtime.
     ///
-    /// User-entered `@path` lookups are rewritten to quoted path tokens for
-    /// transport, while the persisted transcript continues to use the original
-    /// raw prompt text.
+    /// User-authored `@path` lookups are rewritten to quoted path tokens for
+    /// transport. Generated agent data is returned unchanged so source content
+    /// such as Python decorators keeps its leading `@`.
     #[must_use]
     pub fn agent_text(&self) -> String {
-        composer::render_prompt_text_for_agent(&self.text)
+        match self.text_source {
+            TurnPromptTextSource::UserPrompt => composer::render_prompt_text_for_agent(&self.text),
+            TurnPromptTextSource::AgentData => self.text.clone(),
+        }
     }
 
     /// Returns prompt text spans and image attachments in transport order.
@@ -289,7 +319,7 @@ pub struct TurnRequest {
     /// Canonical request kind that drives transport behavior and protocol
     /// semantics for this turn.
     pub request_kind: AgentRequestKind,
-    /// Structured user prompt for the turn.
+    /// Structured prompt payload for the turn.
     pub prompt: TurnPrompt,
     /// Provider-native conversation identifier loaded from persistence.
     ///
@@ -487,6 +517,7 @@ mod tests {
                 local_image_path: PathBuf::from("/tmp/image-1.png"),
             }],
             text: "Review [Image #1] carefully".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act
@@ -516,6 +547,22 @@ mod tests {
     }
 
     #[test]
+    /// Ensures generated agent data bypasses user prompt `@` lookup rewriting.
+    fn test_turn_prompt_agent_text_preserves_agent_data_at_tokens() {
+        // Arrange
+        let prompt = TurnPrompt::from_agent_data(
+            "Diff:\n```diff\n+@dataclass\n+class Config:\n+    pass\n```".to_string(),
+        );
+
+        // Act
+        let agent_text = prompt.agent_text();
+
+        // Assert
+        assert!(agent_text.contains("+@dataclass"));
+        assert!(!agent_text.contains("+\"dataclass\""));
+    }
+
+    #[test]
     /// Ensures transcript text appends any attachment markers missing from the
     /// text payload.
     fn test_turn_prompt_transcript_text_appends_missing_placeholders() {
@@ -532,6 +579,7 @@ mod tests {
                 },
             ],
             text: "Review".to_string(),
+            text_source: TurnPromptTextSource::UserPrompt,
         };
 
         // Act

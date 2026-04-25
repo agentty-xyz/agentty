@@ -752,7 +752,8 @@ mod tests {
     use crate::infra::agent::tests::MockAgentBackend;
     use crate::infra::app_server::{AppServerTurnResponse, MockAppServerClient};
     use crate::infra::channel::{
-        AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnResult,
+        AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
+        TurnResult,
     };
     use crate::infra::db::AppRepositories;
     use crate::infra::fs::{self as fs, FsClient};
@@ -2497,6 +2498,7 @@ mod tests {
                     local_image_path: dir.path().join("draft-image.png"),
                 }],
                 text: "First draft".to_string(),
+                text_source: TurnPromptTextSource::UserPrompt,
             },
         )
         .await

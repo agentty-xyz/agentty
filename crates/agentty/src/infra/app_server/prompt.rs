@@ -3,7 +3,7 @@
 use crate::infra::agent;
 use crate::infra::agent::InstructionDeliveryMode;
 use crate::infra::app_server::{AppServerError, AppServerTurnRequest};
-use crate::infra::channel::{AgentRequestKind, TurnPrompt};
+use crate::infra::channel::{AgentRequestKind, TurnPrompt, TurnPromptTextSource};
 
 /// Reads the latest session output, preferring the live buffer over the
 /// stale snapshot.
@@ -57,6 +57,7 @@ pub(crate) fn turn_prompt_for_runtime(
     Ok(TurnPrompt {
         attachments: prompt.attachments,
         text: turn_prompt,
+        text_source: TurnPromptTextSource::AgentData,
     })
 }
 
@@ -220,6 +221,28 @@ mod tests {
         assert!(turn_prompt.text.contains("\"src/main.rs\""));
         assert!(!turn_prompt.text.contains("@src/main.rs"));
         assert!(!turn_prompt.text.contains("looked/up/"));
+    }
+
+    #[test]
+    fn turn_prompt_for_runtime_preserves_generated_at_tokens_for_agent_data() {
+        // Arrange
+        let prompt = TurnPrompt::from_agent_data(
+            "Review this diff:\n```diff\n+@dataclass\n+class Config:\n+    pass\n```".to_string(),
+        );
+        let request_kind = AgentRequestKind::UtilityPrompt;
+
+        // Act
+        let result = turn_prompt_for_runtime(
+            prompt,
+            &request_kind,
+            None,
+            InstructionDeliveryMode::BootstrapFull,
+        );
+
+        // Assert
+        let turn_prompt = result.expect("prompt rendering should succeed");
+        assert!(turn_prompt.text.contains("+@dataclass"));
+        assert!(!turn_prompt.text.contains("+\"dataclass\""));
     }
 
     #[test]

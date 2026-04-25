@@ -9,7 +9,7 @@ use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
-use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
+use crate::infra::channel::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
@@ -666,6 +666,7 @@ fn take_submitted_turn_prompt(app: &mut App) -> TurnPrompt {
             TurnPrompt {
                 attachments,
                 text: submission.text,
+                text_source: TurnPromptTextSource::UserPrompt,
             }
         }
         _ => TurnPrompt::from_text(String::new()),
@@ -884,6 +885,7 @@ async fn cleanup_prompt_attachment_state(app: &mut App) {
             TurnPrompt {
                 attachments,
                 text: String::new(),
+                text_source: TurnPromptTextSource::UserPrompt,
             }
         }
         _ => return,

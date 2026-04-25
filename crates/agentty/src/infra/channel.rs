@@ -12,7 +12,7 @@ pub mod factory;
 pub use contract::MockAgentChannel;
 pub use contract::{
     AgentChannel, AgentError, AgentFuture, AgentRequestKind, SessionRef, StartSessionRequest,
-    TurnEvent, TurnPrompt, TurnPromptAttachment, TurnRequest, TurnResult,
+    TurnEvent, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource, TurnRequest, TurnResult,
 };
 pub(crate) use contract::{TurnPromptContentPart, split_turn_prompt_content};
 pub use factory::create_agent_channel;
