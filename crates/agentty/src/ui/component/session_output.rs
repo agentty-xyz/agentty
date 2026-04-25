@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
 
+use crate::app;
 use crate::domain::session::{PublishedBranchSyncStatus, Session, SessionId, Status};
 use crate::icon::Icon;
 use crate::ui::markdown::{self, render_markdown};
@@ -490,7 +491,13 @@ impl<'a> SessionOutput<'a> {
             );
         }
         if Self::shows_review_lines(session.status, review_status_message, review_text) {
-            Self::append_review_lines(&mut lines, review_text, inner_width, markdown_render_cache);
+            Self::append_review_lines(
+                &mut lines,
+                review_status_message,
+                review_text,
+                inner_width,
+                markdown_render_cache,
+            );
         }
         Self::append_published_branch_sync_lines(&mut lines, session, spinner_frame);
 
@@ -710,8 +717,8 @@ impl<'a> SessionOutput<'a> {
                 .is_some_and(|review_text| !review_text.is_empty())
     }
 
-    /// Appends focused-review output to the transcript when review text is
-    /// available for the current session view.
+    /// Appends focused-review output or non-loading fallback text to the
+    /// transcript for the current session view.
     ///
     /// The `### Suggestions` header is annotated with a `(type "/apply" to
     /// apply)` hint at render time so users discover the apply shortcut
@@ -719,6 +726,7 @@ impl<'a> SessionOutput<'a> {
     /// suggestion extraction.
     fn append_review_lines(
         lines: &mut Vec<Line<'static>>,
+        review_status_message: Option<&str>,
         review_text: Option<&str>,
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
@@ -727,6 +735,13 @@ impl<'a> SessionOutput<'a> {
             .map(str::trim)
             .filter(|review_text| !review_text.is_empty())
             .map(layout::annotate_review_suggestions_header);
+        let review_markdown = review_markdown.or_else(|| {
+            review_status_message
+                .map(str::trim)
+                .filter(|status_message| !status_message.is_empty())
+                .filter(|status_message| !app::is_review_loading_status_message(status_message))
+                .map(ToString::to_string)
+        });
 
         let Some(review_markdown) = review_markdown else {
             return;
@@ -1260,6 +1275,37 @@ mod tests {
 
         // Assert
         assert!(text.contains("Focused finding"));
+    }
+
+    /// Verifies focused-review failures remain visible after the transient
+    /// loading status returns to `Review`.
+    #[test]
+    fn test_output_lines_review_session_shows_review_status_message_when_text_missing() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        let review_status_message = "Review assist unavailable: empty provider response";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(
+                DoneSessionOutputMode::Summary,
+                Some(review_status_message),
+                None,
+                None,
+            ),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains(review_status_message));
     }
 
     #[test]
