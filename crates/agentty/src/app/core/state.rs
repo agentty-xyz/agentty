@@ -101,6 +101,17 @@ pub(super) struct SyncPopupContext {
     pub(super) project_name: String,
 }
 
+/// Source-session context needed to create a seeded continuation draft.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TerminalContinuationDraft {
+    /// Base branch copied from the terminal source session.
+    base_branch: String,
+    /// Persisted project identifier copied from the terminal source session.
+    project_id: i64,
+    /// Initial draft message that gives the new session prior context.
+    prompt_seed: String,
+}
+
 /// Background sync task result carrying the normalized summary for
 /// persistence alongside the UI outcome.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -450,13 +461,19 @@ impl App {
     /// # Errors
     /// Returns an error if worktree or persistence setup fails.
     pub async fn create_draft_session(&mut self) -> Result<String, AppError> {
-        let session_id = self
-            .sessions
-            .create_draft_session(&self.projects, &self.services)
-            .await?;
-        self.finish_session_creation(&session_id).await;
+        let base_branch = self
+            .projects
+            .git_branch()
+            .ok_or_else(|| {
+                AppError::Workflow("Git branch is required to create a session".to_string())
+            })?
+            .to_string();
 
-        Ok(session_id)
+        self.create_finalized_draft_session_for_project(
+            self.projects.active_project_id(),
+            &base_branch,
+        )
+        .await
     }
 
     /// Creates one fresh draft session, stages the continuation context as
@@ -471,11 +488,16 @@ impl App {
         &mut self,
         source_session_id: &str,
     ) -> Result<String, AppError> {
-        let continuation_prompt_seed = self
-            .terminal_session_continuation_seed(source_session_id)
+        let continuation_draft = self
+            .terminal_session_continuation_draft(source_session_id)
             .await?;
-        let session_id = self.create_draft_session().await?;
-        self.stage_draft_message(&session_id, continuation_prompt_seed)
+        let session_id = self
+            .create_finalized_draft_session_for_project(
+                continuation_draft.project_id,
+                &continuation_draft.base_branch,
+            )
+            .await?;
+        self.stage_draft_message(&session_id, continuation_draft.prompt_seed)
             .await?;
 
         self.mode = AppMode::Prompt {
@@ -489,6 +511,25 @@ impl App {
             input: InputState::default(),
             scroll_offset: None,
         };
+
+        Ok(session_id)
+    }
+
+    /// Creates one draft session for a project and runs the shared app-level
+    /// post-create refresh/selection flow before returning.
+    ///
+    /// # Errors
+    /// Returns an error if draft persistence or app refresh fails.
+    async fn create_finalized_draft_session_for_project(
+        &mut self,
+        project_id: i64,
+        base_branch: &str,
+    ) -> Result<String, AppError> {
+        let session_id = self
+            .sessions
+            .create_draft_session_for_project(&self.services, project_id, base_branch)
+            .await?;
+        self.finish_session_creation(&session_id).await;
 
         Ok(session_id)
     }
@@ -508,16 +549,17 @@ impl App {
         self.sessions.table_state.select(Some(index));
     }
 
-    /// Returns the persisted continuation prompt seed for one terminal session.
+    /// Returns the persisted continuation draft context for one terminal
+    /// session.
     ///
     /// # Errors
     /// Returns an error if the source session is missing, not terminal, or has
     /// neither a stored merged commit hash nor usable persisted continuation
     /// context.
-    async fn terminal_session_continuation_seed(
+    async fn terminal_session_continuation_draft(
         &self,
         source_session_id: &str,
-    ) -> Result<String, AppError> {
+    ) -> Result<TerminalContinuationDraft, AppError> {
         let source_session = self
             .sessions
             .sessions
@@ -530,23 +572,38 @@ impl App {
             ));
         }
 
-        if let Some(merged_commit_hash) = self
+        let project_id = self
+            .services
+            .db()
+            .load_session_project_id(source_session_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Workflow(
+                    "Source session has no project association. Restart Agentty from this project \
+                     to backfill legacy sessions, then continue the session again."
+                        .to_string(),
+                )
+            })?;
+        let prompt_seed = if let Some(merged_commit_hash) = self
             .services
             .db()
             .load_session_merged_commit_hash(source_session_id)
             .await?
         {
-            return Ok(Self::merged_commit_continuation_prompt(
-                source_session,
-                &merged_commit_hash,
-            ));
-        }
+            Self::merged_commit_continuation_prompt(source_session, &merged_commit_hash)
+        } else {
+            source_session.continuation_prompt_seed().ok_or_else(|| {
+                AppError::Workflow(
+                    "Terminal continuation requires a merged commit hash or persisted context"
+                        .to_string(),
+                )
+            })?
+        };
 
-        source_session.continuation_prompt_seed().ok_or_else(|| {
-            AppError::Workflow(
-                "Terminal continuation requires a merged commit hash or persisted context"
-                    .to_string(),
-            )
+        Ok(TerminalContinuationDraft {
+            base_branch: source_session.base_branch.clone(),
+            project_id,
+            prompt_seed,
         })
     }
 
@@ -592,18 +649,9 @@ impl App {
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
-        let active_project_id = self.projects.active_project_id();
-        let project_working_dir = self.projects.working_dir().to_path_buf();
-
         Ok(self
             .sessions
-            .stage_draft_message(
-                &self.services,
-                active_project_id,
-                project_working_dir.as_path(),
-                session_id,
-                prompt,
-            )
+            .stage_draft_message(&self.services, session_id, prompt)
             .await?)
     }
 
@@ -4633,7 +4681,7 @@ mod tests {
             .expect("failed to insert project");
         app.services
             .db()
-            .insert_session("done-source", "gpt-5.4", "main", "Done", project_id)
+            .insert_session("done-source", "gpt-5.4", "release", "Done", project_id)
             .await
             .expect("failed to insert source session row");
         let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
@@ -4642,12 +4690,13 @@ mod tests {
             .update_session_merged_commit_hash("done-source", Some(merged_commit_hash))
             .await
             .expect("failed to persist merged commit hash");
-        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+        let mut source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
             .id("done-source")
             .status(Status::Done)
             .project_name("project-alpha")
             .title(Some("Done source".to_string()))
             .build();
+        source_session.base_branch = "release".to_string();
         app.sessions.push_session(source_session);
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
@@ -4693,6 +4742,7 @@ mod tests {
             .find(|session| session.id == continued_session_id)
             .expect("expected created continuation draft");
         assert!(continued_session.is_draft_session());
+        assert_eq!(continued_session.base_branch, "release");
         assert_eq!(continued_session.status, Status::New);
         assert_eq!(
             continued_session.prompt,
@@ -4725,6 +4775,12 @@ mod tests {
         )
         .await
         .expect("failed to build test app");
+        let project_id = app.active_project_id();
+        app.services
+            .db()
+            .insert_session("canceled-source", "gpt-5.4", "main", "Canceled", project_id)
+            .await
+            .expect("failed to insert source session row");
         let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
             .id("canceled-source")
             .status(Status::Canceled)
@@ -4799,6 +4855,29 @@ mod tests {
             result,
             Err(AppError::Workflow(message))
                 if message == "Only `Done` or `Canceled` sessions can be continued"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_continue_terminal_session_reports_legacy_session_without_project() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
+            .id("legacy-source")
+            .status(Status::Canceled)
+            .summary(Some("summary".to_string()))
+            .build();
+        app.sessions.push_session(source_session);
+
+        // Act
+        let result = app.continue_terminal_session("legacy-source").await;
+
+        // Assert
+        assert!(matches!(
+            result,
+            Err(AppError::Workflow(message))
+                if message == "Source session has no project association. Restart Agentty from \
+                    this project to backfill legacy sessions, then continue the session again."
         ));
     }
 

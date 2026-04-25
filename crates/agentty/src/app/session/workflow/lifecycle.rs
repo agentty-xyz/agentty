@@ -146,8 +146,7 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) -> Result<String, SessionError> {
-        self.create_session_with_draft_mode(projects, services, false)
-            .await
+        self.create_live_session(projects, services).await
     }
 
     /// Creates a blank draft session that stages prompts until explicitly
@@ -167,21 +166,74 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) -> Result<String, SessionError> {
-        self.create_session_with_draft_mode(projects, services, true)
+        let base_branch = projects.git_branch().ok_or_else(|| {
+            SessionError::Workflow("Git branch is required to create a session".to_string())
+        })?;
+
+        self.create_draft_session_for_project(services, projects.active_project_id(), base_branch)
             .await
     }
 
-    /// Creates one blank session using either immediate-start or explicit
-    /// staged-draft first-turn behavior.
+    /// Creates one blank draft session for an explicit persisted project.
+    ///
+    /// Continuation flows use the source session project instead of the
+    /// currently active project so the later lazy worktree is materialized from
+    /// the same repository and base branch as the terminal source session.
+    ///
+    /// Returns the identifier of the newly created session.
+    ///
+    /// # Errors
+    /// Returns an error if the session files or database record cannot be
+    /// created.
+    pub async fn create_draft_session_for_project(
+        &mut self,
+        services: &AppServices,
+        project_id: i64,
+        base_branch: &str,
+    ) -> Result<String, SessionError> {
+        let session_model = self
+            .resolve_default_session_model(services, project_id)
+            .await;
+        self.default_session_model = session_model;
+
+        let session_id = Uuid::new_v4().to_string();
+        let folder = session_folder(services.base_path(), &session_id);
+        if services.fs_client().exists(folder.clone()) {
+            return Err(SessionError::Workflow(format!(
+                "Session folder {session_id} already exists"
+            )));
+        }
+
+        services
+            .db()
+            .insert_draft_session(
+                &session_id,
+                session_model.as_str(),
+                base_branch,
+                &Status::New.to_string(),
+                project_id,
+            )
+            .await
+            .map_err(|error| {
+                SessionError::Workflow(format!("Failed to save session metadata: {error}"))
+            })?;
+
+        Self::record_session_creation_activity(services, &session_id).await;
+        services.emit_app_event(AppEvent::RefreshSessions);
+
+        Ok(session_id)
+    }
+
+    /// Creates one regular session whose worktree is materialized before the
+    /// first prompt is submitted.
     ///
     /// # Errors
     /// Returns an error if the worktree, session files, database record, or
     /// backend setup cannot be created.
-    async fn create_session_with_draft_mode(
+    async fn create_live_session(
         &mut self,
         projects: &ProjectManager,
         services: &AppServices,
-        is_draft: bool,
     ) -> Result<String, SessionError> {
         let base_branch = projects.git_branch().ok_or_else(|| {
             SessionError::Workflow("Git branch is required to create a session".to_string())
@@ -210,43 +262,27 @@ impl SessionManager {
                 SessionError::Workflow("Failed to find git repository root".to_string())
             })?;
 
-        if !is_draft {
-            self.create_session_worktree(
-                services,
+        self.create_session_worktree(
+            services,
+            &session_id,
+            &folder,
+            &repo_root,
+            &worktree_branch,
+            base_branch,
+        )
+        .await?;
+
+        if let Err(error) = services
+            .db()
+            .insert_session(
                 &session_id,
-                &folder,
-                &repo_root,
-                &worktree_branch,
+                session_model.as_str(),
                 base_branch,
+                &Status::New.to_string(),
+                projects.active_project_id(),
             )
-            .await?;
-        }
-
-        let insert_result = if is_draft {
-            services
-                .db()
-                .insert_draft_session(
-                    &session_id,
-                    session_model.as_str(),
-                    base_branch,
-                    &Status::New.to_string(),
-                    projects.active_project_id(),
-                )
-                .await
-        } else {
-            services
-                .db()
-                .insert_session(
-                    &session_id,
-                    session_model.as_str(),
-                    base_branch,
-                    &Status::New.to_string(),
-                    projects.active_project_id(),
-                )
-                .await
-        };
-
-        if let Err(error) = insert_result {
+            .await
+        {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -264,8 +300,7 @@ impl SessionManager {
 
         Self::record_session_creation_activity(services, &session_id).await;
 
-        if !is_draft && let Err(error) = agent::create_backend(session_model.kind()).setup(&folder)
-        {
+        if let Err(error) = agent::create_backend(session_model.kind()).setup(&folder) {
             self.rollback_failed_session_creation(
                 services,
                 &folder,
@@ -474,8 +509,6 @@ impl SessionManager {
     pub async fn stage_draft_message(
         &mut self,
         services: &AppServices,
-        project_id: i64,
-        project_working_dir: &Path,
         session_id: &str,
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), SessionError> {
@@ -523,13 +556,23 @@ impl SessionManager {
                 title_to_save,
             )
         };
+        let project_id = services
+            .db()
+            .load_session_project_id(&persisted_session_id)
+            .await?
+            .ok_or_else(|| {
+                SessionError::Workflow(
+                    "Session project is required to stage draft prompts".to_string(),
+                )
+            })?;
+        let project_working_dir = self.load_project_path(services, project_id).await?;
         let title_generation_model =
             setting::load_default_fast_model_setting(services, Some(project_id), session_model)
                 .await;
         let title_generation_folder = if services.fs_client().is_dir(folder.clone()) {
             folder.clone()
         } else {
-            project_working_dir.to_path_buf()
+            project_working_dir
         };
 
         draft::store_staged_draft_attachments(
@@ -2769,13 +2812,7 @@ mod tests {
 
         // Act
         let error = session_manager
-            .stage_draft_message(
-                &services,
-                1,
-                Path::new("/tmp/project"),
-                "session-id",
-                prompt,
-            )
+            .stage_draft_message(&services, "session-id", prompt)
             .await
             .expect_err("attachment metadata failure should abort draft staging");
         let persisted_session = load_persisted_session_row(&database).await;
