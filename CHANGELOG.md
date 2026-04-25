@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.8.3] - 2026-04-24
+
+### Changed
+- build: remove pinned version comments from release.yml
+
+### Contributors
+- @minev-dev
+
 ## [v0.8.2] - 2026-04-24
 
 ### Added
+
 - Animate session loaders with frame-aware rendering.
 - Preserve source session context when creating continuation drafts.
 
 ### Changed
+
 - Recess clarification prompt background with dedicated palette surface.
 - Route coverage and end-to-end checks to postsubmit.
 - Adopt `cargo-nextest` for workspace tests and coverage.
@@ -22,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Raise pre-commit source-test coverage thresholds.
 
 ### Fixed
+
 - Show review fallback status when no review text is available and refresh staged-draft sessions immediately.
 - Preserve focused review visibility after completion across prompt, question, and done sessions.
 - Preserve user-cancelled turns as canceled sessions.
@@ -29,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restrict protocol questions to genuine clarifications.
 
 ### Contributors
+
 - @andagaev
 - @minev-dev
 
