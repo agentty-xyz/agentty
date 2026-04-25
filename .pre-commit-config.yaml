@@ -5,6 +5,10 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
       - id: check-added-large-files
         args: ['--maxkb=5120']
 
@@ -38,7 +42,7 @@ repos:
         description: Auto-fix clippy lints where possible.
         entry: cargo clippy --fix --allow-dirty --allow-staged -q --all-targets --all-features -- -D warnings
         language: system
-        types: [rust]
+        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
         stages: [manual]
       - id: rustfmt
@@ -51,16 +55,16 @@ repos:
       - id: cargo-check
         name: cargo check
         description: Check the package for errors.
-        entry: cargo check -q --all-targets --all-features
+        entry: cargo check -q --locked --all-targets --all-features
         language: system
-        types: [rust]
+        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
       - id: clippy
         name: clippy
         description: Lint the code and fail on any warnings.
-        entry: cargo clippy -q --all-targets --all-features -- -D warnings
+        entry: cargo clippy -q --locked --all-targets --all-features -- -D warnings
         language: system
-        types: [rust]
+        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
         stages: [manual]
       - id: test-workspace
@@ -71,7 +75,7 @@ repos:
           test_threads=$((test_threads / 2));
           if [ "$test_threads" -lt 1 ]; then test_threads=1; fi;
           if [ "$test_threads" -gt 4 ]; then test_threads=4; fi;
-          cargo test -q -- --test-threads="$test_threads"'
+          cargo test -q --locked -- --test-threads="$test_threads"'
         language: system
         always_run: true
         pass_filenames: false
@@ -79,7 +83,7 @@ repos:
       - id: test-agentty-e2e
         name: cargo test agentty e2e
         description: Run the PTY-driven `agentty` end-to-end feature suite.
-        entry: cargo test -q -p agentty --test e2e -- --test-threads=1
+        entry: cargo test -q --locked -p agentty --test e2e -- --test-threads=1
         language: system
         always_run: true
         pass_filenames: false
@@ -87,7 +91,7 @@ repos:
       - id: coverage
         name: coverage
         description: Verify workspace coverage meets ratchet thresholds.
-        entry: cargo llvm-cov --workspace --summary-only --fail-under-lines 89 --fail-under-functions 86
+        entry: cargo llvm-cov --workspace --summary-only --locked --fail-under-lines 89 --fail-under-functions 86
         language: system
         types: [rust]
         pass_filenames: false
@@ -119,13 +123,20 @@ repos:
       - id: check-migrations
         name: check migrations
         description: Verifies that migration files have unique prefix numbers.
-        entry: cargo run -q -p ag-xtask -- check-migrations
+        entry: cargo run -q --locked -p ag-xtask -- check-migrations
         language: system
         types: [sql]
         pass_filenames: false
       - id: check-roadmap
         name: check roadmap
         description: Verifies that the planning roadmap matches the active workflow rules.
-        entry: cargo run -q -p ag-xtask -- roadmap lint
+        entry: cargo run -q --locked -p ag-xtask -- roadmap lint
         language: system
+        pass_filenames: false
+      - id: validate-prek-config
+        name: validate prek config
+        description: Validate the `prek` hook configuration when it changes.
+        entry: prek validate-config .pre-commit-config.yaml
+        language: system
+        files: ^\.pre-commit-config\.yaml$
         pass_filenames: false

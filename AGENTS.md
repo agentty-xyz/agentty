@@ -12,7 +12,7 @@ TUI tool to manage agents.
 - **Semantic Guidance Only:** Keep `AGENTS.md` files focused on purpose, entry points, invariants, change routing, and docs-sync notes. Do not maintain exhaustive per-directory file inventories.
 - **Local Paths Only:** In `AGENTS.md`, do not use parent-directory relative paths. Each file should describe only its own directory or module boundary.
 - **Context First:** Before broad exploration, read the nearest available `AGENTS.md`. If the current directory does not have one, fall back to the closest ancestor guide and the architecture docs in `docs/site/content/docs/architecture/`.
-- **Context7 First:** If Context7 is connected as an MCP server, use it to retrieve the latest documentation and API details for the tools and libraries used in the task.
+- **Context7 First:** If Context7 is connected as an MCP server, try it first for the latest documentation and API details for external tools and libraries relevant to the task. If Context7 is unavailable, use official docs as the fallback and note the fallback in your response.
 - **Test Isolation for External Commands:** Keep isolated single-command tests real when they validate one external command call, but for higher-level flows that involve multiple external command calls, always extract trait boundaries and mock them with `mockall` (`#[cfg_attr(test, mockall::automock)]`) to reduce runtime and flakiness.
 
 ## Project Facts
@@ -178,33 +178,56 @@ The project uses `tokio` as its async runtime. The binary entry point uses `#[to
 
 ## Quality Gates
 
-Use a tiered validation flow so local iteration stays fast without lowering the
-final quality bar.
+Use the repository hook catalog in `.pre-commit-config.yaml` as the executable
+source of truth for validation commands. Keep agent workflows and CI invoking
+hook IDs from that file instead of re-encoding cargo or Zola commands elsewhere.
 
-### Inner Loop
+### Impact-Based Validation
 
-Use these while iterating on a change:
+Before handoff, commit, or opening a review, run the narrowest repository-defined
+checks that cover every touched file, then expand through affected workspace
+dependencies and dependents. Use the dependency graph from workspace manifests or
+`cargo metadata` when deciding which crates and tests are affected. If you cannot
+confidently prove the targeted checks cover the full impact, run the full
+repository suite instead.
 
-1. **Autofix:** `prek run rustfmt-fix --all-files --hook-stage manual`
-1. **Compile:** `prek run cargo-check --all-files`
-1. **Focused Tests:** Run the narrowest matching hook from the `prek` hook catalog when one exists (for example `prek run test-agentty-e2e --all-files --hook-stage manual`).
+- **Markdown and docs:** Run `prek run mdformat --files <paths>` and
+  `prek run --files <paths>`. If `docs/site/` content changes, also run
+  `prek run zola-check --all-files --hook-stage manual`.
+- **Rust sources:** Run `prek run rustfmt-fix --files <paths> --hook-stage manual`
+  while iterating, then run `prek run cargo-check --files <paths>`. Add focused
+  tests for the changed crate and dependent crates, using the narrowest matching
+  hook when one exists.
+- **Cargo manifests and lockfile:** Run `prek run cargo-check --files <paths>`,
+  `prek run clippy --files <paths> --hook-stage manual`, and tests for
+  affected workspace crates plus dependents. Use `prek run test-workspace --all-files --hook-stage manual` when dependency impact is broad or
+  uncertain.
+- **SQL migrations:** Run `prek run check-migrations --files <paths>` plus the
+  Rust checks and tests for crates that embed or query those migrations.
+- **Planning docs:** Run `prek run check-roadmap --all-files` when `docs/plan/`
+  changes.
+- **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml` when `.pre-commit-config.yaml` changes.
+- **User-visible UI behavior:** Add or update the required `FeatureTest` coverage,
+  then run the focused E2E hook, usually `prek run test-agentty-e2e --all-files --hook-stage manual`.
 
-### Final Local Validation
+### Autofix Discipline
 
-`prek` runs the repository hook catalog from `.pre-commit-config.yaml`, which is
-the executable source of truth for validation commands. Keep agent workflows
-and CI invoking hook IDs from that file instead of re-encoding cargo or Zola
-commands elsewhere.
+Run mutating fixers one at a time and inspect the resulting diff after each one:
 
-Run this sequence before handoff, commit, or opening a review:
+1. **Format:** `prek run rustfmt-fix --all-files --hook-stage manual`
+1. **Inspect:** Review the diff for unexpected formatting churn.
+1. **Clippy Fix:** `prek run clippy-fix --all-files --hook-stage manual`
+1. **Inspect:** Review the diff for behavior changes before continuing.
 
-1. **Autofix:** `prek run rustfmt-fix --all-files --hook-stage manual && prek run clippy-fix --all-files --hook-stage manual`
+### Full Validation
+
+Run the full suite when a change is cross-cutting, when dependency impact is
+unclear, before release work, or when targeted validation fails to give high
+confidence:
+
 1. **Validate:** `prek run --all-files`
 1. **Lint:** `prek run clippy --all-files --hook-stage manual`
 1. **Test:** `prek run test-workspace --all-files --hook-stage manual`
-
-Focused tests are allowed during development, but they do not replace the final
-full-suite run.
 
 ### Periodic / CI
 
@@ -214,11 +237,6 @@ Use these slower hygiene checks in CI or when making broader changes:
 1. **Coverage Upload:** `prek run coverage-lcov --all-files --hook-stage manual`
 1. **Docs Site:** `prek run zola-check --all-files --hook-stage manual`
 1. **Dependency Hygiene:** `prek run cargo-shear --all-files --hook-stage manual`
-
-The manual-stage autofix hooks apply formatting and fixable clippy lints. The
-default validation command keeps feedback relatively fast, while the explicit
-manual-stage hooks keep slower lint, test, docs, and coverage checks available
-through the same hook catalog.
 
 ### Test Failure Protocol
 
@@ -334,44 +352,10 @@ Agentty automatically creates isolated git worktrees for sessions when launched 
 - Use the minimal set of skills needed for the current turn.
 - Do not carry a skill across turns unless it is explicitly requested again or clearly re-triggered by intent.
 
-## Meta-Agent Inventory
+## Runtime Prompts
 
-The project uses two layers of prompt-driven meta-agents that shape agent behavior:
-
-### Interactive Skills (`skills/`)
-
-User- or AI-triggered workflow guides invoked via slash commands. Pure markdown with numbered steps.
-
-| Skill | Description |
-|-------|-------------|
-| [`git-commit`](skills/git-commit/SKILL.md) | Gather context, write commit messages following repo conventions. |
-| [`review`](skills/review/SKILL.md) | Structured code review with severity-categorized report output. |
-| [`implementation-plan`](skills/implementation-plan/SKILL.md) | Create iterative execution plans in `docs/plan/` with size budgeting. |
-| [`release`](skills/release/SKILL.md) | Version bump, changelog, tagging, and push workflow. |
-| [`feature-test`](skills/feature-test/SKILL.md) | Create E2E feature tests with VHS GIF generation and Zola page auto-discovery. |
-
-### Analysis Skills (`skills/`)
-
-Agent-driven analysis skills that review a codebase and return findings as prioritized markdown task lists in the `answer` field. Discovered organically via `AGENTS.md`.
-
-| Skill | Description |
-|-------|-------------|
-| [`security-audit`](skills/security-audit/SKILL.md) | Audit subprocess execution, path handling, SQL queries, panic conditions, and dependency risks. |
-| [`tech-debt`](skills/tech-debt/SKILL.md) | Sweep for TODOs, stale patterns, missing docs, and dead code. |
-
-### Runtime Prompt Templates (`crates/agentty/src/infra/agent/template/`)
-
-Askama templates compiled into the binary that are sent to agent backends automatically during session workflows.
-
-| Template | Rust Struct | Trigger | Job |
-|----------|-------------|---------|-----|
-| `session_title_generation_prompt.md` | `SessionTitleGenerationPromptTemplate` | New session | Generate a concise session title from the user's first prompt. |
-| `session_commit_message_prompt.md` | `SessionCommitMessagePromptTemplate` | Auto-commit | Generate or refine commit messages from the cumulative session diff. |
-| `review_assist_prompt.md` | `ReviewAssistPromptTemplate` | Diff view (`d` key) | Read-only code review producing `## Review` → `### Project Impact` → `### Suggestions`. |
-| `auto_commit_assist_prompt.md` | `AutoCommitAssistPromptTemplate` | Commit failure | Fix code so a follow-up commit can succeed (no git commands allowed). |
-| `rebase_assist_prompt.md` | `RebaseAssistPromptTemplate` | Rebase conflict | Resolve conflict markers using read-only git analysis. |
-| `protocol_instruction_prompt.md` | `ProtocolInstructionPromptTemplate` | Every agent turn | Wrap prompts with structured JSON response protocol and file-path rules. |
-| `resume_with_session_output_prompt.md` | `ResumeWithSessionOutputPromptTemplate` | Model switch | Replay prior session transcript for context continuity. |
+- Agent prompt templates live in `crates/agentty/src/infra/agent/template/`.
+  Inspect the source templates directly when changing backend prompt behavior.
 
 ## Workspace Map
 
