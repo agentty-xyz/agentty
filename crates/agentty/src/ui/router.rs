@@ -80,8 +80,10 @@ struct SessionChatRenderContext<'a> {
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
     mode: &'a AppMode,
+    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     session_id: &'a str,
     session_progress_messages: &'a HashMap<SessionId, String>,
+    session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
     scroll_offset: Option<u16>,
@@ -96,10 +98,12 @@ struct PublishBranchOverlayContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     input: &'a InputState,
     locked_upstream_ref: Option<&'a str>,
     restore_view: &'a ConfirmationViewMode,
     session_progress_messages: &'a HashMap<SessionId, String>,
+    session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     sessions: &'a [Session],
 }
@@ -110,8 +114,10 @@ struct RouteAuxContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
     default_reasoning_level: ReasoningLevel,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     review_comment_cache: &'a ReviewCommentCache,
     session_progress_messages: &'a HashMap<SessionId, String>,
+    session_update_versions: &'a HashMap<SessionId, u64>,
     session_worktree_availability: &'a HashMap<SessionId, bool>,
     wall_clock_unix_seconds: i64,
 }
@@ -125,10 +131,12 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         has_tasks_tab,
         markdown_render_cache,
         mode,
+        output_layout_cache,
         project_table_state,
         projects,
         review_comment_cache,
         session_progress_messages,
+        session_update_versions,
         session_worktree_availability,
         settings,
         stats_activity,
@@ -160,8 +168,10 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_prompt_outputs,
         default_reasoning_level: shared.settings.reasoning_level,
         markdown_render_cache,
+        output_layout_cache,
         review_comment_cache,
         session_progress_messages,
+        session_update_versions,
         session_worktree_availability,
         wall_clock_unix_seconds,
     };
@@ -222,9 +232,11 @@ fn render_list_or_overlay_mode(
                 help_context,
                 list_background: shared.list_background(),
                 markdown_render_cache: aux.markdown_render_cache,
+                output_layout_cache: aux.output_layout_cache,
                 review_comment_cache: aux.review_comment_cache,
                 scroll_offset: *scroll_offset,
                 session_progress_messages: aux.session_progress_messages,
+                session_update_versions: aux.session_update_versions,
                 wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
             },
         ),
@@ -276,8 +288,10 @@ fn render_confirmation_mode(
                 active_prompt_outputs: aux.active_prompt_outputs,
                 default_reasoning_level: aux.default_reasoning_level,
                 markdown_render_cache: aux.markdown_render_cache,
+                output_layout_cache: aux.output_layout_cache,
                 restore_view: view_mode,
                 session_progress_messages: aux.session_progress_messages,
+                session_update_versions: aux.session_update_versions,
                 session_worktree_availability: aux.session_worktree_availability,
                 sessions: shared.sessions,
                 wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
@@ -330,11 +344,13 @@ fn render_view_info_popup_mode(
                 .unwrap_or(&false),
             default_reasoning_level: aux.default_reasoning_level,
             markdown_render_cache: aux.markdown_render_cache,
+            output_layout_cache: aux.output_layout_cache,
             is_loading: *is_loading,
             loading_label,
             message,
             restore_view,
             session_progress_messages: aux.session_progress_messages,
+            session_update_versions: aux.session_update_versions,
             sessions,
             title,
             wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
@@ -363,10 +379,14 @@ struct SessionOverlayRenderContext<'a> {
     default_reasoning_level: ReasoningLevel,
     /// Shared render cache for session transcript markdown.
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Shared output-layout cache for the restored session transcript.
+    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     /// Session view restored after the overlay closes.
     restore_view: &'a ConfirmationViewMode,
     /// Active progress messages keyed by session id.
     session_progress_messages: &'a HashMap<SessionId, String>,
+    /// Latest observable update versions keyed by session id.
+    session_update_versions: &'a HashMap<SessionId, u64>,
     /// Whether each background session currently has a materialized
     /// worktree, keyed by session id.
     session_worktree_availability: &'a HashMap<SessionId, bool>,
@@ -393,8 +413,10 @@ fn render_session_overlay_background(
             default_reasoning_level: context.default_reasoning_level,
             markdown_render_cache: context.markdown_render_cache,
             mode: &background_mode,
+            output_layout_cache: context.output_layout_cache,
             session_id: &context.restore_view.session_id,
             session_progress_messages: context.session_progress_messages,
+            session_update_versions: context.session_update_versions,
             session_worktree_availability: context.session_worktree_availability,
             sessions: context.sessions,
             scroll_offset: context.restore_view.scroll_offset,
@@ -453,8 +475,10 @@ fn render_session_or_diff_mode(
                 default_reasoning_level: aux.default_reasoning_level,
                 markdown_render_cache: aux.markdown_render_cache,
                 mode,
+                output_layout_cache: aux.output_layout_cache,
                 session_id,
                 session_progress_messages: aux.session_progress_messages,
+                session_update_versions: aux.session_update_versions,
                 session_worktree_availability: aux.session_worktree_availability,
                 sessions,
                 scroll_offset: *scroll_offset,
@@ -472,8 +496,10 @@ fn render_session_or_diff_mode(
                 active_prompt_outputs: aux.active_prompt_outputs,
                 default_reasoning_level: aux.default_reasoning_level,
                 markdown_render_cache: aux.markdown_render_cache,
+                output_layout_cache: aux.output_layout_cache,
                 restore_view,
                 session_progress_messages: aux.session_progress_messages,
+                session_update_versions: aux.session_update_versions,
                 session_worktree_availability: aux.session_worktree_availability,
                 sessions,
                 wall_clock_unix_seconds: aux.wall_clock_unix_seconds,
@@ -487,22 +513,17 @@ fn render_session_or_diff_mode(
             locked_upstream_ref,
             restore_view,
             ..
-        } => render_publish_branch_overlay(
+        } => render_publish_branch_input_mode(
             f,
             area,
-            &PublishBranchOverlayContext {
+            PublishBranchModeContext {
                 default_branch_name,
-                active_prompt_outputs: aux.active_prompt_outputs,
-                default_reasoning_level: aux.default_reasoning_level,
-                markdown_render_cache: aux.markdown_render_cache,
                 input,
                 locked_upstream_ref: locked_upstream_ref.as_deref(),
                 restore_view,
-                session_progress_messages: aux.session_progress_messages,
-                session_worktree_availability: aux.session_worktree_availability,
-                sessions,
             },
-            aux.wall_clock_unix_seconds,
+            sessions,
+            aux,
         ),
         AppMode::Diff {
             diff,
@@ -530,6 +551,49 @@ fn render_session_or_diff_mode(
         | AppMode::ViewInfoPopup { .. }
         | AppMode::Help { .. } => {}
     }
+}
+
+/// Renders publish-branch input mode by combining mode-specific values with
+/// shared session-render routing data.
+fn render_publish_branch_input_mode(
+    f: &mut Frame,
+    area: Rect,
+    mode_context: PublishBranchModeContext<'_>,
+    sessions: &[Session],
+    aux: RouteAuxContext<'_>,
+) {
+    render_publish_branch_overlay(
+        f,
+        area,
+        &PublishBranchOverlayContext {
+            default_branch_name: mode_context.default_branch_name,
+            active_prompt_outputs: aux.active_prompt_outputs,
+            default_reasoning_level: aux.default_reasoning_level,
+            markdown_render_cache: aux.markdown_render_cache,
+            output_layout_cache: aux.output_layout_cache,
+            input: mode_context.input,
+            locked_upstream_ref: mode_context.locked_upstream_ref,
+            restore_view: mode_context.restore_view,
+            session_progress_messages: aux.session_progress_messages,
+            session_update_versions: aux.session_update_versions,
+            session_worktree_availability: aux.session_worktree_availability,
+            sessions,
+        },
+        aux.wall_clock_unix_seconds,
+    );
+}
+
+/// Mode-specific publish-branch values extracted from `AppMode`.
+#[derive(Clone, Copy)]
+struct PublishBranchModeContext<'a> {
+    /// Default branch name shown in the publish prompt.
+    default_branch_name: &'a str,
+    /// Publish target input state.
+    input: &'a InputState,
+    /// Existing upstream ref that constrains the publish target, when present.
+    locked_upstream_ref: Option<&'a str>,
+    /// Session view restored behind the publish prompt.
+    restore_view: &'a ConfirmationViewMode,
 }
 
 /// Renders open-command selection overlay above the originating session chat.
@@ -560,10 +624,12 @@ fn render_publish_branch_overlay(
         active_prompt_outputs,
         default_reasoning_level,
         markdown_render_cache,
+        output_layout_cache,
         input,
         locked_upstream_ref,
         restore_view,
         session_progress_messages,
+        session_update_versions,
         session_worktree_availability,
         sessions,
     } = *context;
@@ -574,8 +640,10 @@ fn render_publish_branch_overlay(
             active_prompt_outputs,
             default_reasoning_level,
             markdown_render_cache,
+            output_layout_cache,
             restore_view,
             session_progress_messages,
+            session_update_versions,
             session_worktree_availability,
             sessions,
             wall_clock_unix_seconds,
@@ -597,8 +665,10 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         default_reasoning_level,
         markdown_render_cache,
         mode,
+        output_layout_cache,
         session_id,
         session_progress_messages,
+        session_update_versions,
         session_worktree_availability,
         sessions,
         scroll_offset,
@@ -615,6 +685,10 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
     let active_prompt_output = active_prompt_outputs
         .get(session_id)
         .map(std::string::String::as_str);
+    let session_update_version = session_update_versions
+        .get(session_id)
+        .copied()
+        .unwrap_or_default();
 
     page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
         active_prompt_output,
@@ -622,8 +696,10 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         default_reasoning_level,
         markdown_render_cache,
         mode,
+        output_layout_cache,
         scroll_offset,
         session_index,
+        session_update_version,
         sessions,
         wall_clock_unix_seconds,
     })
@@ -778,6 +854,8 @@ mod tests {
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
         let review_comment_cache = ReviewCommentCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let session_update_versions = HashMap::new();
 
         // Act
         terminal
@@ -791,8 +869,10 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         markdown_render_cache: &cache,
+                        output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
                         session_progress_messages: &progress_messages,
+                        session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
                     },
@@ -822,6 +902,8 @@ mod tests {
         let sessions = Vec::new();
         let cache = markdown::MarkdownRenderCache::default();
         let review_comment_cache = ReviewCommentCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let session_update_versions = HashMap::new();
 
         // Act
         terminal
@@ -837,8 +919,10 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         markdown_render_cache: &cache,
+                        output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
                         session_progress_messages: &progress_messages,
+                        session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
                     },
@@ -872,6 +956,8 @@ mod tests {
         let progress_messages = HashMap::new();
         let cache = markdown::MarkdownRenderCache::default();
         let review_comment_cache = ReviewCommentCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let session_update_versions = HashMap::new();
 
         // Act
         terminal
@@ -885,8 +971,10 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::default(),
                         markdown_render_cache: &cache,
+                        output_layout_cache: &output_layout_cache,
                         review_comment_cache: &review_comment_cache,
                         session_progress_messages: &progress_messages,
+                        session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
                         wall_clock_unix_seconds: 0,
                     },
@@ -921,6 +1009,8 @@ mod tests {
             session_id: session_id.into(),
         };
         let cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
+        let session_update_versions = HashMap::new();
 
         // Act
         terminal
@@ -932,8 +1022,10 @@ mod tests {
                         active_prompt_outputs: &HashMap::new(),
                         default_reasoning_level: ReasoningLevel::High,
                         markdown_render_cache: &cache,
+                        output_layout_cache: &output_layout_cache,
                         restore_view: &view_mode,
                         session_progress_messages: &progress_messages,
+                        session_update_versions: &session_update_versions,
                         session_worktree_availability: &HashMap::new(),
                         sessions: &sessions,
                         wall_clock_unix_seconds: 0,

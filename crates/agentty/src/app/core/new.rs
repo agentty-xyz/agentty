@@ -171,6 +171,8 @@ impl App {
             last_seen_session_update_versions: std::collections::HashMap::new(),
             markdown_render_cache: crate::ui::markdown::MarkdownRenderCache::default(),
             merge_queue: crate::app::merge_queue::MergeQueue::default(),
+            session_output_layout_cache:
+                crate::ui::component::session_output::SessionOutputLayoutCache::default(),
             session_progress_messages: std::collections::HashMap::new(),
             update_status: None,
             sync_main_runner: clients.sync_main_runner,

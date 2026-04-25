@@ -48,6 +48,8 @@ pub struct RenderContext<'a> {
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current app mode and its transient state.
     pub mode: &'a AppMode,
+    /// Shared cache for fully assembled session-output layouts.
+    pub output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     /// Table selection state for the projects list.
     pub project_table_state: &'a mut TableState,
     /// Project rows available for rendering.
@@ -63,6 +65,8 @@ pub struct RenderContext<'a> {
     pub session_index_by_id: &'a HashMap<SessionId, usize>,
     /// Background thinking messages keyed by session id.
     pub session_progress_messages: &'a HashMap<SessionId, String>,
+    /// Latest observable update versions keyed by session id.
+    pub session_update_versions: &'a HashMap<SessionId, u64>,
     /// Whether each rendered session currently has a materialized worktree on
     /// disk, keyed by session id.
     pub session_worktree_availability: &'a HashMap<SessionId, bool>,

@@ -43,6 +43,8 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     pub(crate) default_reasoning_level: ReasoningLevel,
     /// Shared markdown cache reused by the restored session background.
     pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Shared output-layout cache reused by the restored session background.
+    pub(crate) output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     /// Whether the popup should render its loading indicator.
     pub(crate) is_loading: bool,
     /// Loading indicator label.
@@ -53,6 +55,8 @@ pub(crate) struct ViewInfoPopupRenderContext<'a> {
     pub(crate) restore_view: &'a ConfirmationViewMode,
     /// Session progress messages keyed by session id.
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
+    /// Latest observable update versions keyed by session id.
+    pub(crate) session_update_versions: &'a HashMap<SessionId, u64>,
     /// Session rows available for restored background rendering.
     pub(crate) sessions: &'a [Session],
     /// Popup title.
@@ -69,6 +73,8 @@ pub(crate) struct HelpOverlayRenderContext<'a> {
     pub(crate) list_background: ListBackgroundRenderContext<'a>,
     /// Shared markdown cache reused by restored background pages.
     pub(crate) markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Shared output-layout cache reused by restored session backgrounds.
+    pub(crate) output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
     /// Shared review-comment cache used to restore the review-comments page
     /// behind help overlays opened from that page.
     pub(crate) review_comment_cache: &'a ReviewCommentCache,
@@ -76,8 +82,31 @@ pub(crate) struct HelpOverlayRenderContext<'a> {
     pub(crate) scroll_offset: u16,
     /// Session progress messages keyed by session id.
     pub(crate) session_progress_messages: &'a HashMap<SessionId, String>,
+    /// Latest observable update versions keyed by session id.
+    pub(crate) session_update_versions: &'a HashMap<SessionId, u64>,
     /// Render-time clock used for deterministic timers.
     pub(crate) wall_clock_unix_seconds: i64,
+}
+
+/// Borrowed parameters for rendering the background behind the help overlay.
+struct HelpBackgroundRenderContext<'a> {
+    /// Help overlay content and the background page to restore behind it.
+    help_context: &'a HelpContext,
+    /// Shared tab-list state rendered behind list-backed help overlays.
+    list_background: ListBackgroundRenderContext<'a>,
+    /// Shared markdown cache reused by restored background pages.
+    markdown_render_cache: &'a markdown::MarkdownRenderCache,
+    /// Shared output-layout cache reused by restored session backgrounds.
+    output_layout_cache: &'a component::session_output::SessionOutputLayoutCache,
+    /// Shared review-comment cache used to restore diff review comments behind
+    /// help.
+    review_comment_cache: &'a ReviewCommentCache,
+    /// Session progress messages keyed by session id.
+    session_progress_messages: &'a HashMap<SessionId, String>,
+    /// Latest observable update versions keyed by session id.
+    session_update_versions: &'a HashMap<SessionId, u64>,
+    /// Render-time clock used for deterministic timers.
+    wall_clock_unix_seconds: i64,
 }
 
 /// Renders the list background and generic confirmation overlay.
@@ -146,11 +175,13 @@ pub(crate) fn render_view_info_popup(
         can_open_worktree,
         default_reasoning_level,
         markdown_render_cache,
+        output_layout_cache,
         is_loading,
         loading_label,
         message,
         restore_view,
         session_progress_messages,
+        session_update_versions,
         sessions,
         title,
         wall_clock_unix_seconds,
@@ -164,14 +195,20 @@ pub(crate) fn render_view_info_popup(
         let active_progress = session_progress_messages
             .get(&restore_view.session_id)
             .map(std::string::String::as_str);
+        let session_update_version = session_update_versions
+            .get(&restore_view.session_id)
+            .copied()
+            .unwrap_or_default();
         page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
             active_prompt_output: None,
             active_progress,
             default_reasoning_level,
             markdown_render_cache,
             mode: &background_mode,
+            output_layout_cache,
             scroll_offset: restore_view.scroll_offset,
             session_index,
+            session_update_version,
             sessions,
             wall_clock_unix_seconds,
         })
@@ -211,67 +248,28 @@ pub(crate) fn render_help(f: &mut Frame, area: Rect, context: HelpOverlayRenderC
         help_context,
         list_background,
         markdown_render_cache,
+        output_layout_cache,
         review_comment_cache,
         scroll_offset,
         session_progress_messages,
+        session_update_versions,
         wall_clock_unix_seconds,
     } = context;
 
-    let sessions = list_background.sessions;
-    match resolve_help_background(help_context, sessions, review_comment_cache) {
-        Some(ResolvedHelpBackground::List) => {
-            render_list_background(f, area, list_background, wall_clock_unix_seconds);
-        }
-        Some(ResolvedHelpBackground::View {
-            done_session_output_mode,
-            review_status_message,
-            review_text,
-            session_id,
-            session_index,
-            scroll_offset: view_scroll_offset,
-        }) => {
-            let bg_mode = AppMode::View {
-                done_session_output_mode,
-                review_status_message: review_status_message.clone(),
-                review_text: review_text.clone(),
-                session_id: session_id.into(),
-                scroll_offset: view_scroll_offset,
-            };
-            let active_progress = session_progress_messages
-                .get(session_id)
-                .map(std::string::String::as_str);
-            page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
-                active_prompt_output: None,
-                active_progress,
-                default_reasoning_level: list_background.settings.reasoning_level,
-                markdown_render_cache,
-                mode: &bg_mode,
-                scroll_offset: view_scroll_offset,
-                session_index,
-                sessions,
-                wall_clock_unix_seconds,
-            })
-            .render(f, area);
-        }
-        Some(ResolvedHelpBackground::Diff {
-            diff,
-            file_explorer_selected_index,
-            right_panel,
-            session,
-            snapshot,
-            scroll_offset: diff_scroll_offset,
-        }) => page::diff::DiffPage::new(
-            session,
-            diff.to_string(),
-            diff_scroll_offset,
-            file_explorer_selected_index,
-            right_panel,
+    render_help_background(
+        f,
+        area,
+        HelpBackgroundRenderContext {
+            help_context,
+            list_background,
             markdown_render_cache,
-            snapshot.as_ref(),
-        )
-        .render(f, area),
-        None => {}
-    }
+            output_layout_cache,
+            review_comment_cache,
+            session_progress_messages,
+            session_update_versions,
+            wall_clock_unix_seconds,
+        },
+    );
     render_overlay_backdrop(f, area);
 
     component::help_overlay::HelpOverlay::new(help_context)
@@ -421,6 +419,82 @@ fn resolve_help_background<'a>(
                 session,
                 snapshot: review_comment_cache.snapshot(session_id),
             }),
+    }
+}
+
+/// Renders background content behind help based on the source `HelpContext`.
+fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRenderContext<'_>) {
+    let HelpBackgroundRenderContext {
+        help_context,
+        list_background,
+        markdown_render_cache,
+        output_layout_cache,
+        review_comment_cache,
+        session_progress_messages,
+        session_update_versions,
+        wall_clock_unix_seconds,
+    } = context;
+    let sessions = list_background.sessions;
+
+    match resolve_help_background(help_context, sessions, review_comment_cache) {
+        Some(ResolvedHelpBackground::List) => {
+            render_list_background(f, area, list_background, wall_clock_unix_seconds);
+        }
+        Some(ResolvedHelpBackground::View {
+            done_session_output_mode,
+            review_status_message,
+            review_text,
+            session_id,
+            session_index,
+            scroll_offset,
+        }) => {
+            let bg_mode = AppMode::View {
+                done_session_output_mode,
+                review_status_message: review_status_message.clone(),
+                review_text: review_text.clone(),
+                session_id: session_id.into(),
+                scroll_offset,
+            };
+            let active_progress = session_progress_messages
+                .get(session_id)
+                .map(std::string::String::as_str);
+            let session_update_version = session_update_versions
+                .get(session_id)
+                .copied()
+                .unwrap_or_default();
+            page::session_chat::SessionChatPage::new(page::session_chat::SessionChatPageInput {
+                active_prompt_output: None,
+                active_progress,
+                default_reasoning_level: list_background.settings.reasoning_level,
+                markdown_render_cache,
+                mode: &bg_mode,
+                output_layout_cache,
+                scroll_offset,
+                session_index,
+                session_update_version,
+                sessions,
+                wall_clock_unix_seconds,
+            })
+            .render(f, area);
+        }
+        Some(ResolvedHelpBackground::Diff {
+            diff,
+            file_explorer_selected_index,
+            right_panel,
+            session,
+            snapshot,
+            scroll_offset,
+        }) => page::diff::DiffPage::new(
+            session,
+            diff.to_string(),
+            scroll_offset,
+            file_explorer_selected_index,
+            right_panel,
+            markdown_render_cache,
+            snapshot.as_ref(),
+        )
+        .render(f, area),
+        None => {}
     }
 }
 

@@ -242,11 +242,15 @@ This means `session.output` stays the durable transcript, while summary and
 focused review are layered on during render instead of being appended back into
 that transcript string.
 
-`App` owns one shared `MarkdownRenderCache` and threads it through
-`RenderContext`, the router, overlay restore state, and `SessionChatPage` so
-repeated transcript blocks can reuse rendered markdown between frames. Changes
-in this area should keep caches bounded and avoid introducing separate
-layout-only render passes that bypass the shared cache.
+`App` owns one shared `MarkdownRenderCache` plus one shared
+`SessionOutputLayoutCache` and threads them through `RenderContext`, the
+router, overlay restore state, and `SessionChatPage`. The markdown cache
+deduplicates rendered markdown blocks, while the layout cache deduplicates the
+fully assembled `Line` list and line count for matching session id/update
+version, width, mode, active prompt, review text/status, progress text, and
+markdown style version. Changes in this area should keep caches bounded and
+avoid introducing separate layout-only render passes that bypass the shared
+cache.
 
 ### Render Path
 
@@ -267,9 +271,9 @@ The exact session-chat render path is:
 1. `SessionOutput::output_lines()` converts that source text into final panel
    lines: it optionally splits the transcript using `active_prompt_output`,
    normalizes prompt spacing, splits any trailing commit footer, renders the
-   completed-turn markdown, appends the synthetic summary block from
-   `session.summary` when the current status/mode allows it, reattaches the
-   trailing commit footer, appends the active prompt block, appends focused
+   completed-turn markdown, reattaches the trailing commit footer, appends the
+   active prompt block, appends the synthetic summary block from
+   `session.summary` when the current status/mode allows it, appends focused
    review markdown from `review_text`, appends
    the published-branch sync row when a detached auto-push starts, completes,
    or fails, and finally adds the loader row or `t` toggle hint when the

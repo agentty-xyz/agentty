@@ -291,6 +291,11 @@ pub struct App {
     /// Caches rendered markdown output for the session transcript panel so
     /// unchanged content is not re-parsed on every frame.
     pub(super) markdown_render_cache: markdown::MarkdownRenderCache,
+    /// Caches fully assembled session-output layouts so scroll metrics and
+    /// frame rendering reuse the same derived transcript lines for unchanged
+    /// session/update inputs.
+    pub(super) session_output_layout_cache:
+        crate::ui::component::session_output::SessionOutputLayoutCache,
     /// Tracks the last reduced observable-handle version for each session so
     /// stale `SessionUpdated` events do not trigger redundant redraws.
     pub(super) last_seen_session_update_versions: HashMap<SessionId, u64>,
@@ -694,6 +699,28 @@ impl App {
         self.session_progress_messages
             .get(session_id)
             .map(std::string::String::as_str)
+    }
+
+    /// Returns the latest reduced observable update version for a session.
+    pub fn session_update_version(&self, session_id: &str) -> u64 {
+        self.last_seen_session_update_versions
+            .get(session_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Returns the shared session-output layout cache used by scroll metrics
+    /// and frame rendering.
+    pub(crate) fn session_output_layout_cache(
+        &self,
+    ) -> &crate::ui::component::session_output::SessionOutputLayoutCache {
+        &self.session_output_layout_cache
+    }
+
+    /// Returns the shared markdown render cache used by session scroll
+    /// metrics and frame rendering.
+    pub(crate) fn markdown_render_cache(&self) -> &crate::ui::markdown::MarkdownRenderCache {
+        &self.markdown_render_cache
     }
 
     /// Returns the selected follow-up task action for one session, if that

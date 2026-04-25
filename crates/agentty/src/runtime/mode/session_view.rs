@@ -816,7 +816,10 @@ fn view_total_lines(
                     done_session_output_mode,
                     review_status_message,
                     review_text,
+                    session_update_version: app.session_update_version(session_id),
                 },
+                app.markdown_render_cache(),
+                app.session_output_layout_cache(),
             )
         })
 }

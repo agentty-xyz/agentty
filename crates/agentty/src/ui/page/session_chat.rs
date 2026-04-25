@@ -8,7 +8,9 @@ use crate::domain::input;
 use crate::domain::session::Session;
 use crate::infra::agent::protocol::QuestionItem;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
-use crate::ui::component::session_output::{SessionOutput, SessionOutputLineContext};
+use crate::ui::component::session_output::{
+    SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
+};
 use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
 use crate::ui::state::prompt::PromptAtMentionState;
 use crate::ui::util::{
@@ -45,8 +47,13 @@ pub struct SessionChatPage<'a> {
     /// Shared markdown cache reused across transcript renders in this page.
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     pub mode: &'a AppMode,
+    /// Shared fully assembled output-layout cache for scroll metrics and
+    /// frame rendering.
+    pub output_layout_cache: &'a SessionOutputLayoutCache,
     pub scroll_offset: Option<u16>,
     pub session_index: usize,
+    /// Observable update version for the rendered session snapshot.
+    pub session_update_version: u64,
     pub sessions: &'a [Session],
     pub wall_clock_unix_seconds: i64,
 }
@@ -65,10 +72,14 @@ pub struct SessionChatPageInput<'a> {
     pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
     /// Current UI mode that determines view, prompt, and question rendering.
     pub mode: &'a AppMode,
+    /// Shared output-layout cache for this render pass.
+    pub output_layout_cache: &'a SessionOutputLayoutCache,
     /// Current vertical output scroll offset.
     pub scroll_offset: Option<u16>,
     /// Index of the session being rendered.
     pub session_index: usize,
+    /// Observable update version for the rendered session snapshot.
+    pub session_update_version: u64,
     /// Session rows available to the page.
     pub sessions: &'a [Session],
     /// Render-time clock used for deterministic timers.
@@ -84,8 +95,10 @@ impl<'a> SessionChatPage<'a> {
             default_reasoning_level,
             markdown_render_cache,
             mode,
+            output_layout_cache,
             scroll_offset,
             session_index,
+            session_update_version,
             sessions,
             wall_clock_unix_seconds,
         } = input;
@@ -97,8 +110,10 @@ impl<'a> SessionChatPage<'a> {
             default_reasoning_level,
             markdown_render_cache,
             mode,
+            output_layout_cache,
             scroll_offset,
             session_index,
+            session_update_version,
             sessions,
             wall_clock_unix_seconds,
         }
@@ -122,8 +137,16 @@ impl<'a> SessionChatPage<'a> {
         session: &Session,
         output_width: u16,
         context: SessionOutputLineContext<'_>,
+        markdown_render_cache: &markdown::MarkdownRenderCache,
+        output_layout_cache: &SessionOutputLayoutCache,
     ) -> u16 {
-        SessionOutput::rendered_line_count(session, output_width, context)
+        SessionOutput::rendered_line_count(
+            session,
+            output_width,
+            context,
+            Some(markdown_render_cache),
+            Some(output_layout_cache),
+        )
     }
 
     /// Returns the selected `Done`-session output mode for the active page
@@ -248,7 +271,9 @@ impl<'a> SessionChatPage<'a> {
 
         let mut output = SessionOutput::new(session)
             .done_session_output_mode(self.done_session_output_mode())
-            .markdown_render_cache(self.markdown_render_cache);
+            .markdown_render_cache(self.markdown_render_cache)
+            .output_layout_cache(self.output_layout_cache)
+            .session_update_version(self.session_update_version);
         output = output.active_prompt_output(self.active_prompt_output);
         output = output.review_status_message(self.review_status_message());
         output = output.review_text(self.review_text());
@@ -565,8 +590,10 @@ mod tests {
             default_reasoning_level: ReasoningLevel::default(),
             markdown_render_cache: test_markdown_render_cache(),
             mode,
+            output_layout_cache: test_output_layout_cache(),
             scroll_offset: None,
             session_index: 0,
+            session_update_version: 0,
             sessions: std::slice::from_ref(session),
             wall_clock_unix_seconds: 0,
         })
@@ -576,6 +603,12 @@ mod tests {
     /// stable borrow across the page lifetime.
     fn test_markdown_render_cache() -> &'static markdown::MarkdownRenderCache {
         Box::leak(Box::new(markdown::MarkdownRenderCache::default()))
+    }
+
+    /// Returns a leaked output-layout cache for test page builders that need a
+    /// stable borrow across the page lifetime.
+    fn test_output_layout_cache() -> &'static SessionOutputLayoutCache {
+        Box::leak(Box::new(SessionOutputLayoutCache::default()))
     }
 
     fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
@@ -631,6 +664,8 @@ mod tests {
         let mut session = session_fixture();
         session.output = "word ".repeat(40);
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
 
         // Act
         let rendered_line_count = SessionChatPage::rendered_output_line_count(
@@ -642,7 +677,10 @@ mod tests {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
+                session_update_version: 0,
             },
+            &markdown_render_cache,
+            &output_layout_cache,
         );
 
         // Assert
@@ -705,6 +743,8 @@ mod tests {
     fn test_rendered_output_line_count_includes_question_review_output() {
         // Arrange
         let session = session_fixture();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
         let without_review = SessionChatPage::rendered_output_line_count(
             &session,
             40,
@@ -714,7 +754,10 @@ mod tests {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
+                session_update_version: 0,
             },
+            &markdown_render_cache,
+            &output_layout_cache,
         );
 
         // Act
@@ -727,7 +770,10 @@ mod tests {
                 done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: Some("Preparing review..."),
                 review_text: Some("## Review\n\n- Focused finding"),
+                session_update_version: 0,
             },
+            &markdown_render_cache,
+            &output_layout_cache,
         );
 
         // Assert

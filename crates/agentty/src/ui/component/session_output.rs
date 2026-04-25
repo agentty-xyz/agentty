@@ -1,12 +1,17 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt::Write as _;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
+use rustc_hash::FxHasher;
 
-use crate::domain::session::{Session, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
@@ -23,6 +28,152 @@ const USER_PROMPT_PREFIX: &str = " › ";
 /// User prompt prefix when the prompt starts after a transcript newline.
 const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
+const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
+
+/// Cache key for one fully assembled session-output layout.
+///
+/// The key is intentionally tied to the session identifier plus observable
+/// update version and `updated_at` timestamp instead of hashing the full
+/// transcript on every frame. Width, selected done-session mode, active prompt,
+/// review text/status, progress text, and markdown style version cover the
+/// transient inputs that can alter rendered lines without changing the stored
+/// session row.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SessionOutputLayoutCacheKey {
+    active_progress: TextFingerprint,
+    active_prompt_output: TextFingerprint,
+    done_session_output_mode: DoneSessionOutputMode,
+    markdown_render_version: u64,
+    output_width: u16,
+    review_status_message: TextFingerprint,
+    review_text: TextFingerprint,
+    session_id: SessionId,
+    session_update_version: u64,
+    session_updated_at: i64,
+    status: Status,
+}
+
+/// Compact optional-text identity used by the layout cache key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TextFingerprint {
+    content_hash: u64,
+    content_len: usize,
+    is_some: bool,
+}
+
+impl TextFingerprint {
+    /// Builds a cheap identity for optional render inputs without retaining
+    /// borrowed text in the cache key.
+    fn from_text(text: Option<&str>) -> Self {
+        let Some(text) = text else {
+            return Self {
+                content_hash: 0,
+                content_len: 0,
+                is_some: false,
+            };
+        };
+
+        let mut hasher = FxHasher::default();
+        hasher.write(text.as_bytes());
+
+        Self {
+            content_hash: hasher.finish(),
+            content_len: text.len(),
+            is_some: true,
+        }
+    }
+}
+
+/// Cached result for one fully assembled session-output layout.
+#[derive(Clone)]
+pub(crate) struct SessionOutputLayout {
+    /// Number of rendered lines, saturated for scroll metric arithmetic.
+    pub(crate) line_count: u16,
+    /// Rendered lines shared between scroll metrics and frame painting.
+    pub(crate) lines: Arc<[Line<'static>]>,
+}
+
+/// Cached session-output layout entry.
+struct SessionOutputLayoutCacheEntry {
+    key: SessionOutputLayoutCacheKey,
+    layout: SessionOutputLayout,
+}
+
+/// Bounded LRU cache for the fully assembled session output panel.
+///
+/// This sits above [`markdown::MarkdownRenderCache`] so the scroll-metric path
+/// and render path share one derivation for the same session/update version,
+/// width, output mode, active prompt, review text/status, and progress text.
+/// Entries are invalidated by key changes; the markdown render-cache version is
+/// part of the key so style-bearing lines are not reused after markdown cache
+/// invalidation.
+pub struct SessionOutputLayoutCache {
+    entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
+}
+
+impl Default for SessionOutputLayoutCache {
+    fn default() -> Self {
+        Self {
+            entries: RefCell::new(VecDeque::with_capacity(
+                SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT,
+            )),
+        }
+    }
+}
+
+impl SessionOutputLayoutCache {
+    /// Returns cached layout lines when all render-affecting inputs match, or
+    /// derives and stores a fresh layout otherwise.
+    pub(crate) fn layout(
+        &self,
+        session: &Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) -> SessionOutputLayout {
+        let key = SessionOutput::layout_cache_key(
+            session,
+            output_area,
+            context,
+            markdown_render_cache.map_or(0, markdown::MarkdownRenderCache::version),
+        );
+        if let Some(layout) = self.cached_layout(&key) {
+            return layout;
+        }
+
+        let layout =
+            SessionOutput::derive_layout(session, output_area, context, markdown_render_cache);
+        self.store_entry(SessionOutputLayoutCacheEntry {
+            key,
+            layout: layout.clone(),
+        });
+
+        layout
+    }
+
+    /// Returns cached layout for a matching entry and promotes it to the
+    /// front of the LRU queue.
+    fn cached_layout(&self, key: &SessionOutputLayoutCacheKey) -> Option<SessionOutputLayout> {
+        let mut entries = self.entries.borrow_mut();
+        let entry_index = entries.iter().position(|entry| &entry.key == key)?;
+        let entry = entries.remove(entry_index)?;
+        let layout = entry.layout.clone();
+        entries.push_front(entry);
+
+        Some(layout)
+    }
+
+    /// Stores one freshly rendered entry and evicts old entries over the
+    /// bounded capacity.
+    fn store_entry(&self, entry: SessionOutputLayoutCacheEntry) {
+        let mut entries = self.entries.borrow_mut();
+        entries.push_front(entry);
+
+        while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
+            entries.pop_back();
+        }
+    }
+}
 
 /// Session chat output panel renderer.
 pub struct SessionOutput<'a> {
@@ -33,10 +184,15 @@ pub struct SessionOutput<'a> {
     /// Shared render cache that avoids re-parsing unchanged markdown each
     /// frame.
     markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    /// Shared layout cache that avoids rebuilding the full rendered transcript
+    /// for scroll metrics and frame painting within the same session/update
+    /// version.
+    output_layout_cache: Option<&'a SessionOutputLayoutCache>,
     review_status_message: Option<&'a str>,
     review_text: Option<&'a str>,
     scroll_offset: Option<u16>,
     session: &'a Session,
+    session_update_version: u64,
 }
 
 /// Borrowed inputs that control how session output lines are derived from one
@@ -54,6 +210,8 @@ pub(crate) struct SessionOutputLineContext<'a> {
     pub(crate) review_status_message: Option<&'a str>,
     /// Review markdown generated by the agent, when available.
     pub(crate) review_text: Option<&'a str>,
+    /// Current observable update version for this session snapshot.
+    pub(crate) session_update_version: u64,
 }
 
 impl<'a> SessionOutput<'a> {
@@ -64,10 +222,12 @@ impl<'a> SessionOutput<'a> {
             active_progress: None,
             done_session_output_mode: DoneSessionOutputMode::Summary,
             markdown_render_cache: None,
+            output_layout_cache: None,
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
             session,
+            session_update_version: 0,
         }
     }
 
@@ -100,6 +260,14 @@ impl<'a> SessionOutput<'a> {
         self
     }
 
+    /// Sets the shared output-layout cache used by scroll metrics and frame
+    /// rendering to avoid rebuilding unchanged transcript layouts.
+    #[must_use]
+    pub fn output_layout_cache(mut self, cache: &'a SessionOutputLayoutCache) -> Self {
+        self.output_layout_cache = Some(cache);
+        self
+    }
+
     /// Sets the review status message rendered when review text is not
     /// available.
     #[must_use]
@@ -122,6 +290,14 @@ impl<'a> SessionOutput<'a> {
         self
     }
 
+    /// Sets the observable session update version used to invalidate cached
+    /// output layouts when live session handles change.
+    #[must_use]
+    pub fn session_update_version(mut self, version: u64) -> Self {
+        self.session_update_version = version;
+        self
+    }
+
     /// Returns the rendered output line count for chat content at a given
     /// width.
     ///
@@ -131,11 +307,78 @@ impl<'a> SessionOutput<'a> {
         session: &Session,
         output_width: u16,
         context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+        output_layout_cache: Option<&SessionOutputLayoutCache>,
     ) -> u16 {
         let output_area = Rect::new(0, 0, output_width, 0);
-        let lines = Self::output_lines(session, output_area, context, None);
 
-        u16::try_from(lines.len()).unwrap_or(u16::MAX)
+        Self::rendered_layout(
+            session,
+            output_area,
+            context,
+            markdown_render_cache,
+            output_layout_cache,
+        )
+        .line_count
+    }
+
+    /// Returns the rendered output layout for the current session state,
+    /// sharing cached layout lines when a compatible cache is available.
+    fn rendered_layout(
+        session: &Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+        output_layout_cache: Option<&SessionOutputLayoutCache>,
+    ) -> SessionOutputLayout {
+        if let Some(cache) = output_layout_cache {
+            return cache.layout(session, output_area, context, markdown_render_cache);
+        }
+
+        Self::derive_layout(session, output_area, context, markdown_render_cache)
+    }
+
+    /// Derives rendered layout lines and line count from the current session
+    /// snapshot without consulting the higher-level layout cache.
+    fn derive_layout(
+        session: &Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) -> SessionOutputLayout {
+        let lines = Arc::<[Line<'static>]>::from(Self::output_lines(
+            session,
+            output_area,
+            context,
+            markdown_render_cache,
+        ));
+        let line_count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+
+        SessionOutputLayout { line_count, lines }
+    }
+
+    /// Builds the cache key for a fully assembled session-output layout.
+    fn layout_cache_key(
+        session: &Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_version: u64,
+    ) -> SessionOutputLayoutCacheKey {
+        let inner_width = panel_inner_width(output_area, layout::session_output_panel_borders());
+
+        SessionOutputLayoutCacheKey {
+            active_progress: TextFingerprint::from_text(context.active_progress),
+            active_prompt_output: TextFingerprint::from_text(context.active_prompt_output),
+            done_session_output_mode: context.done_session_output_mode,
+            markdown_render_version,
+            output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
+            review_status_message: TextFingerprint::from_text(context.review_status_message),
+            review_text: TextFingerprint::from_text(context.review_text),
+            session_id: session.id.clone(),
+            session_update_version: context.session_update_version,
+            session_updated_at: session.updated_at,
+            status: session.status,
+        }
     }
 
     /// Builds rendered markdown lines and contextual status/help rows for the
@@ -166,11 +409,12 @@ impl<'a> SessionOutput<'a> {
             done_session_output_mode,
             review_status_message,
             review_text,
+            session_update_version: _,
         } = context;
         let status = session.status;
         let output_text = Self::output_text(session, done_session_output_mode);
         let (completed_turn_text, active_turn_text) =
-            Self::transcript_sections(status, &output_text, active_prompt_output);
+            Self::transcript_sections(status, output_text.as_ref(), active_prompt_output);
         let completed_turn_text =
             layout::session_output_text_with_spaced_user_input(completed_turn_text);
         let active_turn_text =
@@ -314,18 +558,21 @@ impl<'a> SessionOutput<'a> {
     /// persisted. New draft sessions render staged-draft guidance before
     /// their first live turn starts. Active and canceled sessions otherwise
     /// render transcript output only.
-    fn output_text(session: &Session, done_session_output_mode: DoneSessionOutputMode) -> String {
+    fn output_text(
+        session: &Session,
+        done_session_output_mode: DoneSessionOutputMode,
+    ) -> Cow<'_, str> {
         match session.status {
             Status::New if session.is_draft_session() => {
-                return Self::render_draft_session_preview(session);
+                return Cow::Owned(Self::render_draft_session_preview(session));
             }
             Status::Done if done_session_output_mode == DoneSessionOutputMode::Summary => {
-                return layout::session_output_summary_markdown(Self::session_summary_text(
-                    session,
+                return Cow::Owned(layout::session_output_summary_markdown(
+                    Self::session_summary_text(session),
                 ));
             }
             Status::Canceled => {
-                return session.output.clone();
+                return Cow::Borrowed(session.output.as_str());
             }
             Status::Review
             | Status::AgentReview
@@ -338,7 +585,7 @@ impl<'a> SessionOutput<'a> {
             | Status::Merging => {}
         }
 
-        session.output.clone()
+        Cow::Borrowed(session.output.as_str())
     }
 
     /// Renders the staged-draft guidance shown while a draft session remains
@@ -537,6 +784,32 @@ impl<'a> SessionOutput<'a> {
             None => Arc::from(render_markdown(markdown, inner_width)),
         }
     }
+
+    /// Builds short-lived paint lines that borrow span text from cached
+    /// `Line<'static>` entries instead of cloning owned strings.
+    ///
+    /// `Paragraph` takes ownership of a `Vec<Line<'a>>`, so this still creates
+    /// lightweight line/span containers for the current paint pass, but each
+    /// span content becomes `Cow::Borrowed` and avoids allocating transcript
+    /// strings on every frame.
+    fn borrowed_paint_lines<'line>(lines: &'line [Line<'static>]) -> Vec<Line<'line>> {
+        lines
+            .iter()
+            .map(|line| Line {
+                alignment: line.alignment,
+                spans: line.spans.iter().map(Self::borrowed_paint_span).collect(),
+                style: line.style,
+            })
+            .collect()
+    }
+
+    /// Builds one borrowed paint span from a cached static span.
+    fn borrowed_paint_span<'span>(span: &'span Span<'static>) -> Span<'span> {
+        Span {
+            content: Cow::Borrowed(span.content.as_ref()),
+            style: span.style,
+        }
+    }
 }
 
 impl Component for SessionOutput<'_> {
@@ -546,7 +819,7 @@ impl Component for SessionOutput<'_> {
     /// component keeps the output border title-free.
     fn render(&self, f: &mut Frame, output_area: Rect) {
         let status = self.session.status;
-        let lines = Self::output_lines(
+        let layout = Self::rendered_layout(
             self.session,
             output_area,
             SessionOutputLineContext {
@@ -555,17 +828,20 @@ impl Component for SessionOutput<'_> {
                 done_session_output_mode: self.done_session_output_mode,
                 review_status_message: self.review_status_message,
                 review_text: self.review_text,
+                session_update_version: self.session_update_version,
             },
             self.markdown_render_cache,
+            self.output_layout_cache,
         );
         let final_scroll = bottom_pinned_scroll_offset(
             output_area,
             layout::session_output_panel_borders(),
-            lines.len(),
+            layout.lines.len(),
             self.scroll_offset,
         );
 
-        let paragraph = Paragraph::new(lines)
+        let paint_lines = SessionOutput::borrowed_paint_lines(&layout.lines);
+        let paragraph = Paragraph::new(paint_lines)
             .block(
                 Block::default()
                     .borders(layout::session_output_panel_borders())
@@ -579,6 +855,8 @@ impl Component for SessionOutput<'_> {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::layout::Alignment;
+    use ratatui::style::Style;
     use serde_json;
 
     use super::*;
@@ -597,6 +875,7 @@ mod tests {
             done_session_output_mode,
             review_status_message,
             review_text,
+            session_update_version: 0,
         }
     }
 
@@ -620,16 +899,121 @@ mod tests {
         let mut session = session_fixture();
         session.output = "word ".repeat(40);
         let raw_line_count = u16::try_from(session.output.lines().count()).unwrap_or(u16::MAX);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
 
         // Act
         let rendered_line_count = SessionOutput::rendered_line_count(
             &session,
             20,
             line_context(DoneSessionOutputMode::Summary, None, None, None),
+            Some(&markdown_render_cache),
+            Some(&output_layout_cache),
         );
 
         // Assert
         assert!(rendered_line_count > raw_line_count);
+    }
+
+    #[test]
+    fn test_output_layout_cache_reuses_lines_for_matching_update_key() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "## Heading\n\ncached body".to_string();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = SessionOutputLineContext {
+            session_update_version: 7,
+            ..line_context(DoneSessionOutputMode::Summary, None, None, None)
+        };
+
+        // Act
+        let first_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        let second_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+
+        // Assert
+        assert_eq!(first_layout.line_count, second_layout.line_count);
+        assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+    }
+
+    #[test]
+    fn test_output_layout_cache_keys_review_text() {
+        // Arrange
+        let session = session_fixture();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let base_context = SessionOutputLineContext {
+            session_update_version: 7,
+            ..line_context(DoneSessionOutputMode::Summary, None, None, None)
+        };
+        let review_context = SessionOutputLineContext {
+            review_text: Some("## Review\n\n- Cached finding"),
+            ..base_context
+        };
+
+        // Act
+        let base_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            base_context,
+            Some(&markdown_render_cache),
+        );
+        let review_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            review_context,
+            Some(&markdown_render_cache),
+        );
+
+        // Assert
+        assert!(review_layout.line_count > base_layout.line_count);
+        assert!(!Arc::ptr_eq(&base_layout.lines, &review_layout.lines));
+    }
+
+    #[test]
+    fn test_output_text_borrows_transcript_for_output_mode() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "borrowed transcript".to_string();
+
+        // Act
+        let output_text = SessionOutput::output_text(&session, DoneSessionOutputMode::Output);
+
+        // Assert
+        assert!(matches!(output_text, Cow::Borrowed("borrowed transcript")));
+    }
+
+    #[test]
+    fn test_borrowed_paint_lines_reuse_cached_span_content() {
+        // Arrange
+        let cached_lines = [Line {
+            alignment: Some(Alignment::Center),
+            spans: vec![Span {
+                content: Cow::Owned("cached span text".to_string()),
+                style: Style::default(),
+            }],
+            style: Style::default(),
+        }];
+
+        // Act
+        let paint_lines = SessionOutput::borrowed_paint_lines(&cached_lines);
+
+        // Assert
+        assert_eq!(paint_lines[0].alignment, Some(Alignment::Center));
+        assert!(matches!(
+            paint_lines[0].spans[0].content,
+            Cow::Borrowed("cached span text")
+        ));
     }
 
     #[test]

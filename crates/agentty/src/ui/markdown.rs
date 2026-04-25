@@ -91,6 +91,13 @@ impl MarkdownRenderCache {
         self.entries.borrow_mut().clear();
     }
 
+    /// Returns the current style-cache version used by higher-level layout
+    /// caches to avoid reusing styled lines after markdown entries are
+    /// invalidated.
+    pub(crate) fn version(&self) -> u64 {
+        self.version.get()
+    }
+
     /// Builds the cache key for one render call.
     fn cache_key(&self, text: &str, width: usize) -> MarkdownRenderCacheKey {
         MarkdownRenderCacheKey {
