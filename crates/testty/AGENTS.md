@@ -1,7 +1,7 @@
 # TUI E2E Testing Framework
 
 Rust-native TUI end-to-end testing framework using PTY-driven semantic
-assertions and VHS screenshot capture.
+assertions, native frame rendering, and VHS-driven GIF capture.
 
 ## Entry Points
 

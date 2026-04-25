@@ -429,6 +429,7 @@ Diffs are automatically computed between consecutive captures in a
 | `renderer` | Native bitmap font renderer for terminal frames to PNG images |
 | `diff` | Cell-level frame diffing with changed region detection |
 | `journey` | Composable journey building blocks for declarative test authoring |
+| `feature` | `FeatureDemo` builder: scenario execution with hash-cached VHS GIF generation |
 
 ## Full example
 
