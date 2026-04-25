@@ -80,6 +80,7 @@ fn settings_tab_shows_content() {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Settings", &full);
+                assertion::assert_text_in_region(frame, "Global settings", &full);
                 assertion::assert_text_in_region(frame, "Default Reasoning Level", &full);
                 assertion::assert_text_in_region(frame, "Default Smart Model", &full);
                 assertion::assert_text_in_region(frame, "Disabled", &full);
@@ -122,10 +123,13 @@ fn settings_jk_navigation() {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("moved_down", "Selection moved down two rows")
+                    .capture_labeled("moved_down", "Selection moved down three rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -165,9 +169,9 @@ fn settings_jk_navigation() {
 
 /// Verify that `Enter` cycles a selector setting value.
 ///
-/// Opens the Settings tab and presses `Enter` on the first row
-/// ("Reasoning Level") to cycle its value. Captures before and after
-/// to show the change in the GIF.
+/// Opens the Settings tab, moves to the project reasoning row, and presses
+/// `Enter` to cycle its value. Captures before and after to show the change in
+/// the GIF.
 #[test]
 fn settings_enter_cycles_value() {
     // Arrange, Act, Assert
@@ -185,6 +189,8 @@ fn settings_enter_cycles_value() {
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .capture_labeled("before_edit", "Reasoning Level before cycling")
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
@@ -232,13 +238,6 @@ fn settings_theme_switch() {
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("before_theme_switch", "Theme setting before switching")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)

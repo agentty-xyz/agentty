@@ -70,13 +70,24 @@ enum SettingRow {
 
 impl SettingRow {
     const ALL: [Self; 7] = [
+        Self::Theme,
         Self::ReasoningLevel,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
         Self::IncludeCoauthoredByAgentty,
         Self::OpenCommand,
-        Self::Theme,
+    ];
+    /// Rows persisted once for the whole application.
+    const GLOBAL: [Self; 1] = [Self::Theme];
+    /// Rows persisted separately for each active project.
+    const PROJECT: [Self; 6] = [
+        Self::ReasoningLevel,
+        Self::DefaultSmartModel,
+        Self::DefaultFastModel,
+        Self::DefaultReviewModel,
+        Self::IncludeCoauthoredByAgentty,
+        Self::OpenCommand,
     ];
     const ROW_COUNT: usize = Self::ALL.len();
 
@@ -327,6 +338,24 @@ impl SettingsManager {
     #[must_use]
     pub fn settings_rows(&self) -> Vec<(&'static str, String)> {
         SettingRow::ALL
+            .iter()
+            .map(|row| (row.label(), self.display_value_for_row(*row)))
+            .collect()
+    }
+
+    /// Returns the global-scoped settings rows.
+    #[must_use]
+    pub fn global_settings_rows(&self) -> Vec<(&'static str, String)> {
+        SettingRow::GLOBAL
+            .iter()
+            .map(|row| (row.label(), self.display_value_for_row(*row)))
+            .collect()
+    }
+
+    /// Returns project-scoped settings rows.
+    #[must_use]
+    pub fn project_settings_rows(&self) -> Vec<(&'static str, String)> {
+        SettingRow::PROJECT
             .iter()
             .map(|row| (row.label(), self.display_value_for_row(*row)))
             .collect()
@@ -1276,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn next_moves_selection_to_default_smart_model_row() {
+    fn next_moves_selection_to_default_reasoning_level_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -1288,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_wraps_to_theme_row_from_reasoning_level_row() {
+    fn previous_wraps_to_open_commands_row_from_theme_row() {
         // Arrange
         let mut manager = new_settings_manager();
 
@@ -1321,13 +1350,34 @@ mod tests {
 
         // Assert
         assert_eq!(rows.len(), 7);
-        assert_eq!(rows[0].0, "Default Reasoning Level");
-        assert_eq!(rows[1].0, "Default Smart Model");
-        assert_eq!(rows[2].0, "Default Fast Model");
-        assert_eq!(rows[3].0, "Default Review Model");
-        assert_eq!(rows[4].0, "Coauthored by Agentty");
-        assert_eq!(rows[5].0, "Open Commands");
-        assert_eq!(rows[6].0, "Theme");
+        assert_eq!(rows[0].0, "Theme");
+        assert_eq!(rows[1].0, "Default Reasoning Level");
+        assert_eq!(rows[2].0, "Default Smart Model");
+        assert_eq!(rows[3].0, "Default Fast Model");
+        assert_eq!(rows[4].0, "Default Review Model");
+        assert_eq!(rows[5].0, "Coauthored by Agentty");
+        assert_eq!(rows[6].0, "Open Commands");
+    }
+
+    #[test]
+    fn settings_rows_split_theme_into_global_and_project_sections() {
+        // Arrange
+        let manager = new_settings_manager();
+
+        // Act
+        let global_rows = manager.global_settings_rows();
+        let project_rows = manager.project_settings_rows();
+
+        // Assert
+        assert_eq!(global_rows.len(), 1);
+        assert_eq!(global_rows[0].0, "Theme");
+        assert_eq!(project_rows.len(), 6);
+        assert_eq!(project_rows[0].0, "Default Reasoning Level");
+        assert_eq!(project_rows[1].0, "Default Smart Model");
+        assert_eq!(project_rows[2].0, "Default Fast Model");
+        assert_eq!(project_rows[3].0, "Default Review Model");
+        assert_eq!(project_rows[4].0, "Coauthored by Agentty");
+        assert_eq!(project_rows[5].0, "Open Commands");
     }
 
     #[test]
@@ -1398,7 +1448,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "<empty>");
+        assert_eq!(rows[6].1, "<empty>");
     }
 
     #[test]
@@ -1412,7 +1462,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "http://localhost:5173|");
+        assert_eq!(rows[6].1, "http://localhost:5173|");
     }
 
     #[test]
@@ -1428,7 +1478,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[5].1, "ab|c");
+        assert_eq!(rows[6].1, "ab|c");
     }
 
     #[test]
@@ -1441,7 +1491,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[1].1, "Last used model as default");
+        assert_eq!(rows[2].1, "Last used model as default");
     }
 
     #[test]
@@ -1454,7 +1504,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[2].1, AgentModel::Gpt54.as_str());
+        assert_eq!(rows[3].1, AgentModel::Gpt54.as_str());
     }
 
     #[test]
@@ -1467,7 +1517,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[3].1, AgentModel::ClaudeOpus47.as_str());
+        assert_eq!(rows[4].1, AgentModel::ClaudeOpus47.as_str());
     }
 
     #[test]
@@ -1480,7 +1530,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[4].1, "Disabled");
+        assert_eq!(rows[5].1, "Disabled");
     }
 
     #[test]
@@ -1493,7 +1543,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[0].1, "xhigh");
+        assert_eq!(rows[1].1, "xhigh");
     }
 
     #[test]
@@ -1506,7 +1556,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[6].1, "Hacker");
+        assert_eq!(rows[0].1, "Hacker");
     }
 
     #[tokio::test]
@@ -1515,7 +1565,7 @@ mod tests {
         let (services, _) = test_services().await;
         let mut manager = new_settings_manager();
         manager.open_command = "nvim .".to_string();
-        select_row(&mut manager, 5);
+        select_row(&mut manager, 6);
 
         // Act
         manager.handle_enter(&services).await;
@@ -1537,7 +1587,7 @@ mod tests {
         // Arrange
         let (services, _) = test_services().await;
         let mut manager = new_settings_manager();
-        select_row(&mut manager, 5);
+        select_row(&mut manager, 6);
         manager.handle_enter(&services).await;
 
         // Act
@@ -1545,7 +1595,7 @@ mod tests {
         manager.previous();
 
         // Assert
-        assert_eq!(manager.table_state.selected(), Some(5));
+        assert_eq!(manager.table_state.selected(), Some(6));
     }
 
     #[tokio::test]
@@ -1570,7 +1620,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        select_row(&mut manager, 5);
+        select_row(&mut manager, 6);
         manager.handle_enter(&services).await;
 
         // Act
@@ -1595,7 +1645,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        select_row(&mut manager, 4);
+        select_row(&mut manager, 5);
 
         // Act
         manager.handle_enter(&services).await;
@@ -1617,7 +1667,7 @@ mod tests {
         // Arrange
         let (services, project_id) = test_services().await;
         let mut manager = SettingsManager::new(&services, project_id).await;
-        select_row(&mut manager, 6);
+        select_row(&mut manager, 0);
 
         // Act
         manager.handle_enter(&services).await;
@@ -1668,7 +1718,7 @@ mod tests {
         let models = selectable_models(AgentKind::ALL);
         manager.default_smart_model = *models.last().expect("models should not be empty");
         manager.use_last_used_model_as_default = false;
-        select_row(&mut manager, 1);
+        select_row(&mut manager, 2);
 
         // Act
         manager.handle_enter(&services).await;

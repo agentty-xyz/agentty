@@ -798,9 +798,18 @@ pub(crate) fn render_list_background(
             page::stat::StatsPage::new(sessions, stats_activity).render(f, chunks[1]);
         }
         Tab::Settings => {
-            page::setting::SettingsPage::new(settings).render(f, chunks[1]);
+            let active_project_name = active_project_name(active_project_id, projects);
+            page::setting::SettingsPage::new(settings, active_project_name).render(f, chunks[1]);
         }
     }
+}
+
+/// Returns the active project's display label for scoped page titles.
+fn active_project_name(active_project_id: i64, projects: &[ProjectListItem]) -> Option<String> {
+    projects
+        .iter()
+        .find(|project_item| project_item.project.id == active_project_id)
+        .map(|project_item| project_item.project.display_label())
 }
 
 #[cfg(test)]

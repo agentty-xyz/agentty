@@ -52,9 +52,6 @@ agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
 ```
 
-Use the **Settings** tab to switch between the default terminal colors and the
-green terminal-inspired `Hacker` theme.
-
 ## Documentation
 
 Documentation for installation and workflows is available at [agentty.xyz/docs](https://agentty.xyz/docs/).
