@@ -359,7 +359,8 @@ impl SessionWorkerService {
     /// generation immediately before the main turn request runs. Progress
     /// events update the UI indicator; `PidUpdate` events update the shared PID
     /// slot used for cancellation. If the turn fails, the error is appended to
-    /// session output before transitioning to `Review`.
+    /// session output before transitioning to `Review`; user-stopped turns
+    /// skip that fallback so the UI cancellation path can finalize `Canceled`.
     ///
     /// A fresh [`CancellationToken`] is swapped into the shared mutex at
     /// the top of this function so stale cancellations from previous
@@ -473,19 +474,19 @@ impl SessionWorkerService {
             });
         }
 
-        let target_status = result.as_ref().copied().unwrap_or(Status::Review);
-
-        // Best-effort: status transition failure is non-critical.
-        let _ = SessionTaskService::update_status(
-            &context.status,
-            context.clock.as_ref(),
-            &context.db,
-            &context.app_event_tx,
-            &context.session_update_versions,
-            &context.session_id,
-            target_status,
-        )
-        .await;
+        if let Some(target_status) = status_update_after_turn_result(&result) {
+            // Best-effort: status transition failure is non-critical.
+            let _ = SessionTaskService::update_status(
+                &context.status,
+                context.clock.as_ref(),
+                &context.db,
+                &context.app_event_tx,
+                &context.session_update_versions,
+                &context.session_id,
+                target_status,
+            )
+            .await;
+        }
 
         result.map(|_| ())
     }
@@ -713,7 +714,7 @@ async fn run_turn_with_cancellation(
             .shutdown_session(context.session_id.to_string())
             .await;
 
-        return Err(AgentError::Backend(
+        return Err(AgentError::InterruptedByUser(
             "[Stopped] Session interrupted by user.".to_string(),
         ));
     }
@@ -751,7 +752,7 @@ async fn run_turn_with_cancellation(
             )
             .await;
 
-            Err(AgentError::Backend(
+            Err(AgentError::InterruptedByUser(
                 "[Stopped] Session interrupted by user.".to_string(),
             ))
         }
@@ -811,22 +812,46 @@ async fn apply_turn_result(
 ) -> Result<Status, SessionError> {
     match turn_result {
         Ok(result) => apply_successful_turn_result(context, turn_metadata, result).await,
+        Err(AgentError::InterruptedByUser(message)) => {
+            append_turn_error(context, &message).await;
+
+            Err(SessionError::StoppedByUser(message))
+        }
         Err(error) => {
             let error_text = error.to_string();
-            let message = format!("\n{}\n", error_text.trim());
-            SessionTaskService::append_session_output(
-                &context.output,
-                &context.db,
-                &context.app_event_tx,
-                &context.session_update_versions,
-                &context.session_id,
-                &message,
-            )
-            .await;
+            append_turn_error(context, &error_text).await;
 
             Err(SessionError::Workflow(error_text))
         }
     }
+}
+
+/// Returns the status transition the worker should emit after a turn result.
+///
+/// User-stopped turns are finalized by the UI cancellation path, which has
+/// already requested `Canceled` and signaled the worker. The worker therefore
+/// skips its normal error fallback to `Review`; otherwise a late stopped-turn
+/// result can briefly re-enter `Review` and start automatic focused review.
+fn status_update_after_turn_result(result: &Result<Status, SessionError>) -> Option<Status> {
+    match result {
+        Ok(status) => Some(*status),
+        Err(SessionError::StoppedByUser(_)) => None,
+        Err(_) => Some(Status::Review),
+    }
+}
+
+/// Appends one terminal turn error to the live and persisted transcript.
+async fn append_turn_error(context: &SessionWorkerContext, error_text: &str) {
+    let message = format!("\n{}\n", error_text.trim());
+    SessionTaskService::append_session_output(
+        &context.output,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        &message,
+    )
+    .await;
 }
 
 /// Persists the successful turn payload, emits the reducer projection, and
@@ -1259,6 +1284,32 @@ mod tests {
     }
 
     #[test]
+    fn test_status_update_after_turn_result_skips_stopped_by_user() {
+        // Arrange
+        let result = Err(SessionError::StoppedByUser(
+            "[Stopped] Session interrupted by user.".to_string(),
+        ));
+
+        // Act
+        let status_update = status_update_after_turn_result(&result);
+
+        // Assert
+        assert_eq!(status_update, None);
+    }
+
+    #[test]
+    fn test_status_update_after_turn_result_falls_back_to_review_for_errors() {
+        // Arrange
+        let result = Err(SessionError::Workflow("backend failed".to_string()));
+
+        // Act
+        let status_update = status_update_after_turn_result(&result);
+
+        // Assert
+        assert_eq!(status_update, Some(Status::Review));
+    }
+
+    #[test]
     /// Ensures session start requests map to `start_prompt` and session
     /// resume requests map to `reply` in persisted operation labels.
     fn test_session_command_kind_values() {
@@ -1543,6 +1594,17 @@ mod tests {
         assert!(
             output_text.contains("[Stopped]"),
             "stopped message should be appended to output, got: {output_text}"
+        );
+        assert_eq!(
+            *context.status.lock().expect("status lock poisoned"),
+            Status::InProgress,
+            "stopped turn worker must not fall back to Review before the UI cancellation path \
+             finalizes Canceled"
+        );
+        let sessions = db.load_sessions().await.expect("failed to load sessions");
+        assert_eq!(
+            sessions[0].status, "InProgress",
+            "stopped turn worker must not persist Review and trigger automatic focused review"
         );
     }
 

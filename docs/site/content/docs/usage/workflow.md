@@ -258,6 +258,7 @@ flowchart TB
 
   in_progress -->|turn completes| review
   in_progress -->|needs clarification| question
+  in_progress -->|stop running session| canceled
   question -->|submit clarifications| in_progress
   question -->|Esc end turn| review
 

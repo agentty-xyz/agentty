@@ -469,7 +469,8 @@ Turn execution is durable and restart-safe:
 ### Status Transition Rules
 
 <a id="architecture-runtime-flow-status"></a>
-Runtime status transitions enforced by `Status::can_transition_to()`:
+Runtime status transitions enforced by `Status::can_transition_to()` or
+explicit cancellation paths:
 
 - `New -> InProgress` (first prompt)
 - `New draft -> Canceled` (list-mode cancel before first turn)
@@ -477,6 +478,7 @@ Runtime status transitions enforced by `Status::can_transition_to()`:
 - `Review -> Queued -> Merging -> Done` (merge queue path)
 - `Review -> Rebasing -> Review/Question` (rebase path)
 - `Review/Question -> Canceled`
+- `InProgress -> Canceled` (user stops a running session)
 - `InProgress/Rebasing -> Review/Question` (post-turn or post-rebase)
 
 ## Agent Channel Architecture

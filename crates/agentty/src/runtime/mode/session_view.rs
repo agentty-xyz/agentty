@@ -564,7 +564,7 @@ fn is_view_rebase_allowed(status: Status) -> bool {
     is_view_action_allowed(status) && status != Status::AgentReview
 }
 
-/// Interrupts a running `InProgress` session and transitions it to `Review`.
+/// Interrupts a running `InProgress` session and transitions it to `Canceled`.
 ///
 /// Cancels queued operations in the database, then fires the per-turn
 /// [`CancellationToken`] so the worker's `select!` branch triggers
@@ -574,7 +574,7 @@ fn is_view_rebase_allowed(status: Status) -> bool {
 /// returned yet), and app-server channels shut down through
 /// `shutdown_session`. Both paths converge on the worker returning a
 /// `[Stopped]` error. After signalling, the persisted status is
-/// updated to `Review`, the in-memory snapshot and shared handle are
+/// updated to `Canceled`, the in-memory snapshot and shared handle are
 /// refreshed, and UI events are emitted.
 async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     let timestamp_seconds =
@@ -615,7 +615,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         .db()
         .update_session_status_with_timing_at(
             session_id,
-            &Status::Review.to_string(),
+            &Status::Canceled.to_string(),
             timestamp_seconds,
         )
         .await
@@ -623,7 +623,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         warn!(
             session_id = session_id,
             error = %error,
-            "failed to persist review status after interrupting session"
+            "failed to persist canceled status after interrupting session"
         );
 
         return;
@@ -632,7 +632,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     if let Some(handles) = app.sessions.handles.get(session_id)
         && let Ok(mut handle_status) = handles.status.lock()
     {
-        *handle_status = Status::Review;
+        *handle_status = Status::Canceled;
     }
 
     app.services.emit_app_event(AppEvent::SessionUpdated {
@@ -650,7 +650,7 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         .iter_mut()
         .find(|session| session.id == session_id)
     {
-        session.status = Status::Review;
+        session.status = Status::Canceled;
     }
 }
 
@@ -2993,7 +2993,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_end_in_progress_turn_transitions_session_to_review() {
+    async fn test_end_in_progress_turn_transitions_session_to_canceled() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions[0].status = Status::InProgress;
@@ -3011,7 +3011,7 @@ mod tests {
         end_in_progress_turn(&mut app, &session_id).await;
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        assert_eq!(app.sessions.sessions[0].status, Status::Canceled);
         let handle_status = *app
             .sessions
             .handles
@@ -3020,7 +3020,7 @@ mod tests {
             .status
             .lock()
             .expect("lock failed");
-        assert_eq!(handle_status, Status::Review);
+        assert_eq!(handle_status, Status::Canceled);
     }
 
     #[tokio::test]
@@ -3097,7 +3097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_end_in_progress_turn_does_not_affect_review_session() {
+    async fn test_end_in_progress_turn_sets_canceled_even_for_review_session() {
         // Arrange
         let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
         app.sessions.sessions[0].status = Status::Review;
@@ -3114,8 +3114,9 @@ mod tests {
         // Act
         end_in_progress_turn(&mut app, &session_id).await;
 
-        // Assert — status stays Review (the DB call succeeds idempotently)
-        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        // Assert — status changes to Canceled so a stopped review-session run
+        // does not auto-trigger a new focused review.
+        assert_eq!(app.sessions.sessions[0].status, Status::Canceled);
         let handle_status = *app
             .sessions
             .handles
@@ -3124,6 +3125,6 @@ mod tests {
             .status
             .lock()
             .expect("lock failed");
-        assert_eq!(handle_status, Status::Review);
+        assert_eq!(handle_status, Status::Canceled);
     }
 }

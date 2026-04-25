@@ -415,6 +415,10 @@ pub enum AgentError {
     #[error("{0}")]
     Backend(String),
 
+    /// The user explicitly interrupted the active turn.
+    #[error("{0}")]
+    InterruptedByUser(String),
+
     /// A subprocess IO error such as a spawn failure or unavailable pipe.
     #[error("{0}")]
     Io(String),

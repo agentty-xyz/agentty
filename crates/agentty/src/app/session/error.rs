@@ -37,6 +37,10 @@ pub enum SessionError {
     /// variants.
     #[error("{0}")]
     Workflow(String),
+
+    /// The user explicitly stopped the active turn before the agent finished.
+    #[error("{0}")]
+    StoppedByUser(String),
 }
 
 impl SessionError {
@@ -44,19 +48,22 @@ impl SessionError {
     /// context string so callers can distinguish which assist operation
     /// produced the failure.
     ///
-    /// Typed infrastructure variants (`Git`, `Db`, `AppServer`) pass through
-    /// unchanged because their type already identifies the failure origin
-    /// and callers can still discriminate them by pattern matching.  In
-    /// practice every current call site (`run_rebase_assist_agent`,
-    /// `run_sync_rebase_assist_agent`, commit-assist in `task.rs`) only
-    /// receives `Workflow` variants because the upstream assist functions
-    /// convert all errors via `SessionError::Workflow(String)`.  The
-    /// pass-through arm is a safety net so future callers that propagate
-    /// typed infra errors do not silently lose their structured variant.
+    /// `StoppedByUser` keeps the same typed routing while adding context to
+    /// the display message. Typed infrastructure variants (`Git`, `Db`,
+    /// `AppServer`) pass through unchanged because their type already
+    /// identifies the failure origin and callers can still discriminate them
+    /// by pattern matching. In practice every current assist call site
+    /// (`run_rebase_assist_agent`, `run_sync_rebase_assist_agent`,
+    /// commit-assist in `task.rs`) only receives `Workflow` variants because
+    /// the upstream assist functions convert all errors via
+    /// `SessionError::Workflow(String)`. The pass-through arm is a safety net
+    /// so future callers that propagate typed infra errors do not silently
+    /// lose their structured variant.
     #[must_use]
     pub fn with_context(self, context: &str) -> Self {
         match self {
             Self::Workflow(message) => Self::Workflow(format!("{context}: {message}")),
+            Self::StoppedByUser(message) => Self::StoppedByUser(format!("{context}: {message}")),
             other => other,
         }
     }
@@ -136,6 +143,25 @@ mod tests {
         assert_eq!(
             contextual.to_string(),
             "Commit assistance failed: agent backend unavailable"
+        );
+    }
+
+    #[test]
+    /// Ensures `with_context` keeps stopped-user errors typed while still
+    /// adding operation context to their display message.
+    fn with_context_prefixes_stopped_by_user_message() {
+        // Arrange
+        let error =
+            SessionError::StoppedByUser("[Stopped] Session interrupted by user.".to_string());
+
+        // Act
+        let contextual = error.with_context("Turn failed");
+
+        // Assert
+        assert!(matches!(contextual, SessionError::StoppedByUser(_)));
+        assert_eq!(
+            contextual.to_string(),
+            "Turn failed: [Stopped] Session interrupted by user."
         );
     }
 
