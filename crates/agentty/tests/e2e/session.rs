@@ -61,7 +61,7 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
 
 /// Seeds one running session so `Ctrl+c` can exercise the turn-stop path
 /// without needing a live agent backend.
-fn seed_in_progress_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -177,7 +177,7 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
 
 /// Seeds one in-progress session so the session view can show the active
 /// Tachyonfx loader without launching a live agent backend.
-fn seed_in_progress_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_workdir = env.workdir.canonicalize()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -257,7 +257,7 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_queue_chat_messages")
         .with_git()
-        .setup(seed_in_progress_session)
+        .setup(seed_running_stop_session)
         .run(
             |scenario| {
                 scenario
@@ -306,7 +306,7 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_stop_turn_returns_to_review")
         .with_git()
-        .setup(seed_in_progress_session)
+        .setup(seed_running_stop_session)
         .run(
             |scenario| {
                 scenario
@@ -539,7 +539,7 @@ fn session_open_and_return_to_list() -> E2eResult {
 fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_active_loader")
-        .setup(seed_in_progress_loader_session)
+        .setup(seed_active_loader_session)
         .run(
             |scenario| {
                 scenario

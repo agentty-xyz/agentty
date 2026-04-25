@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use ratatui::style::Color;
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
@@ -172,20 +171,6 @@ impl Status {
         Status::Done,
         Status::Canceled,
     ];
-
-    /// Returns the UI color associated with this status.
-    pub fn color(&self) -> Color {
-        match self {
-            Status::New => Color::DarkGray,
-            Status::InProgress => Color::Yellow,
-            Status::Review | Status::AgentReview => Color::LightBlue,
-            Status::Question => Color::LightMagenta,
-            Status::Queued => Color::LightCyan,
-            Status::Rebasing | Status::Merging => Color::Cyan,
-            Status::Done => Color::Green,
-            Status::Canceled => Color::Red,
-        }
-    }
 
     /// Returns whether this status keeps the review shortcut set enabled.
     pub fn allows_review_actions(self) -> bool {

@@ -186,7 +186,7 @@ pub fn session_header_lines(
     let title_width = usize::from(header_width);
     let title_text = text_util::inline_text(session.display_title());
     let base_style = Style::default()
-        .fg(session.status.color())
+        .fg(style::status_color(session.status))
         .add_modifier(Modifier::BOLD);
     let title_spans = markdown::parse_inline_spans(&title_text, base_style);
     let title_spans = text_util::truncate_spans_with_ellipsis(title_spans, title_width);
@@ -1431,6 +1431,7 @@ mod tests {
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::input::InputState;
     use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+    use crate::domain::theme::ColorTheme;
     use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::infra::file_index::FileEntry;
     use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
@@ -1547,6 +1548,24 @@ mod tests {
         assert_eq!(header_lines.len(), 2);
         assert!(header_lines[0].to_string().contains("..."));
         assert!(header_lines[1].to_string().contains("Timer: 1h1m0s"));
+    }
+
+    #[test]
+    fn test_session_header_lines_use_theme_status_color() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let mut session = session_fixture();
+        session.status = Status::Canceled;
+        session.title = Some("Canceled session".to_string());
+
+        // Act
+        let header_lines = session_header_lines(&session, 80, ReasoningLevel::default(), 0);
+
+        // Assert
+        assert_eq!(
+            header_lines[0].spans[0].style.fg,
+            Some(style::status_color(Status::Canceled))
+        );
     }
 
     #[test]

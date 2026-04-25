@@ -227,15 +227,16 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     warning_soft: Color::LightYellow,
 };
 
-/// Green phosphor terminal palette with restrained surfaces and soft contrast.
+/// Green phosphor terminal palette with restrained surfaces and muted status
+/// tones.
 const HACKER_PALETTE: ThemePalette = ThemePalette {
-    accent: Color::Rgb(77, 222, 105),
-    accent_soft: Color::Rgb(47, 176, 80),
+    accent: Color::Rgb(86, 184, 105),
+    accent_soft: Color::Rgb(68, 145, 80),
     border: Color::Rgb(74, 132, 78),
-    danger: Color::Rgb(238, 89, 89),
-    danger_soft: Color::Rgb(196, 80, 80),
+    danger: Color::Rgb(190, 88, 78),
+    danger_soft: Color::Rgb(156, 78, 72),
     info: Color::Rgb(113, 143, 107),
-    question: Color::Rgb(157, 241, 171),
+    question: Color::Rgb(132, 189, 142),
     surface: Color::Rgb(6, 18, 8),
     surface_clarification: Color::Rgb(12, 28, 14),
     surface_danger: Color::Rgb(44, 18, 18),
@@ -245,10 +246,10 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
     text: Color::Rgb(205, 245, 211),
     text_muted: Color::Rgb(126, 159, 120),
     text_subtle: Color::Rgb(54, 88, 58),
-    success: Color::Rgb(77, 222, 105),
-    success_soft: Color::Rgb(47, 176, 80),
-    warning: Color::Rgb(213, 199, 104),
-    warning_soft: Color::Rgb(230, 222, 139),
+    success: Color::Rgb(86, 184, 105),
+    success_soft: Color::Rgb(68, 145, 80),
+    warning: Color::Rgb(181, 169, 99),
+    warning_soft: Color::Rgb(198, 187, 116),
 };
 
 /// Sets the process-wide active color theme used by semantic palette tokens.
@@ -471,7 +472,22 @@ mod tests {
         assert_eq!(palette.border, Color::Rgb(74, 132, 78));
         assert_eq!(palette.text, Color::Rgb(205, 245, 211));
         assert_eq!(palette.text_muted, Color::Rgb(126, 159, 120));
-        assert_eq!(palette.accent, Color::Rgb(77, 222, 105));
+        assert_eq!(palette.accent, Color::Rgb(86, 184, 105));
+    }
+
+    #[test]
+    fn active_palette_returns_muted_hacker_status_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.success, Color::Rgb(86, 184, 105));
+        assert_eq!(palette.warning, Color::Rgb(181, 169, 99));
+        assert_eq!(palette.danger, Color::Rgb(190, 88, 78));
+        assert_eq!(palette.question, Color::Rgb(132, 189, 142));
     }
 
     #[test]
