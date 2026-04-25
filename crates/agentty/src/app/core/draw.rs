@@ -135,7 +135,7 @@ impl App {
         let project_table_state = self.projects.project_table_state_mut();
         let (sessions, stats_activity, table_state) = self.sessions.render_parts();
         let settings = &mut self.settings;
-        style::set_active_theme(settings.theme);
+        let _theme_scope = style::scoped_active_theme(settings.theme);
 
         ui::render(
             frame,

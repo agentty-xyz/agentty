@@ -45,7 +45,7 @@ impl Component for Tabs<'_> {
         let paragraph = Paragraph::new(line).block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(style::palette::border()))
+                .border_style(style::border_style())
                 .padding(Padding::top(1)),
         );
         f.render_widget(paragraph, area);

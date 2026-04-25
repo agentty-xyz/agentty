@@ -51,7 +51,7 @@ impl Page for TasksPage<'_> {
                 Block::default()
                     .borders(Borders::ALL)
                     .title("Roadmap Tasks")
-                    .border_style(Style::default().fg(style::palette::border())),
+                    .border_style(style::border_style()),
             )
             .scroll((self.scroll_offset.min(max_scroll_offset), 0))
             .wrap(Wrap { trim: true });

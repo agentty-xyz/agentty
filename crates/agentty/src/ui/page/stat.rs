@@ -68,7 +68,8 @@ impl StatsPage<'_> {
         let heatmap = Paragraph::new(self.build_heatmap_lines(area.width)).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Activity Heatmap (Last 53 Weeks)"),
+                .title("Activity Heatmap (Last 53 Weeks)")
+                .border_style(style::border_style()),
         );
 
         f.render_widget(heatmap, area);
@@ -97,7 +98,9 @@ impl StatsPage<'_> {
                 Cell::from(format_token_count(session.stats.output_tokens)),
             ];
 
-            Row::new(cells).height(1)
+            Row::new(cells)
+                .style(Style::default().fg(style::palette::text()))
+                .height(1)
         });
 
         let table = Table::new(
@@ -112,7 +115,12 @@ impl StatsPage<'_> {
         )
         .column_spacing(TABLE_COLUMN_SPACING)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Token Stats"));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Token Stats")
+                .border_style(style::border_style()),
+        );
 
         f.render_widget(table, area);
     }
@@ -246,6 +254,7 @@ mod tests {
     use crate::agent::AgentModel;
     use crate::domain::session::SessionStats;
     use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::domain::theme::ColorTheme;
 
     #[test]
     fn test_token_stats_table_column_spacing_is_wider_for_readability() {
@@ -257,6 +266,32 @@ mod tests {
 
         // Assert
         assert_eq!(spacing, expected_spacing);
+    }
+
+    #[test]
+    fn test_render_uses_palette_border_for_stats_panels() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let sessions = vec![session_fixture()];
+        let activity: Vec<DailyActivity> = Vec::new();
+        let mut page = StatsPage::new(&sessions, &activity);
+        let backend = ratatui::backend::TestBackend::new(160, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw stats page");
+
+        // Assert
+        let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
+        assert!(
+            border_cell_count >= 2,
+            "expected heatmap and token table panels to use palette border color"
+        );
     }
 
     fn session_fixture() -> Session {
@@ -301,6 +336,46 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect()
+    }
+
+    fn find_text_start_cell<'a>(
+        buffer: &'a ratatui::buffer::Buffer,
+        needle: &str,
+    ) -> Option<&'a ratatui::buffer::Cell> {
+        let width = usize::from(buffer.area.width.max(1));
+        let needle_symbols = needle
+            .chars()
+            .map(|character| character.to_string())
+            .collect::<Vec<_>>();
+        let content = buffer.content();
+
+        for row_start in (0..content.len()).step_by(width) {
+            let row_end = row_start + width.min(content.len().saturating_sub(row_start));
+            let row = &content[row_start..row_end];
+
+            for (index, window) in row.windows(needle_symbols.len()).enumerate() {
+                let window_matches = window
+                    .iter()
+                    .zip(&needle_symbols)
+                    .all(|(cell, symbol)| cell.symbol() == symbol);
+
+                if window_matches {
+                    return Some(&row[index]);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Counts cells matching a rendered symbol and the active palette border
+    /// color.
+    fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
+            .count()
     }
 
     #[test]
@@ -424,10 +499,14 @@ mod tests {
             .expect("failed to draw stats page");
 
         // Assert
-        let text = buffer_text(terminal.backend().buffer());
+        let buffer = terminal.backend().buffer();
+        let fallback_cell = &buffer.content()[0];
+        let title_cell = find_text_start_cell(buffer, "Longest Session").unwrap_or(fallback_cell);
+        let text = buffer_text(buffer);
         assert!(text.contains("Token Stats"));
         assert!(text.contains("gpt-5.4"));
         assert!(text.contains("claude-opus-4-7"));
+        assert_eq!(title_cell.fg, style::palette::text());
     }
 
     #[test]

@@ -74,7 +74,10 @@ impl Page for SessionListPage<'_> {
             .height(1)
             .bottom_margin(1);
 
-        let block = Block::default().borders(Borders::ALL).title("Sessions");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Sessions")
+            .border_style(style::border_style());
         let column_constraints = [
             Constraint::Fill(1),
             model_column_width(self.sessions),
@@ -309,7 +312,8 @@ fn render_session_row(
 ) -> Row<'static> {
     let status = session.status;
     let title_text = inline_text(session.display_title());
-    let title_spans = markdown::parse_inline_spans(&title_text, Style::default());
+    let title_spans =
+        markdown::parse_inline_spans(&title_text, Style::default().fg(style::palette::text()));
     let title_spans = truncate_spans_with_ellipsis(title_spans, title_column_width);
     let timer_label = if session.has_in_progress_timer() {
         format_duration_compact(session.in_progress_duration_seconds(wall_clock_unix_seconds))
@@ -339,7 +343,9 @@ fn render_session_row(
         Cell::from(timer_label),
     ];
 
-    Row::new(cells).height(1)
+    Row::new(cells)
+        .style(Style::default().fg(style::palette::text()))
+        .height(1)
 }
 
 /// Calculates the width of the project column from known session values.
@@ -443,6 +449,7 @@ mod tests {
     use super::*;
     use crate::agent::AgentModel;
     use crate::domain::session::SessionStats;
+    use crate::domain::theme::ColorTheme;
 
     fn test_session(id: &str, status: Status) -> Session {
         Session {
@@ -509,6 +516,16 @@ mod tests {
         }
 
         None
+    }
+
+    /// Counts cells matching a rendered symbol and the active palette border
+    /// color.
+    fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
+            .count()
     }
 
     #[test]
@@ -591,6 +608,28 @@ mod tests {
 
         // Assert
         assert_eq!(spacing, expected_spacing);
+    }
+
+    #[test]
+    fn test_render_uses_palette_border_for_sessions_table() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let sessions = vec![test_session("new-1", Status::New)];
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, 0).render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
+        assert_eq!(border_cell_count, 1);
     }
 
     #[test]
@@ -1043,7 +1082,9 @@ mod tests {
         // Assert
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
+        let title_cell = find_text_start_cell(buffer, "new-1").unwrap_or(fallback_cell);
         let new_cell = find_text_start_cell(buffer, "New").unwrap_or(fallback_cell);
+        assert_eq!(title_cell.fg, style::palette::text());
         assert_eq!(new_cell.fg, style::palette::text_muted());
         assert_eq!(new_cell.bg, style::palette::surface());
         assert_ne!(new_cell.fg, new_cell.bg);

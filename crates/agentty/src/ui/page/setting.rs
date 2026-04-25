@@ -54,7 +54,12 @@ impl Page for SettingsPage<'_> {
         )
         .column_spacing(TABLE_COLUMN_SPACING)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Settings"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Settings")
+                .border_style(style::border_style()),
+        )
         .row_highlight_style(selected_style)
         .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
@@ -94,6 +99,7 @@ fn settings_table_rows(settings_rows: Vec<(&'static str, String)>) -> Vec<Row<'s
                 Cell::from(setting_name),
                 Cell::from(setting_value.clone()),
             ])
+            .style(Style::default().fg(style::palette::text()))
             .height(settings_row_height(&setting_value))
         })
         .collect()
@@ -132,6 +138,34 @@ mod tests {
 
         // Assert
         assert_eq!(spacing, expected_spacing);
+    }
+
+    #[test]
+    fn test_render_uses_palette_text_for_setting_rows() {
+        // Arrange
+        let rows = settings_table_rows(vec![("Theme", "Current".to_string())]);
+        let table = Table::new(
+            rows,
+            [Constraint::Percentage(50), Constraint::Percentage(50)],
+        );
+        let backend = ratatui::backend::TestBackend::new(100, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                frame.render_widget(table, frame.area());
+            })
+            .expect("failed to draw settings page");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let theme_cell = buffer
+            .content()
+            .iter()
+            .find(|cell| cell.symbol() == "T" && cell.fg == style::palette::text())
+            .expect("expected Theme row to use palette text");
+        assert_eq!(theme_cell.fg, style::palette::text());
     }
 
     #[test]

@@ -105,7 +105,12 @@ impl<'a> DiffPage<'a> {
         );
 
         let paragraph = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(style::border_style()),
+            )
             .scroll((scroll_offset, SCROLL_X_OFFSET));
 
         f.render_widget(paragraph, area);
@@ -329,7 +334,12 @@ impl DiffPage<'_> {
             ),
         ]);
         let paragraph = Paragraph::new(wrapped_lines)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(style::border_style()),
+            )
             .scroll((scroll_offset, 0));
 
         f.render_widget(paragraph, area);
@@ -569,6 +579,7 @@ fn append_indented_markdown(lines: &mut Vec<Line<'static>>, rendered: &Arc<[Line
 mod tests {
     use super::*;
     use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::domain::theme::ColorTheme;
     use crate::ui::util::parse_diff_lines;
 
     const SAMPLE_DIFF: &str = concat!(
@@ -621,9 +632,18 @@ mod tests {
             .count()
     }
 
+    fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
+            .count()
+    }
+
     #[test]
     fn test_render_shows_updated_diff_help_hint() {
         // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let mut session = session_fixture();
         session.stats.added_lines = 1;
         session.stats.deleted_lines = 0;
@@ -647,10 +667,12 @@ mod tests {
             .expect("failed to draw diff page");
 
         // Assert
-        let text = buffer_text(terminal.backend().buffer());
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
         assert!(text.contains("(+1 -0) Diff — Diff Session"));
         assert!(text.contains("j/k: select file"));
         assert!(text.contains("c: Show comments"));
+        assert!(foreground_symbol_cell_count(buffer, "┌") >= 2);
     }
 
     #[test]

@@ -63,7 +63,7 @@ cancelable: review-ready sessions and draft sessions that are still in
 <a id="usage-settings-options"></a>
 The Settings tab includes:
 
-- `Theme` to switch the whole terminal UI between `Current` and the docs-site-inspired `Hacker` palette. Agentty uses `Current` by default.
+- `Theme` to switch the whole terminal UI between `Current` and the green terminal-inspired `Hacker` palette. Agentty uses `Current` by default.
 - `Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex and Claude turns in the active project.
 - `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active project. `Default Smart Model` can also cycle to `Last used model as default`.
 - `Coauthored by Agentty` to enable or disable the `Co-Authored-By` trailer on generated session commit messages for the active project. New projects start with this disabled.

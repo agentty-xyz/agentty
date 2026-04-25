@@ -1,14 +1,29 @@
 //! Theme-aware semantic color helpers for Agentty's terminal UI.
 
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 
 use super::icon::Icon;
 use crate::domain::session::{ReviewRequestState, Status};
 use crate::domain::theme::ColorTheme;
 
 static ACTIVE_THEME: AtomicU8 = AtomicU8::new(theme_index(ColorTheme::Current));
+static ACTIVE_THEME_SCOPE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Scoped guard that keeps tests and temporary render checks serialized while
+/// they override the process-wide active color theme.
+pub(crate) struct ActiveThemeScope {
+    previous_theme: ColorTheme,
+    _lock_guard: MutexGuard<'static, ()>,
+}
+
+impl Drop for ActiveThemeScope {
+    fn drop(&mut self) {
+        set_active_theme_unlocked(self.previous_theme);
+    }
+}
 
 /// Shared semantic color tokens for the terminal UI.
 pub mod palette {
@@ -212,32 +227,61 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     warning_soft: Color::LightYellow,
 };
 
+/// Green phosphor terminal palette with restrained surfaces and soft contrast.
 const HACKER_PALETTE: ThemePalette = ThemePalette {
-    accent: Color::Rgb(61, 221, 106),
-    accent_soft: Color::Rgb(42, 179, 85),
-    border: Color::Rgb(27, 61, 32),
-    danger: Color::Rgb(255, 94, 94),
-    danger_soft: Color::Rgb(214, 88, 88),
-    info: Color::Rgb(80, 122, 92),
-    question: Color::Rgb(184, 255, 198),
-    surface: Color::Rgb(13, 22, 13),
-    surface_clarification: Color::Rgb(20, 34, 22),
-    surface_danger: Color::Rgb(48, 20, 20),
-    surface_elevated: Color::Rgb(27, 61, 32),
-    surface_success: Color::Rgb(18, 44, 26),
+    accent: Color::Rgb(77, 222, 105),
+    accent_soft: Color::Rgb(47, 176, 80),
+    border: Color::Rgb(74, 132, 78),
+    danger: Color::Rgb(238, 89, 89),
+    danger_soft: Color::Rgb(196, 80, 80),
+    info: Color::Rgb(113, 143, 107),
+    question: Color::Rgb(157, 241, 171),
+    surface: Color::Rgb(6, 18, 8),
+    surface_clarification: Color::Rgb(12, 28, 14),
+    surface_danger: Color::Rgb(44, 18, 18),
+    surface_elevated: Color::Rgb(10, 32, 12),
+    surface_success: Color::Rgb(12, 38, 17),
     surface_overlay: Color::Black,
-    text: Color::Rgb(224, 255, 230),
-    text_muted: Color::Rgb(80, 122, 92),
-    text_subtle: Color::Rgb(42, 89, 53),
-    success: Color::Rgb(61, 221, 106),
-    success_soft: Color::Rgb(42, 179, 85),
-    warning: Color::Rgb(230, 219, 116),
-    warning_soft: Color::Rgb(250, 245, 160),
+    text: Color::Rgb(205, 245, 211),
+    text_muted: Color::Rgb(126, 159, 120),
+    text_subtle: Color::Rgb(54, 88, 58),
+    success: Color::Rgb(77, 222, 105),
+    success_soft: Color::Rgb(47, 176, 80),
+    warning: Color::Rgb(213, 199, 104),
+    warning_soft: Color::Rgb(230, 222, 139),
 };
 
 /// Sets the process-wide active color theme used by semantic palette tokens.
 pub fn set_active_theme(theme: ColorTheme) {
-    ACTIVE_THEME.store(theme_index(theme), Ordering::Relaxed);
+    let _lock_guard = ACTIVE_THEME_SCOPE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    set_active_theme_unlocked(theme);
+}
+
+/// Temporarily sets the process-wide active theme until the returned guard is
+/// dropped.
+///
+/// The guard serializes callers that need deterministic palette reads while
+/// holding a temporary theme override.
+#[must_use]
+pub(crate) fn scoped_active_theme(theme: ColorTheme) -> ActiveThemeScope {
+    let lock_guard = ACTIVE_THEME_SCOPE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous_theme = active_theme();
+    set_active_theme_unlocked(theme);
+
+    ActiveThemeScope {
+        previous_theme,
+        _lock_guard: lock_guard,
+    }
+}
+
+/// Returns the common border style for framed panels and table widgets.
+#[must_use]
+pub fn border_style() -> Style {
+    Style::default().fg(palette::border())
 }
 
 /// Returns a stable cache discriminator for the active color theme.
@@ -291,10 +335,24 @@ pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
 /// Returns the complete color palette for the active theme.
 #[must_use]
 fn active_palette() -> ThemePalette {
-    match ACTIVE_THEME.load(Ordering::Relaxed) {
-        1 => HACKER_PALETTE,
-        _ => CURRENT_PALETTE,
+    match active_theme() {
+        ColorTheme::Hacker => HACKER_PALETTE,
+        ColorTheme::Current => CURRENT_PALETTE,
     }
+}
+
+/// Returns the active theme represented by the process-wide theme atom.
+#[must_use]
+fn active_theme() -> ColorTheme {
+    match ACTIVE_THEME.load(Ordering::Relaxed) {
+        1 => ColorTheme::Hacker,
+        _ => ColorTheme::Current,
+    }
+}
+
+/// Stores a theme value after callers have already handled serialization.
+fn set_active_theme_unlocked(theme: ColorTheme) {
+    ACTIVE_THEME.store(theme_index(theme), Ordering::Relaxed);
 }
 
 /// Applies one semantic color selector to the active palette.
@@ -318,7 +376,7 @@ mod tests {
     #[test]
     fn status_color_returns_muted_text_for_new() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = status_color(Status::New);
@@ -330,7 +388,7 @@ mod tests {
     #[test]
     fn status_color_returns_success_for_done() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = status_color(Status::Done);
@@ -342,7 +400,7 @@ mod tests {
     #[test]
     fn status_color_returns_danger_for_canceled() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = status_color(Status::Canceled);
@@ -354,7 +412,7 @@ mod tests {
     #[test]
     fn status_color_returns_warning_for_in_progress() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = status_color(Status::InProgress);
@@ -366,7 +424,7 @@ mod tests {
     #[test]
     fn status_color_returns_info_for_review() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = status_color(Status::Review);
@@ -378,7 +436,7 @@ mod tests {
     #[test]
     fn status_color_returns_accent_for_merging() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = status_color(Status::Merging);
@@ -390,15 +448,42 @@ mod tests {
     #[test]
     fn status_color_uses_hacker_palette_when_active() {
         // Arrange
-        set_active_theme(ColorTheme::Hacker);
+        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
 
         // Act
         let color = status_color(Status::Merging);
 
         // Assert
         assert_eq!(color, HACKER_PALETTE.accent);
+    }
 
-        set_active_theme(ColorTheme::Current);
+    #[test]
+    fn active_palette_returns_hacker_terminal_green_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.surface, Color::Rgb(6, 18, 8));
+        assert_eq!(palette.surface_elevated, Color::Rgb(10, 32, 12));
+        assert_eq!(palette.border, Color::Rgb(74, 132, 78));
+        assert_eq!(palette.text, Color::Rgb(205, 245, 211));
+        assert_eq!(palette.text_muted, Color::Rgb(126, 159, 120));
+        assert_eq!(palette.accent, Color::Rgb(77, 222, 105));
+    }
+
+    #[test]
+    fn border_style_uses_active_palette_border_color() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::Hacker);
+
+        // Act
+        let style = border_style();
+
+        // Assert
+        assert_eq!(style.fg, Some(HACKER_PALETTE.border));
     }
 
     #[test]
@@ -431,7 +516,7 @@ mod tests {
     #[test]
     fn forge_indicator_color_returns_warning_for_open() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = forge_indicator_color(Some(ReviewRequestState::Open));
@@ -443,7 +528,7 @@ mod tests {
     #[test]
     fn forge_indicator_color_returns_success_for_merged() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = forge_indicator_color(Some(ReviewRequestState::Merged));
@@ -455,7 +540,7 @@ mod tests {
     #[test]
     fn forge_indicator_color_returns_danger_for_closed() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = forge_indicator_color(Some(ReviewRequestState::Closed));
@@ -467,7 +552,7 @@ mod tests {
     #[test]
     fn forge_indicator_color_returns_accent_soft_for_published_only() {
         // Arrange
-        set_active_theme(ColorTheme::Current);
+        let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
         let color = forge_indicator_color(None);

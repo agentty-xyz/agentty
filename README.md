@@ -53,7 +53,7 @@ agentty --no-update  # Launch without automatic updates
 ```
 
 Use the **Settings** tab to switch between the default terminal colors and the
-docs-site-inspired `Hacker` theme.
+green terminal-inspired `Hacker` theme.
 
 ## Documentation
 

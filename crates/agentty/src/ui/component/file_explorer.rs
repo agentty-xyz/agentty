@@ -377,10 +377,15 @@ impl Component for FileExplorer {
             .collect();
 
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(Span::styled(
-                FILE_EXPLORER_TITLE,
-                Style::default().fg(style::palette::accent()),
-            )))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Span::styled(
+                        FILE_EXPLORER_TITLE,
+                        Style::default().fg(style::palette::accent()),
+                    ))
+                    .border_style(style::border_style()),
+            )
             .highlight_style(Style::default().bg(style::palette::surface()));
 
         let mut state = ListState::default();
@@ -393,6 +398,34 @@ impl Component for FileExplorer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::theme::ColorTheme;
+
+    #[test]
+    fn test_render_uses_palette_border_for_file_explorer() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let parsed_lines = vec![DiffLine {
+            kind: DiffLineKind::FileHeader,
+            old_line: None,
+            new_line: None,
+            content: DIFF_SAME_PATH_HEADER,
+        }];
+        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                FileExplorer::new(&parsed_lines).render(frame, frame.area());
+            })
+            .expect("failed to draw file explorer");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let border_cell = &buffer.content()[0];
+        assert_eq!(border_cell.symbol(), "┌");
+        assert_eq!(border_cell.fg, style::palette::border());
+    }
 
     const DIFF_SAME_PATH_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
     const DIFF_RENAME_HEADER: &str = "diff --git a/src/old.rs b/src/new.rs";

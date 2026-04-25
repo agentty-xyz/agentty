@@ -79,7 +79,7 @@ impl Page for ProjectListPage<'_> {
         let info_panel_block = Block::default()
             .borders(Borders::ALL)
             .title("Agentty")
-            .border_style(Style::default().fg(style::palette::border()));
+            .border_style(style::border_style());
         let info_panel_inner_area = info_panel_block.inner(info_area);
         let info_panel_chunks = Layout::horizontal([
             Constraint::Percentage(AGENTTY_INFO_ASCII_WIDTH_PERCENT),
@@ -127,7 +127,12 @@ impl Page for ProjectListPage<'_> {
         )
         .column_spacing(TABLE_COLUMN_SPACING)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title("Projects"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Projects")
+                .border_style(style::border_style()),
+        )
         .row_highlight_style(selected_style)
         .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
@@ -190,7 +195,7 @@ fn project_row_style(project_item: &ProjectListItem, active_project_id: i64) -> 
         return Style::default().fg(style::palette::accent_soft());
     }
 
-    Style::default()
+    Style::default().fg(style::palette::text())
 }
 
 /// Returns the visible project title, marking the active project in the list.
@@ -241,6 +246,7 @@ mod tests {
 
     use super::*;
     use crate::domain::project::Project;
+    use crate::domain::theme::ColorTheme;
 
     #[test]
     fn test_row_highlight_symbol_uses_background_only_selection() {
@@ -264,6 +270,45 @@ mod tests {
 
         // Assert
         assert_eq!(spacing, expected_spacing);
+    }
+
+    #[test]
+    fn test_render_uses_palette_border_for_projects_table() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+        let projects = vec![ProjectListItem {
+            active_session_count: 0,
+            last_session_updated_at: None,
+            project: Project {
+                created_at: 1,
+                display_name: Some("agentty".to_string()),
+                git_branch: Some("main".to_string()),
+                id: 42,
+                is_favorite: false,
+                last_opened_at: None,
+                path: PathBuf::from("/tmp/agentty"),
+                updated_at: 2,
+            },
+            session_count: 0,
+        }];
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                ProjectListPage::new(&projects, &mut table_state, 42).render(frame, frame.area());
+            })
+            .expect("failed to draw projects page");
+
+        // Assert
+        let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
+        assert!(
+            border_cell_count >= 2,
+            "expected both project page panels to use palette border color"
+        );
     }
 
     #[test]
@@ -434,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn test_project_row_style_uses_default_style_for_inactive_project() {
+    fn test_project_row_style_uses_text_color_for_inactive_project() {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
@@ -456,7 +501,7 @@ mod tests {
         let style = project_row_style(&project_item, 7);
 
         // Assert
-        assert_eq!(style, Style::default());
+        assert_eq!(style.fg, Some(style::palette::text()));
     }
 
     #[test]
@@ -514,5 +559,15 @@ mod tests {
 
         // Assert
         assert_eq!(actual_width, usize::from(AGENTTY_ASCII_ART_WIDTH));
+    }
+
+    /// Counts cells matching a rendered symbol and the active palette border
+    /// color.
+    fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) -> usize {
+        buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
+            .count()
     }
 }
