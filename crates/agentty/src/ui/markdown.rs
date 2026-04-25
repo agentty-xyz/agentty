@@ -1117,8 +1117,12 @@ fn stats_value_style() -> Style {
 }
 
 /// Returns the background color used for clarification prompt blocks.
+///
+/// Resolves to a recessed dark blue-gray surface so the inset reads as a
+/// quiet quote block rather than the bright `surface_elevated` tone used for
+/// table headers.
 fn clarification_background_color() -> Color {
-    style::palette::surface_elevated()
+    style::palette::surface_clarification()
 }
 
 /// Returns the style for the visible `CLARIFICATION_PROMPT_PREFIX` marker.

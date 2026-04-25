@@ -64,6 +64,13 @@ pub mod palette {
         token_color(|palette| palette.surface)
     }
 
+    /// Subtle blue-gray surface used behind clarification prompt blocks so the
+    /// block reads as a recessed inset rather than an elevated panel.
+    #[must_use]
+    pub fn surface_clarification() -> Color {
+        token_color(|palette| palette.surface_clarification)
+    }
+
     /// Subtle danger-tinted surface used behind removed diff lines.
     #[must_use]
     pub fn surface_danger() -> Color {
@@ -156,6 +163,8 @@ pub struct ThemePalette {
     pub question: Color,
     /// Base surface color for bars and selected rows.
     pub surface: Color,
+    /// Subtle blue-gray surface used behind clarification prompt blocks.
+    pub surface_clarification: Color,
     /// Subtle danger-tinted surface used behind removed diff lines.
     pub surface_danger: Color,
     /// Elevated surface color for table headers.
@@ -189,6 +198,7 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     info: Color::LightBlue,
     question: Color::LightMagenta,
     surface: Color::DarkGray,
+    surface_clarification: Color::Rgb(28, 38, 48),
     surface_danger: Color::Rgb(48, 24, 24),
     surface_elevated: Color::Gray,
     surface_success: Color::Rgb(18, 44, 26),
@@ -211,6 +221,7 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
     info: Color::Rgb(80, 122, 92),
     question: Color::Rgb(184, 255, 198),
     surface: Color::Rgb(13, 22, 13),
+    surface_clarification: Color::Rgb(20, 34, 22),
     surface_danger: Color::Rgb(48, 20, 20),
     surface_elevated: Color::Rgb(27, 61, 32),
     surface_success: Color::Rgb(18, 44, 26),
