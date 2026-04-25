@@ -2241,6 +2241,11 @@ mod tests {
             .create_draft_session()
             .await
             .expect("failed to create draft session");
+        let session_update_versions = app.services.session_update_versions();
+        SessionTaskService::remove_session_update_version(
+            &session_update_versions,
+            session_id.as_str(),
+        );
 
         // Act
         app.stage_draft_message(&session_id, "First draft")
@@ -2249,6 +2254,14 @@ mod tests {
         app.stage_draft_message(&session_id, "Second draft")
             .await
             .expect("failed to stage second draft");
+        let session_update_version = {
+            let session_update_versions = session_update_versions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *session_update_versions
+                .get(session_id.as_str())
+                .unwrap_or(&0)
+        };
 
         // Assert
         assert_eq!(app.sessions.sessions[0].status, Status::New);
@@ -2269,6 +2282,7 @@ mod tests {
             .expect("failed to load");
         assert_eq!(db_sessions[0].prompt, "First draft\n\nSecond draft");
         assert_eq!(db_sessions[0].title, Some("First draft".to_string()));
+        assert_eq!(session_update_version, 2);
     }
 
     #[tokio::test]

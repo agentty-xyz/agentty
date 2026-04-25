@@ -499,6 +499,12 @@ impl SessionManager {
     /// Appends one staged draft message to a `New` session without launching
     /// the agent yet.
     ///
+    /// This emits a [`AppEvent::SessionUpdated`] signal so memoized session
+    /// views refresh immediately after local draft updates. The signal is
+    /// best-effort after staged state has already been persisted; if the
+    /// foreground event channel is closed, staging still succeeds and the next
+    /// session refresh observes the committed prompt.
+    ///
     /// The first staged prompt seeds a fallback title, while later staged
     /// prompts keep the current visible title in place until the refreshed
     /// generated title arrives.
@@ -618,6 +624,12 @@ impl SessionManager {
             &persisted_session_id,
             title_generation_task_generation,
             title_generation_task,
+        );
+
+        SessionTaskService::emit_session_updated(
+            &services.event_sender(),
+            &services.session_update_versions(),
+            persisted_session_id.as_str(),
         );
 
         Ok(())

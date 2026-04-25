@@ -45,6 +45,7 @@ struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
     active_prompt_output: TextFingerprint,
     done_session_output_mode: DoneSessionOutputMode,
+    draft_prompt: TextFingerprint,
     markdown_render_version: u64,
     output_width: u16,
     review_status_message: TextFingerprint,
@@ -375,6 +376,7 @@ impl<'a> SessionOutput<'a> {
             active_progress: TextFingerprint::from_text(context.active_progress),
             active_prompt_output: TextFingerprint::from_text(context.active_prompt_output),
             done_session_output_mode: context.done_session_output_mode,
+            draft_prompt: Self::draft_prompt_fingerprint(session),
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
             review_status_message: TextFingerprint::from_text(context.review_status_message),
@@ -385,6 +387,16 @@ impl<'a> SessionOutput<'a> {
             spinner_frame: Self::layout_cache_spinner_frame(session, context),
             status: session.status,
         }
+    }
+
+    /// Returns the staged-draft prompt identity when the draft preview reads
+    /// from `session.prompt`.
+    fn draft_prompt_fingerprint(session: &Session) -> TextFingerprint {
+        if session.status == Status::New && session.is_draft_session() {
+            return TextFingerprint::from_text(Some(session.prompt.as_str()));
+        }
+
+        TextFingerprint::from_text(None)
     }
 
     /// Returns the spinner frame when this session output includes a dynamic
@@ -731,23 +743,58 @@ impl<'a> SessionOutput<'a> {
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
-        let review_markdown = review_text
+        if let Some(review_markdown) = review_text
             .map(str::trim)
             .filter(|review_text| !review_text.is_empty())
-            .map(layout::annotate_review_suggestions_header);
-        let review_markdown = review_markdown.or_else(|| {
-            review_status_message
-                .map(str::trim)
-                .filter(|status_message| !status_message.is_empty())
-                .filter(|status_message| !app::is_review_loading_status_message(status_message))
-                .map(ToString::to_string)
-        });
+            .map(layout::annotate_review_suggestions_header)
+        {
+            Self::append_markdown_lines(
+                lines,
+                &review_markdown,
+                inner_width,
+                markdown_render_cache,
+            );
 
-        let Some(review_markdown) = review_markdown else {
             return;
-        };
+        }
 
-        Self::append_markdown_lines(lines, &review_markdown, inner_width, markdown_render_cache);
+        if let Some(status_message) = Self::visible_review_status_message(review_status_message) {
+            while lines.last().is_some_and(|line| line.width() == 0) {
+                lines.pop();
+            }
+
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+
+            Self::append_plain_review_status_lines(lines, status_message, inner_width);
+        }
+    }
+
+    /// Returns non-loading focused-review fallback text suitable for plain
+    /// rendering.
+    fn visible_review_status_message(review_status_message: Option<&str>) -> Option<&str> {
+        review_status_message
+            .map(str::trim)
+            .filter(|status_message| !status_message.is_empty())
+            .filter(|status_message| !app::is_review_loading_status_message(status_message))
+    }
+
+    /// Appends review fallback text without interpreting markdown
+    /// metacharacters in status strings.
+    ///
+    /// The caller owns separator trimming and spacing so this helper remains
+    /// purely additive.
+    fn append_plain_review_status_lines(
+        lines: &mut Vec<Line<'static>>,
+        status_message: &str,
+        inner_width: usize,
+    ) {
+        let rendered_lines = text_util::wrap_lines(status_message, inner_width)
+            .into_iter()
+            .map(|line| Line::from(line.to_string()));
+
+        lines.extend(rendered_lines);
     }
 
     /// Appends a rendered structured-summary section without mutating the
@@ -1014,6 +1061,41 @@ mod tests {
         // Assert
         assert_eq!(first_layout.line_count, second_layout.line_count);
         assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+    }
+
+    #[test]
+    fn test_output_layout_cache_keys_staged_draft_prompt() {
+        // Arrange
+        let mut session = session_fixture();
+        session.is_draft = true;
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = line_context(DoneSessionOutputMode::Summary, None, None, None);
+
+        // Act
+        let empty_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        session.prompt = "First staged draft".to_string();
+        let staged_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        let staged_text = staged_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(!Arc::ptr_eq(&empty_layout.lines, &staged_layout.lines));
+        assert!(staged_text.contains("First staged draft"));
     }
 
     #[test]
@@ -1285,6 +1367,37 @@ mod tests {
         let mut session = session_fixture();
         session.status = Status::Review;
         let review_status_message = "Review assist unavailable: empty provider response";
+
+        // Act
+        let lines = SessionOutput::output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(
+                DoneSessionOutputMode::Summary,
+                Some(review_status_message),
+                None,
+                None,
+            ),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(text.contains(review_status_message));
+    }
+
+    /// Verifies focused-review fallback text is rendered literally instead of
+    /// being interpreted as markdown.
+    #[test]
+    fn test_output_lines_review_status_message_preserves_markdown_characters() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::Review;
+        let review_status_message = "# Review *failed* for `tool`";
 
         // Act
         let lines = SessionOutput::output_lines(

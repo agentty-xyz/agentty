@@ -116,6 +116,30 @@ impl SessionTaskService {
         session_update_versions.remove(id);
     }
 
+    /// Bumps one session's observable-state version and emits a matching
+    /// [`AppEvent::SessionUpdated`] event for targeted snapshot sync.
+    ///
+    /// Returns the emitted version so callers and tests can observe the exact
+    /// version recorded in the shared update map.
+    pub(crate) fn emit_session_updated(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+    ) -> u64 {
+        let version = Self::next_session_update_version(session_update_versions, id);
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionUpdated {
+                session_id: SessionId::from(id),
+                version,
+            },
+            Some(id),
+            "SessionUpdated",
+        );
+
+        version
+    }
+
     /// Recomputes and persists diff-derived size and line-count totals using
     /// the session worktree diff.
     ///
@@ -918,17 +942,7 @@ impl SessionTaskService {
                 "failed to persist session status update"
             );
         }
-        let session_id = SessionId::from(id);
-        let version = Self::next_session_update_version(session_update_versions, id);
-        Self::send_app_event(
-            app_event_tx,
-            AppEvent::SessionUpdated {
-                session_id,
-                version,
-            },
-            Some(id),
-            "SessionUpdated",
-        );
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
         if Self::status_requires_full_refresh(new) {
             Self::send_app_event(
                 app_event_tx,
@@ -967,16 +981,7 @@ impl SessionTaskService {
                 "failed to persist session output"
             );
         }
-        let version = Self::next_session_update_version(session_update_versions, id);
-        Self::send_app_event(
-            app_event_tx,
-            AppEvent::SessionUpdated {
-                session_id: SessionId::from(id),
-                version,
-            },
-            Some(id),
-            "SessionUpdated",
-        );
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
     /// Clears the transient thinking message for one session.
