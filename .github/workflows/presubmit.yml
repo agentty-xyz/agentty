@@ -26,6 +26,11 @@ jobs:
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
 
+      - name: Install `cargo-nextest`
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 

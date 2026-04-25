@@ -31,7 +31,7 @@ repos:
         files: \.html?$
       - id: rustfmt-fix
         name: rustfmt fix
-        description: Format the code with rustfmt.
+        description: Format all Rust workspace code with rustfmt before review.
         entry: cargo fmt --all
         language: system
         types: [rust]
@@ -39,7 +39,7 @@ repos:
         stages: [manual]
       - id: clippy-fix
         name: clippy fix
-        description: Auto-fix clippy lints where possible.
+        description: Auto-fix clippy lints across Rust targets when a mechanical fix is available.
         entry: cargo clippy --fix --allow-dirty --allow-staged -q --all-targets --all-features -- -D warnings
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
@@ -47,98 +47,100 @@ repos:
         stages: [manual]
       - id: rustfmt
         name: rustfmt check
-        description: Verify code formatting with rustfmt.
+        description: Verify all Rust workspace code is already formatted with rustfmt.
         entry: cargo fmt --all --check
         language: system
         types: [rust]
         pass_filenames: false
       - id: cargo-check
         name: cargo check
-        description: Check the package for errors.
+        description: Type-check all Rust workspace targets and features without running tests.
         entry: cargo check -q --locked --all-targets --all-features
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
       - id: clippy
         name: clippy
-        description: Lint the code and fail on any warnings.
+        description: Run strict clippy across all Rust targets and features, failing on warnings.
         entry: cargo clippy -q --locked --all-targets --all-features -- -D warnings
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
         stages: [manual]
       - id: test-workspace
-        name: cargo test workspace
-        description: Run the full workspace test suite with a shared-host thread budget.
-        entry: >-
-          bash -lc 'test_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)";
-          test_threads=$((test_threads / 2));
-          if [ "$test_threads" -lt 1 ]; then test_threads=1; fi;
-          if [ "$test_threads" -gt 4 ]; then test_threads=4; fi;
-          cargo test -q --locked -- --test-threads="$test_threads"'
+        name: cargo nextest workspace
+        description: Run the full workspace unit and integration test suite with `cargo-nextest`.
+        entry: cargo nextest run --locked --profile ci --workspace
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: test-ag-forge-src
-        name: cargo test ag-forge src
+        name: cargo nextest ag-forge src
         description: Source tests for `crates/ag-forge/src`.
-        entry: cargo test -q --locked -p ag-forge --lib
+        entry: cargo nextest run --locked --profile ci -p ag-forge --lib
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: test-agentty-src
-        name: cargo test agentty src
+        name: cargo nextest agentty src
         description: Source tests for `crates/agentty/src`.
-        entry: cargo test -q --locked -p agentty --lib --bin agentty
+        entry: cargo nextest run --locked --profile ci -p agentty --lib --bin agentty
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: test-ag-xtask-src
-        name: cargo test ag-xtask src
+        name: cargo nextest ag-xtask src
         description: Source tests for `crates/ag-xtask/src`.
-        entry: cargo test -q --locked -p ag-xtask --bin ag-xtask
+        entry: cargo nextest run --locked --profile ci -p ag-xtask --bin ag-xtask
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: test-testty-src
-        name: cargo test testty src
+        name: cargo nextest testty src
         description: Source tests for `crates/testty/src`.
-        entry: cargo test -q --locked -p testty --lib
+        entry: cargo nextest run --locked --profile ci -p testty --lib
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: test-agentty-e2e
-        name: cargo test agentty e2e
+        name: cargo nextest agentty e2e
         description: Postsubmit-only `agentty` integration tests from `crates/agentty/tests`.
-        entry: cargo test -q --locked -p agentty --test showcase --test protocol_compliance_e2e --test e2e -- --test-threads=1
+        entry: >-
+          cargo nextest run --locked --profile ci -p agentty
+          --test showcase --test protocol_compliance_e2e --test e2e
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: coverage
         name: coverage
-        description: Verify workspace coverage meets ratchet thresholds.
-        entry: cargo llvm-cov --workspace --summary-only --locked --fail-under-lines 89 --fail-under-functions 86
+        description: Verify source-test coverage meets workspace ratchet thresholds with `cargo-llvm-cov` and Nextest.
+        entry: >-
+          cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
+          --fail-under-lines 89 --fail-under-functions 86
         language: system
         types: [rust]
         pass_filenames: false
         stages: [manual]
       - id: coverage-lcov
         name: coverage lcov
-        description: Postsubmit-only workspace LCOV report for CI upload, excluding `crates/agentty/tests`.
-        entry: cargo llvm-cov --workspace --lib --bins --lcov --ignore-filename-regex '^crates/agentty/tests/' --output-path coverage.lcov --locked
+        description: Generate the postsubmit Nextest LCOV report uploaded to Codecov, excluding `crates/agentty/tests`.
+        entry: >-
+          cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
+          --lcov --ignore-filename-regex '^crates/agentty/tests/'
+          --output-path coverage.lcov
         language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
       - id: cargo-shear
         name: cargo-shear
-        description: Check for unused dependencies.
+        description: Check workspace manifests for unused dependencies.
         entry: cargo shear
         language: system
         types: [rust]
@@ -146,7 +148,7 @@ repos:
         stages: [manual]
       - id: zola-check
         name: zola check
-        description: Verify the docs site builds without broken links.
+        description: Verify the Zola docs site builds without broken links.
         entry: zola --root docs/site check
         language: system
         always_run: true
@@ -154,20 +156,20 @@ repos:
         stages: [manual]
       - id: check-migrations
         name: check migrations
-        description: Verifies that migration files have unique prefix numbers.
+        description: Verify SQL migration files have unique prefix numbers.
         entry: cargo run -q --locked -p ag-xtask -- check-migrations
         language: system
         types: [sql]
         pass_filenames: false
       - id: check-roadmap
         name: check roadmap
-        description: Verifies that the planning roadmap matches the active workflow rules.
+        description: Verify that the planning roadmap matches the active workflow rules.
         entry: cargo run -q --locked -p ag-xtask -- roadmap lint
         language: system
         pass_filenames: false
       - id: validate-prek-config
         name: validate prek config
-        description: Validate the `prek` hook configuration when it changes.
+        description: Validate the `prek` hook catalog whenever `.pre-commit-config.yaml` changes.
         entry: prek validate-config .pre-commit-config.yaml
         language: system
         files: ^\.pre-commit-config\.yaml$

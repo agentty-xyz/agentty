@@ -34,6 +34,15 @@ prek install -f
 cargo install cargo-llvm-cov
 ```
 
+### Install `cargo-nextest`
+
+```sh
+cargo install cargo-nextest --locked
+```
+
+Coverage hooks also use `cargo-nextest`, so install both Cargo subcommands
+before running the full manual hook suite locally.
+
 ## Website
 
 `agentty.xyz` is a Zola site stored in `docs/site/` and deployed through GitHub Pages.
@@ -48,28 +57,18 @@ zola build --root docs/site
 
 ## Development Checks
 
-Run the following checks before opening a pull request:
-
-```sh
-prek run rustfmt-fix --all-files --hook-stage manual
-prek run clippy-fix --all-files --hook-stage manual
-prek run --all-files
-prek run clippy --all-files --hook-stage manual
-prek run test-workspace --all-files --hook-stage manual
-```
-
-`prek run --all-files` now includes the workspace coverage ratchet via
-`cargo llvm-cov --workspace --summary-only --fail-under-lines 89 --fail-under-functions 86`.
+Use `.pre-commit-config.yaml` as the source of truth for all formatting,
+linting, test, coverage, migration, roadmap, docs-site, and dependency hygiene
+checks. Run the hook IDs from that file through `prek`; hook descriptions explain
+what each check covers and whether it is a manual or default hook.
 
 ## Roadmap Maintenance
 
-Use the `ag-xtask` roadmap commands to keep planning current before revising
-`docs/plan/roadmap.md`.
+Use the `ag-xtask` roadmap digest to keep planning current before revising
+`docs/plan/roadmap.md`. The roadmap quality check is the `check-roadmap` hook in
+`.pre-commit-config.yaml`.
 
 ```sh
-# Validate roadmap structure and queue rules
-cargo run -q -p ag-xtask -- roadmap lint
-
 # Print a read-only planning digest from git state and the roadmap
 cargo run -q -p ag-xtask -- roadmap context-digest
 ```
@@ -99,13 +98,11 @@ TUI end-to-end tests use the `testty` framework to drive the real `agentty`
 binary in a PTY and assert terminal state semantically. Tests are written as Rust
 scenarios and can also be compiled into VHS tapes for visual screenshots.
 
-```sh
-# Run TUI E2E tests
-cargo test -p agentty --test e2e
-
-# Update snapshot baselines
-TUI_TEST_UPDATE=1 cargo test -p agentty --test e2e
-```
+Run the `test-agentty-e2e` hook from `.pre-commit-config.yaml` with `prek`
+instead of invoking `cargo` directly. The hook uses `language: system`, so
+`prek` preserves parent-shell environment variables when it launches
+`cargo-nextest`; set `TUI_TEST_UPDATE=1` on the `prek run` invocation when
+intentionally updating snapshot baselines.
 
 ### Authoring Tests
 
