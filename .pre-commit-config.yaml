@@ -122,7 +122,7 @@ repos:
         description: Verify source-test coverage meets workspace ratchet thresholds with `cargo-llvm-cov` and Nextest.
         entry: >-
           cargo llvm-cov nextest --workspace --lib --bins --locked --profile ci
-          --fail-under-lines 89 --fail-under-functions 86
+          --fail-under-lines 91 --fail-under-functions 91
         language: system
         types: [rust]
         pass_filenames: false
