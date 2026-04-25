@@ -1,23 +1,25 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::hash::Hasher;
 use std::sync::Arc;
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
+use tachyonfx::{Duration, Effect, Interpolation, fx};
 
 use crate::app;
 use crate::domain::session::{PublishedBranchSyncStatus, Session, SessionId, Status};
-use crate::icon::Icon;
+use crate::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
-use crate::ui::{Component, layout, text_util};
+use crate::ui::{Component, layout, style, text_util};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter` to stage the \
@@ -31,6 +33,9 @@ const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
+const TACHYON_LOADER_FRAME_COUNT: usize = 9;
+const TACHYON_LOADER_PERIOD_MS: u32 = 900;
+const TACHYON_LOADER_STEP_MS: u32 = 100;
 
 /// Cache key for one fully assembled session-output layout.
 ///
@@ -91,16 +96,119 @@ impl TextFingerprint {
 /// Cached result for one fully assembled session-output layout.
 #[derive(Clone)]
 pub(crate) struct SessionOutputLayout {
+    /// Index of the active Tachyon loader row within `lines`, when present.
+    pub(crate) active_loader_line_index: Option<usize>,
     /// Number of rendered lines, saturated for scroll metric arithmetic.
     pub(crate) line_count: u16,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<[Line<'static>]>,
 }
 
+/// Fully assembled session-output lines plus metadata derived during assembly.
+struct SessionOutputLines {
+    active_loader_line_index: Option<usize>,
+    lines: Vec<Line<'static>>,
+}
+
 /// Cached session-output layout entry.
 struct SessionOutputLayoutCacheEntry {
     key: SessionOutputLayoutCacheKey,
     layout: SessionOutputLayout,
+}
+
+/// Stateful Tachyonfx loader effect reused by the session output cache.
+///
+/// The effect is advanced by frame deltas so render-time painting avoids
+/// rebuilding the effect closure on every tick. Palette colors are read inside
+/// the closure at process time so theme changes do not require cache
+/// invalidation.
+struct TachyonLoaderEffect {
+    effect: Effect,
+    spinner_frame: Option<usize>,
+}
+
+impl TachyonLoaderEffect {
+    /// Builds a reusable loader effect ready for the first frame.
+    fn new() -> Self {
+        Self {
+            effect: Self::build_effect(),
+            spinner_frame: None,
+        }
+    }
+
+    /// Applies the loader pulse to `area`, advancing from the previous frame
+    /// offset when available.
+    fn apply(&mut self, buffer: &mut Buffer, area: Rect, spinner_frame: usize) {
+        let elapsed_steps = self.elapsed_steps(spinner_frame);
+        let phase_ms = u32::try_from(elapsed_steps).unwrap_or_default() * TACHYON_LOADER_STEP_MS;
+
+        self.effect
+            .process(Duration::from_millis(phase_ms), buffer, area);
+        self.spinner_frame = Some(spinner_frame);
+    }
+
+    /// Returns elapsed animation steps and resets the finite Tachyonfx effect
+    /// when the spinner frame crosses into a new loader cycle.
+    fn elapsed_steps(&mut self, spinner_frame: usize) -> usize {
+        let frame_offset = spinner_frame % TACHYON_LOADER_FRAME_COUNT;
+        let Some(previous_spinner_frame) = self.spinner_frame else {
+            return frame_offset;
+        };
+        if spinner_frame <= previous_spinner_frame {
+            return 0;
+        }
+
+        let previous_frame_offset = previous_spinner_frame % TACHYON_LOADER_FRAME_COUNT;
+        let elapsed_steps = spinner_frame - previous_spinner_frame;
+        if previous_frame_offset + elapsed_steps >= TACHYON_LOADER_FRAME_COUNT {
+            self.effect = Self::build_effect();
+
+            return frame_offset;
+        }
+
+        elapsed_steps
+    }
+
+    /// Builds the Tachyonfx effect that sweeps emphasis across the loader
+    /// glyph cells.
+    fn build_effect() -> Effect {
+        fx::effect_fn_buf(
+            (),
+            (TACHYON_LOADER_PERIOD_MS, Interpolation::Linear),
+            move |_state, context, buffer| {
+                let active_color = style::palette::warning();
+                let base_color = style::palette::warning_soft();
+                let muted_color = style::palette::text_subtle();
+                let alpha = context.alpha();
+                let active_index = if alpha < (1.0 / 3.0) {
+                    0
+                } else if alpha < (2.0 / 3.0) {
+                    1
+                } else {
+                    2
+                };
+                let trailing_index = (active_index + 2) % 3;
+
+                for (cell_index, position) in context.area.positions().enumerate() {
+                    let cell = &mut buffer[position];
+                    if cell.symbol() == " " {
+                        continue;
+                    }
+
+                    let loader_index = cell_index % usize::from(TACHYON_LOADER_WIDTH);
+                    let color = if loader_index == active_index {
+                        active_color
+                    } else if loader_index == trailing_index {
+                        base_color
+                    } else {
+                        muted_color
+                    };
+
+                    cell.set_fg(color);
+                }
+            },
+        )
+    }
 }
 
 /// Bounded LRU cache for the fully assembled session output panel.
@@ -110,9 +218,12 @@ struct SessionOutputLayoutCacheEntry {
 /// width, output mode, active prompt, review text/status, progress text, and
 /// active spinner frame. Entries are invalidated by key changes; the markdown
 /// render-cache version is part of the key so style-bearing lines are not
-/// reused after markdown cache invalidation.
+/// reused after markdown cache invalidation. Per-session Tachyonfx state is
+/// bounded by the same layout LRU and is removed once no cached layout remains
+/// for that session.
 pub struct SessionOutputLayoutCache {
     entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
+    tachyon_loader_effects: RefCell<HashMap<SessionId, TachyonLoaderEffect>>,
 }
 
 impl Default for SessionOutputLayoutCache {
@@ -121,6 +232,7 @@ impl Default for SessionOutputLayoutCache {
             entries: RefCell::new(VecDeque::with_capacity(
                 SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT,
             )),
+            tachyon_loader_effects: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -167,15 +279,57 @@ impl SessionOutputLayoutCache {
         Some(layout)
     }
 
-    /// Stores one freshly rendered entry and evicts old entries over the
-    /// bounded capacity.
+    /// Stores one freshly rendered entry and evicts old entries plus orphaned
+    /// Tachyonfx state over the bounded capacity.
     fn store_entry(&self, entry: SessionOutputLayoutCacheEntry) {
-        let mut entries = self.entries.borrow_mut();
-        entries.push_front(entry);
+        let mut evicted_session_ids = Vec::new();
+        {
+            let mut entries = self.entries.borrow_mut();
+            entries.push_front(entry);
 
-        while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
-            entries.pop_back();
+            while entries.len() > SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
+                let Some(evicted_entry) = entries.pop_back() else {
+                    continue;
+                };
+                let evicted_session_id = evicted_entry.key.session_id;
+                if !entries
+                    .iter()
+                    .any(|entry| entry.key.session_id == evicted_session_id)
+                {
+                    evicted_session_ids.push(evicted_session_id);
+                }
+            }
         }
+
+        if evicted_session_ids.is_empty() {
+            return;
+        }
+
+        let mut tachyon_loader_effects = self.tachyon_loader_effects.borrow_mut();
+        for session_id in evicted_session_ids {
+            tachyon_loader_effects.remove(&session_id);
+        }
+    }
+
+    /// Applies the cached Tachyonfx loader effect to the current frame,
+    /// cloning the session id only when a new per-session effect is needed.
+    pub(crate) fn apply_tachyon_loader_effect(
+        &self,
+        session_id: &SessionId,
+        buffer: &mut Buffer,
+        area: Rect,
+        spinner_frame: usize,
+    ) {
+        let mut tachyon_loader_effects = self.tachyon_loader_effects.borrow_mut();
+        if let Some(effect) = tachyon_loader_effects.get_mut(session_id) {
+            effect.apply(buffer, area, spinner_frame);
+
+            return;
+        }
+
+        let mut effect = TachyonLoaderEffect::new();
+        effect.apply(buffer, area, spinner_frame);
+        tachyon_loader_effects.insert(session_id.clone(), effect);
     }
 }
 
@@ -352,15 +506,15 @@ impl<'a> SessionOutput<'a> {
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) -> SessionOutputLayout {
-        let lines = Arc::<[Line<'static>]>::from(Self::output_lines(
-            session,
-            output_area,
-            context,
-            markdown_render_cache,
-        ));
-        let line_count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        let output_lines =
+            Self::output_lines_with_metadata(session, output_area, context, markdown_render_cache);
+        let line_count = u16::try_from(output_lines.lines.len()).unwrap_or(u16::MAX);
 
-        SessionOutputLayout { line_count, lines }
+        SessionOutputLayout {
+            active_loader_line_index: output_lines.active_loader_line_index,
+            line_count,
+            lines: Arc::<[Line<'static>]>::from(output_lines.lines),
+        }
     }
 
     /// Builds the cache key for a fully assembled session-output layout.
@@ -400,31 +554,21 @@ impl<'a> SessionOutput<'a> {
     }
 
     /// Returns the spinner frame when this session output includes a dynamic
-    /// loader glyph; otherwise returns `None` so stable layouts remain cached
-    /// across frame ticks.
+    /// glyph inside cached layout text; otherwise returns `None` so stable
+    /// active-loader rows remain cached across Tachyonfx repaint ticks.
     fn layout_cache_spinner_frame(
         session: &Session,
         context: SessionOutputLineContext<'_>,
     ) -> Option<usize> {
-        if Self::status_renders_spinner(session.status)
-            || session.published_branch_sync_status == PublishedBranchSyncStatus::InProgress
-        {
+        if session.published_branch_sync_status == PublishedBranchSyncStatus::InProgress {
             return Some(context.spinner_frame);
         }
 
         None
     }
 
-    /// Returns whether the inline status row uses an animated spinner.
-    fn status_renders_spinner(status: Status) -> bool {
-        matches!(
-            status,
-            Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging
-        )
-    }
-
-    /// Builds rendered markdown lines and contextual status/help rows for the
-    /// current session state.
+    /// Builds rendered markdown lines, contextual status/help rows, and
+    /// metadata for rows that receive post-render effects.
     ///
     /// `Status::Done` includes an inline `t` toggle hint that switches between
     /// summary and full output views. Active statuses append only the generic
@@ -439,12 +583,12 @@ impl<'a> SessionOutput<'a> {
     /// like agent-produced session output instead of replacing the transcript
     /// panel, and it is shown for completed review payloads even when the
     /// session has reached `Done`.
-    fn output_lines(
+    fn output_lines_with_metadata(
         session: &Session,
         output_area: Rect,
         context: SessionOutputLineContext<'_>,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
-    ) -> Vec<Line<'static>> {
+    ) -> SessionOutputLines {
         let SessionOutputLineContext {
             active_prompt_output,
             active_progress,
@@ -455,6 +599,7 @@ impl<'a> SessionOutput<'a> {
             spinner_frame,
         } = context;
         let status = session.status;
+        let mut active_loader_line_index = None;
         let output_text = Self::output_text(session, done_session_output_mode);
         let (completed_turn_text, active_turn_text) =
             Self::transcript_sections(status, output_text.as_ref(), active_prompt_output);
@@ -513,17 +658,17 @@ impl<'a> SessionOutput<'a> {
         }
         Self::append_published_branch_sync_lines(&mut lines, session, spinner_frame);
 
-        if let Some(status_line) = layout::session_output_status_line(
-            status,
-            active_progress,
-            review_status_message,
-            spinner_frame,
-        ) {
+        if let Some(status_line) =
+            layout::session_output_status_line(status, active_progress, review_status_message)
+        {
             while lines.last().is_some_and(|line| line.width() == 0) {
                 lines.pop();
             }
 
             lines.push(Line::from(""));
+            if Self::status_uses_tachyon_loader(status) {
+                active_loader_line_index = Some(lines.len());
+            }
             lines.push(status_line);
         } else if status == Status::Done {
             lines.push(Line::from(""));
@@ -535,7 +680,10 @@ impl<'a> SessionOutput<'a> {
             lines.push(Line::from(""));
         }
 
-        lines
+        SessionOutputLines {
+            active_loader_line_index,
+            lines,
+        }
     }
 
     /// Appends one automatic published-branch sync status row when the latest
@@ -925,6 +1073,80 @@ impl<'a> SessionOutput<'a> {
             style: span.style,
         }
     }
+
+    /// Returns the screen area occupied by the active loader glyph when the
+    /// status row is currently visible inside the scrolled output panel.
+    fn active_loader_area(
+        output_area: Rect,
+        active_loader_line_index: Option<usize>,
+        final_scroll: u16,
+        status: Status,
+    ) -> Option<Rect> {
+        if !Self::status_uses_tachyon_loader(status) || output_area.width < TACHYON_LOADER_WIDTH {
+            return None;
+        }
+
+        let inner_area = Self::session_output_inner_area(output_area);
+        if inner_area.height == 0 {
+            return None;
+        }
+
+        let status_line_index = active_loader_line_index?;
+        let first_visible_line_index = usize::from(final_scroll);
+        let last_visible_line_index =
+            first_visible_line_index.saturating_add(usize::from(inner_area.height));
+        if status_line_index < first_visible_line_index
+            || status_line_index >= last_visible_line_index
+        {
+            return None;
+        }
+
+        let row_offset = u16::try_from(status_line_index - first_visible_line_index).ok()?;
+
+        Some(Rect::new(
+            inner_area.x,
+            inner_area.y.saturating_add(row_offset),
+            TACHYON_LOADER_WIDTH,
+            1,
+        ))
+    }
+
+    /// Returns the paragraph content area used by the session-output block.
+    fn session_output_inner_area(output_area: Rect) -> Rect {
+        Rect::new(
+            output_area.x,
+            output_area.y.saturating_add(1),
+            output_area.width,
+            output_area.height.saturating_sub(2),
+        )
+    }
+
+    /// Returns whether a status row should receive the Tachyonfx loader
+    /// treatment.
+    fn status_uses_tachyon_loader(status: Status) -> bool {
+        matches!(
+            status,
+            Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging
+        )
+    }
+
+    /// Applies one deterministic Tachyonfx pulse frame to the loader glyph.
+    ///
+    /// Live rendering provides `output_layout_cache` so the Tachyonfx phase is
+    /// retained across frames. Callers without that cache receive only a
+    /// stateless frame paint for the requested spinner offset.
+    fn apply_tachyon_loader_effect(&self, buffer: &mut Buffer, area: Rect, spinner_frame: usize) {
+        if let Some(cache) = self.output_layout_cache {
+            cache.apply_tachyon_loader_effect(&self.session.id, buffer, area, spinner_frame);
+
+            return;
+        }
+
+        // This fallback intentionally does not retain Tachyonfx phase between
+        // renders; it exists for isolated component tests and ad hoc renders.
+        let mut loader_effect = TachyonLoaderEffect::new();
+        loader_effect.apply(buffer, area, spinner_frame);
+    }
 }
 
 impl Component for SessionOutput<'_> {
@@ -934,6 +1156,7 @@ impl Component for SessionOutput<'_> {
     /// component keeps the output border title-free.
     fn render(&self, f: &mut Frame, output_area: Rect) {
         let status = self.session.status;
+        let spinner_frame = Icon::current_spinner_frame();
         let layout = Self::rendered_layout(
             self.session,
             output_area,
@@ -944,7 +1167,7 @@ impl Component for SessionOutput<'_> {
                 review_status_message: self.review_status_message,
                 review_text: self.review_text,
                 session_update_version: self.session_update_version,
-                spinner_frame: Icon::current_spinner_frame(),
+                spinner_frame,
             },
             self.markdown_render_cache,
             self.output_layout_cache,
@@ -954,6 +1177,12 @@ impl Component for SessionOutput<'_> {
             layout::session_output_panel_borders(),
             layout.lines.len(),
             self.scroll_offset,
+        );
+        let active_loader_area = Self::active_loader_area(
+            output_area,
+            layout.active_loader_line_index,
+            final_scroll,
+            status,
         );
 
         let paint_lines = SessionOutput::borrowed_paint_lines(&layout.lines);
@@ -966,6 +1195,10 @@ impl Component for SessionOutput<'_> {
             .scroll((final_scroll, 0));
 
         f.render_widget(paragraph, output_area);
+
+        if let Some(loader_area) = active_loader_area {
+            self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);
+        }
     }
 }
 
@@ -1008,6 +1241,23 @@ mod tests {
         crate::domain::session::tests::SessionFixtureBuilder::new()
             .status(Status::New)
             .build()
+    }
+
+    /// Builds rendered lines without exposing row metadata to tests that only
+    /// assert text content.
+    fn output_lines(
+        session: &Session,
+        output_area: Rect,
+        context: SessionOutputLineContext<'_>,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) -> Vec<Line<'static>> {
+        SessionOutput::output_lines_with_metadata(
+            session,
+            output_area,
+            context,
+            markdown_render_cache,
+        )
+        .lines
     }
 
     #[test]
@@ -1133,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_layout_cache_keys_active_loader_spinner_frame() {
+    fn test_output_layout_cache_reuses_active_loader_across_spinner_frames() {
         // Arrange
         let mut session = session_fixture();
         session.output = "active output".to_string();
@@ -1171,19 +1421,178 @@ mod tests {
             &first_layout.lines,
             &repeated_first_layout.lines
         ));
-        assert!(!Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+        assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
         assert!(
             first_layout
                 .lines
                 .iter()
-                .any(|line| line.to_string().contains(Icon::Spinner(0).as_str()))
+                .any(|line| line.to_string().contains(Icon::TachyonLoader.as_str()))
         );
+    }
+
+    #[test]
+    fn test_output_layout_cache_keeps_tachyon_effect_state_per_session() {
+        // Arrange
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let area = Rect::new(0, 0, TACHYON_LOADER_WIDTH, 1);
+        let mut first_buffer = Buffer::empty(area);
+        let mut second_buffer = Buffer::empty(area);
+        for column in 0..TACHYON_LOADER_WIDTH {
+            first_buffer[(column, 0)]
+                .set_symbol("▌")
+                .set_fg(style::palette::text_muted());
+            second_buffer[(column, 0)]
+                .set_symbol("▌")
+                .set_fg(style::palette::text_muted());
+        }
+        let first_session_id = SessionId::from("first-loader-session");
+        let second_session_id = SessionId::from("second-loader-session");
+
+        // Act
+        output_layout_cache.apply_tachyon_loader_effect(
+            &first_session_id,
+            &mut first_buffer,
+            area,
+            4,
+        );
+        output_layout_cache.apply_tachyon_loader_effect(
+            &second_session_id,
+            &mut second_buffer,
+            area,
+            4,
+        );
+
+        // Assert
+        assert_eq!(output_layout_cache.tachyon_loader_effects.borrow().len(), 2);
         assert!(
-            second_layout
-                .lines
-                .iter()
-                .any(|line| line.to_string().contains(Icon::Spinner(1).as_str()))
+            (0..TACHYON_LOADER_WIDTH)
+                .any(|column| second_buffer[(column, 0)].fg == style::palette::warning())
         );
+    }
+
+    #[test]
+    fn test_output_layout_cache_evicts_tachyon_effects_with_layout_lru() {
+        // Arrange
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let area = Rect::new(0, 0, TACHYON_LOADER_WIDTH, 1);
+
+        // Act
+        for session_index in 0..=SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT {
+            let mut session = session_fixture();
+            session.id = SessionId::from(format!("loader-session-{session_index:02}"));
+            session.output = format!("active output {session_index}");
+            session.status = Status::InProgress;
+
+            output_layout_cache.layout(
+                &session,
+                Rect::new(0, 0, 80, 8),
+                line_context(DoneSessionOutputMode::Summary, None, None, None),
+                Some(&markdown_render_cache),
+            );
+
+            let mut buffer = Buffer::empty(area);
+            for column in 0..TACHYON_LOADER_WIDTH {
+                buffer[(column, 0)].set_symbol("▌");
+            }
+            output_layout_cache.apply_tachyon_loader_effect(&session.id, &mut buffer, area, 4);
+        }
+
+        // Assert
+        let tachyon_loader_effects = output_layout_cache.tachyon_loader_effects.borrow();
+        assert_eq!(
+            tachyon_loader_effects.len(),
+            SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT
+        );
+        assert!(!tachyon_loader_effects.contains_key(&SessionId::from("loader-session-00")));
+        assert!(tachyon_loader_effects.contains_key(&SessionId::from("loader-session-16")));
+    }
+
+    #[test]
+    fn test_output_lines_metadata_marks_status_loader_not_user_text() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = format!("{} pasted transcript glyph", Icon::TachyonLoader);
+        session.status = Status::InProgress;
+        let context = line_context(DoneSessionOutputMode::Summary, None, None, None);
+
+        // Act
+        let output_lines = SessionOutput::output_lines_with_metadata(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            None,
+        );
+
+        // Assert
+        let loader_line_index = output_lines
+            .active_loader_line_index
+            .expect("active loader status row should be tracked");
+        let loader_line = output_lines.lines[loader_line_index].to_string();
+        assert!(loader_line.contains("Working..."));
+        assert!(!loader_line.contains("pasted transcript glyph"));
+    }
+
+    #[test]
+    fn test_active_loader_area_tracks_scrolled_status_row() {
+        // Arrange
+        let output_area = Rect::new(2, 3, 80, 10);
+
+        // Act
+        let loader_area =
+            SessionOutput::active_loader_area(output_area, Some(19), 12, Status::InProgress);
+
+        // Assert
+        assert_eq!(loader_area, Some(Rect::new(2, 11, TACHYON_LOADER_WIDTH, 1)));
+    }
+
+    #[test]
+    fn test_active_loader_area_locates_status_row_before_following_hint() {
+        // Arrange
+        let output_area = Rect::new(0, 0, 80, 8);
+
+        // Act
+        let loader_area =
+            SessionOutput::active_loader_area(output_area, Some(1), 0, Status::InProgress);
+
+        // Assert
+        assert_eq!(loader_area, Some(Rect::new(0, 2, TACHYON_LOADER_WIDTH, 1)));
+    }
+
+    #[test]
+    fn test_active_loader_area_skips_non_tachyon_statuses() {
+        // Arrange
+        let output_area = Rect::new(0, 0, 80, 10);
+
+        // Act
+        let loader_area =
+            SessionOutput::active_loader_area(output_area, Some(0), 0, Status::Queued);
+
+        // Assert
+        assert_eq!(loader_area, None);
+    }
+
+    #[test]
+    fn test_tachyon_loader_effect_emphasizes_loader_cells() {
+        // Arrange
+        let area = Rect::new(0, 0, TACHYON_LOADER_WIDTH, 1);
+        let mut buffer = Buffer::empty(area);
+        for column in 0..TACHYON_LOADER_WIDTH {
+            buffer[(column, 0)]
+                .set_symbol("▌")
+                .set_fg(style::palette::text_muted());
+        }
+
+        // Act
+        let mut loader_effect = TachyonLoaderEffect::new();
+        loader_effect.apply(&mut buffer, area, 4);
+
+        // Assert
+        let foreground_colors = (0..TACHYON_LOADER_WIDTH)
+            .map(|column| buffer[(column, 0)].fg)
+            .collect::<Vec<_>>();
+        assert!(foreground_colors.contains(&style::palette::warning()));
+        assert!(foreground_colors.contains(&style::palette::warning_soft()));
     }
 
     #[test]
@@ -1231,7 +1640,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1257,7 +1666,7 @@ mod tests {
         session.prompt = "First draft\n\nSecond draft".to_string();
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1283,7 +1692,7 @@ mod tests {
         session.is_draft = true;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1310,7 +1719,7 @@ mod tests {
         session.status = Status::Done;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Output, None, None, None),
@@ -1338,7 +1747,7 @@ mod tests {
         let assisted_review = "## Review\n\n- Focused finding";
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(
@@ -1369,7 +1778,7 @@ mod tests {
         let review_status_message = "Review assist unavailable: empty provider response";
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(
@@ -1400,7 +1809,7 @@ mod tests {
         let review_status_message = "# Review *failed* for `tool`";
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(
@@ -1430,7 +1839,7 @@ mod tests {
         session.status = Status::Review;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1460,7 +1869,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
@@ -1500,7 +1909,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
@@ -1539,7 +1948,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1578,7 +1987,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             SessionOutputLineContext {
@@ -1612,7 +2021,7 @@ mod tests {
         session.status = Status::Review;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1640,7 +2049,7 @@ mod tests {
         session.output = "streamed output".to_string();
         session.summary = Some(summary_fixture());
         session.status = Status::Review;
-        let review_lines = SessionOutput::output_lines(
+        let review_lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1660,7 +2069,7 @@ mod tests {
 
         // Act
         let done_output_text = SessionOutput::output_text(&session, DoneSessionOutputMode::Summary);
-        let done_lines = SessionOutput::output_lines(
+        let done_lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 8),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1696,7 +2105,7 @@ mod tests {
         let assisted_text = "## Review\n\n- Focused finding";
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(
@@ -1727,7 +2136,7 @@ mod tests {
         session.status = Status::Canceled;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1752,7 +2161,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let lines = SessionOutput::output_lines(
+        let lines = output_lines(
             &session,
             Rect::new(0, 0, 80, 5),
             line_context(DoneSessionOutputMode::Summary, None, None, None),
@@ -1766,5 +2175,6 @@ mod tests {
 
         // Assert
         assert!(text.contains("Working..."));
+        assert!(text.contains(Icon::TachyonLoader.as_str()));
     }
 }

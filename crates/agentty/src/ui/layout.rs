@@ -586,11 +586,14 @@ pub fn session_output_done_toggle_line(
 
 /// Builds the active-status line shown at the end of an in-flight session
 /// transcript.
+///
+/// The leading glyph is stable text because the session output component
+/// applies the Tachyonfx loader animation directly to those buffer cells after
+/// the paragraph is rendered.
 pub fn session_output_status_line(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
-    spinner_frame: usize,
 ) -> Option<Line<'static>> {
     if !matches!(
         status,
@@ -607,10 +610,7 @@ pub fn session_output_status_line(
         session_output_status_message(status, active_progress, review_status_message);
 
     Some(Line::from(vec![Span::styled(
-        format!(
-            "{} {status_message}",
-            session_output_status_icon(status, spinner_frame)
-        ),
+        format!("{} {status_message}", session_output_status_icon(status)),
         Style::default().fg(style::status_color(status)),
     )]))
 }
@@ -1129,10 +1129,10 @@ fn session_output_status_message(
 }
 
 /// Returns the status indicator icon used for inline session-output messages.
-fn session_output_status_icon(status: Status, spinner_frame: usize) -> Icon {
+fn session_output_status_icon(status: Status) -> Icon {
     match status {
         Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
-            Icon::Spinner(spinner_frame)
+            Icon::TachyonLoader
         }
         Status::Queued
         | Status::New
@@ -2204,13 +2204,9 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(
-            Status::InProgress,
-            Some("Inspecting changed files"),
-            None,
-            0,
-        )
-        .expect("in-progress sessions should render a status line");
+        let status_line =
+            session_output_status_line(Status::InProgress, Some("Inspecting changed files"), None)
+                .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(
@@ -2229,7 +2225,6 @@ mod tests {
             Status::AgentReview,
             None,
             Some("Reviewing changes with gpt-5.4"),
-            0,
         )
         .expect("agent-review sessions should render a status line");
 
@@ -2246,7 +2241,7 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::Merging, None, None, 0)
+        let status_line = session_output_status_line(Status::Merging, None, None)
             .expect("merging sessions should render a status line");
 
         // Assert

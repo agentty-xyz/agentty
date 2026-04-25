@@ -280,10 +280,10 @@ flowchart TB
   class done,canceled terminal
 ```
 
-While a session is **InProgress**, Agentty keeps the `Thinking...` status badge
-and may update its transient loader text from provider thought or tool-status
-events until the turn completes. The chat transcript itself is updated only
-after the final turn result is parsed and persisted.
+While a session is **InProgress**, Agentty keeps an animated loader row in the
+session output panel and may update its transient loader text from provider
+thought or tool-status events until the turn completes. The chat transcript
+itself is updated only after the final turn result is parsed and persisted.
 
 The session-chat timer measures only cumulative **active work** across
 `InProgress` intervals. That differs from `/stats`, whose `Session Time`

@@ -279,8 +279,8 @@ The exact session-chat render path is:
    or fails, and finally adds the loader row or `t` toggle hint when the
    current status requires it.
 1. `SessionOutput::render()` writes the final `Line` list into a `ratatui`
-   `Paragraph`, which is the exact widget printed in the session chat output
-   area.
+   `Paragraph`, then applies a Tachyonfx pulse over the active loader glyph
+   cells when the status row is visible in the session chat output area.
 
 ### Print Timing
 
@@ -403,7 +403,9 @@ stays readable on narrow screens.
 #### In-progress loader
 
 - Comes from: `active_progress`
-- Prints: while a turn is running in `InProgress`.
+- Prints: while a turn is running in `InProgress`; the loader glyph is painted
+  as stable text and animated by a Tachyonfx buffer effect after paragraph
+  rendering.
 - Hidden or removed: removed when the turn finishes or the session leaves an
   active status.
 

@@ -9,6 +9,7 @@ use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
+use agentty::test_support;
 use testty::assertion;
 use testty::region::Region;
 
@@ -16,6 +17,7 @@ use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
+const LOADER_SESSION_ID: &str = "loader-session-0001";
 
 /// Stable id for the seeded running session used by stop-turn tests.
 const RUNNING_STOP_SESSION_ID: &str = "running-stop-0001";
@@ -169,6 +171,46 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
 
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
+
+    Ok(())
+}
+
+/// Seeds one in-progress session so the session view can show the active
+/// Tachyonfx loader without launching a live agent backend.
+fn seed_in_progress_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .await?;
+
+        database.touch_project_last_opened(project_id).await?;
+        database
+            .insert_session(
+                LOADER_SESSION_ID,
+                "gpt-5.4",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await?;
+        database
+            .update_session_title(LOADER_SESSION_ID, "Loader session")
+            .await?;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    std::fs::create_dir_all(test_support::session_folder(
+        &env.agentty_root.join("wt"),
+        LOADER_SESSION_ID,
+    ))?;
 
     Ok(())
 }
@@ -434,6 +476,35 @@ fn session_open_and_return_to_list() -> E2eResult {
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "test", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that active session output uses the Tachyonfx loader glyph instead
+/// of dot-based working copy.
+#[test]
+fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_active_loader")
+        .setup(seed_in_progress_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "session_active_loader",
+                        "Active session view with Tachyonfx loader",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "▌▌▌ Working...", &full);
             },
         )?;
 

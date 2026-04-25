@@ -2,6 +2,10 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Stable loader glyph painted by the Tachyonfx session-output effect.
+pub(crate) const TACHYON_LOADER_GLYPH: &str = "▌▌▌";
+/// Display width of [`TACHYON_LOADER_GLYPH`] in terminal cells.
+pub(crate) const TACHYON_LOADER_WIDTH: u16 = 3;
 
 /// A collection of icons used throughout the terminal UI.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -18,6 +22,8 @@ pub enum Icon {
     GitBranch,
     /// A pending status symbol (·).
     Pending,
+    /// A compact loader symbol animated by Tachyonfx after render.
+    TachyonLoader,
     /// A spinner symbol frame.
     Spinner(usize),
     /// A warning symbol (!).
@@ -55,6 +61,7 @@ impl Icon {
             Icon::Cross => "✗",
             Icon::GitBranch => "●",
             Icon::Pending => "·",
+            Icon::TachyonLoader => TACHYON_LOADER_GLYPH,
             Icon::Spinner(frame) => SPINNER_FRAMES[frame % SPINNER_FRAMES.len()],
             Icon::Warn => "!",
         }
@@ -80,6 +87,7 @@ mod tests {
         assert_eq!(Icon::Cross.as_str(), "✗");
         assert_eq!(Icon::GitBranch.as_str(), "●");
         assert_eq!(Icon::Pending.as_str(), "·");
+        assert_eq!(Icon::TachyonLoader.as_str(), TACHYON_LOADER_GLYPH);
         assert_eq!(Icon::Warn.as_str(), "!");
     }
 
@@ -125,6 +133,7 @@ mod tests {
             Icon::Cross,
             Icon::GitBranch,
             Icon::Pending,
+            Icon::TachyonLoader,
             Icon::Spinner(3),
             Icon::Warn,
         ];

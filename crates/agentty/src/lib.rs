@@ -23,6 +23,10 @@ pub mod ui;
 
 pub mod runtime;
 
+/// Hidden support APIs used by Agentty's integration tests.
+#[doc(hidden)]
+pub mod test_support;
+
 // Re-exports for backward compatibility and convenience
 pub use domain::agent;
 pub use infra::{db, git, version};
