@@ -12,10 +12,11 @@ Keep size budgeting in the skill workflow only; do not render `### Size` section
 Require every roadmap step heading title to use the exact format `[UUID] Stream: Title`.
 Require `Ready Now` steps to start with `#### Assignee` using `@username`.
 Keep validation and documentation attached to each user-facing slice through the task's `#### Tests` and `#### Docs` sections. Do not split tests or docs into standalone roadmap cards.
-Promote `Queued Next` or `Parked` work into `Ready Now` through `skills/implementation-plan/references/promote-step.md`, and set the assignee in that same roadmap edit by either naming an explicit `@username` or defaulting to the current promoter resolved through `gh api user --jq .login`.
+Promote `Queued Next` or `Parked` work into `Ready Now` through `skills/implementation-plan/references/promote-step.md`, and set the assignee in that same roadmap edit by either naming an explicit `@username` or defaulting to the current authenticated forge user after confirming which forge account owns the active project.
 Run `cargo run -q -p ag-xtask -- roadmap context-digest` before promoting queued or parked work into `Ready Now`.
 When a `Ready Now` step is completed and `Queued Next` still has items, promote the next queued card into `Ready Now` instead of leaving the slot open.
 Keep `Ready Now` steps to `1..=3` implementation checklist items under `#### Substeps`; when a slice needs more than that or spans multiple peer surfaces, split the follow-up into `Queued Next` instead of widening the active step.
+Keep `Ready Now` to `2..=5` active implementation items for agent-backed two- or three-person development.
 
 ## Planning Surface
 

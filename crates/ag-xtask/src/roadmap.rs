@@ -5,8 +5,13 @@ use std::process::Command;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use uuid::Uuid;
 
+/// Minimum active implementation items expected for normal team execution.
+const READY_NOW_MIN_STEPS: usize = 2;
+/// Maximum active implementation items allowed for agent-backed team execution.
 const READY_NOW_MAX_STEPS: usize = 5;
+/// Repository-relative roadmap path validated by the roadmap linter.
 const ROADMAP_PATH: &str = "docs/plan/roadmap.md";
+/// Required top-level sections for the canonical roadmap document.
 const REQUIRED_SECTION_TITLES: [&str; 9] = [
     "Current State Snapshot",
     "Active Streams",
@@ -32,7 +37,8 @@ pub(crate) fn lint() -> Result<(), String> {
     validate_unique_ids(&roadmap)?;
     validate_ready_now(&roadmap)?;
     validate_candidate_queue(&roadmap.queued_next, QueueKind::QueuedNext)?;
-    validate_candidate_queue(&roadmap.parked, QueueKind::Parked)
+    validate_candidate_queue(&roadmap.parked, QueueKind::Parked)?;
+    validate_execution_order(&roadmap)
 }
 
 /// Builds a context digest from the roadmap and read-only git state.
@@ -84,9 +90,15 @@ impl QueueKind {
 
 /// Parsed representation of the roadmap file.
 struct RoadmapDocument {
+    /// Raw `Ready Now Execution Order` section body used for diagram linting.
+    execution_order: String,
+    /// Top-level `##` section titles in source order.
     section_titles: Vec<String>,
+    /// Fully expanded active implementation items.
     ready_now: Vec<RoadmapItem>,
+    /// Compact next-up promotion cards.
     queued_next: Vec<RoadmapItem>,
+    /// Compact strategic backlog cards.
     parked: Vec<RoadmapItem>,
 }
 
@@ -111,8 +123,10 @@ impl RoadmapDocument {
             QueueKind::QueuedNext.section_title(),
         )?)?;
         let parked = parse_queue(section_body(&sections, QueueKind::Parked.section_title())?)?;
+        let execution_order = section_body(&sections, "Ready Now Execution Order")?.to_string();
 
         Ok(Self {
+            execution_order,
             section_titles,
             ready_now,
             queued_next,
@@ -464,6 +478,14 @@ fn validate_unique_ids(roadmap: &RoadmapDocument) -> Result<(), String> {
 /// Returns an error when one active step violates the canonical `Ready Now`
 /// template.
 fn validate_ready_now(roadmap: &RoadmapDocument) -> Result<(), String> {
+    if roadmap.ready_now.len() < READY_NOW_MIN_STEPS {
+        return Err(format!(
+            "`## Ready Now` must contain at least {READY_NOW_MIN_STEPS} steps for normal team \
+             execution, found {}",
+            roadmap.ready_now.len()
+        ));
+    }
+
     if roadmap.ready_now.len() > READY_NOW_MAX_STEPS {
         return Err(format!(
             "`## Ready Now` may contain at most {READY_NOW_MAX_STEPS} steps, found {}",
@@ -527,19 +549,19 @@ fn validate_subsection_order(item: &RoadmapItem, queue: QueueKind) -> Result<(),
 /// Validates the `#### Assignee` value for one `Ready Now` item.
 ///
 /// # Errors
-/// Returns an error when the assignee is not one of the accepted formats.
+/// Returns an error when the assignee is not a concrete `@username` value.
 fn validate_ready_assignee(item: &RoadmapItem) -> Result<(), String> {
     let assignee = item
         .subsection_body("Assignee")
         .ok_or_else(|| format!("`{}` is missing `#### Assignee`", item.heading()))?;
     let assignee = trim_inline_code(assignee);
 
-    if assignee == "No assignee" || is_github_handle(assignee) || is_agent_session(assignee) {
+    if is_user_handle(assignee) {
         return Ok(());
     }
 
     Err(format!(
-        "`{}` has invalid assignee `{assignee}`; expected `No assignee`, `@handle`, or `wt/<hash>`",
+        "`{}` has invalid assignee `{assignee}`; expected `@username`",
         item.heading()
     ))
 }
@@ -547,7 +569,7 @@ fn validate_ready_assignee(item: &RoadmapItem) -> Result<(), String> {
 /// Validates the `#### Substeps` checklist count for one `Ready Now` item.
 ///
 /// # Errors
-/// Returns an error when the number of substeps falls outside `2..=5`.
+/// Returns an error when the number of substeps falls outside `1..=3`.
 fn validate_ready_substeps(item: &RoadmapItem) -> Result<(), String> {
     let substeps = item
         .subsection_body("Substeps")
@@ -557,14 +579,33 @@ fn validate_ready_substeps(item: &RoadmapItem) -> Result<(), String> {
         .filter(|line| is_task_list_item(line.trim_start()))
         .count();
 
-    if (2..=5).contains(&checklist_count) {
+    if (1..=3).contains(&checklist_count) {
         return Ok(());
     }
 
     Err(format!(
-        "`{}` must contain `2..=5` `#### Substeps` checklist items, found {checklist_count}",
+        "`{}` must contain `1..=3` `#### Substeps` checklist items, found {checklist_count}",
         item.heading()
     ))
+}
+
+/// Validates that the execution diagram contains at least one dependency edge.
+///
+/// # Errors
+/// Returns an error when the diagram is missing or only lists disconnected
+/// nodes.
+fn validate_execution_order(roadmap: &RoadmapDocument) -> Result<(), String> {
+    if roadmap.execution_order.contains("-->")
+        || roadmap.execution_order.contains("-.")
+        || roadmap.execution_order.contains("==>")
+    {
+        return Ok(());
+    }
+
+    Err(
+        "`## Ready Now Execution Order` must show at least one dependency or queued-follow-up edge"
+            .to_string(),
+    )
 }
 
 /// Returns whether one markdown line is a checked or unchecked task item.
@@ -642,7 +683,7 @@ fn render_item_lines(items: &[RoadmapItem], include_assignee: bool) -> Vec<Strin
             if include_assignee {
                 let assignee = item
                     .subsection_body("Assignee")
-                    .map_or("No assignee", trim_inline_code);
+                    .map_or("Unassigned", trim_inline_code);
 
                 return format!(
                     "- [{}] {}: {} ({assignee})",
@@ -697,8 +738,8 @@ fn trim_inline_code(value: &str) -> &str {
     trimmed
 }
 
-/// Returns whether a string is a simple GitHub-style handle.
-fn is_github_handle(value: &str) -> bool {
+/// Returns whether a string is a simple forge username handle.
+fn is_user_handle(value: &str) -> bool {
     let Some(handle) = value.strip_prefix('@') else {
         return false;
     };
@@ -707,15 +748,6 @@ fn is_github_handle(value: &str) -> bool {
         && handle.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'
         })
-}
-
-/// Returns whether a string is an agent session identifier.
-fn is_agent_session(value: &str) -> bool {
-    let Some(suffix) = value.strip_prefix("wt/") else {
-        return false;
-    };
-
-    !suffix.is_empty()
 }
 
 /// Extracts changed paths from `git status --short` output.
@@ -777,7 +809,7 @@ Snapshot.
 
 #### Assignee
 
-`No assignee`
+`@minev-dev`
 
 #### Why now
 
@@ -800,11 +832,39 @@ The user sees persisted tasks.
 
 - [ ] Update the architecture notes.
 
+### [b3c1d3e5-8f90-4a12-9b34-5c6789012def] Workflow: Continue terminal sessions
+
+#### Assignee
+
+`@andagaev`
+
+#### Why now
+
+Need a continuation slice.
+
+#### Usable outcome
+
+The user can continue closed sessions.
+
+#### Substeps
+
+- [ ] **Seed the composer.** Reuse saved session context.
+
+#### Tests
+
+- [ ] Add continuation coverage.
+
+#### Docs
+
+- [ ] Update workflow docs.
+
 ## Ready Now Execution Order
 
 ```mermaid
 flowchart TD
     A["[cbf025d6] Workflow: Persist and render emitted follow-up tasks"]
+    B["[b3c1d3e5] Workflow: Continue terminal sessions"]
+    A -. parallel .-> B
 ```
 
 ## Queued Next
@@ -860,7 +920,8 @@ Promote when product work slows down.
             .and_then(|()| validate_unique_ids(&roadmap))
             .and_then(|()| validate_ready_now(&roadmap))
             .and_then(|()| validate_candidate_queue(&roadmap.queued_next, QueueKind::QueuedNext))
-            .and_then(|()| validate_candidate_queue(&roadmap.parked, QueueKind::Parked));
+            .and_then(|()| validate_candidate_queue(&roadmap.parked, QueueKind::Parked))
+            .and_then(|()| validate_execution_order(&roadmap));
 
         // Assert
         assert!(result.is_ok(), "{result:?}");
@@ -869,7 +930,7 @@ Promote when product work slows down.
     #[test]
     fn lint_rejects_invalid_assignee_format() {
         // Arrange
-        let roadmap = roadmap_fixture().replace("`No assignee`", "`andagaev`");
+        let roadmap = roadmap_fixture().replace("`@minev-dev`", "`minev-dev`");
         let roadmap = RoadmapDocument::parse(&roadmap).expect("parse");
 
         // Act
@@ -879,6 +940,51 @@ Promote when product work slows down.
         assert!(result.is_err());
         let error = result.expect_err("expected invalid assignee error");
         assert!(error.contains("invalid assignee"), "{error}");
+    }
+
+    #[test]
+    fn lint_allows_one_assignee_to_own_multiple_ready_now_items() {
+        // Arrange
+        let extra_step = r"
+### [9f4402cd-beff-4b4d-b9f7-00efd834249b] Workflow: Review continued sessions
+
+#### Assignee
+
+`@minev-dev`
+
+#### Why now
+
+Need a review slice.
+
+#### Usable outcome
+
+The user can review continued sessions.
+
+#### Substeps
+
+- [ ] **Render the source link.** Show the session that produced the continuation.
+
+#### Tests
+
+- [ ] Add source-link coverage.
+
+#### Docs
+
+- [ ] Update workflow docs.
+";
+        let roadmap = roadmap_fixture()
+            .replace("`@andagaev`", "`@minev-dev`")
+            .replace(
+                "## Ready Now Execution Order",
+                &format!("{extra_step}\n## Ready Now Execution Order"),
+            );
+        let roadmap = RoadmapDocument::parse(&roadmap).expect("parse");
+
+        // Act
+        let result = validate_ready_now(&roadmap);
+
+        // Assert
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]
@@ -903,7 +1009,7 @@ Promote when product work slows down.
 
 #### Assignee
 
-`No assignee`
+`@assignee`
 
 #### Why now
 
@@ -933,12 +1039,13 @@ One usable outcome.
                 base_step
                     .replace("11111111-1111-4111-8111-111111111111", &id)
                     .replace("First ready step", &format!("Ready step {index}"))
+                    .replace("@assignee", &format!("@assignee-{index}"))
             })
             .collect::<Vec<_>>()
             .join("\n");
         roadmap = roadmap.replacen(
             "### [cbf025d6-2d29-4be7-b393-4ed3092ae66d] Workflow: Persist and render emitted \
-             follow-up tasks\n\n#### Assignee\n\n`No assignee`\n\n#### Why now\n\nNeed a base \
+             follow-up tasks\n\n#### Assignee\n\n`@minev-dev`\n\n#### Why now\n\nNeed a base \
              slice.\n\n#### Usable outcome\n\nThe user sees persisted tasks.\n\n#### \
              Substeps\n\n- [ ] **Extend the protocol.** Update the protocol shape.\n- [ ] **Store \
              the tasks.** Persist emitted tasks.\n\n#### Tests\n\n- [ ] Add protocol and \
@@ -958,10 +1065,52 @@ One usable outcome.
     }
 
     #[test]
+    fn lint_rejects_too_few_ready_now_steps() {
+        // Arrange
+        let roadmap = roadmap_fixture().replacen(
+            "\n### [b3c1d3e5-8f90-4a12-9b34-5c6789012def] Workflow: Continue terminal \
+             sessions\n\n#### Assignee\n\n`@andagaev`\n\n#### Why now\n\nNeed a continuation \
+             slice.\n\n#### Usable outcome\n\nThe user can continue closed sessions.\n\n#### \
+             Substeps\n\n- [ ] **Seed the composer.** Reuse saved session context.\n\n#### \
+             Tests\n\n- [ ] Add continuation coverage.\n\n#### Docs\n\n- [ ] Update workflow \
+             docs.\n",
+            "",
+            1,
+        );
+        let roadmap = RoadmapDocument::parse(&roadmap).expect("parse");
+
+        // Act
+        let result = validate_ready_now(&roadmap);
+
+        // Assert
+        assert!(result.is_err());
+        let error = result.expect_err("expected ready-now underflow");
+        assert!(error.contains("at least"), "{error}");
+    }
+
+    #[test]
+    fn lint_rejects_disconnected_execution_order_diagram() {
+        // Arrange
+        let roadmap = roadmap_fixture().replace("    A -. parallel .-> B", "    B");
+        let roadmap = RoadmapDocument::parse(&roadmap).expect("parse");
+
+        // Act
+        let result = validate_execution_order(&roadmap);
+
+        // Assert
+        assert!(result.is_err());
+        let error = result.expect_err("expected disconnected diagram error");
+        assert!(
+            error.contains("dependency or queued-follow-up edge"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn parser_accepts_trailing_hash_headings() {
         // Arrange
         let roadmap = roadmap_fixture()
-            .replace("## Ready Now", "  ## Ready Now ##")
+            .replacen("## Ready Now", "  ## Ready Now ##", 1)
             .replace(
                 "### [cbf025d6-2d29-4be7-b393-4ed3092ae66d] Workflow: Persist and render emitted \
                  follow-up tasks",
@@ -1003,7 +1152,7 @@ One usable outcome.
 
         // Assert
         assert!(digest.contains("wt/test-branch"), "{digest}");
-        assert!(digest.contains("Ready Now: 1"), "{digest}");
+        assert!(digest.contains("Ready Now: 2"), "{digest}");
         assert!(digest.contains("Queued Next: 1"), "{digest}");
         assert!(digest.contains("Parked: 1"), "{digest}");
         assert!(digest.contains("docs"), "{digest}");

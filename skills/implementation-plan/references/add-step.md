@@ -16,6 +16,7 @@ Insert one new roadmap item into the correct queue in `docs/plan/roadmap.md` usi
 1. For `Queued Next` or `Parked`, prepare one stream name, one step title, one `#### Outcome` sentence, one `#### Promote when` sentence, and one `#### Depends on` value.
 1. Insert the new item using the canonical layout from `skills/implementation-plan/SKILL.md`, give it a fresh UUID in the `[UUID] Stream: Title` heading, and place it where the execution window or promotion queue should reflect the new work.
 1. Re-read the inserted item and then manually reconcile any roadmap sections outside that queue that the new work affects.
+1. If the item was added to `Ready Now`, verify the active window remains within the normal `2..=5` implementation-item capacity.
 
 ## Guardrails
 
@@ -23,6 +24,6 @@ Insert one new roadmap item into the correct queue in `docs/plan/roadmap.md` usi
 - Treat `500` changed lines as the hard ceiling, but keep new `Ready Now` steps estimated at `350` changed lines or less so the implementation still has room for test, wiring, and docs churn.
 - Keep new `Ready Now` steps at `XL` or smaller and split them before insertion if they would exceed the skill's size budget.
 - Keep new `Ready Now` steps to `1..=3` implementation bullets under `#### Substeps`; if the slice needs a fourth implementation bullet, queue the follow-up instead of widening the step.
-- New `Ready Now` steps must include a concrete `@username` assignee. If the request does not name one, resolve the current promoter with `gh api user --jq .login` and use that `@<login>` value.
+- New `Ready Now` steps must include a concrete `@username` assignee. If the request does not name one, resolve the current authenticated forge user for the active project and use that `@username` value.
 - Do not add standalone roadmap cards for tests, docs, cleanup, or similar internal work; keep that follow-through inside the user-facing slice it supports.
 - Prefer adding backlog work to `## Queued Next` or `## Parked` instead of expanding `## Ready Now` beyond `5` items.

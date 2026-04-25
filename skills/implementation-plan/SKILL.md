@@ -47,8 +47,9 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Keep `Ready Now` detailed. Render `Assignee`, `Why now`, `Usable outcome`, `Substeps`, `Tests`, and `Docs` as their own subtopics on separate lines instead of inline bold labels.
    - Keep `Queued Next` and `Parked` intentionally compact. Render `Outcome`, `Promote when`, and `Depends on` as their only subtopics.
    - Render `#### Assignee` as the first subsection in every `Ready Now` step and store the owner there in `@username` format.
-   - When promoting work into `Ready Now`, resolve the GitHub login with `gh api user --jq .login` first and either write an explicit `@username` chosen during promotion or default to the current promoter's `@<login>` instead of guessing from local git config or the OS username.
+   - When promoting work into `Ready Now`, prefer an explicit `@username` chosen by the user or team. If no owner is named, resolve the current authenticated forge user for the active project and use that `@username` instead of guessing from local git config or the OS username.
    - Until lease automation exists, only `Ready Now` items carry assignees. Keep `Queued Next` and `Parked` unassigned, and assign ownership as part of promotion instead of using a separate claim-only edit.
+   - Keep `Ready Now` to `2..=5` active implementation items for agent-backed two- or three-person development.
    - Use size budgeting during roadmap creation, not after the fact. Before finalizing the roadmap, estimate the changed-line scope for each step, split oversized work into additional steps, and keep those size estimates in planning notes or reviewer reasoning rather than rendering a `#### Size` block in `docs/plan/` files.
    - Treat `500` changed lines as the hard implementation ceiling, not the planning target. Plan each `Ready Now` step with headroom and split it before handoff when the estimate is above `350` changed lines so routine implementation drift does not push the real diff over `500`.
    - Estimate size by summing the likely changes across production code, tests, and docs instead of counting only the main behavior edit. Use the higher-risk estimate when one slice spans multiple module families or introduces a new boundary plus its first consumer.
@@ -87,7 +88,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Ensure later promotions extend that working baseline and keep validation/docs tied to the same ready step as the behavior change.
    - When a `Ready Now` step is completed and `Queued Next` is not empty, promote the highest-priority queued card into `Ready Now` instead of leaving the execution window short.
    - Do not reserve testing or documentation for a final catch-all step; if a ready step changes behavior, it owns the validation and docs updates for that change.
-   - Keep the single roadmap diagram aligned with `Ready Now` and use it to show which active streams can run in parallel.
+   - Keep the single roadmap diagram aligned with `Ready Now` and use it to show active lanes, queued follow-ups, and which streams can run in parallel.
 
 1. **Quality check before handing off**
 
@@ -97,11 +98,12 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Verify every `Ready Now` step was split using the size table below before handoff, even though the resulting plan should not render a `#### Size` section.
    - Verify every `Ready Now` step has at least `150` changed lines of buffer beneath the `500`-line hard ceiling; split anything estimated above `350`.
    - Verify no `Ready Now` step is larger than `XL`; split oversized work before handoff.
+   - Verify `Ready Now` has `2..=5` active implementation items.
    - Verify no `Ready Now` step has more than `3` implementation checklist items under `#### Substeps`; split crowded steps before handoff.
    - Verify every item heading uses the exact `[UUID] Stream: Title` format and that the UUID value is valid.
    - Verify every `Ready Now` step starts with explicit `#### Assignee` before `#### Why now`.
    - Verify every `#### Assignee` value uses `@username`.
-   - Verify every `Ready Now` step has a concrete `@username` assignee and that any assignee defaulted during promotion was derived from `gh api user --jq .login`.
+   - Verify every `Ready Now` step has a concrete `@username` assignee and that any assignee defaulted during promotion was derived from the authenticated forge user for the active project.
    - Verify every `Ready Now` step has explicit `#### Tests` and `#### Docs` sections tied to the same user-facing slice.
    - Verify no roadmap item is a standalone test-only, docs-only, cleanup-only, or other internal-only card.
    - Verify every `Queued Next` or `Parked` card uses only `#### Outcome`, `#### Promote when`, and `#### Depends on`.
@@ -109,7 +111,7 @@ This skill is the source of truth for roadmap structure and execution-planning r
    - Reject ready steps that bundle multiple acceptance stories behind one title, one `#### Usable outcome`, or one combined validation block.
    - Reject ready steps whose estimated size assumes best-case edits across several module families without contingency for test churn, router wiring, or docs updates.
    - Reject plans that defer most validation or docs to a separate roadmap slice instead of keeping them attached to the same behavior change.
-   - Verify the roadmap uses one shared diagram for `Ready Now`.
+   - Verify the roadmap uses one shared diagram for `Ready Now` that shows active lanes and meaningful dependency or queued-follow-up edges.
    - Verify no implemented step remains in `Ready Now`; completed work belongs in snapshot context or should disappear entirely.
    - Verify that completing a `Ready Now` step would trigger promotion of another queued card whenever `Queued Next` still has work.
    - When this skill changed, verify the roadmap and active planning inventory in `docs/plan/` were reviewed and updated to match the new rules unless the user explicitly excluded them.
@@ -219,7 +221,7 @@ flowchart TD
 
 ## Status Maintenance Rule
 
-- Keep no more than `5` items in `## Ready Now`.
+- Keep `2..=5` items in `## Ready Now` for agent-backed two- or three-person development.
 - Keep only `Ready Now` items fully expanded.
 - Keep `## Queued Next` and `## Parked` intentionally compact.
 - Keep roadmap items centered on user-facing outcomes; fold tests, docs, cleanup, and similar internal follow-through into the supporting step instead of tracking them as standalone cards.
