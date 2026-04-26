@@ -9,6 +9,7 @@
 //! ```
 
 pub use crate::assertion;
+pub use crate::assertion::{AssertionFailure, Expected, MatchResult};
 pub use crate::frame::{CellColor, CellStyle, TerminalFrame};
 pub use crate::journey::Journey;
 pub use crate::locator::MatchedSpan;

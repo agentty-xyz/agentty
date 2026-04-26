@@ -57,6 +57,9 @@ per-turn digest of used skills, executed commands, or changed-file CRUD after ea
   interrupted-run recovery.
 - `Session Output`: per-turn execution digests that summarize the commands, changed
   files, and skill activity users need to review directly in the chat transcript.
+- `Testing`: testty's published assertion surface for downstream test authors, covering
+  composable `match_*` cores, predicate-driven waiters, soft accumulators, and richer
+  structured-failure rendering in the proof report.
 
 ## Planning Model
 
@@ -193,6 +196,63 @@ delay, including when the message carries an image attachment.
   that queue mutations emit `AppEvent::SessionUpdated` rather than
   `AppEvent::RefreshSessions`.
 
+### [def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions
+
+#### Assignee
+
+`@andagaev`
+
+#### Why now
+
+The published `testty::assertion` API panics on first miss with no Result-returning
+siblings, so consumers cannot compose, retry, soft-batch, or surface structured failures
+into the proof report without wrapping calls in `catch_unwind`. Returning failures as
+data is the foundation that unblocks the queued `eventually` waiter, `SoftAssertions`
+accumulator, richer HTML diff rendering, and the agentty E2E adoption that finally
+retires fixed `Step::sleep` waits.
+
+#### Usable outcome
+
+testty consumers can call new `match_*` siblings of every existing `assertion::assert_*`
+that return `Result<(), Box<AssertionFailure>>` (aliased as `MatchResult`) carrying the
+same structured context the current panic strings carry, while existing `assert_*` calls
+keep panicking with byte-compatible messages so the published surface stays additive and
+does not require a major version bump.
+
+#### Substeps
+
+- [ ] **Add `AssertionFailure` data type and Result-returning `match_*` core to
+  `crates/testty/src/assertion.rs`.** Introduce a public `AssertionFailure` struct
+  carrying the same context the current panic strings carry (needle, region,
+  pre-formatted region/frame excerpt, matched spans, expected color/style/count) and a
+  `MatchResult = Result<(), Box<AssertionFailure>>` alias. Add `match_*` siblings for
+  every existing `assert_*` (`match_text_in_region`, `match_not_visible`,
+  `match_match_count`, `match_text_has_fg_color`, `match_text_has_bg_color`,
+  `match_span_is_highlighted`, `match_span_is_not_highlighted`) and re-implement each
+  `assert_*` as a thin panic wrapper that delegates to its `match_*` sibling so the
+  existing panic-only surface stays byte-compatible.
+- [ ] **Re-export `AssertionFailure` and `MatchResult` from
+  `crates/testty/src/prelude.rs` and lock the new surface in
+  `crates/testty/tests/public_api.rs`.** Match the existing `MatchedSpan`/`Region`
+  re-export pattern, add a public_api tripwire that constructs/destructures
+  `AssertionFailure` and references one `match_*` symbol so future renames break the
+  build before publication.
+
+#### Tests
+
+- [ ] Extend the existing `mod tests` block at the bottom of
+  `crates/testty/src/assertion.rs` with unit tests for each `match_*` covering the `Ok`
+  path and the structured `Err` path (asserting the populated `AssertionFailure`
+  fields), and keep the existing `#[should_panic]` tests so the panic-wrapper
+  equivalence stays under coverage.
+
+#### Docs
+
+- [ ] Update `crates/testty/README.md` and `crates/testty/CLAUDE.md` with a
+  "Result-returning matchers" section that documents the layered `match_*`/`assert_*`
+  pairing, when to pick each, and the additive-vs-breaking change rule that keeps the
+  new surface from forcing a major version bump.
+
 ## Ready Now Execution Order
 
 ```mermaid
@@ -206,6 +266,20 @@ flowchart TD
     subgraph WorkflowLane["Workflow - @andagaev"]
         W2["[b8c92f4d] Persist queued messages"]
         W4["[3f7c4a9b] Render queued messages without delay"]
+    end
+
+    subgraph TestingLane["Testing - @andagaev"]
+        T1["[def193a2] Matcher Result core"]
+        T2["[a9ef45e2] SoftAssertions accumulator"]
+        T3["[6523822e] eventually waiter"]
+        T4["[ca40b36d] Recipe match_* siblings"]
+        T5["[07cce0e7] HTML structured failure diff"]
+        T6["[c821816d] agentty fixed-sleep removal"]
+        T1 -. queued follow-up .-> T2
+        T1 -. queued follow-up .-> T3
+        T1 -. queued follow-up .-> T4
+        T2 -. queued follow-up .-> T5
+        T3 -. queued follow-up .-> T6
     end
 
     subgraph LaterLanes["Queued independent streams"]
@@ -400,6 +474,104 @@ is in place and Codex is the next provider chosen for activity-summary rollout.
 #### Depends on
 
 `[29d3d82d-d1e5-452b-a93c-e873f89a8bba] Session Output: Render git-derived changed-file summaries`
+
+### [a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testing: SoftAssertions accumulator for batched test failures
+
+#### Outcome
+
+Test authors can collect multiple `match_*` checks against one captured frame through a
+`SoftAssertions` accumulator that records every `AssertionFailure` and panics once at
+scope end with all messages, and the accumulated failures attach to the active
+`ProofCapture::assertions` so the HTML proof report can show all problems for a single
+capture instead of just the first.
+
+#### Promote when
+
+Promote when
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+lands and the `match_*`/`AssertionFailure` surface is stable.
+
+#### Depends on
+
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+
+### [6523822e-376a-4531-b78a-1c7e13d6787a] Testing: Eventually predicate-driven frame waiter
+
+#### Outcome
+
+Test authors can express "wait until this frame predicate is true" through a new
+`eventually(timeout, poll, predicate)` combinator and matching `Step` variant in
+`crates/testty/src/scenario.rs` that re-reads the live PTY frame on each tick, returns
+the last `AssertionFailure` on timeout, and replaces fixed `Step::sleep` durations with
+deterministic condition-based waits.
+
+#### Promote when
+
+Promote when
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+lands so predicates can compose `MatchResult`.
+
+#### Depends on
+
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+
+### [ca40b36d-2bb9-4f1a-a931-2ce93e285fab] Testing: Result-returning recipe matchers
+
+#### Outcome
+
+Every `recipe::expect_*` helper in `crates/testty/src/recipe.rs` exposes a `match_*`
+sibling returning `MatchResult`, so feature tests can compose, retry, or soft-batch
+high-level recipe checks the same way they compose low-level `assertion::match_*` calls.
+
+#### Promote when
+
+Promote when
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+lands and the assertion-layer pattern is settled.
+
+#### Depends on
+
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+
+### [07cce0e7-ab8e-4f36-8fd0-251de665eb01] Testing: Render structured assertion failures in HTML proof report
+
+#### Outcome
+
+Failed `match_*` calls captured during a scenario surface in
+`crates/testty/src/proof/html.rs` as a side-by-side colored frame diff with row/col
+gutters and the structured `AssertionFailure` context, instead of dying as a stderr
+panic the report cannot see.
+
+#### Promote when
+
+Promote when
+`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+lands and
+`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testing: SoftAssertions accumulator for batched test failures`
+has wired structured failures into `ProofCapture::assertions`.
+
+#### Depends on
+
+`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testing: SoftAssertions accumulator for batched test failures`
+
+### [c821816d-2f45-40a3-bc85-d4504577ba30] Testing: Replace fixed E2E sleeps with eventually waits in agentty
+
+#### Outcome
+
+Compound journeys in `crates/agentty/tests/e2e/common.rs` (such as
+`create_session_and_return_to_list` and `create_session_with_prompt_and_return_to_list`)
+wait deterministically on `eventually` predicates instead of fixed `Step::sleep`
+durations, lowering E2E flake rate and total wall time.
+
+#### Promote when
+
+Promote when
+`[6523822e-376a-4531-b78a-1c7e13d6787a] Testing: Eventually predicate-driven frame waiter`
+lands.
+
+#### Depends on
+
+`[6523822e-376a-4531-b78a-1c7e13d6787a] Testing: Eventually predicate-driven frame waiter`
 
 ## Parked
 

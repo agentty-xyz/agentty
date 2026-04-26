@@ -242,8 +242,39 @@ assertion::assert_text_has_fg_color(&frame, "Error", &CellColor::new(128, 0, 0))
 assertion::assert_text_has_bg_color(&frame, "Active", &CellColor::new(0, 0, 128));
 ```
 
-All assertion functions panic with detailed messages on failure, including the match
+All `assert_*` functions panic with detailed messages on failure, including the match
 position, actual colors/styles, and region contents.
+
+### Result-returning matchers (`match_*`)
+
+Every `assert_*` has a `match_*` sibling that returns
+`Result<(), Box<AssertionFailure>>` (aliased as `MatchResult`) instead of panicking. The
+failure is boxed so the `Ok` path stays a single pointer-sized return and the `Result`
+enum stays small. Use the matcher form when you need to compose, retry, soft-batch, or
+surface failures into a proof report — for example, when polling the live PTY frame for
+a condition or when collecting multiple expectations against one capture.
+
+```rust
+use testty::assertion::{self, AssertionFailure, Expected, MatchResult};
+use testty::region::Region;
+
+let region = Region::top_row(80);
+
+let result: MatchResult = assertion::match_text_in_region(&frame, "Projects", &region);
+if let Err(failure) = result {
+    // `failure.message` is the same byte-compatible string the panic adapter
+    // would have produced, while `failure.expected`, `failure.region`, and
+    // `failure.matched_spans` carry the structured context for renderers.
+    match &failure.expected {
+        Expected::TextInRegion { needle } => eprintln!("missing: {needle}"),
+        _ => {}
+    }
+}
+```
+
+Adding the `match_*` siblings is a strictly additive change: all existing `assert_*`
+callers keep working without modification, so this evolution does not require a major
+version bump for downstream crates.
 
 ### Recipe helpers (`recipe` module)
 

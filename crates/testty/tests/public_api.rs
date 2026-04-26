@@ -61,6 +61,11 @@ fn prelude_surface_is_stable() {
     let _: fn(&NoopBackend) = accept_backend::<NoopBackend>;
 
     let _: fn(&TerminalFrame, &str) = assertion::assert_not_visible;
+
+    // Result-returning matcher core surface.
+    let _: fn(&TerminalFrame, &str) -> MatchResult = assertion::match_not_visible;
+    let _: Option<AssertionFailure> = None;
+    let _: Option<Expected> = None;
 }
 
 /// Reference always-available stable items that live outside the prelude
@@ -101,6 +106,50 @@ fn public_struct_literals_are_stable() {
     assert_eq!(color.red, 10);
     assert_eq!(color.green, 20);
     assert_eq!(color.blue, 30);
+}
+
+/// Lock in the supported pattern for matching `AssertionFailure` and the
+/// `Expected` variants exposed by the `match_*` matcher core.
+///
+/// `AssertionFailure` and `Expected` are both `#[non_exhaustive]` so future
+/// fields and variants stay non-breaking. Downstream callers must destructure
+/// with named fields plus a trailing `..` rest-pattern and must include a
+/// fallback `_` arm. This function is compiled (not run) so accidental
+/// renames of variants or destructured field names fail the build before
+/// publication.
+#[allow(dead_code)]
+fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'static str {
+    let AssertionFailure {
+        message: _,
+        expected,
+        region: _,
+        matched_spans: _,
+        frame_excerpt: _,
+        ..
+    } = failure;
+
+    match expected {
+        Expected::TextInRegion { needle: _, .. } => "text-in-region",
+        Expected::NotVisible { needle: _, .. } => "not-visible",
+        Expected::MatchCount {
+            needle: _,
+            count: _,
+            ..
+        } => "match-count",
+        Expected::ForegroundColor {
+            needle: _,
+            color: _,
+            ..
+        } => "foreground",
+        Expected::BackgroundColor {
+            needle: _,
+            color: _,
+            ..
+        } => "background",
+        Expected::Highlighted { needle: _, .. } => "highlighted",
+        Expected::NotHighlighted { needle: _, .. } => "not-highlighted",
+        _ => "unknown",
+    }
 }
 
 /// Lock in the supported pattern for matching `SnapshotError` variants.

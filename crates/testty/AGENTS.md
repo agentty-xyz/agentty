@@ -35,6 +35,21 @@ expect a stable curated API surface.
   deliberately whenever the published surface changes and bump the testty major version
   in lockstep with the upgrade note in the testty `README.md`.
 
+## Layered Assertion API
+
+- `assertion::match_*` functions return `Result<(), Box<AssertionFailure>>` (aliased as
+  `MatchResult`) and carry the structured failure context (`Expected` variant, optional
+  `Region`, matched spans, frame excerpt, pre-formatted message). The failure is boxed
+  so the `Ok` path stays a single pointer-sized return. Use this layer for any new
+  composable, retrying, soft-batched, or proof-report surface.
+- `assertion::assert_*` functions are thin panic adapters that delegate to the matching
+  `match_*`. Keep them so historical tests that expected panic-on-failure stay
+  byte-compatible without a major version bump.
+- `AssertionFailure` and `Expected` are both `#[non_exhaustive]`. New fields and
+  variants stay non-breaking as long as `tests/public_api.rs` still uses `..`
+  rest-patterns and a fallback `_` arm when destructuring them, so update those tripwire
+  patterns whenever the structured surface evolves.
+
 ## Snapshot Update Mode
 
 Update mode is triggered by an environment variable whose name defaults to
