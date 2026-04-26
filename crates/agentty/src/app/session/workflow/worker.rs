@@ -343,7 +343,7 @@ impl SessionWorkerService {
                 let result = Self::process_session_command(&context, command).await;
                 if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                     context.clear_queued_messages();
-                    let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
+                    Self::emit_queue_session_updated(&context);
                     continue;
                 }
 
@@ -423,8 +423,10 @@ impl SessionWorkerService {
 
             // Mirror the queue change into render snapshots so the inline
             // "queued" rows disappear as soon as drainage starts the
-            // follow-up turn.
-            let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
+            // follow-up turn. The targeted `SessionUpdated` event re-syncs
+            // only this session's snapshot from handles instead of paying for
+            // a full DB-backed `RefreshSessions` reload.
+            Self::emit_queue_session_updated(context);
 
             let operation_id = Uuid::new_v4().to_string();
             // Best-effort: operation tracking metadata is non-critical.
@@ -447,11 +449,25 @@ impl SessionWorkerService {
             let result = Self::process_session_command(context, command).await;
             if matches!(result, Some(Err(SessionError::StoppedByUser(_)))) {
                 context.clear_queued_messages();
-                let _ = context.app_event_tx.send(AppEvent::RefreshSessions);
+                Self::emit_queue_session_updated(context);
 
                 return;
             }
         }
+    }
+
+    /// Emits a targeted [`AppEvent::SessionUpdated`] for the worker's session
+    /// after the in-memory queue mutates so the reducer re-syncs the snapshot
+    /// from the handles without paying for a full `RefreshSessions` reload.
+    fn emit_queue_session_updated(context: &SessionWorkerContext) {
+        let version = SessionTaskService::next_session_update_version(
+            &context.session_update_versions,
+            context.session_id.as_str(),
+        );
+        let _ = context.app_event_tx.send(AppEvent::SessionUpdated {
+            session_id: context.session_id.clone(),
+            version,
+        });
     }
 
     /// Executes the queued command through the session's agent channel.

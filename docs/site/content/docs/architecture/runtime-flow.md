@@ -116,8 +116,13 @@ channels:
 - Producer(s): Workers and session task helpers
 - Consumer(s): `App::apply_app_events()` via `SessionUpdated`-driven
   `sync_session_from_handle()` calls
-- Payload: Shared `Arc<Mutex<...>>` output, status, and pid handles
-- Purpose: Fast targeted snapshot sync without a full DB reload.
+- Payload: Shared `Arc<Mutex<...>>` output, status, pid handles, and the in-memory
+  `queued_messages` deque
+- Purpose: Fast targeted snapshot sync without a full DB reload. Handles are the single
+  source of truth for `output`, `status`, and the chat queue;
+  `sync_session_with_handles()` re-projects all three into the snapshot, so queue
+  mutations (lifecycle enqueue, worker drain between turns, runtime LIFO pop) only need
+  to touch the handle and emit `SessionUpdated`.
 
 ## App Event Reducer Flow
 

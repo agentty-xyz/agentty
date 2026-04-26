@@ -883,6 +883,12 @@ impl SessionManager {
     /// interrupting the running turn, and once the queue is empty a further
     /// press cancels the active turn.
     ///
+    /// The just-pushed entry is mirrored into the render snapshot via
+    /// [`SessionState::sync_session_from_handle`] so the inline `queued ›`
+    /// row appears on the very next frame, and the targeted
+    /// [`AppEvent::SessionUpdated`] event triggers a single-session redraw
+    /// without paying for a full DB-backed `RefreshSessions` reload.
+    ///
     /// # Errors
     /// Returns [`SessionError::NotFound`] when the session id does not
     /// resolve to a known session, or [`SessionError::Workflow`] when the
@@ -900,9 +906,7 @@ impl SessionManager {
             ));
         }
 
-        let session_index = self.session_index_or_err(session_id)?;
         let handles = self.session_handles_or_err(session_id)?;
-        let queued_text = prompt.transcript_text();
 
         // Sync critical section (single push, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
@@ -910,11 +914,13 @@ impl SessionManager {
             guard.push_back(prompt);
         }
 
-        if let Some(session) = self.state.sessions.get_mut(session_index) {
-            session.queued_messages.push(queued_text);
-        }
+        self.state.sync_session_from_handle(session_id);
 
-        services.emit_app_event(AppEvent::RefreshSessions);
+        SessionTaskService::emit_session_updated(
+            &services.event_sender(),
+            &services.session_update_versions(),
+            session_id,
+        );
 
         Ok(())
     }
@@ -2826,6 +2832,48 @@ mod tests {
             }
         );
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    /// Verifies `enqueue_message()` emits a single targeted
+    /// [`AppEvent::SessionUpdated`] for the touched session and never falls
+    /// back to [`AppEvent::RefreshSessions`]. The targeted event lets the
+    /// reducer re-sync only the affected snapshot from handles instead of
+    /// paying for a full DB-backed reload, which is the contract that makes
+    /// queued chat rows appear without a perceptible delay.
+    async fn test_enqueue_message_emits_session_updated_event_only() {
+        // Arrange
+        let session = test_session("Prompt", Status::InProgress, Some("Title"), "");
+        let database = database_with_session(&session).await;
+        let mut session_manager = session_manager_with_one_session(session);
+        let (services, mut event_rx) = test_services_with_event_receiver(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+
+        // Act
+        session_manager
+            .enqueue_message(&services, "session-id", "queued reply")
+            .expect("enqueue_message should succeed for InProgress session");
+
+        // Assert
+        let emitted_event = event_rx
+            .try_recv()
+            .expect("expected SessionUpdated event from enqueue_message");
+        assert!(
+            matches!(
+                &emitted_event,
+                AppEvent::SessionUpdated { session_id, .. }
+                    if AsRef::<str>::as_ref(session_id) == "session-id"
+            ),
+            "enqueue_message must emit SessionUpdated, got {emitted_event:?}"
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "enqueue_message must not emit additional events (especially not RefreshSessions) so \
+             the reducer skips the full DB-backed reload"
+        );
     }
 
     #[tokio::test]

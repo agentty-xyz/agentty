@@ -759,7 +759,7 @@ mod tests {
     use tokio::sync::Barrier;
 
     use super::*;
-    use crate::app::{App, SyncSessionStartError, Tab};
+    use crate::app::{App, AppEvent, SyncSessionStartError, Tab};
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
     use crate::domain::session::{
         DailyActivity, SESSION_DATA_DIR, Session, SessionHandles, SessionSize, SessionStats, Status,
@@ -2706,6 +2706,44 @@ mod tests {
             .expect("handles present");
         let queued_len = handles.queued_messages.lock().expect("queue lock").len();
         assert_eq!(queued_len, 1);
+    }
+
+    #[tokio::test]
+    /// Regression: a queued chat message must remain visible after the
+    /// reducer reloads sessions from the database. The previous wiring
+    /// emitted `RefreshSessions` from `enqueue_message`, which rebuilt every
+    /// `Session` snapshot with `queued_messages: Vec::new()`. The post-reload
+    /// `sync_session_with_handles` did not restore `queued_messages` from the
+    /// handles, so the just-pushed entry was silently wiped on the next
+    /// reducer pass and the inline `queued ›` row briefly disappeared from
+    /// the transcript before reappearing on a later mutation.
+    async fn test_enqueue_message_survives_refresh_sessions_reducer_pass() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        create_and_start_session(&mut app, "Initial").await;
+        let session_id = app.sessions.sessions[0].id.clone();
+        wait_for_status(&mut app, &session_id, Status::Review).await;
+        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        app.enqueue_message(&session_id, "queued reply")
+            .expect("enqueue_message should succeed for InProgress session");
+
+        // Act
+        app.apply_app_events(AppEvent::RefreshSessions).await;
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("session present");
+        assert_eq!(
+            session.queued_messages,
+            vec!["queued reply".to_string()],
+            "queued_messages snapshot must be re-projected from handles after a RefreshSessions \
+             reducer pass instead of being wiped to an empty vec"
+        );
     }
 
     #[tokio::test]

@@ -131,7 +131,7 @@ choice persists across app restarts.
   `docs/site/content/docs/getting-started/overview.md` to explain the new per-project
   delivery strategy setting without claiming session actions consume it yet.
 
-### [c9469d77-97c3-4d5b-a035-497a83752bd1] Workflow: Delete individual queued chat messages
+### [3f7c4a9b-2e1d-4c5a-b8f6-9d2e7a1c4b6f] Workflow: Render queued chat messages without UI delay
 
 #### Assignee
 
@@ -139,50 +139,59 @@ choice persists across app restarts.
 
 #### Why now
 
-`Ctrl+C` already retracts queued chat messages one press at a time using a LIFO order,
-but users still cannot remove a specific older queued entry without popping every newer
-one first; a focused per-item delete shortcut closes that gap so the queue can be edited
-like a normal list.
+Submitting a chat message while a session is `InProgress` should make the inline
+`queued ›` row appear immediately, but today there is a visible delay — most pronounced
+when the message includes a pasted image attachment. The cause is that `enqueue_message`
+emits the heavyweight `AppEvent::RefreshSessions`, which triggers a full DB-backed
+`refresh_sessions_now` that reconstructs every `Session` snapshot with
+`queued_messages: Vec::new()`, while `sync_session_with_handles` only re-syncs `output`
+and `status` from the handles. The just-pushed queue entry is silently wiped on the next
+reducer pass and only reappears on a later mutation. Fixing this makes queued rows
+render on the very next frame and removes a snapshot-wipe correctness bug at the same
+time.
 
 #### Usable outcome
 
-While a session is `InProgress` with queued chat messages, users can focus a specific
-queued entry in the chat transcript and remove just that entry with a dedicated shortcut
-without touching the running turn or any other queued entries.
+When a user submits a chat message during an `InProgress` turn, the corresponding
+`queued ›` row appears in the transcript on the next render frame with no perceptible
+delay, including when the message carries an image attachment.
 
 #### Substeps
 
-- [ ] **Surface a focused queued-message selection in the session chat transcript.**
-  Extend `crates/agentty/src/ui/component/session_output.rs` (around
-  `append_queued_message_lines`) and the session view state in
-  `crates/agentty/src/runtime/mode/session_view.rs` so users can move focus across the
-  rendered `queued ›` rows while a turn is `InProgress`, with the focused row visually
-  distinguished from the other queued entries.
-- [ ] **Delete the focused queued chat message on a dedicated shortcut.** Wire a
-  session-view shortcut in `crates/agentty/src/runtime/mode/session_view.rs` that, when
-  a queued row is focused, removes only that entry from the matching index of
-  `SessionHandles::queued_messages` (in `crates/agentty/src/domain/session.rs`) and the
-  `Session::queued_messages` snapshot, emits `AppEvent::SessionUpdated` and
-  `AppEvent::RefreshSessions`, and leaves the running turn, cancellation token, and
-  persisted status untouched.
+- [ ] **Make `SessionHandles::queued_messages` the single source of truth for the
+  rendered queue.** Extend `sync_session_with_handles` in
+  `crates/agentty/src/app/session_state.rs` to derive `Session::queued_messages` from
+  `SessionHandles::queued_message_transcripts()` alongside the existing `output` and
+  `status` syncs so any handle-driven mutation re-projects deterministically into the
+  snapshot.
+- [ ] **Route queue mutations through targeted `SessionUpdated` events instead of
+  `RefreshSessions`.** In `crates/agentty/src/app/session/workflow/lifecycle.rs`
+  (`enqueue_message`), `crates/agentty/src/app/session/workflow/worker.rs` (post-cancel
+  queue clear and `drain_queued_messages`), and
+  `crates/agentty/src/runtime/mode/session_view.rs`
+  (`pop_last_queued_chat_message_if_any`), drop the direct `Session::queued_messages`
+  writes, immediately re-sync the touched session from handles when running on the
+  foreground manager, and emit `AppEvent::SessionUpdated` instead of
+  `AppEvent::RefreshSessions` so the reducer skips the full DB reload.
 
 #### Tests
 
-- [ ] Add runtime coverage in `crates/agentty/src/runtime/mode/session_view.rs`
-  exercising the per-item delete handler against a seeded `InProgress` session with
-  multiple queued messages: deleting a focused middle entry removes only that index,
-  status stays `InProgress`, the cancel token is not fired, and
-  `AppEvent::SessionUpdated` plus `AppEvent::RefreshSessions` are emitted. Add an E2E
-  `FeatureTest` in `crates/agentty/tests/e2e/session.rs` that queues several chat
-  messages, focuses the middle entry, presses the delete shortcut, and asserts that only
-  the focused row disappeared while the others and `Ctrl+c: stop` remain.
+- [ ] Add a regression test in `crates/agentty/src/app/session/core.rs` that enqueues a
+  chat message on an `InProgress` session, drives a `RefreshSessions` reducer pass, and
+  asserts `Session::queued_messages` still mirrors
+  `SessionHandles::queued_message_transcripts()` (this currently fails because the
+  post-reload sync wipes the field). Keep
+  `test_enqueue_message_pushes_prompt_onto_in_memory_queue` covering the snapshot
+  mirroring through the new sync path. Add an E2E `FeatureTest` in
+  `crates/agentty/tests/e2e/session.rs` that submits a queued chat message while a turn
+  runs and asserts the `queued ›` row is visible on the next frame.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and
-  `docs/site/content/docs/usage/keybindings.md` so the `InProgress` chat queue notes
-  describe the new focused per-item delete shortcut alongside the existing per-press
-  LIFO `Ctrl+C` retraction.
+- [ ] Update `docs/site/content/docs/architecture/runtime-flow.md` to note that
+  `SessionHandles::queued_messages` is the canonical source for the queue snapshot and
+  that queue mutations emit `AppEvent::SessionUpdated` rather than
+  `AppEvent::RefreshSessions`.
 
 ## Ready Now Execution Order
 
@@ -196,7 +205,7 @@ flowchart TD
 
     subgraph WorkflowLane["Workflow - @andagaev"]
         W2["[b8c92f4d] Persist queued messages"]
-        W4["[c9469d77] Delete queued messages"]
+        W4["[3f7c4a9b] Render queued messages without delay"]
     end
 
     subgraph LaterLanes["Queued independent streams"]

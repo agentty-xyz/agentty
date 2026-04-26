@@ -570,47 +570,36 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
 }
 
 /// Pops the most recently queued chat message (LIFO) from the session's
-/// handles and rebuilds the snapshot from the post-pop handle state,
+/// handles and re-syncs the snapshot from the post-pop handle state,
 /// returning `true` when one queued message was retracted.
 ///
 /// Pops the entry from the shared [`SessionHandles::queued_messages`] deque
-/// via `pop_back`, then derives the snapshot's `queued_messages` from the
-/// remaining handle contents (rather than independently calling `Vec::pop`
-/// on the snapshot). The handle is the source of truth: the worker may have
+/// via `pop_back`. The handle is the source of truth: the worker may have
 /// already drained the oldest entry via `pop_front` between snapshot
 /// refreshes, so a position-based snapshot pop could remove the wrong
-/// transcript row and leave a phantom queued message visible. Releases any
-/// local image attachments owned by the popped prompt through
+/// transcript row and leave a phantom queued message visible. The snapshot
+/// is then re-projected from the handle through
+/// [`SessionState::sync_session_from_handle`], so no additional manual
+/// `queued_messages` mutation is needed here. Releases any local image
+/// attachments owned by the popped prompt through
 /// [`App::cleanup_prompt_attachment_files`] so retracted messages do not
 /// leak temp files under `AGENTTY_ROOT/tmp/`, then emits
-/// [`AppEvent::SessionUpdated`] and [`AppEvent::RefreshSessions`] to refresh
-/// list and chat views. Leaves the cancellation token, persisted status, and
-/// auto-review suppression untouched so the running turn can keep streaming.
+/// [`AppEvent::SessionUpdated`] so list and chat views redraw without paying
+/// for a full DB-backed `RefreshSessions` reload. Leaves the cancellation
+/// token, persisted status, and auto-review suppression untouched so the
+/// running turn can keep streaming.
 async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) -> bool {
-    let pop_outcome = app.sessions.handles.get(session_id).and_then(|handles| {
-        handles.queued_messages.lock().ok().and_then(|mut queued| {
-            let popped = queued.pop_back()?;
-            let remaining_transcript: Vec<String> = queued
-                .iter()
-                .map(crate::infra::channel::TurnPrompt::transcript_text)
-                .collect();
+    let popped_prompt = app
+        .sessions
+        .handles
+        .get(session_id)
+        .and_then(|handles| handles.queued_messages.lock().ok()?.pop_back());
 
-            Some((popped, remaining_transcript))
-        })
-    });
-
-    let Some((popped_prompt, remaining_transcript)) = pop_outcome else {
+    let Some(popped_prompt) = popped_prompt else {
         return false;
     };
 
-    if let Some(session) = app
-        .sessions
-        .sessions
-        .iter_mut()
-        .find(|session| session.id == session_id)
-    {
-        session.queued_messages = remaining_transcript;
-    }
+    app.sessions.sync_session_from_handle(session_id);
 
     app.cleanup_prompt_attachment_files(&popped_prompt).await;
 
@@ -621,7 +610,6 @@ async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) ->
             session_id,
         ),
     });
-    app.services.emit_app_event(AppEvent::RefreshSessions);
 
     true
 }

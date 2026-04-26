@@ -2257,9 +2257,13 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line =
-            session_output_status_line(Status::InProgress, Some(COMMITTING_PROGRESS_LABEL), None)
-                .expect("in-progress sessions should render a status line");
+        let status_line = session_output_status_line(
+            Status::InProgress,
+            Some(COMMITTING_PROGRESS_LABEL),
+            None,
+            AgentModel::Gpt54,
+        )
+        .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(status_line.to_string().contains(COMMITTING_PROGRESS_LABEL));

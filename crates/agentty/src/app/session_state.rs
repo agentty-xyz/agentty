@@ -316,6 +316,15 @@ impl SessionState {
     /// output extends the existing snapshot with the same prefix, only the
     /// newly appended suffix is copied. Equal-length rewrites and non-prefix
     /// changes still fall back to full replacement so edits are never missed.
+    /// Re-projects per-session render state from the runtime handles into the
+    /// snapshot.
+    ///
+    /// The handles are the single source of truth for `output`, `status`, and
+    /// the in-memory chat queue. `queued_messages` is rebuilt from
+    /// `SessionHandles::queued_message_transcripts()` so any handle-driven
+    /// mutation (lifecycle enqueue, worker drain between turns, runtime LIFO
+    /// pop) becomes visible on the very next sync without callers also having
+    /// to mirror the change into the snapshot field.
     fn sync_session_with_handles(session: &mut Session, session_handles: &SessionHandles) {
         if let Ok(output) = session_handles.output.lock() {
             Self::sync_session_output(&mut session.output, output.as_str());
@@ -324,6 +333,8 @@ impl SessionState {
         if let Ok(status) = session_handles.status.lock() {
             session.status = *status;
         }
+
+        session.queued_messages = session_handles.queued_message_transcripts();
     }
 
     /// Synchronizes one output snapshot from its shared runtime output buffer.
