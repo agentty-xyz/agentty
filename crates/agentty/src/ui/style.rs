@@ -254,27 +254,34 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
 
 /// Warm dark palette inspired by the Horizon editor theme: deep navy surfaces,
 /// pink accent, peach warning, mint success, and soft lavender text.
+///
+/// Token roles are tuned for visual harmony: `accent` keeps Horizon's signature
+/// pink while `danger` shifts to a crimson red so destructive states do not
+/// blend into focused chrome, `accent_soft` is a same-hue softer pink so
+/// `question` retains exclusive use of Horizon purple, and each `*_soft`
+/// variant is a desaturated same-hue companion to its base token rather than a
+/// different hue.
 const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
     accent: Color::Rgb(233, 86, 120),
-    accent_soft: Color::Rgb(184, 119, 219),
-    border: Color::Rgb(59, 64, 82),
-    danger: Color::Rgb(233, 86, 120),
-    danger_soft: Color::Rgb(189, 79, 102),
+    accent_soft: Color::Rgb(238, 142, 168),
+    border: Color::Rgb(64, 70, 92),
+    danger: Color::Rgb(209, 67, 76),
+    danger_soft: Color::Rgb(189, 105, 108),
     info: Color::Rgb(38, 187, 217),
     question: Color::Rgb(184, 119, 219),
     surface: Color::Rgb(35, 37, 48),
     surface_clarification: Color::Rgb(40, 47, 66),
     surface_danger: Color::Rgb(63, 32, 42),
     surface_elevated: Color::Rgb(46, 49, 64),
-    surface_success: Color::Rgb(24, 56, 50),
+    surface_success: Color::Rgb(28, 64, 54),
     surface_overlay: Color::Rgb(22, 24, 32),
-    text: Color::Rgb(203, 206, 208),
-    text_muted: Color::Rgb(108, 111, 147),
-    text_subtle: Color::Rgb(74, 77, 102),
-    success: Color::Rgb(9, 247, 160),
-    success_soft: Color::Rgb(33, 191, 194),
+    text: Color::Rgb(214, 217, 232),
+    text_muted: Color::Rgb(132, 136, 168),
+    text_subtle: Color::Rgb(96, 100, 128),
+    success: Color::Rgb(64, 207, 160),
+    success_soft: Color::Rgb(126, 219, 188),
     warning: Color::Rgb(250, 194, 154),
-    warning_soft: Color::Rgb(240, 148, 131),
+    warning_soft: Color::Rgb(252, 215, 188),
 };
 
 /// Sets the process-wide active color theme used by semantic palette tokens.
@@ -541,9 +548,9 @@ mod tests {
         // Assert
         assert_eq!(palette.surface, Color::Rgb(35, 37, 48));
         assert_eq!(palette.surface_elevated, Color::Rgb(46, 49, 64));
-        assert_eq!(palette.border, Color::Rgb(59, 64, 82));
-        assert_eq!(palette.text, Color::Rgb(203, 206, 208));
-        assert_eq!(palette.text_muted, Color::Rgb(108, 111, 147));
+        assert_eq!(palette.border, Color::Rgb(64, 70, 92));
+        assert_eq!(palette.text, Color::Rgb(214, 217, 232));
+        assert_eq!(palette.text_muted, Color::Rgb(132, 136, 168));
         assert_eq!(palette.accent, Color::Rgb(233, 86, 120));
     }
 
@@ -556,10 +563,44 @@ mod tests {
         let palette = palette::active();
 
         // Assert
-        assert_eq!(palette.success, Color::Rgb(9, 247, 160));
+        assert_eq!(palette.success, Color::Rgb(64, 207, 160));
         assert_eq!(palette.warning, Color::Rgb(250, 194, 154));
-        assert_eq!(palette.danger, Color::Rgb(233, 86, 120));
+        assert_eq!(palette.danger, Color::Rgb(209, 67, 76));
         assert_eq!(palette.question, Color::Rgb(184, 119, 219));
+    }
+
+    #[test]
+    fn dark_horizon_accent_and_danger_are_distinct() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::DarkHorizon);
+
+        // Act
+        let accent = palette::accent();
+        let danger = palette::danger();
+
+        // Assert
+        assert_ne!(
+            accent, danger,
+            "accent and danger must be distinct so canceled states do not blend into focused \
+             chrome",
+        );
+    }
+
+    #[test]
+    fn dark_horizon_accent_soft_and_question_are_distinct() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::DarkHorizon);
+
+        // Act
+        let accent_soft = palette::accent_soft();
+        let question = palette::question();
+
+        // Assert
+        assert_ne!(
+            accent_soft, question,
+            "accent_soft and question must be distinct so queued and question states are visually \
+             separable",
+        );
     }
 
     #[test]
