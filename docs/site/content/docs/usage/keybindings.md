@@ -62,7 +62,7 @@ The Settings tab includes:
 The page is split into `Global settings` for the app-wide `Theme` row and
 `'<project>' settings` for rows stored against the active project.
 
-- `Theme` to switch the whole terminal UI between `Current` and the green terminal-inspired `Hacker` palette. Agentty uses `Current` by default.
+- `Theme` to switch the whole terminal UI between `Current`, the green terminal-inspired `Hacker` palette, and the warm navy `Dark Horizon` palette inspired by the Horizon editor theme. Agentty uses `Current` by default.
 - `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`) for Codex and Claude turns in the active project.
 - `Default Smart Model`, `Default Fast Model`, and `Default Review Model` for the active project. `Default Smart Model` can also cycle to `Last used model as default`.
 - `Coauthored by Agentty` to enable or disable the `Co-Authored-By` trailer on generated session commit messages for the active project. New projects start with this disabled.

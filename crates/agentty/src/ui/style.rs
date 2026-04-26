@@ -252,6 +252,31 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
     warning_soft: Color::Rgb(198, 187, 116),
 };
 
+/// Warm dark palette inspired by the Horizon editor theme: deep navy surfaces,
+/// pink accent, peach warning, mint success, and soft lavender text.
+const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
+    accent: Color::Rgb(233, 86, 120),
+    accent_soft: Color::Rgb(184, 119, 219),
+    border: Color::Rgb(59, 64, 82),
+    danger: Color::Rgb(233, 86, 120),
+    danger_soft: Color::Rgb(189, 79, 102),
+    info: Color::Rgb(38, 187, 217),
+    question: Color::Rgb(184, 119, 219),
+    surface: Color::Rgb(35, 37, 48),
+    surface_clarification: Color::Rgb(40, 47, 66),
+    surface_danger: Color::Rgb(63, 32, 42),
+    surface_elevated: Color::Rgb(46, 49, 64),
+    surface_success: Color::Rgb(24, 56, 50),
+    surface_overlay: Color::Rgb(22, 24, 32),
+    text: Color::Rgb(203, 206, 208),
+    text_muted: Color::Rgb(108, 111, 147),
+    text_subtle: Color::Rgb(74, 77, 102),
+    success: Color::Rgb(9, 247, 160),
+    success_soft: Color::Rgb(33, 191, 194),
+    warning: Color::Rgb(250, 194, 154),
+    warning_soft: Color::Rgb(240, 148, 131),
+};
+
 /// Sets the process-wide active color theme used by semantic palette tokens.
 pub fn set_active_theme(theme: ColorTheme) {
     let _lock_guard = ACTIVE_THEME_SCOPE_LOCK
@@ -338,6 +363,7 @@ pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
 fn active_palette() -> ThemePalette {
     match active_theme() {
         ColorTheme::Hacker => HACKER_PALETTE,
+        ColorTheme::DarkHorizon => DARK_HORIZON_PALETTE,
         ColorTheme::Current => CURRENT_PALETTE,
     }
 }
@@ -347,6 +373,7 @@ fn active_palette() -> ThemePalette {
 fn active_theme() -> ColorTheme {
     match ACTIVE_THEME.load(Ordering::Relaxed) {
         1 => ColorTheme::Hacker,
+        2 => ColorTheme::DarkHorizon,
         _ => ColorTheme::Current,
     }
 }
@@ -367,6 +394,7 @@ const fn theme_index(theme: ColorTheme) -> u8 {
     match theme {
         ColorTheme::Current => 0,
         ColorTheme::Hacker => 1,
+        ColorTheme::DarkHorizon => 2,
     }
 }
 
@@ -488,6 +516,50 @@ mod tests {
         assert_eq!(palette.warning, Color::Rgb(181, 169, 99));
         assert_eq!(palette.danger, Color::Rgb(190, 88, 78));
         assert_eq!(palette.question, Color::Rgb(132, 189, 142));
+    }
+
+    #[test]
+    fn status_color_uses_dark_horizon_palette_when_active() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::DarkHorizon);
+
+        // Act
+        let color = status_color(Status::Merging);
+
+        // Assert
+        assert_eq!(color, DARK_HORIZON_PALETTE.accent);
+    }
+
+    #[test]
+    fn active_palette_returns_dark_horizon_navy_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::DarkHorizon);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.surface, Color::Rgb(35, 37, 48));
+        assert_eq!(palette.surface_elevated, Color::Rgb(46, 49, 64));
+        assert_eq!(palette.border, Color::Rgb(59, 64, 82));
+        assert_eq!(palette.text, Color::Rgb(203, 206, 208));
+        assert_eq!(palette.text_muted, Color::Rgb(108, 111, 147));
+        assert_eq!(palette.accent, Color::Rgb(233, 86, 120));
+    }
+
+    #[test]
+    fn active_palette_returns_dark_horizon_status_tones() {
+        // Arrange
+        let _theme_scope = scoped_active_theme(ColorTheme::DarkHorizon);
+
+        // Act
+        let palette = palette::active();
+
+        // Assert
+        assert_eq!(palette.success, Color::Rgb(9, 247, 160));
+        assert_eq!(palette.warning, Color::Rgb(250, 194, 154));
+        assert_eq!(palette.danger, Color::Rgb(233, 86, 120));
+        assert_eq!(palette.question, Color::Rgb(184, 119, 219));
     }
 
     #[test]

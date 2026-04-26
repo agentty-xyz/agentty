@@ -219,14 +219,15 @@ fn settings_enter_cycles_value() {
         .expect("feature test failed");
 }
 
-/// Verify that the `Theme` settings row switches from `Current` to `Hacker`.
+/// Verify that the `Theme` settings row cycles through `Current`, `Hacker`,
+/// and `Dark Horizon` and wraps back to `Current`.
 #[test]
 fn settings_theme_switch() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_theme_switch")
         .zola(
             "Settings theme switch",
-            "Switch Agentty between the current palette and the Hacker theme.",
+            "Cycle Agentty through the Current, Hacker, and Dark Horizon themes.",
             155,
         )
         .run(
@@ -241,26 +242,53 @@ fn settings_theme_switch() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
-                    .capture_labeled("after_theme_switch", "Hacker theme selected")
+                    .capture_labeled("after_theme_switch_hacker", "Hacker theme selected")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(2500)
+                    .capture_labeled(
+                        "after_theme_switch_dark_horizon",
+                        "Dark Horizon theme selected",
+                    )
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(2500)
+                    .capture_labeled(
+                        "after_theme_switch_wrap_current",
+                        "Theme wraps back to Current",
+                    )
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Theme", &full);
-                assertion::assert_text_in_region(frame, "Hacker", &full);
+                assertion::assert_text_in_region(frame, "Current", &full);
 
                 assert_eq!(
                     report.captures.len(),
-                    2,
-                    "Expected 2 captures (before and after switching theme)"
+                    4,
+                    "Expected 4 captures (initial Current, Hacker, Dark Horizon, wrapped Current)"
                 );
 
                 let before_frame = common::frame_from_capture(&report.captures[0]);
                 let before_full = Region::full(before_frame.cols(), before_frame.rows());
                 assertion::assert_text_in_region(&before_frame, "Current", &before_full);
 
-                let after_frame = common::frame_from_capture(&report.captures[1]);
-                let after_full = Region::full(after_frame.cols(), after_frame.rows());
-                assertion::assert_text_in_region(&after_frame, "Hacker", &after_full);
+                let hacker_frame = common::frame_from_capture(&report.captures[1]);
+                let hacker_full = Region::full(hacker_frame.cols(), hacker_frame.rows());
+                assertion::assert_text_in_region(&hacker_frame, "Hacker", &hacker_full);
+
+                let dark_horizon_frame = common::frame_from_capture(&report.captures[2]);
+                let dark_horizon_full =
+                    Region::full(dark_horizon_frame.cols(), dark_horizon_frame.rows());
+                assertion::assert_text_in_region(
+                    &dark_horizon_frame,
+                    "Dark Horizon",
+                    &dark_horizon_full,
+                );
+
+                let wrapped_frame = common::frame_from_capture(&report.captures[3]);
+                let wrapped_full = Region::full(wrapped_frame.cols(), wrapped_frame.rows());
+                assertion::assert_text_in_region(&wrapped_frame, "Current", &wrapped_full);
             },
         )
         .expect("feature test failed");

@@ -76,7 +76,7 @@ stored per active project. Switching projects reloads that project's
 `Default Reasoning Level`, `Default Smart Model` mode (explicit model or
 `Last used model as default`), `Default Fast Model`, `Default Review Model`,
 `Coauthored by Agentty` toggle, and `Open Commands`. The global `Theme` setting
-switches between `Current` and `Hacker`, with `Current` used by default. The
+switches between `Current`, `Hacker`, and `Dark Horizon`, with `Current` used by default. The
 Settings tab renders these scopes separately as `Global settings` and
 `'<project>' settings`. New projects default the coauthor toggle to disabled
 until you enable it.

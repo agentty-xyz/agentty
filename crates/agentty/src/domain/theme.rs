@@ -10,11 +10,13 @@ pub enum ColorTheme {
     Current,
     /// A green-on-dark palette inspired by the Agentty docs site.
     Hacker,
+    /// A warm dark palette inspired by the Horizon editor theme.
+    DarkHorizon,
 }
 
 impl ColorTheme {
     /// All selectable color themes in settings display order.
-    pub const ALL: [Self; 2] = [Self::Current, Self::Hacker];
+    pub const ALL: [Self; 3] = [Self::Current, Self::Hacker, Self::DarkHorizon];
 
     /// Returns the persisted wire value for this theme.
     #[must_use]
@@ -22,6 +24,7 @@ impl ColorTheme {
         match self {
             Self::Current => "current",
             Self::Hacker => "hacker",
+            Self::DarkHorizon => "dark_horizon",
         }
     }
 
@@ -31,6 +34,7 @@ impl ColorTheme {
         match self {
             Self::Current => "Current",
             Self::Hacker => "Hacker",
+            Self::DarkHorizon => "Dark Horizon",
         }
     }
 
@@ -43,6 +47,7 @@ impl ColorTheme {
         match value {
             "current" => Some(Self::Current),
             "hacker" => Some(Self::Hacker),
+            "dark_horizon" => Some(Self::DarkHorizon),
             _ => None,
         }
     }
@@ -111,13 +116,28 @@ mod tests {
         // Arrange
         let current_theme = ColorTheme::Current;
         let hacker_theme = ColorTheme::Hacker;
+        let dark_horizon_theme = ColorTheme::DarkHorizon;
 
         // Act
         let next_theme = current_theme.next();
-        let wrapped_theme = hacker_theme.next();
+        let after_hacker_theme = hacker_theme.next();
+        let wrapped_theme = dark_horizon_theme.next();
 
         // Assert
         assert_eq!(next_theme, ColorTheme::Hacker);
+        assert_eq!(after_hacker_theme, ColorTheme::DarkHorizon);
         assert_eq!(wrapped_theme, ColorTheme::Current);
+    }
+
+    #[test]
+    fn parse_persisted_returns_dark_horizon_theme() {
+        // Arrange
+        let stored_value = "dark_horizon";
+
+        // Act
+        let theme = ColorTheme::parse_persisted(stored_value);
+
+        // Assert
+        assert_eq!(theme, Some(ColorTheme::DarkHorizon));
     }
 }

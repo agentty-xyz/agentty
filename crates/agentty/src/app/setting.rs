@@ -1304,6 +1304,23 @@ mod tests {
         assert_eq!(manager.theme, ColorTheme::Current);
     }
 
+    #[tokio::test]
+    async fn settings_manager_new_loads_persisted_dark_horizon_theme() {
+        // Arrange
+        let (services, project_id) = test_services().await;
+        services
+            .db()
+            .upsert_setting(SettingName::Theme, ColorTheme::DarkHorizon.as_str())
+            .await
+            .expect("failed to persist theme setting");
+
+        // Act
+        let manager = SettingsManager::new(&services, project_id).await;
+
+        // Assert
+        assert_eq!(manager.theme, ColorTheme::DarkHorizon);
+    }
+
     #[test]
     fn next_moves_selection_to_default_reasoning_level_row() {
         // Arrange
@@ -1671,16 +1688,44 @@ mod tests {
 
         // Act
         manager.handle_enter(&services).await;
+        let theme_after_first_cycle = manager.theme;
+        let persisted_theme_after_first_cycle = services
+            .db()
+            .get_setting(SettingName::Theme)
+            .await
+            .expect("failed to load theme setting");
+
+        manager.handle_enter(&services).await;
+        let theme_after_second_cycle = manager.theme;
+        let persisted_theme_after_second_cycle = services
+            .db()
+            .get_setting(SettingName::Theme)
+            .await
+            .expect("failed to load theme setting");
+
+        manager.handle_enter(&services).await;
+        let theme_after_wrap_cycle = manager.theme;
+        let persisted_theme_after_wrap_cycle = services
+            .db()
+            .get_setting(SettingName::Theme)
+            .await
+            .expect("failed to load theme setting");
 
         // Assert
-        assert_eq!(manager.theme, ColorTheme::Hacker);
+        assert_eq!(theme_after_first_cycle, ColorTheme::Hacker);
         assert_eq!(
-            services
-                .db()
-                .get_setting(SettingName::Theme)
-                .await
-                .expect("failed to load theme setting"),
+            persisted_theme_after_first_cycle,
             Some(ColorTheme::Hacker.as_str().to_string())
+        );
+        assert_eq!(theme_after_second_cycle, ColorTheme::DarkHorizon);
+        assert_eq!(
+            persisted_theme_after_second_cycle,
+            Some(ColorTheme::DarkHorizon.as_str().to_string())
+        );
+        assert_eq!(theme_after_wrap_cycle, ColorTheme::Current);
+        assert_eq!(
+            persisted_theme_after_wrap_cycle,
+            Some(ColorTheme::Current.as_str().to_string())
         );
     }
 
