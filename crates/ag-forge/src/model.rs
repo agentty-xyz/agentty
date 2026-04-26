@@ -75,13 +75,11 @@ impl ForgeKind {
     /// Returns whether Agentty can fetch inline review-thread comments for
     /// this forge.
     ///
-    /// GitLab merge-request comment sync is not implemented yet, so callers
-    /// must skip comment-thread fetches and the read-only comments preview
-    /// for non-GitHub forges until a native adapter lands.
+    /// GitHub pull-request and GitLab merge-request adapters both expose
+    /// enough line-position data for the read-only comments preview.
     pub fn supports_review_comments_preview(self) -> bool {
         match self {
-            Self::GitHub => true,
-            Self::GitLab => false,
+            Self::GitHub | Self::GitLab => true,
         }
     }
 }
@@ -253,6 +251,17 @@ pub struct ReviewComment {
     pub body: String,
 }
 
+/// Diff side used to anchor one inline review-thread comment.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ReviewCommentAnchorSide {
+    /// A file-level thread that is not attached to a specific diff line.
+    File,
+    /// A thread anchored to the new/right side of the diff.
+    New,
+    /// A thread anchored to the old/left side of the diff.
+    Old,
+}
+
 /// One review thread anchored to a line of the review request diff.
 ///
 /// Threads group chronological `comments` that share the same anchor. v1 of
@@ -260,14 +269,21 @@ pub struct ReviewComment {
 /// sorted by `(path, line)` before display.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCommentThread {
+    /// Diff side used with `line` when placing this thread inline.
+    pub anchor_side: ReviewCommentAnchorSide,
     /// Chronological reviewer comments attached to this thread.
     pub comments: Vec<ReviewComment>,
+    /// Whether newer changes made the thread's original diff position stale,
+    /// when the forge exposes that state.
+    pub is_outdated: Option<bool>,
     /// Whether the thread has been marked resolved on the forge.
     pub is_resolved: bool,
-    /// Anchor line number inside the diff, when the forge exposes one.
+    /// Anchor line number on `anchor_side`, when the forge exposes one.
     pub line: Option<u32>,
     /// File path the thread is anchored to, relative to the repository root.
     pub path: String,
+    /// Optional first line for a multi-line thread on `anchor_side`.
+    pub start_line: Option<u32>,
 }
 
 /// Full review-comments payload captured for one review request.
@@ -576,10 +592,10 @@ mod tests {
     }
 
     #[test]
-    fn supports_review_comments_preview_only_returns_true_for_github() {
+    fn supports_review_comments_preview_returns_true_for_supported_forges() {
         // Arrange / Act / Assert
         assert!(ForgeKind::GitHub.supports_review_comments_preview());
-        assert!(!ForgeKind::GitLab.supports_review_comments_preview());
+        assert!(ForgeKind::GitLab.supports_review_comments_preview());
     }
 
     #[test]

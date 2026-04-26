@@ -198,15 +198,16 @@ session straight to **Done**.
 
 <a id="usage-review-comments-preview"></a>
 While in **Review** or **AgentReview**, press `d` to open the diff page. Its
-right panel starts on the git diff; press `c` inside the diff page to toggle
-the right panel between the git diff and the cached review-request comments so
-you can flip between code and feedback without leaving the view. The comments
-panel includes inline threads grouped by file (pre-sorted by line number) and
-pull-request-level "General discussion" comments at the top. Threads are
-fetched by the same background sync that refreshes review-request status. The
-panel is read-only — replies still happen on the forge web UI. Inline comment
-previews for GitLab merge requests are not yet supported, so the comments
-toggle stays empty for GitLab-linked sessions.
+right panel starts on the git diff and renders cached pull-request or
+merge-request line comments directly below matching diff lines. Press `c`
+inside the diff page to toggle the right panel between the annotated git diff
+and the cached review-request comments overview so you can flip between code
+and feedback without leaving the view. The comments panel includes inline
+threads grouped by file (pre-sorted by line number and diff side) and
+pull-request-level or merge-request-level "General discussion" comments at the
+top. Threads are fetched by the same background sync that refreshes
+review-request status. The panel is read-only — replies still happen on the
+forge web UI.
 
 From the **Sessions** tab, press `a` to create a regular session or `Shift+A`
 to create a draft session. Regular sessions keep the fast path: type the first

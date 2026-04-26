@@ -172,13 +172,14 @@ comments without leaving the page.
 
 <a id="usage-diff-totals"></a>
 When the right panel shows the git diff, its title includes aggregate line
-totals as `+added` and `-removed` counts for the current session diff. When the
-right panel shows review-request comments, it lists cached inline threads and
-pull-request-level "General discussion" comments. The comments panel is
-read-only; replies must happen on the forge web UI. GitLab merge requests are
-not yet supported, so the `c` action stays hidden for GitLab-linked sessions.
-Comment threads are fetched by the background review-request sync task and are
-pre-sorted by file path and line.
+totals as `+added` and `-removed` counts for the current session diff, and
+cached pull-request or merge-request line comments are rendered inline below
+matching diff lines. When the right panel shows review-request comments, it
+lists the same cached inline threads as an overview plus pull-request-level or
+merge-request-level "General discussion" comments. The comments panel is
+read-only; replies must happen on the forge web UI. Comment threads are fetched
+by the background review-request sync task and are pre-sorted by file path,
+line, and diff side.
 
 ## Prompt Input
 

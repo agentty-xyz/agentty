@@ -5,7 +5,8 @@ use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::state::app_mode::{AppMode, DiffScrollCache, HelpContext};
-use crate::ui::util::{diff_view_max_scroll_offset, parse_diff_lines, selected_diff_lines};
+use crate::ui::util::{parse_diff_lines, selected_diff_lines};
+use crate::ui::{markdown, page};
 
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
@@ -115,6 +116,13 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
 
 /// Applies file-selection and scroll navigation keys in diff mode.
 fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
+    let review_comment_snapshot = if let AppMode::Diff { session_id, .. } = &app.mode {
+        app.services.review_comment_cache().snapshot(session_id)
+    } else {
+        None
+    };
+    let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
     if let AppMode::Diff {
         diff,
         file_explorer_selected_index,
@@ -156,6 +164,8 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
                     content_area,
                     *file_explorer_selected_index,
                     scroll_cache,
+                    review_comment_snapshot.as_ref(),
+                    &markdown_render_cache,
                 );
                 let clamped_scroll_offset = (*scroll_offset).min(max_scroll_offset);
 
@@ -171,6 +181,8 @@ fn handle_navigation_key(app: &mut App, content_area: Rect, key: KeyEvent) {
                     content_area,
                     *file_explorer_selected_index,
                     scroll_cache,
+                    review_comment_snapshot.as_ref(),
+                    &markdown_render_cache,
                 );
                 let clamped_scroll_offset = (*scroll_offset).min(max_scroll_offset);
 
@@ -207,6 +219,8 @@ fn diff_max_scroll_offset(
     content_area: Rect,
     selected_index: usize,
     scroll_cache: &mut Option<DiffScrollCache>,
+    review_comment_snapshot: Option<&ag_forge::ReviewCommentSnapshot>,
+    markdown_render_cache: &crate::ui::markdown::MarkdownRenderCache,
 ) -> u16 {
     if let Some(cached_scroll_limit) = scroll_cache
         && cached_scroll_limit.content_area == content_area
@@ -218,7 +232,12 @@ fn diff_max_scroll_offset(
     let parsed_lines = parse_diff_lines(diff);
     let tree_items = FileExplorer::file_tree_items(&parsed_lines);
     let selected_lines = selected_diff_lines(&parsed_lines, &tree_items, selected_index);
-    let max_scroll_offset = diff_view_max_scroll_offset(&selected_lines, content_area);
+    let max_scroll_offset = page::diff::diff_view_max_scroll_offset_with_comments(
+        &selected_lines,
+        content_area,
+        review_comment_snapshot,
+        markdown_render_cache,
+    );
 
     *scroll_cache = Some(DiffScrollCache {
         content_area,
@@ -231,6 +250,9 @@ fn diff_max_scroll_offset(
 
 #[cfg(test)]
 mod tests {
+    use ag_forge::{
+        ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+    };
     use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
     use tempfile::tempdir;
@@ -275,6 +297,25 @@ mod tests {
             .map(|index| format!("+line {index}"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Returns one cached inline review thread for scroll-bound tests.
+    fn review_comment_snapshot() -> ReviewCommentSnapshot {
+        ReviewCommentSnapshot {
+            pr_level_comments: Vec::new(),
+            threads: vec![ReviewCommentThread {
+                anchor_side: ReviewCommentAnchorSide::New,
+                comments: vec![ReviewComment {
+                    author: "alice".to_string(),
+                    body: "This inline comment adds extra rendered rows.".to_string(),
+                }],
+                is_outdated: Some(false),
+                is_resolved: false,
+                line: Some(1),
+                path: "src/main.rs".to_string(),
+                start_line: None,
+            }],
+        }
     }
 
     #[tokio::test]
@@ -671,7 +712,15 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         let diff = scrollable_diff_fixture();
-        let max_scroll_offset = diff_max_scroll_offset(&diff, TEST_TERMINAL_SIZE, 0, &mut None);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let max_scroll_offset = diff_max_scroll_offset(
+            &diff,
+            TEST_TERMINAL_SIZE,
+            0,
+            &mut None,
+            None,
+            &markdown_render_cache,
+        );
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff,
@@ -705,7 +754,15 @@ mod tests {
         // Arrange
         let (mut app, _base_dir) = new_test_app().await;
         let diff = scrollable_diff_fixture();
-        let max_scroll_offset = diff_max_scroll_offset(&diff, TEST_TERMINAL_SIZE, 0, &mut None);
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let max_scroll_offset = diff_max_scroll_offset(
+            &diff,
+            TEST_TERMINAL_SIZE,
+            0,
+            &mut None,
+            None,
+            &markdown_render_cache,
+        );
         app.mode = AppMode::Diff {
             session_id: "session-id".into(),
             diff,
@@ -732,6 +789,40 @@ mod tests {
                 ..
             } if scroll_offset == max_scroll_offset.saturating_sub(1)
         ));
+    }
+
+    #[test]
+    fn test_diff_max_scroll_offset_includes_inline_review_comments() {
+        // Arrange
+        let diff = concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "@@ -1 +1 @@\n",
+            "+new content\n"
+        );
+        let snapshot = review_comment_snapshot();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+
+        // Act
+        let terminal_size = Rect::new(0, 0, 80, 6);
+        let without_comments = diff_max_scroll_offset(
+            diff,
+            terminal_size,
+            0,
+            &mut None,
+            None,
+            &markdown_render_cache,
+        );
+        let with_comments = diff_max_scroll_offset(
+            diff,
+            terminal_size,
+            0,
+            &mut None,
+            Some(&snapshot),
+            &markdown_render_cache,
+        );
+
+        // Assert
+        assert!(with_comments > without_comments);
     }
 
     #[tokio::test]

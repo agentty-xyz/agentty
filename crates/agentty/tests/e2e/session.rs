@@ -5,6 +5,11 @@
 //! basics (typing, multiline via Alt+Enter, cancel via Esc), and returning
 //! to the session list from session view.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
+
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -102,6 +107,8 @@ fn seed_review_ready_session_with_review_request(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env)?;
+    seed_review_worktree_with_diff(env)?;
+    seed_github_review_comments_stub(env)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -128,6 +135,86 @@ fn seed_review_ready_session_with_review_request(
             .update_session_review_request("review-shortcut-0001", Some(&review_request))
             .await
     })?;
+
+    Ok(())
+}
+
+/// Seeds the review session folder with a real git diff and GitHub remote so
+/// diff mode and background review-comment sync can run without live services.
+fn seed_review_worktree_with_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let session_worktree = env.agentty_root.join("wt").join("review-s");
+    std::fs::create_dir_all(session_worktree.join("src"))?;
+    run_git(&session_worktree, &["init", "-b", "main"])?;
+    run_git(
+        &session_worktree,
+        &["config", "user.email", "test@test.com"],
+    )?;
+    run_git(&session_worktree, &["config", "user.name", "Test"])?;
+    std::fs::write(session_worktree.join("src/main.rs"), "fn main() {\n}\n")?;
+    run_git(&session_worktree, &["add", "."])?;
+    run_git(&session_worktree, &["commit", "-m", "init"])?;
+    run_git(
+        &session_worktree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/agentty-xyz/agentty.git",
+        ],
+    )?;
+    std::fs::write(
+        session_worktree.join("src/main.rs"),
+        "fn main() {\n    println!(\"review\");\n}\n",
+    )?;
+
+    Ok(())
+}
+
+/// Runs one git command in `working_directory`, returning an error with stderr
+/// detail when git fails.
+fn run_git(working_directory: &Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(working_directory)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+
+    Ok(())
+}
+
+/// Installs a deterministic `gh` stub that returns review-request status and
+/// one inline review-thread snapshot for the E2E feature scenario.
+fn seed_github_review_comments_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let gh_path = env.stub_bin.join("gh");
+    std::fs::write(
+        &gh_path,
+        r#"#!/bin/sh
+case "$*" in
+  *"auth status"*)
+    exit 0
+    ;;
+  *"pr view"*)
+    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+    ;;
+  *"api --hostname github.com graphql"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please simplify this line."}]}}]}}}}}'
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 1
+    ;;
+esac
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))?;
 
     Ok(())
 }
@@ -713,10 +800,8 @@ fn review_request_sync_runs_in_background() -> E2eResult {
     Ok(())
 }
 
-/// Verify that opening the diff page from a review-ready session and pressing
-/// `c` toggles the right panel to review-request comments. The panel renders
-/// the "Waiting for review-request comments to sync..." empty-state banner
-/// before the background sync has populated the cache.
+/// Verify that opening the diff page from a review-ready session shows cached
+/// review-request comments inline below matching diff lines.
 #[test]
 fn review_comments_preview_opens_from_diff_page() -> E2eResult {
     // Arrange, Act, Assert
@@ -725,8 +810,8 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
         .setup(seed_review_ready_session_with_review_request)
         .zola(
             "Review comments preview",
-            "From a review-ready session press `d` to open the diff page, then `c` to toggle the \
-             right panel to inline review-request comments grouped by file.",
+            "From a review-ready session press `d` to open the diff page and see inline \
+             review-request comments on matching diff lines.",
             44,
         )
         .run(
@@ -738,18 +823,17 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
                     .sleep(std::time::Duration::from_secs(1))
                     .press_key("d")
                     .wait_for_stable_frame(300, 5000)
-                    .press_key("c")
-                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("Please simplify this line.", 10000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "review_comments_preview",
-                        "Review comments preview after pressing d then c",
+                        "Review comments preview after pressing d",
                     )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Comments", &full);
-                assertion::assert_text_in_region(frame, "Review request #42", &full);
+                assertion::assert_text_in_region(frame, "Please simplify this line.", &full);
+                assertion::assert_text_in_region(frame, "alice", &full);
             },
         )?;
 

@@ -1,6 +1,6 @@
 +++
 title = "Review comments preview"
-description = "From a review-ready session press `d` to open the diff page, then `c` to toggle the right panel to inline review-request comments grouped by file."
+description = "From a review-ready session press `d` to open the diff page and see inline review-request comments on matching diff lines."
 weight = 44
 
 [extra]

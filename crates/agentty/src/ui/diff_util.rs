@@ -11,6 +11,8 @@ const LAYOUT_MARGIN: u16 = 1;
 const MIN_GUTTER_WIDTH: usize = 1;
 const SCROLLBAR_WIDTH: usize = 1;
 const SIGN_COLUMN_WIDTH: usize = 1;
+const DIFF_GIT_PATH_PREFIX: &str = "diff --git a/";
+const DIFF_GIT_PATH_SEPARATOR: &str = " b/";
 
 /// The kind of a line in a unified diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +126,29 @@ pub fn parse_diff_lines(diff: &str) -> Vec<DiffLine<'_>> {
     }
 
     result
+}
+
+/// Extracts the old and new repository-relative paths from a standard
+/// `diff --git a/<old> b/<new>` file header.
+pub fn diff_header_paths(header_line: &str) -> Option<(&str, &str)> {
+    let stripped = header_line.strip_prefix(DIFF_GIT_PATH_PREFIX)?;
+    let (old_path, new_path) = stripped.split_once(DIFF_GIT_PATH_SEPARATOR)?;
+
+    Some((old_path, new_path))
+}
+
+/// Extracts the new/right-side repository-relative path from a diff header.
+pub fn diff_header_new_path(header_line: &str) -> Option<&str> {
+    let (_, new_path) = diff_header_paths(header_line)?;
+
+    Some(new_path)
+}
+
+/// Extracts the old/left-side repository-relative path from a diff header.
+pub fn diff_header_old_path(header_line: &str) -> Option<&str> {
+    let (old_path, _) = diff_header_paths(header_line)?;
+
+    Some(old_path)
 }
 
 /// Find the maximum line number across all parsed diff lines for gutter width

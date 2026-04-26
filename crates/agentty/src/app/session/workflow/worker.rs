@@ -154,9 +154,7 @@ impl SessionWorkerContext {
     fn current_status(&self) -> Status {
         // Sync critical section (single read, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
-        self.status
-            .lock()
-            .map_or(Status::Review, |guard| *guard)
+        self.status.lock().map_or(Status::Review, |guard| *guard)
     }
 }
 

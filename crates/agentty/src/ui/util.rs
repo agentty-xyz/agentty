@@ -13,9 +13,9 @@ pub use crate::ui::activity_heatmap::{
     heatmap_month_markers, visible_heatmap_week_count,
 };
 pub use crate::ui::diff_util::{
-    DiffLine, DiffLineKind, diff_line_change_totals, diff_view_max_scroll_offset,
-    max_diff_line_number, parse_diff_lines, parse_hunk_header, selected_diff_lines,
-    wrap_diff_content,
+    DiffLine, DiffLineKind, diff_header_new_path, diff_header_old_path, diff_header_paths,
+    diff_line_change_totals, diff_view_max_scroll_offset, max_diff_line_number, parse_diff_lines,
+    parse_hunk_header, selected_diff_lines, wrap_diff_content,
 };
 pub use crate::ui::layout::{
     CHAT_INPUT_MAX_VISIBLE_LINES, QuestionPanelAreas, bottom_pinned_scroll_offset,

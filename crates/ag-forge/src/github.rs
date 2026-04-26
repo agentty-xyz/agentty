@@ -6,10 +6,10 @@ use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, ReviewComment, ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError,
-    ReviewRequestState, ReviewRequestSummary, command_output_detail,
-    looks_like_authentication_failure, looks_like_host_resolution_failure, map_spawn_error,
-    normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
+    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
+    command_output_detail, looks_like_authentication_failure, looks_like_host_resolution_failure,
+    map_spawn_error, normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// GitHub pull-request adapter that normalizes `gh` command output.
@@ -423,8 +423,8 @@ fn review_decision_summary(review_decision: Option<&str>) -> Option<String> {
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
      $repo) { pullRequest(number: $number) { comments(first: 100) { nodes { author { login } body \
-     } } reviewThreads(first: 100) { nodes { isResolved path line comments(first: 100) { nodes { \
-     author { login } body } } } } } } }";
+     } } reviewThreads(first: 100) { nodes { diffSide isOutdated isResolved line path startLine \
+     subjectType comments(first: 100) { nodes { author { login } body } } } } } } }";
 
 /// Parses the full review-comment snapshot from a GraphQL response.
 ///
@@ -470,16 +470,24 @@ fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentS
 
 /// Converts one GraphQL thread node into the forge-neutral representation.
 fn review_comment_thread_from_node(node: GitHubReviewThreadNode) -> ReviewCommentThread {
+    let line = if node.subject_type == "FILE" {
+        None
+    } else {
+        node.line
+    };
     ReviewCommentThread {
+        anchor_side: github_anchor_side(&node),
         comments: node
             .comments
             .nodes
             .into_iter()
             .map(review_comment_from_node)
             .collect(),
+        is_outdated: Some(node.is_outdated),
         is_resolved: node.is_resolved,
-        line: node.line,
+        line,
         path: node.path,
+        start_line: node.start_line,
     }
 }
 
@@ -490,6 +498,18 @@ fn review_comment_from_node(node: GitHubReviewCommentNode) -> ReviewComment {
             .author
             .map_or_else(|| "ghost".to_string(), |author| author.login),
         body: node.body,
+    }
+}
+
+/// Converts GitHub's diff-side labels into Agentty's normalized anchor side.
+fn github_anchor_side(node: &GitHubReviewThreadNode) -> ReviewCommentAnchorSide {
+    if node.subject_type == "FILE" || node.line.is_none() {
+        return ReviewCommentAnchorSide::File;
+    }
+
+    match node.diff_side.as_str() {
+        "LEFT" => ReviewCommentAnchorSide::Old,
+        _ => ReviewCommentAnchorSide::New,
     }
 }
 
@@ -537,10 +557,18 @@ struct GitHubReviewThreadsConnection {
 #[derive(Deserialize)]
 struct GitHubReviewThreadNode {
     comments: GitHubReviewCommentsConnection,
+    #[serde(rename = "diffSide")]
+    diff_side: String,
+    #[serde(rename = "isOutdated")]
+    is_outdated: bool,
     #[serde(rename = "isResolved")]
     is_resolved: bool,
     line: Option<u32>,
     path: String,
+    #[serde(rename = "startLine")]
+    start_line: Option<u32>,
+    #[serde(rename = "subjectType")]
+    subject_type: String,
 }
 
 /// GraphQL `comments` connection for one review thread.
@@ -866,6 +894,8 @@ mod tests {
         let unresolved = &snapshot.threads[0];
         assert_eq!(unresolved.path, "src/foo.rs");
         assert_eq!(unresolved.line, Some(42));
+        assert_eq!(unresolved.anchor_side, ReviewCommentAnchorSide::New);
+        assert_eq!(unresolved.is_outdated, Some(false));
         assert!(!unresolved.is_resolved);
         assert_eq!(unresolved.comments.len(), 2);
         assert_eq!(unresolved.comments[0].author, "alice");
@@ -873,6 +903,7 @@ mod tests {
 
         let resolved = &snapshot.threads[1];
         assert_eq!(resolved.path, "src/bar.rs");
+        assert_eq!(resolved.anchor_side, ReviewCommentAnchorSide::Old);
         assert!(resolved.is_resolved);
         assert_eq!(resolved.comments.len(), 1);
         assert_eq!(resolved.comments[0].author, "ghost");
@@ -1012,6 +1043,7 @@ mod tests {
                                     "line": 42,
                                     "startLine": null,
                                     "diffSide": "RIGHT",
+                                    "subjectType": "LINE",
                                     "comments": {
                                         "nodes": [
                                             {
@@ -1042,7 +1074,8 @@ mod tests {
                                     "path": "src/bar.rs",
                                     "line": 15,
                                     "startLine": null,
-                                    "diffSide": null,
+                                    "diffSide": "LEFT",
+                                    "subjectType": "LINE",
                                     "comments": {
                                         "nodes": [
                                             {

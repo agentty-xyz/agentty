@@ -163,6 +163,7 @@ pub(super) struct AppEventBatch {
     pub(super) should_refresh_git_status: bool,
     pub(super) should_force_reload: bool,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
+    pub(super) review_comment_session_ids: HashSet<SessionId>,
     pub(super) sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     pub(super) update_status: Option<UpdateStatus>,
 }
@@ -207,9 +208,7 @@ impl AppEventBatch {
             AppEvent::AtMentionEntriesLoaded {
                 entries,
                 session_id,
-            } => {
-                self.at_mention_entries_updates.insert(session_id, entries);
-            }
+            } => self.collect_at_mention_entries_loaded(session_id, entries),
             AppEvent::GitStatusUpdated {
                 session_statuses,
                 status,
@@ -218,7 +217,7 @@ impl AppEventBatch {
                 latest_available_version,
             } => self.collect_version_availability_updated(latest_available_version),
             AppEvent::UpdateStatusChanged { update_status } => {
-                self.update_status = Some(update_status);
+                self.collect_update_status_changed(update_status);
             }
             AppEvent::SessionModelUpdated {
                 session_id,
@@ -233,12 +232,8 @@ impl AppEventBatch {
                 self.session_reasoning_level_updates
                     .insert(session_id, reasoning_level_override);
             }
-            AppEvent::RefreshSessions => {
-                self.should_force_reload = true;
-            }
-            AppEvent::RefreshGitStatus => {
-                self.should_refresh_git_status = true;
-            }
+            AppEvent::RefreshSessions => self.collect_refresh_sessions(),
+            AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -246,9 +241,7 @@ impl AppEventBatch {
                 self.session_progress_updates
                     .insert(session_id, progress_message);
             }
-            AppEvent::SyncMainCompleted { result } => {
-                self.collect_sync_main_completed(result);
-            }
+            AppEvent::SyncMainCompleted { result } => self.collect_sync_main_completed(result),
             AppEvent::SessionSizeUpdated {
                 added_lines,
                 deleted_lines,
@@ -300,12 +293,40 @@ impl AppEventBatch {
             AppEvent::ReviewRequestStatusUpdated { result, session_id } => {
                 self.collect_review_request_status_updated(result, session_id);
             }
-            AppEvent::ReviewCommentsUpdated { session_id: _ } => {
-                // The comments cache is the source of truth; the event only
-                // serves as a wake-up signal so the UI refreshes on the next
-                // draw. No reducer state needs to change here.
+            AppEvent::ReviewCommentsUpdated { session_id } => {
+                self.collect_review_comments_updated(session_id);
             }
         }
+    }
+
+    /// Tracks one review-comment cache update so the reducer redraws and
+    /// clears stale diff scroll metrics for that session.
+    fn collect_review_comments_updated(&mut self, session_id: SessionId) {
+        self.review_comment_session_ids.insert(session_id);
+    }
+
+    /// Stores loaded at-mention entries for one session.
+    fn collect_at_mention_entries_loaded(
+        &mut self,
+        session_id: SessionId,
+        entries: Vec<FileEntry>,
+    ) {
+        self.at_mention_entries_updates.insert(session_id, entries);
+    }
+
+    /// Stores one pending status-bar update.
+    fn collect_update_status_changed(&mut self, update_status: UpdateStatus) {
+        self.update_status = Some(update_status);
+    }
+
+    /// Marks the next reducer application as a full session refresh.
+    fn collect_refresh_sessions(&mut self) {
+        self.should_force_reload = true;
+    }
+
+    /// Marks git status polling for restart.
+    fn collect_refresh_git_status(&mut self) {
+        self.should_refresh_git_status = true;
     }
 
     /// Stores the latest git status event for this reducer batch.
@@ -522,6 +543,10 @@ impl App {
                 .await;
         }
 
+        self.invalidate_diff_scroll_cache_for_review_comments(
+            &event_batch.review_comment_session_ids,
+        );
+
         self.apply_session_progress_updates(std::mem::take(
             &mut event_batch.session_progress_updates,
         ));
@@ -562,6 +587,26 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    /// Clears the diff scroll limit cache when review comments change for the
+    /// currently visible diff session.
+    fn invalidate_diff_scroll_cache_for_review_comments(
+        &mut self,
+        review_comment_session_ids: &HashSet<SessionId>,
+    ) {
+        let AppMode::Diff {
+            scroll_cache,
+            session_id,
+            ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+
+        if review_comment_session_ids.contains(session_id) {
+            *scroll_cache = None;
         }
     }
 
@@ -646,6 +691,7 @@ impl App {
             || event_batch.branch_publish_action_update.is_some()
             || !event_batch.published_branch_sync_updates.is_empty()
             || !event_batch.review_request_status_updates.is_empty()
+            || !event_batch.review_comment_session_ids.is_empty()
             || !event_batch.review_updates.is_empty()
             || !event_batch.session_model_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()

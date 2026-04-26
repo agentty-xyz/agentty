@@ -29,8 +29,8 @@ impl ReviewCommentCache {
     }
 
     /// Stores `snapshot` for `session_id`, sorting the inline threads by
-    /// `(path, line)` so the UI does not sort during render. Returns whether
-    /// the cached content changed since the previous write.
+    /// `(path, line, side)` so the UI does not sort during render. Returns
+    /// whether the cached content changed since the previous write.
     pub fn record_snapshot(
         &self,
         session_id: SessionId,
@@ -40,6 +40,9 @@ impl ReviewCommentCache {
             left.path
                 .cmp(&right.path)
                 .then_with(|| left.line.unwrap_or(0).cmp(&right.line.unwrap_or(0)))
+                .then_with(|| {
+                    anchor_side_order(left.anchor_side).cmp(&anchor_side_order(right.anchor_side))
+                })
         });
 
         let Ok(mut guard) = self.inner.lock() else {
@@ -62,21 +65,35 @@ impl ReviewCommentCache {
     }
 }
 
+/// Returns a stable ordering for review-comment anchor sides.
+fn anchor_side_order(anchor_side: ag_forge::ReviewCommentAnchorSide) -> u8 {
+    match anchor_side {
+        ag_forge::ReviewCommentAnchorSide::File => 0,
+        ag_forge::ReviewCommentAnchorSide::Old => 1,
+        ag_forge::ReviewCommentAnchorSide::New => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use ag_forge::{ReviewComment, ReviewCommentSnapshot, ReviewCommentThread};
+    use ag_forge::{
+        ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+    };
 
     use super::*;
 
     fn review_thread(path: &str, line: u32, resolved: bool) -> ReviewCommentThread {
         ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
             comments: vec![ReviewComment {
                 author: "alice".to_string(),
                 body: format!("Comment on {path}"),
             }],
+            is_outdated: Some(false),
             is_resolved: resolved,
             line: Some(line),
             path: path.to_string(),
+            start_line: None,
         }
     }
 

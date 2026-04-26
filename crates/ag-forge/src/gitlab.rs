@@ -3,11 +3,12 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use url::Url;
+use url::{Url, form_urlencoded};
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
+    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ReviewCommentThread, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
     command_output_detail, is_gitlab_host, looks_like_authentication_failure,
     looks_like_host_resolution_failure, map_spawn_error, normalize_provider_label,
     parse_remote_url, status_summary_parts, strip_port,
@@ -67,6 +68,33 @@ impl GitLabReviewRequestAdapter {
 
         self.refresh_review_request_after_auth(remote, display_id)
             .await
+    }
+
+    /// Fetches merge-request discussions through GitLab's REST API and
+    /// normalizes diff notes plus review-request-wide notes for the comments
+    /// preview.
+    pub(crate) async fn fetch_review_comment_snapshot(
+        &self,
+        remote: ForgeRemote,
+        display_id: String,
+    ) -> Result<ReviewCommentSnapshot, ReviewRequestError> {
+        self.ensure_authenticated(&remote).await?;
+
+        let merge_request_iid = parse_display_id(&display_id)?;
+        let output = self
+            .run_review_command(
+                &remote,
+                discussions_command(&remote, &merge_request_iid),
+                "fetch merge-request discussions",
+            )
+            .await?;
+
+        parse_review_comment_snapshot_response(&output.stdout).map_err(|message| {
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitLab,
+                message,
+            }
+        })
     }
 
     /// Finds one existing merge request after authentication has been
@@ -292,6 +320,28 @@ fn view_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
     )
 }
 
+/// Builds the `glab api` command for merge-request discussions.
+fn discussions_command(remote: &ForgeRemote, merge_request_iid: &str) -> ForgeCommand {
+    let encoded_project_path: String =
+        form_urlencoded::byte_serialize(remote.project_path().as_bytes()).collect();
+    let endpoint = format!(
+        "/projects/{encoded_project_path}/merge_requests/{merge_request_iid}/discussions?\
+         per_page=100"
+    );
+
+    gitlab_command(
+        remote,
+        "glab",
+        vec![
+            "api".to_string(),
+            "--hostname".to_string(),
+            remote.host.clone(),
+            "--paginate".to_string(),
+            endpoint,
+        ],
+    )
+}
+
 /// Builds one base `glab` command with deterministic color settings and the
 /// optional session worktree for repository-aware host detection.
 fn gitlab_command(
@@ -365,6 +415,113 @@ fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
     })
 }
 
+/// Parses merge-request discussions into inline threads and MR-level comments.
+fn parse_review_comment_snapshot_response(stdout: &str) -> Result<ReviewCommentSnapshot, String> {
+    let discussions: Vec<GitLabDiscussion> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitLab merge-request discussions response: {error}"))?;
+    let mut pr_level_comments = Vec::new();
+    let mut threads = Vec::new();
+
+    for discussion in discussions {
+        let mut notes = discussion
+            .notes
+            .into_iter()
+            .filter(|note| !note.system)
+            .collect::<Vec<_>>();
+        if notes.is_empty() {
+            continue;
+        }
+
+        if let Some(thread) = review_comment_thread_from_discussion(&notes) {
+            threads.push(thread);
+        } else {
+            pr_level_comments.extend(notes.drain(..).map(review_comment_from_note));
+        }
+    }
+
+    Ok(ReviewCommentSnapshot {
+        pr_level_comments,
+        threads,
+    })
+}
+
+/// Converts one GitLab discussion into an inline thread when it carries a diff
+/// note position.
+fn review_comment_thread_from_discussion(
+    notes: &[GitLabDiscussionNote],
+) -> Option<ReviewCommentThread> {
+    let anchor_note = notes.iter().find(|note| {
+        note.note_type.as_deref() == Some("DiffNote") && note.position.as_ref().is_some()
+    })?;
+    let position = anchor_note.position.as_ref()?;
+    let (anchor_side, path, line) = gitlab_anchor_from_position(position);
+
+    Some(ReviewCommentThread {
+        anchor_side,
+        comments: notes
+            .iter()
+            .cloned()
+            .map(review_comment_from_note)
+            .collect(),
+        is_outdated: None,
+        is_resolved: anchor_note.resolved,
+        line,
+        path,
+        start_line: None,
+    })
+}
+
+/// Converts one GitLab diff-note position into Agentty's normalized anchor.
+fn gitlab_anchor_from_position(
+    position: &GitLabDiscussionPosition,
+) -> (ReviewCommentAnchorSide, String, Option<u32>) {
+    if let Some(new_line) = position.new_line {
+        return (
+            ReviewCommentAnchorSide::New,
+            position
+                .new_path
+                .clone()
+                .or_else(|| position.old_path.clone())
+                .unwrap_or_default(),
+            Some(new_line),
+        );
+    }
+
+    if let Some(old_line) = position.old_line {
+        return (
+            ReviewCommentAnchorSide::Old,
+            position
+                .old_path
+                .clone()
+                .or_else(|| position.new_path.clone())
+                .unwrap_or_default(),
+            Some(old_line),
+        );
+    }
+
+    (
+        ReviewCommentAnchorSide::File,
+        position
+            .new_path
+            .clone()
+            .or_else(|| position.old_path.clone())
+            .unwrap_or_default(),
+        None,
+    )
+}
+
+/// Converts one GitLab discussion note into the forge-neutral comment shape.
+fn review_comment_from_note(note: GitLabDiscussionNote) -> ReviewComment {
+    ReviewComment {
+        author: note
+            .author
+            .username
+            .or(note.author.name)
+            .unwrap_or_default(),
+        body: note.body,
+    }
+}
+
 /// Parses one GitLab merge-request display id into the numeric argument for
 /// `glab`.
 fn parse_display_id(display_id: &str) -> Result<String, ReviewRequestError> {
@@ -424,6 +581,46 @@ struct GitLabViewResponse {
     title: String,
     #[serde(rename = "web_url")]
     web_url: String,
+}
+
+/// GitLab merge-request discussion returned by the discussions API.
+#[derive(Clone, Deserialize)]
+struct GitLabDiscussion {
+    notes: Vec<GitLabDiscussionNote>,
+}
+
+/// One GitLab discussion note, optionally carrying a diff position.
+#[derive(Clone, Deserialize)]
+struct GitLabDiscussionNote {
+    author: GitLabDiscussionAuthor,
+    body: String,
+    position: Option<GitLabDiscussionPosition>,
+    #[serde(default)]
+    resolved: bool,
+    #[serde(default)]
+    system: bool,
+    #[serde(rename = "type")]
+    note_type: Option<String>,
+}
+
+/// Minimal GitLab note author data shown in the comments preview.
+#[derive(Clone, Deserialize)]
+struct GitLabDiscussionAuthor {
+    name: Option<String>,
+    username: Option<String>,
+}
+
+/// Minimal GitLab diff position used to anchor inline comments.
+#[derive(Clone, Deserialize)]
+struct GitLabDiscussionPosition {
+    #[serde(rename = "new_line")]
+    new_line: Option<u32>,
+    #[serde(rename = "new_path")]
+    new_path: Option<String>,
+    #[serde(rename = "old_line")]
+    old_line: Option<u32>,
+    #[serde(rename = "old_path")]
+    old_path: Option<String>,
 }
 
 impl GitLabViewResponse {
@@ -632,6 +829,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn fetch_review_comment_snapshot_parses_discussions_response() {
+        // Arrange
+        let remote = gitlab_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &discussions_command(&remote, "42")
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(gitlab_discussions_json())) }));
+        let adapter = GitLabReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let snapshot = adapter
+            .fetch_review_comment_snapshot(remote, "!42".to_string())
+            .await
+            .expect("GitLab discussion snapshot should parse");
+
+        // Assert
+        assert_eq!(snapshot.threads.len(), 1);
+        let thread = &snapshot.threads[0];
+        assert_eq!(thread.path, "src/main.rs");
+        assert_eq!(thread.line, Some(12));
+        assert_eq!(thread.anchor_side, ReviewCommentAnchorSide::New);
+        assert_eq!(thread.is_outdated, None);
+        assert!(!thread.is_resolved);
+        assert_eq!(thread.comments.len(), 2);
+        assert_eq!(thread.comments[0].author, "alice");
+        assert_eq!(thread.comments[0].body, "Please simplify this.");
+
+        assert_eq!(snapshot.pr_level_comments.len(), 1);
+        assert_eq!(snapshot.pr_level_comments[0].author, "carol");
+    }
+
     #[test]
     fn detect_remote_supports_gitlab_hosts() {
         // Arrange
@@ -704,6 +951,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn discussions_command_requests_all_gitlab_pages() {
+        // Arrange
+        let remote = gitlab_remote();
+
+        // Act
+        let command = discussions_command(&remote, "42");
+
+        // Assert
+        assert!(
+            command
+                .arguments
+                .iter()
+                .any(|argument| argument == "--paginate")
+        );
+        assert!(command.arguments.iter().any(|argument| {
+            argument == "/projects/agentty-xyz%2Fagentty/merge_requests/42/discussions?per_page=100"
+        }));
+    }
+
     /// Builds one normalized GitLab remote for command-construction tests.
     fn gitlab_remote() -> ForgeRemote {
         ForgeRemote {
@@ -740,6 +1007,57 @@ mod tests {
             "title": "Add forge review support",
             "web_url": "https://gitlab.com/agentty-xyz/agentty/-/merge_requests/42"
         }"#
+        .to_string()
+    }
+
+    /// Returns one representative GitLab discussions API response.
+    fn gitlab_discussions_json() -> String {
+        r#"[
+            {
+                "id": "discussion-1",
+                "individual_note": false,
+                "notes": [
+                    {
+                        "id": 1,
+                        "type": "DiffNote",
+                        "body": "Please simplify this.",
+                        "author": {"name": "Alice", "username": "alice"},
+                        "system": false,
+                        "resolved": false,
+                        "position": {
+                            "old_path": "src/main.rs",
+                            "new_path": "src/main.rs",
+                            "old_line": null,
+                            "new_line": 12
+                        }
+                    },
+                    {
+                        "id": 2,
+                        "type": "DiscussionNote",
+                        "body": "Agreed.",
+                        "author": {"name": "Bob", "username": "bob"},
+                        "system": false,
+                        "resolved": false,
+                        "position": null
+                    }
+                ]
+            },
+            {
+                "id": "discussion-2",
+                "individual_note": true,
+                "notes": [
+                    {
+                        "id": 3,
+                        "type": "DiscussionNote",
+                        "body": "Looks good overall.",
+                        "author": {"name": "Carol", "username": "carol"},
+                        "system": false,
+                        "resolved": false,
+                        "position": null
+                    }
+                ]
+            }
+        ]"#
         .to_string()
     }
 }

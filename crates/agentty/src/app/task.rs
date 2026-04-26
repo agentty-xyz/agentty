@@ -546,9 +546,8 @@ enum ReviewCommentsSyncAction {
 /// The UI only shows inline comments while the review request is still open
 /// and belongs to a forge whose comment-preview adapter is implemented:
 ///
-/// - Forge that does not yet support the comments preview (for example a GitLab
-///   merge request) → skip so the poll does not record a doomed failure on
-///   every tick.
+/// - Forge that does not yet support the comments preview → skip so the poll
+///   does not record a doomed failure on every tick.
 /// - Successful `Open` outcome → fetch fresh comments using the freshly
 ///   observed display id.
 /// - Successful non-open outcome (merged, closed, or no review request) →
@@ -1423,10 +1422,9 @@ mod tests {
     }
 
     #[test]
-    /// A successful `Open` outcome on an unsupported forge (GitLab) skips the
-    /// comment-thread fetch until a native adapter ships, to avoid recording
-    /// unsupported-forge errors on every sync tick.
-    fn review_comments_sync_action_skips_on_unsupported_forge_open_sync_outcome() {
+    /// A successful GitLab `Open` outcome fetches comment threads now that
+    /// merge-request discussions are normalized through the forge boundary.
+    fn review_comments_sync_action_fetches_on_gitlab_open_sync_outcome() {
         // Arrange
         let linked = crate::domain::session::ReviewRequest {
             last_refreshed_at: 0,
@@ -1452,13 +1450,14 @@ mod tests {
         let action = review_comments_sync_action(Some(&linked), Some(&sync_result));
 
         // Assert
-        assert_eq!(action, ReviewCommentsSyncAction::Skip);
+        assert_eq!(action, ReviewCommentsSyncAction::Fetch("!42".to_string()));
     }
 
     #[test]
-    /// A failed sync with a GitLab-linked review request skips fetching so
-    /// the loop does not keep calling an unsupported forge path.
-    fn review_comments_sync_action_skips_on_unsupported_forge_when_sync_fails() {
+    /// A failed sync with a GitLab-linked review request falls back to the
+    /// existing open merge request so transient refresh errors do not blank
+    /// the comments preview.
+    fn review_comments_sync_action_fetches_on_gitlab_sync_failure() {
         // Arrange
         let linked = crate::domain::session::ReviewRequest {
             last_refreshed_at: 0,
@@ -1473,7 +1472,7 @@ mod tests {
         let action = review_comments_sync_action(Some(&linked), None);
 
         // Assert
-        assert_eq!(action, ReviewCommentsSyncAction::Skip);
+        assert_eq!(action, ReviewCommentsSyncAction::Fetch("!11".to_string()));
     }
 
     #[test]

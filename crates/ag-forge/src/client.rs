@@ -187,12 +187,15 @@ impl ReviewRequestClient for RealReviewRequestClient {
                         .await
                 })
             }
-            super::ForgeKind::GitLab => Box::pin(async move {
-                Err(ReviewRequestError::OperationFailed {
-                    forge_kind: remote.forge_kind,
-                    message: "GitLab review-comment preview is not yet supported".to_string(),
+            super::ForgeKind::GitLab => {
+                let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move {
+                    adapter
+                        .fetch_review_comment_snapshot(remote, display_id)
+                        .await
                 })
-            }),
+            }
         }
     }
 }
