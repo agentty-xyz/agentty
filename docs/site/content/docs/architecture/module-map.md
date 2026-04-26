@@ -134,7 +134,7 @@ also writes a machine-readable workspace summary to
   shared repository bundle construction, and row or repository re-exports.
 - `crates/agentty/src/infra/db/session.rs`: `SessionRepository`,
   `SqliteSessionRepository`, session row models, turn-metadata persistence,
-  and session query helpers.
+  focused-review cache persistence, and session query helpers.
 - `crates/agentty/src/infra/db/project.rs`: `ProjectRepository`,
   `SqliteProjectRepository`, project row models, and project list queries.
 - `crates/agentty/src/infra/db/review.rs`: `ReviewRepository`,

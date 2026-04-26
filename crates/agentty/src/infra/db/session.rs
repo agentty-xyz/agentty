@@ -127,6 +127,17 @@ pub(crate) struct SessionFollowUpTaskRow {
     pub text: String,
 }
 
+/// Row returned when hydrating persisted focused-review cache entries.
+#[derive(Clone, Debug, Eq, PartialEq, sqlx::FromRow)]
+pub(crate) struct SessionFocusedReviewRow {
+    /// Diff-content hash captured when the focused review was generated.
+    pub(crate) diff_hash: String,
+    /// Stable session identifier.
+    pub(crate) session_id: String,
+    /// Generated focused-review markdown text.
+    pub(crate) text: String,
+}
+
 impl SessionFollowUpTaskRow {
     /// Converts one follow-up-task row into the domain snapshot used by the
     /// UI.
@@ -209,6 +220,12 @@ pub(crate) trait SessionRepository: Send + Sync {
     /// Loads all persisted session follow-up-task rows in stable display
     /// order.
     async fn load_session_follow_up_tasks(&self) -> Result<Vec<SessionFollowUpTaskRow>, DbError>;
+
+    /// Loads persisted focused-review cache rows for one project.
+    async fn load_session_focused_reviews_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionFocusedReviewRow>, DbError>;
 
     /// Loads lightweight session metadata used for cheap change detection.
     async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError>;
@@ -344,6 +361,14 @@ pub(crate) trait SessionRepository: Send + Sync {
 
     /// Updates the persisted session summary text for a session row.
     async fn update_session_summary(&self, id: &str, summary: &str) -> Result<(), DbError>;
+
+    /// Updates or clears the persisted focused-review cache for a session.
+    async fn update_session_focused_review(
+        &self,
+        id: &str,
+        diff_hash: Option<String>,
+        text: Option<String>,
+    ) -> Result<(), DbError>;
 
     /// Updates the display title for a session row.
     async fn update_session_title(&self, id: &str, title: &str) -> Result<(), DbError>;
@@ -988,6 +1013,30 @@ ORDER BY session_id, position, id
         Ok(rows)
     }
 
+    async fn load_session_focused_reviews_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionFocusedReviewRow>, DbError> {
+        let rows = sqlx::query_as::<_, SessionFocusedReviewRow>(
+            r"
+SELECT id AS session_id,
+       focused_review_diff_hash AS diff_hash,
+       focused_review_text AS text
+FROM session
+WHERE project_id = ?
+  AND focused_review_diff_hash IS NOT NULL
+  AND focused_review_text IS NOT NULL
+  AND focused_review_text <> ''
+ORDER BY updated_at DESC, id
+",
+        )
+        .bind(project_id)
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(rows)
+    }
+
     async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError> {
         let row = sqlx::query_as!(
             SessionMetadataRow,
@@ -1514,6 +1563,29 @@ WHERE id = ?
 ",
         )
         .bind(summary)
+        .bind(id)
+        .execute(&self.0)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_session_focused_review(
+        &self,
+        id: &str,
+        diff_hash: Option<String>,
+        text: Option<String>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            r"
+UPDATE session
+SET focused_review_diff_hash = ?,
+    focused_review_text = ?
+WHERE id = ?
+",
+        )
+        .bind(diff_hash.as_deref())
+        .bind(text.as_deref())
         .bind(id)
         .execute(&self.0)
         .await?;

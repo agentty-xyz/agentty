@@ -181,12 +181,16 @@ The printed session-chat data comes from these sources:
   question panel renders the current question and its options/input while the
   transcript panel remains visible above it.
 - `review_status_message` and `review_text`
-  Stored on `AppMode::View` and its restore-view variants. Review mode is opened
-  from `crates/agentty/src/runtime/mode/session_view.rs`, which either reuses a
+  Stored on `AppMode::View` and its restore-view variants, with successful
+  focused review text also persisted on the `session` row as the last
+  focused-review cache entry. Review mode is opened from
+  `crates/agentty/src/runtime/mode/session_view.rs`, which either reuses a
   cached review, shows a loading message, or starts a review-assist task. That
   task emits `ReviewPrepared` / `ReviewPreparationFailed`, and
-  `App::apply_review_update()` in `crates/agentty/src/app/core.rs` writes the
-  resulting text or error/status message back into the active view mode.
+  `App::apply_review_update()` in
+  `crates/agentty/src/app/core/events.rs` writes the resulting text or
+  error/status message back into the active view mode while the reducer
+  persists successful text for restart hydration.
 - `active_progress`
   Sourced from `App::session_progress_message()` in
   `crates/agentty/src/app/core.rs`. Session task helpers emit
@@ -388,11 +392,14 @@ stays readable on narrow screens.
 
 #### Focused review text
 
-- Comes from: `review_text` from review cache or view state
+- Comes from: `review_text` from review cache or view state; successful
+  focused reviews are also saved as the session's persisted focused-review
+  cache entry and hydrated into `App.review_cache` on startup.
 - Prints: appended after transcript content once review assist succeeds.
-- Hidden or removed: cleared when a new reply starts, when the session returns
-  to `InProgress`, or when a later review result fails and replaces it with an
-  error status message.
+- Hidden or removed: cleared from memory and persistence when a new reply
+  starts, when the session returns to `InProgress`, when a replacement review
+  starts, or when a later review result fails and replaces it with an error
+  status message.
 
 #### In-progress loader
 

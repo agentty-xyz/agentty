@@ -26,7 +26,9 @@ pub(crate) use review::{ReviewRepository, SqliteReviewRepository};
 #[cfg(test)]
 pub(crate) use session::SessionJoinRow;
 pub use session::{SessionDetailRow, SessionListRow, SessionRow};
-pub(crate) use session::{SessionRepository, SessionTurnMetadata, SqliteSessionRepository};
+pub(crate) use session::{
+    SessionFocusedReviewRow, SessionRepository, SessionTurnMetadata, SqliteSessionRepository,
+};
 pub(crate) use setting::{SettingRepository, SqliteSettingRepository};
 pub use usage::SessionUsageRow;
 pub(crate) use usage::{SqliteUsageRepository, UsageRepository};
@@ -455,6 +457,16 @@ impl AppRepositories {
         self.session.load_session_detail(session_id).await
     }
 
+    /// Loads persisted focused-review cache rows for one project.
+    pub(crate) async fn load_session_focused_reviews_for_project(
+        &self,
+        project_id: i64,
+    ) -> Result<Vec<SessionFocusedReviewRow>, DbError> {
+        self.session
+            .load_session_focused_reviews_for_project(project_id)
+            .await
+    }
+
     /// Loads lightweight session metadata used for cheap change detection.
     pub(crate) async fn load_sessions_metadata(&self) -> Result<(i64, i64), DbError> {
         self.session.load_sessions_metadata().await
@@ -674,6 +686,25 @@ impl AppRepositories {
         summary: &str,
     ) -> Result<(), DbError> {
         self.session.update_session_summary(id, summary).await
+    }
+
+    /// Updates or clears the persisted focused-review cache for a session.
+    ///
+    /// # Errors
+    /// Returns an error if the session row cannot be updated.
+    pub async fn update_session_focused_review(
+        &self,
+        id: &str,
+        diff_hash: Option<&str>,
+        text: Option<&str>,
+    ) -> Result<(), DbError> {
+        self.session
+            .update_session_focused_review(
+                id,
+                diff_hash.map(str::to_string),
+                text.map(str::to_string),
+            )
+            .await
     }
 
     /// Updates the display title for a session row.
@@ -2763,6 +2794,75 @@ WHERE model = ?
 
         // Assert
         assert_eq!(loaded_summary.as_deref(), Some("persisted summary"));
+    }
+
+    #[tokio::test]
+    async fn test_load_session_focused_reviews_for_project_returns_persisted_review() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        database
+            .update_session_focused_review("session-a", Some("42"), Some("## Review\nPersisted"))
+            .await
+            .expect("failed to update focused review");
+
+        // Act
+        let focused_reviews = database
+            .load_session_focused_reviews_for_project(project_id)
+            .await
+            .expect("failed to load focused reviews");
+
+        // Assert
+        assert_eq!(
+            focused_reviews,
+            vec![SessionFocusedReviewRow {
+                diff_hash: "42".to_string(),
+                session_id: "session-a".to_string(),
+                text: "## Review\nPersisted".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_session_focused_review_clears_persisted_review() {
+        // Arrange
+        let database = Database::open_in_memory()
+            .await
+            .expect("failed to open in-memory db");
+        let project_id = database
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to insert project");
+        database
+            .insert_session("session-a", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        database
+            .update_session_focused_review("session-a", Some("42"), Some("## Review\nPersisted"))
+            .await
+            .expect("failed to update focused review");
+
+        // Act
+        database
+            .update_session_focused_review("session-a", None, None)
+            .await
+            .expect("failed to clear focused review");
+        let focused_reviews = database
+            .load_session_focused_reviews_for_project(project_id)
+            .await
+            .expect("failed to load focused reviews");
+
+        // Assert
+        assert!(focused_reviews.is_empty());
     }
 
     #[tokio::test]

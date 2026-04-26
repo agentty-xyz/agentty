@@ -15,7 +15,9 @@ use app::branch_publish::{
     pull_request_publish_success_message as pull_request_publish_success_message_text,
 };
 use app::reducer::AppEventReducer;
-use app::review::{ReviewUpdate, apply_review_updates, auto_start_reviews};
+use app::review::{
+    FocusedReviewPersistence, ReviewUpdate, apply_review_updates, auto_start_reviews,
+};
 
 use super::state::{App, SyncPopupContext, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::app;
@@ -541,12 +543,14 @@ impl App {
 
         self.apply_batch_session_snapshot_updates(&mut event_batch);
 
-        apply_review_updates(
+        let focused_review_persistence = apply_review_updates(
             &mut self.review_cache,
             &mut self.mode,
             &mut self.sessions,
             event_batch.review_updates,
         );
+        self.persist_focused_review_updates(focused_review_persistence)
+            .await;
 
         if let Some(branch_publish_action_update) = event_batch.branch_publish_action_update {
             self.apply_branch_publish_action_update(branch_publish_action_update);
@@ -1041,6 +1045,29 @@ impl App {
             &mut self.sessions,
             review_updates,
         );
+    }
+
+    /// Persists successful focused reviews and clears stale saved review text
+    /// after failed regeneration attempts.
+    async fn persist_focused_review_updates(
+        &self,
+        focused_review_persistence: Vec<FocusedReviewPersistence>,
+    ) {
+        for persistence_update in focused_review_persistence {
+            let diff_hash = persistence_update
+                .diff_hash
+                .map(|diff_hash| diff_hash.to_string());
+
+            let _ = self
+                .services
+                .db()
+                .update_session_focused_review(
+                    persistence_update.session_id.as_str(),
+                    diff_hash.as_deref(),
+                    persistence_update.text.as_deref(),
+                )
+                .await;
+        }
     }
 
     /// Starts focused review generation for sessions that just entered review.

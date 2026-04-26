@@ -64,6 +64,32 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Seeds one review-ready session with a focused review already persisted as
+/// if Agentty had been restarted after review generation completed.
+fn seed_review_ready_session_with_persisted_focused_review(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env)?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        database
+            .update_session_focused_review(
+                "review-shortcut-0001",
+                Some("42"),
+                Some("## Review\nPersisted focused review finding."),
+            )
+            .await
+    })?;
+
+    Ok(())
+}
+
 /// Seeds one running session so `Ctrl+c` can exercise the turn-stop path
 /// without needing a live agent backend.
 fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -909,6 +935,36 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Please simplify this line.", &full);
                 assertion::assert_text_in_region(frame, "alice", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that persisted focused review text is restored into the session
+/// output panel after Agentty starts again.
+#[test]
+fn persisted_focused_review_survives_reload() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("persisted_focused_review")
+        .with_git()
+        .setup(seed_review_ready_session_with_persisted_focused_review)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "persisted_focused_review",
+                        "Persisted focused review visible after startup",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Persisted focused review finding.", &full);
             },
         )?;
 

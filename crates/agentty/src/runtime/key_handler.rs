@@ -521,8 +521,9 @@ async fn handle_merge_confirmation(
     Ok(EventResult::Continue)
 }
 
-/// Clears the focused review cache and restarts generation for the confirmed
-/// session, then restores session view with the refreshed review state.
+/// Clears focused review cache state and persisted review text, restarts
+/// generation for the confirmed session, then restores session view with the
+/// refreshed review state.
 async fn handle_regenerate_review_confirmation(
     app: &mut App,
     confirmation_session_id: Option<SessionId>,
@@ -580,6 +581,11 @@ async fn handle_regenerate_review_confirmation(
     let review_model = app.settings.default_review_model;
     app.review_cache
         .insert(session_id.clone(), ReviewCacheEntry::Loading { diff_hash });
+    let _ = app
+        .services
+        .db()
+        .update_session_focused_review(session_id.as_str(), None, None)
+        .await;
     app.start_review_assist(
         session_id.as_str(),
         &session_folder,

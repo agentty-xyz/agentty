@@ -1,8 +1,6 @@
 //! Focused review-cache and review-assist orchestration helpers.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -13,6 +11,7 @@ use super::task;
 use crate::app::session_state::SessionState;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionId, Status};
+use crate::infra::db::SessionFocusedReviewRow;
 use crate::infra::git::GitClient;
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
@@ -82,6 +81,18 @@ pub(crate) struct ReviewUpdate {
     pub(crate) result: Result<String, String>,
 }
 
+/// Persistable focused-review cache change produced by the reducer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FocusedReviewPersistence {
+    /// Hash of the diff that the persisted text applies to, or `None` when
+    /// clearing a stale persisted review.
+    pub(crate) diff_hash: Option<u64>,
+    /// Stable session identifier for the focused-review cache row.
+    pub(crate) session_id: SessionId,
+    /// Focused-review markdown to persist, or `None` when clearing it.
+    pub(crate) text: Option<String>,
+}
+
 /// Prefix for the focused-review loading status while assist output is being
 /// prepared.
 const REVIEW_LOADING_MESSAGE_PREFIX: &str = "Reviewing changes with";
@@ -94,16 +105,15 @@ struct ReviewModeTarget<'a> {
     review_text: &'a mut Option<String>,
 }
 
-/// Computes a deterministic hash of diff text for cache invalidation.
-///
-/// Uses [`DefaultHasher`] which is not guaranteed to produce stable hashes
-/// across Rust versions. This is acceptable because the cache is purely
-/// in-memory and lives only for the duration of the process.
+/// Computes a deterministic `FNV-1a` hash of diff text for focused-review
+/// cache invalidation.
 pub(crate) fn diff_content_hash(diff: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    diff.hash(&mut hasher);
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    hasher.finish()
+    diff.as_bytes().iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    })
 }
 
 /// Returns whether one status line represents an in-flight focused review.
@@ -136,6 +146,26 @@ pub(crate) fn review_view_state(
         ),
         ReviewCacheEntry::Suppressed { .. } => (None, None),
     }
+}
+
+/// Builds the startup focused-review cache from persisted rows.
+pub(crate) fn review_cache_from_rows(
+    focused_review_rows: Vec<SessionFocusedReviewRow>,
+) -> HashMap<SessionId, ReviewCacheEntry> {
+    focused_review_rows
+        .into_iter()
+        .filter_map(|row| {
+            let diff_hash = row.diff_hash.parse::<u64>().ok()?;
+
+            Some((
+                SessionId::from(row.session_id),
+                ReviewCacheEntry::Ready {
+                    diff_hash,
+                    text: row.text,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Spawns one focused review-assist task for the provided session diff.
@@ -176,16 +206,22 @@ pub(crate) fn apply_review_updates(
     mode: &mut AppMode,
     session_state: &mut SessionState,
     review_updates: HashMap<SessionId, ReviewUpdate>,
-) {
+) -> Vec<FocusedReviewPersistence> {
+    let mut persistence_updates = Vec::new();
+
     for (session_id, review_update) in review_updates {
-        apply_review_update(
+        if let Some(persistence_update) = apply_review_update(
             review_cache,
             mode,
             session_state,
             &session_id,
             review_update,
-        );
+        ) {
+            persistence_updates.push(persistence_update);
+        }
     }
+
+    persistence_updates
 }
 
 /// Starts focused review generation for sessions that just entered review.
@@ -294,18 +330,23 @@ fn apply_review_update(
     session_state: &mut SessionState,
     session_id: &str,
     review_update: ReviewUpdate,
-) {
+) -> Option<FocusedReviewPersistence> {
     let ReviewUpdate { diff_hash, result } = review_update;
     let Some(cache_entry) = review_cache.get(session_id) else {
-        return;
+        return None;
     };
 
     if !matches!(cache_entry, ReviewCacheEntry::Loading { .. })
         || cache_entry.diff_hash() != diff_hash
     {
-        return;
+        return None;
     }
 
+    let persistence_update = FocusedReviewPersistence {
+        diff_hash: result.as_ref().ok().map(|_| diff_hash),
+        session_id: SessionId::from(session_id),
+        text: result.as_ref().ok().cloned(),
+    };
     review_cache.insert(
         SessionId::from(session_id),
         ReviewCacheEntry::from_result(diff_hash, &result),
@@ -319,6 +360,8 @@ fn apply_review_update(
             result,
         );
     }
+
+    Some(persistence_update)
 }
 
 /// Restores one transient `AgentReview` session back to `Review` after the
@@ -556,6 +599,101 @@ mod tests {
         // Assert
         assert_eq!(review_status_message, None);
         assert_eq!(review_text, None);
+    }
+
+    #[test]
+    fn review_cache_from_rows_restores_persisted_ready_review() {
+        // Arrange
+        let focused_review_rows = vec![SessionFocusedReviewRow {
+            diff_hash: "42".to_string(),
+            session_id: "session-id".to_string(),
+            text: "## Review\nPersisted finding.".to_string(),
+        }];
+
+        // Act
+        let review_cache = review_cache_from_rows(focused_review_rows);
+
+        // Assert
+        assert!(matches!(
+            review_cache.get("session-id"),
+            Some(ReviewCacheEntry::Ready { diff_hash: 42, text })
+                if text == "## Review\nPersisted finding."
+        ));
+    }
+
+    #[test]
+    fn apply_review_updates_returns_success_for_persistence() {
+        // Arrange
+        let session_id = SessionId::from("session-persist-review");
+        let diff_hash = 19;
+        let review_text = "## Review\nPersist this finding.";
+        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let mut mode = AppMode::View {
+            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_text: None,
+            scroll_offset: None,
+            session_id: session_id.clone(),
+        };
+        let mut session_state = empty_session_state();
+        let review_updates = successful_review_update(&session_id, diff_hash, review_text);
+
+        // Act
+        let persistence_updates = apply_review_updates(
+            &mut review_cache,
+            &mut mode,
+            &mut session_state,
+            review_updates,
+        );
+
+        // Assert
+        assert_eq!(
+            persistence_updates,
+            vec![FocusedReviewPersistence {
+                diff_hash: Some(diff_hash),
+                session_id,
+                text: Some(review_text.to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn apply_review_updates_returns_clear_for_failed_regeneration() {
+        // Arrange
+        let session_id = SessionId::from("session-failed-review");
+        let diff_hash = 29;
+        let mut review_cache = loading_review_cache(&session_id, diff_hash);
+        let mut mode = AppMode::View {
+            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
+            review_text: None,
+            scroll_offset: None,
+            session_id: session_id.clone(),
+        };
+        let mut session_state = empty_session_state();
+        let review_updates = HashMap::from([(
+            session_id.clone(),
+            ReviewUpdate {
+                diff_hash,
+                result: Err("provider failed".to_string()),
+            },
+        )]);
+
+        // Act
+        let persistence_updates = apply_review_updates(
+            &mut review_cache,
+            &mut mode,
+            &mut session_state,
+            review_updates,
+        );
+
+        // Assert
+        assert_eq!(
+            persistence_updates,
+            vec![FocusedReviewPersistence {
+                diff_hash: None,
+                session_id,
+                text: None,
+            }]
+        );
     }
 
     /// Verifies completed review output updates preserved prompt-mode render

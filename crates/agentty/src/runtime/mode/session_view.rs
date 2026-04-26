@@ -1019,7 +1019,8 @@ fn half_page_scroll_step(metrics: ViewMetrics) -> u16 {
 /// user presses `f` and no cached review exists yet, Agentty computes the
 /// current diff, starts background generation, and shows a loading message
 /// immediately. The resulting review is appended into the normal session
-/// output panel instead of replacing it.
+/// output panel instead of replacing it, and successful review text is
+/// persisted for restart hydration.
 async fn open_review_output_mode(
     app: &mut App,
     view_context: &ViewContext,
@@ -1086,6 +1087,11 @@ async fn open_review_output_mode(
         view_context.session_id.clone(),
         ReviewCacheEntry::Loading { diff_hash },
     );
+    let _ = app
+        .services
+        .db()
+        .update_session_focused_review(&view_context.session_id, None, None)
+        .await;
     *review_status_message = Some(review_loading_message(review_model));
     *review_text = None;
     app.start_review_assist(

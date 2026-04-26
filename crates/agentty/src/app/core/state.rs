@@ -264,8 +264,9 @@ pub struct App {
     pub settings: SettingsManager,
     /// Manages the selected top-level list tab.
     pub tabs: TabManager,
-    /// Caches generated focused review text per session so it survives
-    /// mode switches and is ready when the user presses `f`.
+    /// Caches generated focused review text per session so it survives mode
+    /// switches, is hydrated after restart, and is ready when the user presses
+    /// `f`.
     pub(crate) review_cache: HashMap<SessionId, ReviewCacheEntry>,
     /// Owns project selection state, project metadata, and git status
     /// snapshots.
@@ -620,8 +621,9 @@ impl App {
 
     /// Submits the initial prompt for a newly created session.
     ///
-    /// Starting a new turn clears any cached focused-review output for that
-    /// session so review text does not bleed into the next prompt cycle.
+    /// Starting a new turn clears cached and persisted focused-review output
+    /// for that session so review text does not bleed into the next prompt
+    /// cycle.
     ///
     /// # Errors
     /// Returns an error if the session is missing or task enqueue fails.
@@ -631,6 +633,10 @@ impl App {
         prompt: impl Into<TurnPrompt>,
     ) -> Result<(), AppError> {
         self.review_cache.remove(session_id);
+        self.services
+            .db()
+            .update_session_focused_review(session_id, None, None)
+            .await?;
 
         Ok(self
             .sessions
@@ -660,6 +666,12 @@ impl App {
     /// Returns an error if the session is missing, has no staged drafts, or
     /// launch enqueue fails.
     pub async fn start_staged_session(&mut self, session_id: &str) -> Result<(), AppError> {
+        self.review_cache.remove(session_id);
+        self.services
+            .db()
+            .update_session_focused_review(session_id, None, None)
+            .await?;
+
         Ok(self
             .sessions
             .start_staged_session(&self.services, session_id)
@@ -668,10 +680,16 @@ impl App {
 
     /// Submits a follow-up prompt for an existing session.
     ///
-    /// Starting a new turn clears any cached focused-review output for that
-    /// session so review text does not persist past prompt submission.
+    /// Starting a new turn clears cached and persisted focused-review output
+    /// for that session so review text does not persist past prompt
+    /// submission.
     pub async fn reply(&mut self, session_id: &str, prompt: impl Into<TurnPrompt>) {
         self.review_cache.remove(session_id);
+        let _ = self
+            .services
+            .db()
+            .update_session_focused_review(session_id, None, None)
+            .await;
         self.sessions
             .reply(&self.services, session_id, prompt)
             .await;

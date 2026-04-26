@@ -11,7 +11,7 @@ use crate::app::service::{AppServiceDeps, AppServices};
 use crate::app::session::SessionManager;
 use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
-use crate::app::{AppError, session, task};
+use crate::app::{AppError, review, session, task};
 use crate::domain::agent::AgentKind;
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
@@ -151,6 +151,12 @@ impl App {
             },
         )
         .await;
+        let review_cache = review::review_cache_from_rows(
+            repositories
+                .load_session_focused_reviews_for_project(active_project_id)
+                .await
+                .unwrap_or_default(),
+        );
 
         AppStartup::spawn_background_tasks(auto_update, &event_tx, &projects, &services, &sessions);
 
@@ -166,7 +172,7 @@ impl App {
             active_project_roadmap,
             task_roadmap_scroll_offset: 0,
             event_rx,
-            review_cache: std::collections::HashMap::new(),
+            review_cache,
             latest_available_version: None,
             last_seen_session_update_versions: std::collections::HashMap::new(),
             markdown_render_cache: crate::ui::markdown::MarkdownRenderCache::default(),
