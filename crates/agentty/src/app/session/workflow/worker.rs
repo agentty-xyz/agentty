@@ -24,6 +24,7 @@ use crate::domain::session::{
     Status,
 };
 use crate::domain::setting::SettingName;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{
     AgentChannel, AgentError, AgentRequestKind, TurnEvent, TurnPrompt, TurnRequest, TurnResult,
     create_agent_channel,
@@ -1158,7 +1159,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
             });
         }
         Err(failure) => {
-            let message = format!("\n[Branch Push Error] {}\n", failure.message);
+            let message = TranscriptNotice::BranchPushError.format(failure.message);
             SessionTaskService::append_session_output(
                 &output,
                 &db,
@@ -1181,8 +1182,9 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
 /// Reconciles a failed turn-metadata write by surfacing the error and forcing
 /// the next UI reload to prefer durable state.
 async fn handle_turn_persistence_failure(context: &SessionWorkerContext, error: &SessionError) {
-    let message =
-        format!("\n[Turn Metadata Error] Failed to persist completed turn metadata: {error}\n");
+    let message = TranscriptNotice::TurnMetadataError.format(format!(
+        "Failed to persist completed turn metadata: {error}"
+    ));
     SessionTaskService::append_session_output(
         &context.output,
         &context.db,

@@ -18,6 +18,7 @@ use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SessionId, SessionSize, Status};
 use crate::domain::setting::SettingName;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
@@ -213,7 +214,8 @@ impl SessionTaskService {
                 )
                 .await;
 
-                let message = format!("\n[Commit] committed with hash `{}`\n", outcome.commit_hash);
+                let message = TranscriptNotice::Commit
+                    .format(format!("committed with hash `{}`", outcome.commit_hash));
                 Self::append_session_output(
                     &context.output,
                     &context.db,
@@ -226,19 +228,19 @@ impl SessionTaskService {
                 Self::request_git_status_refresh(&context.app_event_tx);
             }
             Ok(None) => {
-                let message = "\n[Commit] No changes to commit.\n";
+                let message = TranscriptNotice::Commit.format("No changes to commit.");
                 Self::append_session_output(
                     &context.output,
                     &context.db,
                     &context.app_event_tx,
                     &context.session_update_versions,
                     &context.id,
-                    message,
+                    &message,
                 )
                 .await;
             }
             Err(commit_error) => {
-                let message = format!("\n[Commit Error] {commit_error}\n");
+                let message = TranscriptNotice::CommitError.format(&commit_error);
                 Self::append_session_output(
                     &context.output,
                     &context.db,
@@ -494,7 +496,7 @@ impl SessionTaskService {
         let formatted_error = Self::format_commit_error_for_display(commit_error);
         append_assist_header(
             context,
-            "Commit",
+            TranscriptNotice::CommitAssist,
             assist_attempt,
             AUTO_COMMIT_ASSIST_POLICY.max_attempts,
             "Resolving auto-commit failure:",

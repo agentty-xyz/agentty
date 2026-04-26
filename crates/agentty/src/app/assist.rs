@@ -9,6 +9,7 @@ use crate::app::AppEvent;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
 use crate::domain::agent::AgentModel;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
 use crate::infra::git::GitClient;
 
@@ -96,16 +97,15 @@ pub(super) fn format_detail_lines(detail: &str) -> String {
 /// Appends a normalized assist-attempt header to the session output buffer.
 pub(super) async fn append_assist_header(
     context: &AssistContext,
-    assist_label: &str,
+    notice: TranscriptNotice,
     assist_attempt: usize,
     max_assist_attempts: usize,
     assist_action: &str,
     detail: &str,
 ) {
-    let assist_header = format!(
-        "\n[{assist_label} Assist] Attempt {assist_attempt}/{max_assist_attempts}. \
-         {assist_action}\n{detail}\n"
-    );
+    let assist_header = notice.format(format!(
+        "Attempt {assist_attempt}/{max_assist_attempts}. {assist_action}\n{detail}"
+    ));
     SessionTaskService::append_session_output(
         &context.output,
         &context.db,

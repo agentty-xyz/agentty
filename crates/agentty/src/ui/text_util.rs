@@ -285,8 +285,8 @@ pub fn format_duration_compact(duration_seconds: i64) -> String {
     label
 }
 
-/// Splits one trailing footer line block from `text` when its last non-empty
-/// line starts with any provided prefix.
+/// Splits trailing footer paragraphs from `text` when each paragraph's first
+/// non-empty line starts with any provided prefix.
 ///
 /// This keeps transcript content and synthetic footers renderable in separate
 /// sections without rewriting the stored output string.
@@ -297,6 +297,39 @@ pub fn split_trailing_line_block<'a>(
     let trimmed_text = text.trim_end_matches('\n');
     if trimmed_text.is_empty() {
         return (text, None);
+    }
+
+    let mut search_end = trimmed_text.len();
+    let mut trailing_block_start = None;
+    loop {
+        let paragraph_start = trimmed_text[..search_end]
+            .rfind("\n\n")
+            .map_or(0, |index| index + 2);
+        let paragraph = &trimmed_text[paragraph_start..search_end];
+        let first_line = paragraph
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default();
+        if !line_prefixes
+            .iter()
+            .any(|line_prefix| first_line.starts_with(line_prefix))
+        {
+            break;
+        }
+
+        trailing_block_start = Some(paragraph_start);
+        if paragraph_start == 0 {
+            break;
+        }
+
+        search_end = trimmed_text[..paragraph_start].trim_end_matches('\n').len();
+        if search_end == 0 {
+            break;
+        }
+    }
+
+    if let Some(block_start) = trailing_block_start {
+        return (&text[..block_start], Some(&text[block_start..]));
     }
 
     let line_start = trimmed_text.rfind('\n').map_or(0, |index| index + 1);
@@ -575,6 +608,42 @@ mod tests {
         // Assert
         assert_eq!(body, "Implemented the change.\n\n");
         assert_eq!(footer, Some("[Commit] committed with hash `abc1234`\n"));
+    }
+
+    #[test]
+    fn test_split_trailing_line_block_returns_matching_multiline_status_block() {
+        // Arrange
+        let text = "Implemented the change.\n\n[Commit] committed with hash `abc1234`\n\n[Rebase \
+                    Assist] Attempt 1/3. Resolving conflicts in:\n- crates/agentty/src/app.rs\n";
+
+        // Act
+        let (body, footer) = split_trailing_line_block(text, &["[Commit]", "[Rebase Assist]"]);
+
+        // Assert
+        assert_eq!(body, "Implemented the change.\n\n");
+        assert_eq!(
+            footer,
+            Some(
+                "[Commit] committed with hash `abc1234`\n\n[Rebase Assist] Attempt 1/3. Resolving \
+                 conflicts in:\n- crates/agentty/src/app.rs\n"
+            )
+        );
+    }
+
+    #[test]
+    fn test_split_trailing_line_block_allows_leading_blank_lines_before_prefix() {
+        // Arrange
+        let text = "Implemented the change.\n\n\n[Rebase Assist] Attempt 1/3.\n- src/main.rs\n";
+
+        // Act
+        let (body, footer) = split_trailing_line_block(text, &["[Rebase Assist]"]);
+
+        // Assert
+        assert_eq!(body, "Implemented the change.\n\n\n");
+        assert_eq!(
+            footer,
+            Some("[Rebase Assist] Attempt 1/3.\n- src/main.rs\n")
+        );
     }
 
     #[test]

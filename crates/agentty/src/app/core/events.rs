@@ -27,6 +27,7 @@ use crate::domain::input::InputState;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::file_index::FileEntry;
 use crate::runtime::mode::{at_mention, question, sync_blocked};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
@@ -1115,7 +1116,7 @@ impl App {
                 if let Some(warning) = self.complete_externally_merged_session(&session_id).await {
                     self.append_output_for_session(
                         &session_id,
-                        &format!("\n[Review Request Sync Warning] {warning}\n"),
+                        &TranscriptNotice::ReviewRequestSyncWarning.format(warning),
                     )
                     .await;
                 }

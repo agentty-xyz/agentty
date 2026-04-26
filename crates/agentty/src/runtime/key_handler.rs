@@ -8,6 +8,7 @@ use tracing::warn;
 
 use crate::app::{App, ReviewCacheEntry, diff_content_hash, review_loading_message};
 use crate::domain::session::SessionId;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, backend_err, mode};
 use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
@@ -438,7 +439,7 @@ async fn handle_continue_session_confirmation(
 
     if let Err(error) = app.continue_terminal_session(&session_id).await {
         app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
-        app.append_output_for_session(&session_id, &format!("\n[Continue Error] {error}\n"))
+        app.append_output_for_session(&session_id, &TranscriptNotice::ContinueError.format(error))
             .await;
     }
 
@@ -456,7 +457,7 @@ async fn handle_merge_confirmation(
     if let Some(session_id) = confirmation_session_id
         && let Err(error) = app.merge_session(&session_id).await
     {
-        app.append_output_for_session(&session_id, &format!("\n[Merge Error] {error}\n"))
+        app.append_output_for_session(&session_id, &TranscriptNotice::MergeError.format(error))
             .await;
     }
 

@@ -20,6 +20,7 @@ use crate::app::{
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, SessionId, Status};
 use crate::domain::setting::SettingName;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{
     AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
 };
@@ -1710,7 +1711,7 @@ impl SessionManager {
         session_id: &str,
         error: &SessionError,
     ) {
-        let status_error = format!("\n[Reply Error] {error}\n");
+        let status_error = TranscriptNotice::ReplyError.format(error);
         let Ok(handles) = self.session_handles_or_err(session_id) else {
             return;
         };
@@ -1742,7 +1743,7 @@ impl SessionManager {
         {
             self.cleanup_prompt_attachment_files(services, prompt).await;
 
-            let error_line = format!("\n[Reply Error] {error}\n");
+            let error_line = TranscriptNotice::ReplyError.format(error);
             SessionTaskService::append_session_output(
                 output,
                 services.db(),

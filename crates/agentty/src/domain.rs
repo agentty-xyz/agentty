@@ -8,3 +8,4 @@ pub mod project;
 pub mod session;
 pub mod setting;
 pub mod theme;
+pub(crate) mod transcript_notice;

@@ -13,6 +13,7 @@ use crate::app::{
 use crate::domain::agent::AgentModel;
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key::is_insertable_char_key;
@@ -186,7 +187,7 @@ async fn handle_primary_view_key(
             {
                 app.append_output_for_session(
                     &view_context.session_id,
-                    &format!("\n[Follow-Up Task Error] {error}\n"),
+                    &TranscriptNotice::FollowUpTaskError.format(error),
                 )
                 .await;
             }
@@ -197,7 +198,7 @@ async fn handle_primary_view_key(
             if let Err(error) = app.start_staged_session(&view_context.session_id).await {
                 app.append_output_for_session(
                     &view_context.session_id,
-                    &format!("\n[Start Error] {error}\n"),
+                    &TranscriptNotice::StartError.format(error),
                 )
                 .await;
             }
@@ -1086,7 +1087,7 @@ async fn load_view_session_diff(app: &App, view_context: &ViewContext) -> String
 
 async fn rebase_view_session(app: &mut App, session_id: &str) {
     if let Err(error) = app.rebase_session(session_id).await {
-        app.append_output_for_session(session_id, &format!("\n[Rebase Error] {error}\n"))
+        app.append_output_for_session(session_id, &TranscriptNotice::RebaseError.format(error))
             .await;
     }
 }

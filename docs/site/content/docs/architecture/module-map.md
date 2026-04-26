@@ -124,6 +124,9 @@ also writes a machine-readable workspace summary to
   across app and infrastructure layers.
 - `crates/agentty/src/domain/theme.rs`: Terminal color theme values,
   persistence strings, and settings selector ordering.
+- `crates/agentty/src/domain/transcript_notice.rs`: Canonical bracketed
+  transcript workflow notice labels shared by producers and session-output
+  rendering.
 
 ## Infrastructure Layer (`infra/`)
 

@@ -41,6 +41,7 @@ use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::TurnPrompt;
 #[cfg(test)]
 use crate::infra::db;
@@ -1439,7 +1440,7 @@ impl App {
                     self.restore_queued_session_to_review(&next_session_id)
                         .await;
 
-                    let merge_error = format!("\n[Merge Error] {error}\n");
+                    let merge_error = TranscriptNotice::MergeError.format(&error);
                     self.append_output_for_session(&next_session_id, &merge_error)
                         .await;
 

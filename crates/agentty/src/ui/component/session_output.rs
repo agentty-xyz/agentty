@@ -14,6 +14,7 @@ use rustc_hash::FxHasher;
 
 use crate::app;
 use crate::domain::session::{Session, SessionId, Status};
+use crate::domain::transcript_notice::TRAILING_TRANSCRIPT_NOTICE_PREFIXES;
 use crate::icon::{Icon, TACHYON_LOADER_WIDTH};
 use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::markdown::{self, render_markdown};
@@ -26,7 +27,6 @@ const DRAFT_PREVIEW_EMPTY_NOTE: &str = "No draft messages staged yet. Use `Enter
                                         start the bundle.";
 const DRAFT_PREVIEW_STAGED_NOTE: &str =
     "Draft messages stay local until you press `s` in session view to start the staged bundle.";
-const TRANSCRIPT_FOOTER_PREFIXES: &[&str] = &["[Commit]", "[Commit Error]"];
 const USER_PROMPT_PREFIX: &str = " › ";
 /// User prompt prefix when the prompt starts after a transcript newline.
 const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
@@ -506,8 +506,10 @@ impl<'a> SessionOutput<'a> {
         let active_turn_text =
             active_turn_text.map(layout::session_output_text_with_spaced_user_input);
         let inner_width = panel_inner_width(output_area, layout::session_output_panel_borders());
-        let (completed_turn_text, trailing_footer_text) =
-            text_util::split_trailing_line_block(&completed_turn_text, TRANSCRIPT_FOOTER_PREFIXES);
+        let (completed_turn_text, trailing_notice_text) = text_util::split_trailing_line_block(
+            &completed_turn_text,
+            TRAILING_TRANSCRIPT_NOTICE_PREFIXES,
+        );
         let mut lines = Vec::new();
         Self::append_markdown_lines(
             &mut lines,
@@ -528,9 +530,9 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
-        Self::append_transcript_footer_lines(
+        Self::append_trailing_transcript_notice_lines(
             &mut lines,
-            trailing_footer_text,
+            trailing_notice_text,
             inner_width,
             markdown_render_cache,
         );
@@ -847,21 +849,21 @@ impl<'a> SessionOutput<'a> {
         );
     }
 
-    /// Appends one trailing transcript footer after any summary produced for
-    /// the completed turn when a known footer block is present.
-    fn append_transcript_footer_lines(
+    /// Appends trailing transcript notices after any summary produced for the
+    /// completed turn when known workflow-status blocks are present.
+    fn append_trailing_transcript_notice_lines(
         lines: &mut Vec<Line<'static>>,
-        trailing_footer_text: Option<&str>,
+        trailing_notice_text: Option<&str>,
         inner_width: usize,
         markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
     ) {
-        let Some(trailing_footer_text) = trailing_footer_text else {
+        let Some(trailing_notice_text) = trailing_notice_text else {
             return;
         };
 
         Self::append_markdown_lines(
             lines,
-            trailing_footer_text,
+            trailing_notice_text,
             inner_width,
             markdown_render_cache,
         );
@@ -1700,6 +1702,50 @@ mod tests {
         assert!(text.contains("Session output now renders persisted summary markdown."));
         assert!(output_index < summary_index);
         assert!(summary_index < commit_index);
+    }
+
+    /// Verifies later workflow notices stay below the summary that belongs to
+    /// the completed agent turn.
+    #[test]
+    fn test_output_lines_places_summary_before_trailing_workflow_notices() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "streamed output\n\n[Commit] No changes to commit.\n\n[Rebase Assist] \
+                          Attempt 1/3. Resolving conflicts in:\n- \
+                          crates/agentty/src/runtime/worker.rs\n"
+            .to_string();
+        session.summary = Some(summary_fixture());
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 5),
+            line_context(None, None, None),
+            None,
+        );
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let output_index = text
+            .find("streamed output")
+            .expect("streamed output should be rendered");
+        let summary_index = text
+            .find("Change Summary")
+            .expect("structured summary should be rendered");
+        let commit_index = text
+            .find("[Commit] No changes to commit.")
+            .expect("commit notice should be rendered");
+        let rebase_index = text
+            .find("[Rebase Assist] Attempt 1/3.")
+            .expect("rebase notice should be rendered");
+
+        // Assert
+        assert!(output_index < summary_index);
+        assert!(summary_index < commit_index);
+        assert!(commit_index < rebase_index);
     }
 
     /// Verifies a terminal `Done` session keeps its final summary without

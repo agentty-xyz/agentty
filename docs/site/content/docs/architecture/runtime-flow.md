@@ -219,12 +219,12 @@ flowchart TD
   split --> active
 
   completed --> spacing["Normalize prompt spacing"]
-  spacing --> footer_split["Peel trailing footer block"]
-  footer_split --> footer_kind["Commit footer or commit error footer"]
+  spacing --> footer_split["Peel trailing workflow notice block"]
+  footer_split --> footer_kind["Commit, assist, or error notice"]
   footer_split --> completed_md["Render completed-turn markdown"]
 
   completed_md --> summary["Append synthetic session.summary block"]
-  summary --> footer["Append trailing commit footer"]
+  summary --> footer["Append trailing workflow notices"]
   footer --> active_prompt["Append active-turn prompt block"]
   active_prompt --> review["Append focused review markdown<br/>(review_text)"]
   review --> branch_sync["Append published-branch sync row<br/>(auto-push started, completed, or failed)"]
@@ -261,10 +261,10 @@ The exact session-chat render path is:
    staged draft preview for draft `New` sessions, otherwise `session.output`.
 1. `SessionOutput::output_lines()` converts that source text into final panel
    lines: it optionally splits the transcript using `active_prompt_output`,
-   normalizes prompt spacing, splits any trailing commit footer, renders the
+   normalizes prompt spacing, splits any trailing workflow notices, renders the
    completed-turn markdown, appends the synthetic summary block from
    `session.summary` when the current status and prompt state allow it,
-   reattaches the trailing commit footer, appends the active prompt block,
+   reattaches the trailing workflow notices, appends the active prompt block,
    appends focused review markdown from `review_text`, appends
    the published-branch sync row when a detached auto-push starts, completes,
    or fails, and finally adds the loader row or done continuation hint when the
@@ -359,17 +359,22 @@ stays readable on narrow screens.
 #### Summary block
 
 - Comes from: `session.summary`
-- Prints: appended after transcript content for most statuses.
+- Prints: appended after the completed agent-turn transcript and before later
+  trailing workflow notices for most statuses.
 - Hidden or removed: hidden for `Canceled` sessions and while a newer prompt is
   active, so stale change metadata disappears as soon as the user posts the
   next prompt.
 
-#### Commit footer
+#### Trailing workflow notices
 
-- Comes from: trailing lines in `session.output` that begin with `[Commit]` or
-  `[Commit Error]`
-- Prints: reattached after summary and follow-up sections so commit notes stay
-  tied to the completed turn footer.
+- Comes from: trailing paragraphs in `session.output` that begin with known
+  workflow labels such as `[Commit]`, `[Commit Error]`, `[Commit Assist]`,
+  `[Rebase Assist]`, `[Rebase Error]`, or other bracketed workflow errors.
+  Producers and the renderer share these labels through
+  `TranscriptNotice` in `crates/agentty/src/domain/transcript_notice.rs`.
+- Prints: reattached after the synthetic summary so the summary stays at the
+  completed agent-turn boundary and later workflow notices remain below it in
+  transcript order.
 - Hidden or removed: durable transcript content; only moved later in render
   order.
 

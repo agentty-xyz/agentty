@@ -9,6 +9,7 @@ use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
@@ -577,7 +578,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
             append_output_for_session(
                 app,
                 &prompt_context.session_id,
-                &format!("\n[Error] {error}\n"),
+                &TranscriptNotice::Error.format(error),
             )
             .await;
         }
@@ -586,7 +587,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
             append_output_for_session(
                 app,
                 &prompt_context.session_id,
-                &format!("\n[Error] {error}\n"),
+                &TranscriptNotice::Error.format(error),
             )
             .await;
         }
@@ -595,7 +596,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
             append_output_for_session(
                 app,
                 &prompt_context.session_id,
-                &format!("\n[Queue Error] {error}\n"),
+                &TranscriptNotice::QueueError.format(error),
             )
             .await;
         }

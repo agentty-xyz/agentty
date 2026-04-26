@@ -21,6 +21,7 @@ use crate::app::session::{Clock, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, Status};
+use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::db::AppRepositories;
@@ -960,7 +961,7 @@ impl SessionManager {
 
         match result {
             Ok(message) => {
-                let merge_message = format!("\n[Merge] {message}\n");
+                let merge_message = TranscriptNotice::Merge.format(message);
                 SessionTaskService::append_session_output(
                     output,
                     db,
@@ -973,7 +974,7 @@ impl SessionManager {
                 SessionTaskService::request_git_status_refresh(app_event_tx);
             }
             Err(error) => {
-                let merge_error = format!("\n[Merge Error] {error}\n");
+                let merge_error = TranscriptNotice::MergeError.format(error);
                 SessionTaskService::append_session_output(
                     output,
                     db,
@@ -1378,8 +1379,8 @@ impl SessionManager {
                 )
                 .await;
 
-                let commit_message =
-                    format!("\n[Commit] committed with hash `{}`\n", outcome.commit_hash);
+                let commit_message = TranscriptNotice::Commit
+                    .format(format!("committed with hash `{}`", outcome.commit_hash));
                 SessionTaskService::append_session_output(
                     &input.output,
                     &input.db,
@@ -1392,14 +1393,14 @@ impl SessionManager {
                 SessionTaskService::request_git_status_refresh(&input.app_event_tx);
             }
             Err(error) if error.to_string().contains("Nothing to commit") => {
-                let commit_message = "\n[Commit] No changes to commit.\n";
+                let commit_message = TranscriptNotice::Commit.format("No changes to commit.");
                 SessionTaskService::append_session_output(
                     &input.output,
                     &input.db,
                     &input.app_event_tx,
                     &input.session_update_versions,
                     &input.id,
-                    commit_message,
+                    &commit_message,
                 )
                 .await;
             }
@@ -1446,7 +1447,7 @@ impl SessionManager {
 
         match rebase_result {
             Ok(message) => {
-                let rebase_message = format!("\n[Rebase] {message}\n");
+                let rebase_message = TranscriptNotice::Rebase.format(message);
                 SessionTaskService::append_session_output(
                     output,
                     db,
@@ -1470,7 +1471,7 @@ impl SessionManager {
                 .await;
             }
             Err(error) => {
-                let rebase_error = format!("\n[Rebase Error] {error}\n");
+                let rebase_error = TranscriptNotice::RebaseError.format(error);
                 SessionTaskService::append_session_output(
                     output,
                     db,
@@ -1920,7 +1921,7 @@ impl SessionManager {
         let conflict_summary = Self::format_conflicted_file_list(conflicted_files);
         append_assist_header(
             &Self::assist_context(input),
-            "Rebase",
+            TranscriptNotice::RebaseAssist,
             assist_attempt,
             REBASE_ASSIST_POLICY.max_attempts,
             "Resolving conflicts in:",
