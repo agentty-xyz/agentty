@@ -1186,8 +1186,14 @@ fn user_prompt_prefix_style() -> Style {
 }
 
 /// Returns the style for user prompt text content.
+///
+/// Prompt transcript text uses the same semantic foreground as live typed
+/// input while retaining a shaded background so persisted prompts remain
+/// visually grouped without becoming brighter than the surrounding UI.
 fn user_prompt_content_style() -> Style {
-    Style::default().bg(user_prompt_background_color())
+    Style::default()
+        .fg(style::palette::text())
+        .bg(user_prompt_background_color())
 }
 
 /// Returns the style for one `@` lookup token within user prompt content.
@@ -1270,6 +1276,7 @@ mod tests {
         assert_eq!(lines[1].width(), 80);
         assert_eq!(lines[1].spans[0].style, user_prompt_prefix_style());
         assert_eq!(lines[1].spans[1].style, user_prompt_content_style());
+        assert_eq!(lines[1].spans[1].style.fg, Some(style::palette::text()));
         assert_eq!(
             lines[1].spans.last().expect("padding span").style,
             user_prompt_content_style()
