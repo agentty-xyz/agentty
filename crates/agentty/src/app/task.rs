@@ -75,8 +75,9 @@ pub(super) struct ReviewAssistTaskInput {
 #[derive(Template)]
 #[template(path = "review_assist_prompt.md", escape = "none")]
 struct ReviewAssistPromptTemplate<'a> {
-    diff_fence: &'a str,
-    review_diff: &'a str,
+    /// Full diff payload wrapped in a Markdown fence sized for its content.
+    fenced_diff: &'a str,
+    /// Prior session summary used to give the review model continuity.
     session_summary: &'a str,
 }
 
@@ -508,9 +509,9 @@ impl TaskService {
     ) -> Result<String, AppError> {
         let trimmed_diff = review_diff.trim();
         let fence = agent::diff_fence(trimmed_diff);
+        let fenced_diff = format!("{fence}diff\n{trimmed_diff}\n{fence}");
         let template = ReviewAssistPromptTemplate {
-            diff_fence: &fence,
-            review_diff: trimmed_diff,
+            fenced_diff: &fenced_diff,
             session_summary: session_summary.map_or("", str::trim),
         };
 

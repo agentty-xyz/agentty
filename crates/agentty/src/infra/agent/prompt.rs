@@ -375,7 +375,9 @@ mod tests {
         assert!(rendered_prompt.contains("Do not run mutating git commands"));
         assert!(rendered_prompt.contains("Quality check requirements:"));
         assert!(rendered_prompt.contains("repository-defined quality checks"));
-        assert!(rendered_prompt.contains("affected dependencies and dependents"));
+        let normalized_rendered_prompt = rendered_prompt.split_whitespace().collect::<Vec<_>>();
+        let normalized_rendered_prompt = normalized_rendered_prompt.join(" ");
+        assert!(normalized_rendered_prompt.contains("affected dependencies and dependents"));
         assert!(rendered_prompt.contains("full repository test/check suite"));
         assert!(rendered_prompt.contains("Structured response protocol:"));
         assert!(rendered_prompt.contains("Return a single JSON object"));

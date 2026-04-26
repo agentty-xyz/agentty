@@ -47,4 +47,4 @@ Existing session summary context (may be empty): {{ session_summary }}
 
 Unified diff:
 
-{{ diff_fence }}diff {{ review_diff }} {{ diff_fence }}
+{{ fenced_diff }}

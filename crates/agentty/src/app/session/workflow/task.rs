@@ -47,9 +47,11 @@ struct AutoCommitAssistPromptTemplate<'a> {
 #[derive(Template)]
 #[template(path = "session_commit_message_prompt.md", escape = "none")]
 struct SessionCommitMessagePromptTemplate<'a> {
+    /// Existing commit message continuity after removing Agentty's trailer.
     current_commit_message: &'a str,
-    diff: &'a str,
-    diff_fence: &'a str,
+    /// Full cumulative diff payload wrapped in a Markdown fence sized for its
+    /// content.
+    fenced_diff: &'a str,
 }
 
 /// Stateless helpers for session process execution and output handling.
@@ -569,10 +571,10 @@ impl SessionTaskService {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
         let fence = agent::diff_fence(diff);
+        let fenced_diff = format!("{fence}diff\n{diff}\n{fence}");
         let template = SessionCommitMessagePromptTemplate {
             current_commit_message: stripped_current_commit_message.trim(),
-            diff,
-            diff_fence: &fence,
+            fenced_diff: &fenced_diff,
         };
 
         template.render().map_err(|error| {
