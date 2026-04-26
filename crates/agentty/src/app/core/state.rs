@@ -885,10 +885,10 @@ impl App {
         self.reload_projects().await;
     }
 
-    /// Cancels a session in review status.
+    /// Cancels a session that is running, in review, or an unstarted draft.
     ///
     /// # Errors
-    /// Returns an error if the session is not found or not in review status.
+    /// Returns an error if the session is not found or not cancelable.
     pub async fn cancel_session(&self, session_id: &str) -> Result<(), AppError> {
         Ok(self
             .sessions

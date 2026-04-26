@@ -19,7 +19,7 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | `a` | Start new session |
 | `Shift+A` | Start draft session |
 | `s` | Sync active project branch |
-| `c` | Cancel the selected review session or unstarted draft session (confirmation popup) |
+| `c` | Cancel the selected running session, review session, or unstarted draft session (confirmation popup) |
 | `Enter` | Open session |
 | `j` / `k` | Navigate sessions |
 | `Tab` | Switch tab |
@@ -40,8 +40,8 @@ The currently active project is highlighted in the table with a `* ` prefix and
 accented row text, even while cursor selection moves to other rows.
 
 On the **Sessions** list, `c` appears only when the selected row is
-cancelable: review-ready sessions and draft sessions that are still in
-`New` before their first staged bundle starts.
+cancelable: running sessions, review-ready sessions, and draft sessions that
+are still in `New` before their first staged bundle starts.
 
 ## Settings
 

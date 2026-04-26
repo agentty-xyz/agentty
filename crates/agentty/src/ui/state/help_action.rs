@@ -146,7 +146,8 @@ pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
-/// Returns compact session list footer actions for the page-level hint line.
+/// Returns compact session list footer actions for the page-level hint line,
+/// including `c` only when the selected session can be canceled.
 pub(crate) fn session_list_footer_actions(
     can_cancel_selected_session: bool,
     can_open_selected_session: bool,

@@ -186,7 +186,8 @@ impl Status {
     ///
     /// Draft-session-only guards still live on [`Session`] methods, so
     /// callers must separately prevent regular `New` sessions from taking the
-    /// `Canceled` path.
+    /// `Canceled` path. Running sessions may also move directly to
+    /// `Canceled` after the UI signals the active turn's cancellation token.
     pub fn can_transition_to(self, next: Status) -> bool {
         if self == next {
             return true;
@@ -196,6 +197,7 @@ impl Status {
             (self, next),
             (Status::New, Status::InProgress | Status::Canceled)
                 | (Status::New | Status::InProgress, Status::Rebasing)
+                | (Status::InProgress, Status::Canceled)
                 | (Status::Review, Status::AgentReview)
                 | (Status::AgentReview, Status::Review)
                 | (
@@ -549,10 +551,13 @@ impl Session {
 
     /// Returns whether the session can be canceled by the user.
     ///
-    /// Review-oriented sessions remain cancelable, and unstarted draft
-    /// sessions can also be canceled before they materialize a worktree.
+    /// Running sessions can be canceled from the list after their active turn
+    /// is signaled to stop. Review-oriented sessions remain cancelable, and
+    /// unstarted draft sessions can also be canceled before they materialize a
+    /// worktree.
     pub fn allows_cancel_action(&self) -> bool {
-        self.status.allows_review_actions()
+        self.status == Status::InProgress
+            || self.status.allows_review_actions()
             || (self.status == Status::New && self.is_draft_session())
     }
 
@@ -1081,6 +1086,18 @@ pub(crate) mod tests {
     fn test_status_transition_new_to_canceled() {
         // Arrange
         let current_status = Status::New;
+
+        // Act
+        let can_transition = current_status.can_transition_to(Status::Canceled);
+
+        // Assert
+        assert!(can_transition);
+    }
+
+    #[test]
+    fn test_status_transition_in_progress_to_canceled() {
+        // Arrange
+        let current_status = Status::InProgress;
 
         // Act
         let can_transition = current_status.can_transition_to(Status::Canceled);
@@ -1781,6 +1798,19 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
         let mut session = test_session(None);
         session.status = Status::New;
         session.is_draft = true;
+
+        // Act
+        let allows_cancel_action = session.allows_cancel_action();
+
+        // Assert
+        assert!(allows_cancel_action);
+    }
+
+    #[test]
+    fn test_session_allows_cancel_action_for_running_session() {
+        // Arrange
+        let mut session = test_session(None);
+        session.status = Status::InProgress;
 
         // Act
         let allows_cancel_action = session.allows_cancel_action();

@@ -21,9 +21,9 @@ use crate::ui::util::inline_text;
 /// Pressing `q` opens a confirmation overlay instead of quitting immediately,
 /// with `No` selected by default. Pressing `Enter` on the `Projects` tab
 /// selects the active project and then moves focus to `Tab::Sessions`.
-/// `c` opens a cancel confirmation overlay for review sessions and unstarted
-/// draft sessions, and `Tab` cycles tabs forward while `Shift+Tab` cycles
-/// backward.
+/// `c` opens a cancel confirmation overlay for running sessions, review
+/// sessions, and unstarted draft sessions, and `Tab` cycles tabs forward while
+/// `Shift+Tab` cycles backward.
 pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
     if app.tabs.current() == Tab::Settings && app.settings.is_editing_text_input() {
         return handle_settings_text_input(app, key).await;
@@ -1281,6 +1281,44 @@ mod tests {
             .create_draft_session()
             .await
             .expect("failed to create draft session");
+        let expected_session_title = app.sessions.sessions[0].display_title().to_string();
+        app.tabs.set(Tab::Sessions);
+        app.sessions.table_state.select(Some(0));
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("failed to handle key");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        assert!(matches!(
+            app.mode,
+            AppMode::Confirmation {
+                confirmation_intent: ConfirmationIntent::CancelSession,
+                ref confirmation_message,
+                ref confirmation_title,
+                restore_view: None,
+                session_id: Some(ref mode_session_id),
+                selected_confirmation_index: DEFAULT_OPTION_INDEX,
+            } if mode_session_id == &expected_session_id
+                && confirmation_title == "Confirm Cancel"
+                && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_cancel_key_opens_cancel_confirmation_for_running_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        let expected_session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        app.sessions.sessions[0].status = Status::InProgress;
         let expected_session_title = app.sessions.sessions[0].display_title().to_string();
         app.tabs.set(Tab::Sessions);
         app.sessions.table_state.select(Some(0));

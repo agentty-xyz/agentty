@@ -403,8 +403,8 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
     }
 }
 
-/// Cancels the confirmed review session, when still present, and returns to
-/// list mode.
+/// Cancels the confirmed cancelable session, when still present, and returns
+/// to list mode.
 async fn handle_cancel_session_confirmation(
     app: &mut App,
     confirmation_session_id: Option<SessionId>,

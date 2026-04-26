@@ -469,6 +469,7 @@ explicit cancellation paths:
 - `Review -> Rebasing -> Review/Question` (rebase path)
 - `Review/Question -> Canceled`
 - `InProgress -> Review` (user stops the current turn)
+- `InProgress -> Canceled` (list-mode cancel stops the running turn)
 - `InProgress/Rebasing -> Review/Question` (post-turn or post-rebase)
 
 ## Agent Channel Architecture

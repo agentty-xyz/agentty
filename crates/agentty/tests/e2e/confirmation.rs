@@ -39,6 +39,38 @@ fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
     Ok(())
 }
 
+/// Seeds one running session for list-mode cancel confirmation.
+fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
+    let canonical_workdir = env.workdir.canonicalize()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+        let database = Database::open(&db_path).await?;
+        let project_id = database
+            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .await?;
+
+        database.touch_project_last_opened(project_id).await?;
+        database
+            .insert_session(
+                "running-cancel-0001",
+                "gpt-5.4",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await?;
+        database
+            .update_session_title("running-cancel-0001", "Cancel running session from list")
+            .await
+    })?;
+
+    Ok(())
+}
+
 /// Verify that confirming quit with `y` causes the process to exit with
 /// code 0.
 ///
@@ -184,6 +216,68 @@ fn draft_session_cancel_confirmation() -> E2eResult {
                 assertion::assert_text_in_region(
                     &list_frame,
                     "Cancel staged draft from list",
+                    &list_full,
+                );
+                assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
+
+                let confirmation_frame = common::frame_from_capture(&report.captures[1]);
+                let confirmation_full =
+                    Region::full(confirmation_frame.cols(), confirmation_frame.rows());
+                assertion::assert_text_in_region(
+                    &confirmation_frame,
+                    "Confirm Cancel",
+                    &confirmation_full,
+                );
+
+                let final_full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Archive", &final_full);
+                assertion::assert_text_in_region(frame, "Canceled", &final_full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that a running session can be canceled directly from the session
+/// list.
+#[test]
+fn running_session_cancel_confirmation() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("running_session_cancel")
+        .with_git()
+        .setup(seed_cancelable_running_session)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Cancel running session from list", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "running_row",
+                        "Running session visible in the session list with cancel available",
+                    )
+                    .press_key("c")
+                    .wait_for_text("Confirm Cancel", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "confirm_cancel",
+                        "Cancel confirmation for the selected running session",
+                    )
+                    .press_key("y")
+                    .wait_for_text("Canceled", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "canceled_running",
+                        "Canceled running session moved into the archive group",
+                    )
+            },
+            |frame, report| {
+                let list_frame = common::frame_from_capture(&report.captures[0]);
+                let list_full = Region::full(list_frame.cols(), list_frame.rows());
+                assertion::assert_text_in_region(
+                    &list_frame,
+                    "Cancel running session from list",
                     &list_full,
                 );
                 assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);

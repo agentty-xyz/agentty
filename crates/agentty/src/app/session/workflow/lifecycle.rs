@@ -18,7 +18,9 @@ use crate::app::{
     AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, review_request, setting,
 };
 use crate::domain::agent::{AgentModel, ReasoningLevel};
-use crate::domain::session::{ReviewRequest, SESSION_DATA_DIR, Session, SessionId, Status};
+use crate::domain::session::{
+    ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
+};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{
@@ -2161,12 +2163,14 @@ impl SessionManager {
         .await;
     }
 
-    /// Cancels a review session or unstarted draft session.
+    /// Cancels a review, running, or unstarted draft session.
     ///
     /// Persisted transcript metadata remains available after the worktree
     /// checkout and session branch are removed. Draft sessions that never
     /// created a worktree only update persisted state and skip worktree
-    /// cleanup.
+    /// cleanup. Running sessions first request operation cancellation and fire
+    /// the active turn's cancellation token so provider work stops before the
+    /// terminal `Canceled` status is persisted.
     ///
     /// # Errors
     /// Returns an error if the session is not found or is not cancelable.
@@ -2178,16 +2182,22 @@ impl SessionManager {
         let session = self.session_or_err(session_id)?;
         if !session.allows_cancel_action() {
             return Err(SessionError::Workflow(
-                "Session must be in review or be an unstarted draft to be canceled".to_string(),
+                "Session must be running, in review, or be an unstarted draft to be canceled"
+                    .to_string(),
             ));
         }
 
         let branch_name = session_branch(&session.id);
         let folder = session.folder.clone();
+        let is_running = session.status == Status::InProgress;
         let has_worktree = services.fs_client().is_dir(folder.clone());
         let handles = self.session_handles_or_err(session_id)?;
         let status = Arc::clone(&handles.status);
         let app_event_tx = services.event_sender();
+
+        if is_running {
+            Self::signal_running_session_cancellation(services, handles, session_id).await;
+        }
 
         let status_updated = SessionTaskService::update_status(
             &status,
@@ -2224,6 +2234,41 @@ impl SessionManager {
         }
 
         Ok(())
+    }
+
+    /// Requests cancellation for queued operations and signals the active
+    /// running turn for a session that is being terminally canceled.
+    async fn signal_running_session_cancellation(
+        services: &AppServices,
+        handles: &SessionHandles,
+        session_id: &str,
+    ) {
+        if let Err(error) = services
+            .db()
+            .request_cancel_for_session_operations(session_id)
+            .await
+        {
+            warn!(
+                session_id = session_id,
+                error = %error,
+                "failed to request cancellation for running session operations"
+            );
+        }
+
+        if let Ok(mut queued_messages) = handles.queued_messages.lock() {
+            queued_messages.clear();
+        }
+
+        match handles.cancel_token.lock() {
+            Ok(cancel_token) => cancel_token.cancel(),
+            Err(error) => {
+                warn!(
+                    session_id = session_id,
+                    error = %error,
+                    "failed to lock running session cancel token"
+                );
+            }
+        }
     }
 
     /// Removes git and filesystem resources for one session worktree.

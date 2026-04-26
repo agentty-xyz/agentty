@@ -755,7 +755,7 @@ mod tests {
         AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
         TurnResult,
     };
-    use crate::infra::db::AppRepositories;
+    use crate::infra::db::{AppRepositories, OperationRepository};
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
     use crate::ui::state::app_mode::AppMode;
@@ -4899,6 +4899,81 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Ensures canceling a running session requests operation cancellation,
+    /// signals the active turn token, clears queued prompts, and persists the
+    /// terminal `Canceled` status.
+    async fn test_cancel_running_session_stops_turn_and_cancels_session() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        let mut app = new_test_app_with_git(dir.path()).await;
+        let session_id = app
+            .create_session()
+            .await
+            .expect("failed to create session");
+        set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+        app.services
+            .db()
+            .insert_session_operation("operation-id", &session_id, "reply")
+            .await
+            .expect("failed to insert operation");
+        app.sessions
+            .enqueue_message(&app.services, &session_id, "queued reply")
+            .expect("failed to enqueue message");
+
+        // Act
+        app.sessions
+            .cancel_session(&app.services, &session_id)
+            .await
+            .expect("failed to cancel session");
+
+        // Assert
+        app.sessions.sync_from_handles();
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing session");
+        assert_eq!(session.status, Status::Canceled);
+        let handles = app
+            .sessions
+            .session_handles_or_err(&session_id)
+            .expect("missing session handles");
+        assert!(
+            handles
+                .cancel_token
+                .lock()
+                .expect("cancel token lock")
+                .is_cancelled()
+        );
+        assert!(
+            handles
+                .queued_messages
+                .lock()
+                .expect("queue lock")
+                .is_empty()
+        );
+        assert!(
+            app.services
+                .db()
+                .is_cancel_requested_for_operation("operation-id")
+                .await
+                .expect("failed to load operation cancel status")
+        );
+        let db_sessions = app
+            .services
+            .db()
+            .load_sessions()
+            .await
+            .expect("failed to load");
+        let db_session = db_sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .expect("missing persisted session");
+        assert_eq!(db_session.status, "Canceled");
+    }
+
+    #[tokio::test]
     /// Ensures canceling a review session shuts down its app-server runtime.
     async fn test_cancel_session_triggers_app_server_shutdown() {
         // Arrange
@@ -5065,7 +5140,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cancel_session_requires_review_status() {
+    async fn test_cancel_session_requires_cancelable_status() {
         // Arrange
         let dir = tempdir().expect("failed to create temp dir");
         let mut app = new_test_app_with_git(dir.path()).await;
@@ -5087,7 +5162,7 @@ mod tests {
             result
                 .expect_err("should be error")
                 .to_string()
-                .contains("must be in review")
+                .contains("must be running, in review")
         );
     }
 
