@@ -15,7 +15,7 @@ Single-file roadmap for the active user-facing project backlog. Humans keep prio
 | Project delivery strategy | Review-ready sessions can already merge into the base branch or publish a session branch, but projects configured in Agentty still cannot declare whether their normal landing path should be direct merge to `main` or a pull-request flow. | Missing |
 | Chained session workflow | Follow-up tasks can already launch sibling sessions, but each new session still starts from the active project base branch and published review requests always target that same base branch instead of another session branch. | Missing |
 | Terminal session continuation | `Done` and `Canceled` sessions now expose a `c` continuation shortcut that opens a fresh draft session whose first staged message is seeded from the source session's persisted summary or transcript context. | Landed |
-| Queued chat messages | Session chat now keeps the composer open while a turn is `InProgress` and renders submitted messages inline as `queued ›` rows that the worker dispatches one-by-one between turns; queue dispatch pauses while the session sits in `Question` and `Ctrl+C` clears the queue alongside cancelling the running turn. The queue is in-memory only and discarded on app restart. | Landed |
+| Queued chat messages | Session chat now keeps the composer open while a turn is `InProgress` and renders submitted messages inline as `queued ›` rows that the worker dispatches one-by-one between turns; queue dispatch pauses while the session sits in `Question`. `Ctrl+C` during `InProgress` retracts the most recently queued chat message (LIFO) one press at a time without interrupting the running turn, and once the queue is empty a further press cancels the running turn. The queue is in-memory only and discarded on app restart. | Landed |
 | Session resume efficiency | Codex and Gemini app-server turns already reuse a compact reminder after the first bootstrap, but Claude sessions still resend the full wrapper because session identity is not yet explicit. | Partial |
 | Turn activity summaries | Session output stores the assistant answer, questions, and summary, but it does not append a normalized per-turn digest of used skills, executed commands, or changed-file CRUD after each turn. | Missing |
 
@@ -69,7 +69,7 @@ Users can view and change a project's landing strategy in Agentty settings, and 
 
 - [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/getting-started/overview.md` to explain the new per-project delivery strategy setting without claiming session actions consume it yet.
 
-### [7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C
+### [c9469d77-97c3-4d5b-a035-497a83752bd1] Workflow: Delete individual queued chat messages
 
 #### Assignee
 
@@ -77,23 +77,24 @@ Users can view and change a project's landing strategy in Agentty settings, and 
 
 #### Why now
 
-The chat composer now queues messages while a turn is running, but a single `Ctrl+C` cancels the active turn and clears every queued message at once; users need a way to drop staged follow-ups without losing the running turn so they can correct an over-eager queue without restarting the agent.
+`Ctrl+C` already retracts queued chat messages one press at a time using a LIFO order, but users still cannot remove a specific older queued entry without popping every newer one first; a focused per-item delete shortcut closes that gap so the queue can be edited like a normal list.
 
 #### Usable outcome
 
-While a turn is running with a non-empty queue, the first `Ctrl+C` press clears only the queued chat messages and lets the running turn finish, while a second `Ctrl+C` cancels the running turn as it does today.
+While a session is `InProgress` with queued chat messages, users can focus a specific queued entry in the chat transcript and remove just that entry with a dedicated shortcut without touching the running turn or any other queued entries.
 
 #### Substeps
 
-- [ ] **Branch the running-turn `Ctrl+C` handler on queue contents.** In `crates/agentty/src/runtime/mode/session_view.rs::end_in_progress_turn`, when the targeted session is `InProgress` with a non-empty queue, drop the queued prompts on `SessionHandles::queued_messages`, mirror the change into the snapshot's `queued_messages`, emit `AppEvent::RefreshSessions`, and leave the running turn untouched; only when the queue is already empty fall through to the existing cancel path that cancels the active turn and transitions to `Review`.
+- [ ] **Surface a focused queued-message selection in the session chat transcript.** Extend `crates/agentty/src/ui/component/session_output.rs` (around `append_queued_message_lines`) and the session view state in `crates/agentty/src/runtime/mode/session_view.rs` so users can move focus across the rendered `queued ›` rows while a turn is `InProgress`, with the focused row visually distinguished from the other queued entries.
+- [ ] **Delete the focused queued chat message on a dedicated shortcut.** Wire a session-view shortcut in `crates/agentty/src/runtime/mode/session_view.rs` that, when a queued row is focused, removes only that entry from the matching index of `SessionHandles::queued_messages` (in `crates/agentty/src/domain/session.rs`) and the `Session::queued_messages` snapshot, emits `AppEvent::SessionUpdated` and `AppEvent::RefreshSessions`, and leaves the running turn, cancellation token, and persisted status untouched.
 
 #### Tests
 
-- [ ] Add runtime coverage in `crates/agentty/src/runtime/mode/session_view.rs` exercising the two-stage `Ctrl+C` handler against a seeded `InProgress` session: one press with a non-empty queue clears only the queue and keeps status as `InProgress`, while a follow-up press with an empty queue still routes through the existing cancel path and transitions to `Review`. Extend the existing `session_queue_chat_messages` E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` (or add a sibling) to assert that the first `Ctrl+C` removes the `queued ›` rows without leaving InProgress, and the second `Ctrl+C` produces `Enter: reply`.
+- [ ] Add runtime coverage in `crates/agentty/src/runtime/mode/session_view.rs` exercising the per-item delete handler against a seeded `InProgress` session with multiple queued messages: deleting a focused middle entry removes only that index, status stays `InProgress`, the cancel token is not fired, and `AppEvent::SessionUpdated` plus `AppEvent::RefreshSessions` are emitted. Add an E2E `FeatureTest` in `crates/agentty/tests/e2e/session.rs` that queues several chat messages, focuses the middle entry, presses the delete shortcut, and asserts that only the focused row disappeared while the others and `Ctrl+c: stop` remain.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` so the `Ctrl+C` notes describe the new two-stage behavior: the first press clears only the queued chat messages while a non-empty queue exists, and the second press cancels the running turn and returns the session to `Review`.
+- [ ] Update `docs/site/content/docs/usage/workflow.md` and `docs/site/content/docs/usage/keybindings.md` so the `InProgress` chat queue notes describe the new focused per-item delete shortcut alongside the existing per-press LIFO `Ctrl+C` retraction.
 
 ## Ready Now Execution Order
 
@@ -106,11 +107,8 @@ flowchart TD
     end
 
     subgraph WorkflowLane["Workflow - @andagaev"]
-        W3["[7684c30b] Two-stage Ctrl+C"]
         W2["[b8c92f4d] Persist queued messages"]
         W4["[c9469d77] Delete queued messages"]
-        W3 -. queued follow-up .-> W2
-        W3 -. queued follow-up .-> W4
     end
 
     subgraph LaterLanes["Queued independent streams"]
@@ -137,20 +135,6 @@ Promote when `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact re
 
 - `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory`
 - `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract`
-
-### [c9469d77-97c3-4d5b-a035-497a83752bd1] Workflow: Delete individual queued chat messages
-
-#### Outcome
-
-Users can focus a queued chat entry in the transcript and remove it with a dedicated shortcut without clearing the rest of the queue or canceling the running turn.
-
-#### Promote when
-
-Promote when `[7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C` lands and the team is ready for per-item queue editing affordances.
-
-#### Depends on
-
-`[7684c30b-2884-49ef-9cba-2a8f6aa1211d] Workflow: Cancel queued chat messages with two-stage Ctrl+C`
 
 ### [d9d93e21-2d9a-45af-9d44-61eb68e64ea7] Delivery: Apply landing strategy to session actions
 
@@ -284,7 +268,7 @@ No parked user-facing cards right now.
 
 ## Context Notes
 
-- `Workflow: Queue messages while a turn runs` should keep the queue in memory only so the first slice does not touch `crates/agentty/src/infra/db.rs` while Delivery is in active flight there, pause dispatch while the session is in `Question` state so the existing clarification flow is preserved, and keep `Ctrl+C` as a one-shot that cancels the running turn and clears the queue together; persistence with interrupted-run recovery, two-stage cancellation, and per-item delete affordances live in the queued follow-ups.
+- `Workflow: Queue messages while a turn runs` should keep the queue in memory only so the first slice does not touch `crates/agentty/src/infra/db.rs` while Delivery is in active flight there, pause dispatch while the session is in `Question` state so the existing clarification flow is preserved, and use `Ctrl+C` to retract the most recently queued chat message (LIFO) one press at a time without interrupting the running turn before falling through to cancel once the queue is empty; persistence with interrupted-run recovery and per-item delete affordances live in the queued follow-ups.
 - `Workflow: Persist queued chat messages across restarts` spans runtime, persistence, and transcript surfaces, so its interrupted-run recovery messaging should reuse the restart-detection contract from `[84aa58cc-8cd0-41cb-a6fc-a97016e85f0d] Protocol: Define compact restart session memory` for "previous turn was interrupted" detection and target the shared transcript/operation-log shape from `[eff3638c-359c-4374-9388-d3e9e4c2f26c] Session Output: Define turn activity storage contract` for the one-line drop note instead of inventing a parallel restart signal or transcript entry format.
 - `Delivery: Edit project landing strategy in settings` should stop at persisted settings UI; the session-action behavior belongs to the queued follow-up so the first Delivery slice remains reviewable.
 - `Delivery: Chain sessions for stacked review requests` should build on the existing follow-up-task sibling-session flow, persist session lineage, and let review-request publishing target the parent session branch instead of always targeting the project base branch.

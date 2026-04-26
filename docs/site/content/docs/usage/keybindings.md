@@ -105,7 +105,7 @@ state:
 | `G` | Scroll to bottom |
 | `Ctrl+d` | Half page down |
 | `Ctrl+u` | Half page up |
-| `Ctrl+c` | Stop the current turn and return to **Review** (InProgress only); also clears any chat messages queued during the running turn |
+| `Ctrl+c` | During **InProgress**: while the queue has staged chat messages, each press retracts the most recently queued message (LIFO) and leaves the running turn alone; once the queue is empty, the next press stops the current turn and returns the session to **Review** |
 | `?` | Help |
 
 During **AgentReview**, Agentty keeps the same review-oriented shortcuts but

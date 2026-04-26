@@ -550,6 +550,82 @@ fn is_view_rebase_allowed(status: Status) -> bool {
     is_view_action_allowed(status) && status != Status::AgentReview
 }
 
+/// Handles `Ctrl+C` while a session is `InProgress` with a per-press policy.
+///
+/// Each press first tries to retract the most recently queued chat message on
+/// [`SessionHandles::queued_messages`] (LIFO `pop_back`) so the user can undo
+/// queue entries one-by-one in the reverse order they were added, without
+/// interrupting the running turn. The running turn keeps streaming, status
+/// stays `InProgress`, and no cancellation token, database status update, or
+/// auto-review suppression runs while a queued message is being dropped.
+/// When the queue is already empty, the press falls through to
+/// [`cancel_in_progress_turn`] which performs the existing
+/// cancel-and-return-to-`Review` flow.
+async fn end_in_progress_turn(app: &mut App, session_id: &str) {
+    if pop_last_queued_chat_message_if_any(app, session_id).await {
+        return;
+    }
+
+    cancel_in_progress_turn(app, session_id).await;
+}
+
+/// Pops the most recently queued chat message (LIFO) from the session's
+/// handles and rebuilds the snapshot from the post-pop handle state,
+/// returning `true` when one queued message was retracted.
+///
+/// Pops the entry from the shared [`SessionHandles::queued_messages`] deque
+/// via `pop_back`, then derives the snapshot's `queued_messages` from the
+/// remaining handle contents (rather than independently calling `Vec::pop`
+/// on the snapshot). The handle is the source of truth: the worker may have
+/// already drained the oldest entry via `pop_front` between snapshot
+/// refreshes, so a position-based snapshot pop could remove the wrong
+/// transcript row and leave a phantom queued message visible. Releases any
+/// local image attachments owned by the popped prompt through
+/// [`App::cleanup_prompt_attachment_files`] so retracted messages do not
+/// leak temp files under `AGENTTY_ROOT/tmp/`, then emits
+/// [`AppEvent::SessionUpdated`] and [`AppEvent::RefreshSessions`] to refresh
+/// list and chat views. Leaves the cancellation token, persisted status, and
+/// auto-review suppression untouched so the running turn can keep streaming.
+async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) -> bool {
+    let pop_outcome = app.sessions.handles.get(session_id).and_then(|handles| {
+        handles.queued_messages.lock().ok().and_then(|mut queued| {
+            let popped = queued.pop_back()?;
+            let remaining_transcript: Vec<String> = queued
+                .iter()
+                .map(crate::infra::channel::TurnPrompt::transcript_text)
+                .collect();
+
+            Some((popped, remaining_transcript))
+        })
+    });
+
+    let Some((popped_prompt, remaining_transcript)) = pop_outcome else {
+        return false;
+    };
+
+    if let Some(session) = app
+        .sessions
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.queued_messages = remaining_transcript;
+    }
+
+    app.cleanup_prompt_attachment_files(&popped_prompt).await;
+
+    app.services.emit_app_event(AppEvent::SessionUpdated {
+        session_id: session_id.into(),
+        version: SessionTaskService::next_session_update_version(
+            &app.services.session_update_versions(),
+            session_id,
+        ),
+    });
+    app.services.emit_app_event(AppEvent::RefreshSessions);
+
+    true
+}
+
 /// Interrupts the active turn of a running `InProgress` session and returns it
 /// to `Review`.
 ///
@@ -564,7 +640,7 @@ fn is_view_rebase_allowed(status: Status) -> bool {
 /// `Review`, the in-memory snapshot and shared handle are refreshed, and UI
 /// events are emitted so the user can inspect or continue the session instead
 /// of treating it as canceled.
-async fn end_in_progress_turn(app: &mut App, session_id: &str) {
+async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
     let timestamp_seconds =
         app::session::unix_timestamp_from_system_time(app.services.clock().now_system_time());
 
@@ -617,17 +693,10 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         return;
     }
 
-    if let Some(handles) = app.sessions.handles.get(session_id) {
-        if let Ok(mut handle_status) = handles.status.lock() {
-            *handle_status = Status::Review;
-        }
-        // Clear queued chat messages alongside cancelling the running
-        // turn so `Ctrl+C` cancels the queue together with the active
-        // turn, regardless of whether the worker drain path observes the
-        // cancellation first.
-        if let Ok(mut queued) = handles.queued_messages.lock() {
-            queued.clear();
-        }
+    if let Some(handles) = app.sessions.handles.get(session_id)
+        && let Ok(mut handle_status) = handles.status.lock()
+    {
+        *handle_status = Status::Review;
     }
 
     if let Some(session) = app
@@ -637,7 +706,6 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
         .find(|session| session.id == session_id)
     {
         session.status = Status::Review;
-        session.queued_messages.clear();
     }
 
     suppress_auto_review_for_stopped_turn(app, session_id).await;
@@ -2981,5 +3049,246 @@ mod tests {
             .lock()
             .expect("lock failed");
         assert_eq!(handle_status, Status::Review);
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_first_press_with_queue_pops_last_queued_message() {
+        // Arrange — seed an InProgress session with two queued chat messages
+        // so the LIFO pop is observable (the older entry must remain).
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        let handles =
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
+        let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
+        {
+            let mut queued = queued_messages.lock().expect("queued_messages lock");
+            queued.push_back(crate::infra::channel::TurnPrompt::from("first queued"));
+            queued.push_back(crate::infra::channel::TurnPrompt::from("second queued"));
+        }
+        app.sessions
+            .handles
+            .insert(session_id.clone().into(), handles);
+        app.sessions.sessions[0].queued_messages =
+            vec!["first queued".to_string(), "second queued".to_string()];
+
+        // Act — first Ctrl+C while the queue is non-empty.
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — the most recently queued message is popped (LIFO), the
+        // older message remains, status stays InProgress, and the cancel
+        // token is untouched so the running turn keeps streaming.
+        let remaining_handle_queue: Vec<String> = queued_messages
+            .lock()
+            .expect("queued_messages lock")
+            .iter()
+            .map(crate::infra::channel::TurnPrompt::transcript_text)
+            .collect();
+        assert_eq!(
+            remaining_handle_queue,
+            vec!["first queued".to_string()],
+            "only the most recently queued chat message should be popped on first Ctrl+C"
+        );
+        assert_eq!(
+            app.sessions.sessions[0].queued_messages,
+            vec!["first queued".to_string()],
+            "snapshot queued_messages should mirror the handle after LIFO pop"
+        );
+        assert_eq!(
+            app.sessions.sessions[0].status,
+            Status::InProgress,
+            "status should stay InProgress while only a queued message is popped"
+        );
+        let handle_status = *app
+            .sessions
+            .handles
+            .get(session_id.as_str())
+            .expect("handles missing")
+            .status
+            .lock()
+            .expect("lock failed");
+        assert_eq!(handle_status, Status::InProgress);
+        assert!(
+            !cancel_token
+                .lock()
+                .expect("cancel token lock")
+                .is_cancelled(),
+            "cancel_token must not be cancelled when only a queued message is popped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_drains_queue_one_press_at_a_time_then_cancels() {
+        // Arrange — InProgress session with two queued chat messages so we
+        // can observe LIFO drain across consecutive presses before falling
+        // through to the cancel path.
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        let handles =
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
+        let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
+        {
+            let mut queued = queued_messages.lock().expect("queued_messages lock");
+            queued.push_back(crate::infra::channel::TurnPrompt::from("first queued"));
+            queued.push_back(crate::infra::channel::TurnPrompt::from("second queued"));
+        }
+        app.sessions
+            .handles
+            .insert(session_id.clone().into(), handles);
+        app.sessions.sessions[0].queued_messages =
+            vec!["first queued".to_string(), "second queued".to_string()];
+
+        // Act — first press pops "second queued".
+        end_in_progress_turn(&mut app, &session_id).await;
+        // Act — second press pops "first queued".
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — queue is empty after two presses, but the running turn
+        // still has not been cancelled yet.
+        assert!(
+            queued_messages
+                .lock()
+                .expect("queued_messages lock")
+                .is_empty(),
+            "queue should be drained after one press per queued message"
+        );
+        assert!(
+            app.sessions.sessions[0].queued_messages.is_empty(),
+            "snapshot queued_messages should be empty after LIFO drain"
+        );
+        assert_eq!(app.sessions.sessions[0].status, Status::InProgress);
+        assert!(
+            !cancel_token
+                .lock()
+                .expect("cancel token lock")
+                .is_cancelled(),
+            "cancel_token must not be cancelled while queued messages are still being drained"
+        );
+
+        // Act — third press, with empty queue, falls through to cancel.
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — cancel path engages and the session returns to Review.
+        assert!(
+            cancel_token
+                .lock()
+                .expect("cancel token lock")
+                .is_cancelled(),
+            "cancel_token must be cancelled once the queue is drained"
+        );
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+    }
+
+    #[tokio::test]
+    async fn test_end_in_progress_turn_second_press_after_empty_queue_cancels_turn() {
+        // Arrange — InProgress session with an empty queue, mirroring the
+        // state after the first press has already drained queued messages.
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        let handles =
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let cancel_token = std::sync::Arc::clone(&handles.cancel_token);
+        app.sessions
+            .handles
+            .insert(session_id.clone().into(), handles);
+
+        // Act — second Ctrl+C now that the queue is empty.
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — falls through to the cancel path: cancel token fires and
+        // the session transitions to Review.
+        assert!(
+            cancel_token
+                .lock()
+                .expect("cancel token lock")
+                .is_cancelled(),
+            "cancel_token must be cancelled when the queue is empty"
+        );
+        assert_eq!(app.sessions.sessions[0].status, Status::Review);
+        let handle_status = *app
+            .sessions
+            .handles
+            .get(session_id.as_str())
+            .expect("handles missing")
+            .status
+            .lock()
+            .expect("lock failed");
+        assert_eq!(handle_status, Status::Review);
+    }
+
+    #[tokio::test]
+    /// Regression: when the worker has already drained the oldest queued
+    /// prompt via `pop_front` but the deferred `RefreshSessions` reducer
+    /// has not yet rebuilt the snapshot, a `Ctrl+C` press must still align
+    /// the snapshot with the current handle state instead of removing the
+    /// snapshot's last entry positionally and leaving a phantom queued row.
+    async fn test_pop_last_queued_chat_message_resyncs_snapshot_after_worker_drain() {
+        // Arrange — two prompts queued; simulate the worker popping the
+        // oldest entry off the handle without yet refreshing the snapshot.
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions[0].status = Status::InProgress;
+        let _ = app
+            .services
+            .db()
+            .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
+            .await;
+        let handles =
+            crate::domain::session::SessionHandles::new(String::new(), Status::InProgress);
+        let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
+        {
+            let mut queued = queued_messages.lock().expect("queued_messages lock");
+            queued.push_back(crate::infra::channel::TurnPrompt::from("first queued"));
+            queued.push_back(crate::infra::channel::TurnPrompt::from("second queued"));
+        }
+        app.sessions
+            .handles
+            .insert(session_id.clone().into(), handles);
+        app.sessions.sessions[0].queued_messages =
+            vec!["first queued".to_string(), "second queued".to_string()];
+
+        // Simulate the worker `pop_front` draining the oldest entry before
+        // the snapshot has been refreshed.
+        {
+            let mut queued = queued_messages.lock().expect("queued_messages lock");
+            queued.pop_front();
+        }
+
+        // Act — Ctrl+C while the handle has [second] but the snapshot still
+        // reads [first, second].
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert — handle is now empty (the user retracted "second"), and
+        // the snapshot reflects the post-pop handle state instead of
+        // positionally dropping the snapshot's last entry (which would
+        // leave a phantom "first queued" row pointing at a turn the worker
+        // is already running).
+        assert!(
+            queued_messages
+                .lock()
+                .expect("queued_messages lock")
+                .is_empty(),
+            "handle queue should be empty after retracting the only remaining entry"
+        );
+        assert!(
+            app.sessions.sessions[0].queued_messages.is_empty(),
+            "snapshot must rebuild from the handle state and not show a phantom row for a prompt \
+             the worker is already executing"
+        );
     }
 }

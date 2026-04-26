@@ -36,6 +36,17 @@ pub trait FsClient: Send + Sync {
     /// Returns an error when filesystem removal fails.
     fn remove_dir_all(&self, path: PathBuf) -> FsFuture<Result<(), FsError>>;
 
+    /// Removes one empty directory at `path`.
+    ///
+    /// Fails with [`std::io::ErrorKind::DirectoryNotEmpty`] when the directory
+    /// still contains entries, allowing callers to safely prune shared
+    /// directories only when no sibling files remain.
+    ///
+    /// # Errors
+    /// Returns an error when filesystem removal fails for any reason,
+    /// including the directory still being non-empty.
+    fn remove_dir(&self, path: PathBuf) -> FsFuture<Result<(), FsError>>;
+
     /// Reads one file into bytes without blocking the async runtime.
     ///
     /// # Errors
@@ -84,6 +95,10 @@ impl FsClient for RealFsClient {
 
     fn remove_dir_all(&self, path: PathBuf) -> FsFuture<Result<(), FsError>> {
         Box::pin(async move { tokio::fs::remove_dir_all(path).await.map_err(FsError::from) })
+    }
+
+    fn remove_dir(&self, path: PathBuf) -> FsFuture<Result<(), FsError>> {
+        Box::pin(async move { tokio::fs::remove_dir(path).await.map_err(FsError::from) })
     }
 
     fn read_file(&self, path: PathBuf) -> FsFuture<Result<Vec<u8>, FsError>> {

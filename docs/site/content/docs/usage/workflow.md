@@ -61,7 +61,7 @@ Session statuses and what you can do in each state:
 | Status | Description | Available actions |
 |--------|-------------|-------------------|
 | **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first and only create their worktree when the staged bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree after the session has started, scroll, help |
-| **InProgress** | Agent is actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c` stop the current turn (also clears any queued chat messages), `o` open worktree, scroll, help |
+| **InProgress** | Agent is actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c` retracts the most recently queued chat message (LIFO) one press at a time without interrupting the running turn, then stops the current turn once the queue is empty, `o` open worktree, scroll, help |
 | **Review** | Agent finished; changes are ready for review. Linked pull requests / merge requests refresh in the background; merged requests move the session to `Done`, and closed requests move it to `Canceled`. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
 | **AgentReview** | Agentty is generating the focused review output in the background. Linked pull requests / merge requests continue refreshing in the background. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
 | **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) |
@@ -86,10 +86,11 @@ in the background. While that review-assist job is running, the session
 temporarily shows **AgentReview** and keeps the review-oriented shortcuts
 available, except `r`, which stays hidden until the session returns to
 **Review**.
-If you stop an active turn with `Ctrl+c`, Agentty returns the session to
-**Review** without completing the turn and does not automatically start focused
-review for that stopped turn; press `f` if you still want a manual focused
-review.
+When `Ctrl+c` finally cancels an active turn (after the queued chat messages,
+if any, have been retracted by earlier presses), Agentty returns the session
+to **Review** without completing the turn and does not automatically start
+focused review for that stopped turn; press `f` if you still want a manual
+focused review.
 Pressing `f` appends the cached review directly into the normal session output
 panel when it is ready, or shows a loading message there while generation is
 still running. That appended review remains visible when you leave and reopen
@@ -298,10 +299,13 @@ with a `queued ›` prefix. Once the running turn finishes, Agentty dispatches
 queued messages one-by-one as new turns without bouncing the session through
 **Review** between them. Drainage pauses while the session sits in
 **Question** state and resumes only after the clarification flow returns to a
-runnable state. Pressing `Ctrl+c` clears the queue alongside cancelling the
-active turn. The queue is session-local and lives only for the active app
-session, so queued messages are discarded if `agentty` restarts before they
-dispatch.
+runnable state. While the queue is non-empty, each `Ctrl+c` press retracts
+the most recently queued chat message (LIFO) without interrupting the running
+turn so you can undo queue entries one-by-one in the reverse order they were
+added. Once the queue is empty, the next `Ctrl+c` cancels the running turn
+and returns the session to **Review** as usual. The queue is session-local
+and lives only for the active app session, so queued messages are discarded
+if `agentty` restarts before they dispatch.
 
 The session-chat timer measures only cumulative **active work** across
 `InProgress` intervals. That differs from `/stats`, whose `Session Time`

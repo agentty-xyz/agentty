@@ -24,7 +24,7 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{
     AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
 };
-use crate::infra::fs::FsClient;
+use crate::infra::fs::{FsClient, FsError};
 use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
 
@@ -835,8 +835,10 @@ impl SessionManager {
     /// only for the active app session, so queued prompts are discarded on
     /// `agentty` restart. The session worker drains the queue between turns
     /// without bouncing through `Review` and pauses drainage while the
-    /// session sits in `Question`. `Ctrl+C` on the running turn clears the
-    /// queue alongside cancelling the active turn.
+    /// session sits in `Question`. `Ctrl+C` on the running turn drops the
+    /// most recently queued chat message (LIFO) one press at a time without
+    /// interrupting the running turn, and once the queue is empty a further
+    /// press cancels the active turn.
     ///
     /// # Errors
     /// Returns [`SessionError::NotFound`] when the session id does not
@@ -2242,7 +2244,13 @@ impl SessionManager {
     }
 
     /// Removes Agentty-managed prompt attachment files inside one explicit tmp
-    /// root and prunes their shared image directory when safe.
+    /// root and prunes their shared image directory only when it is empty.
+    ///
+    /// The image directory is shared per session, so other queued prompts or
+    /// the active composer may still reference sibling files there. Pruning
+    /// uses [`FsClient::remove_dir`] (empty-only) and silently tolerates the
+    /// `DirectoryNotEmpty` and `NotFound` cases so retracting one prompt
+    /// never deletes another prompt's attachments.
     async fn cleanup_prompt_attachment_paths_in_root(
         fs_client: Arc<dyn FsClient>,
         managed_tmp_root: &Path,
@@ -2267,12 +2275,18 @@ impl SessionManager {
         }
 
         if let Some(image_directory) = image_directory
-            && let Err(error) = fs_client.remove_dir_all(image_directory).await
+            && let Err(error) = fs_client.remove_dir(image_directory).await
         {
-            warn!(
-                error = %error,
-                "failed to remove managed prompt attachment directory"
-            );
+            let FsError::Io(io_error) = &error;
+            if !matches!(
+                io_error.kind(),
+                std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+            ) {
+                warn!(
+                    error = %error,
+                    "failed to remove managed prompt attachment directory"
+                );
+            }
         }
     }
 
@@ -3311,6 +3325,47 @@ mod tests {
         assert!(!first_image.exists());
         assert!(!second_image.exists());
         assert!(!image_directory.exists());
+    }
+
+    #[tokio::test]
+    /// Ensures cleanup of one prompt's attachments preserves sibling files
+    /// owned by other queued prompts in the same shared image directory and
+    /// keeps the directory in place when it is still non-empty.
+    async fn test_cleanup_prompt_attachment_paths_preserves_sibling_files_in_shared_directory() {
+        // Arrange — two managed image files share one session image directory,
+        // mirroring two queued prompts with image attachments under the same
+        // `AGENTTY_ROOT/tmp/<session-id>/images/` root.
+        let temp_dir = tempfile::tempdir().expect("temp dir should exist");
+        let managed_tmp_root = temp_dir.path().join("tmp");
+        let image_directory = managed_tmp_root.join("session-id").join("images");
+        std::fs::create_dir_all(&image_directory).expect("image directory should exist");
+        let popped_image = image_directory.join("image-1.png");
+        let sibling_image = image_directory.join("image-2.png");
+        std::fs::write(&popped_image, b"png").expect("popped image should exist");
+        std::fs::write(&sibling_image, b"png").expect("sibling image should exist");
+
+        // Act — clean up only the popped prompt's attachment.
+        SessionManager::cleanup_prompt_attachment_paths_in_root(
+            Arc::new(fs::RealFsClient),
+            &managed_tmp_root,
+            vec![popped_image.clone()],
+        )
+        .await;
+
+        // Assert — popped image is gone, sibling image survives, and the
+        // shared directory is preserved because it is still non-empty.
+        assert!(
+            !popped_image.exists(),
+            "popped attachment file should be removed"
+        );
+        assert!(
+            sibling_image.exists(),
+            "sibling attachment file from another queued prompt must survive cleanup"
+        );
+        assert!(
+            image_directory.exists(),
+            "shared image directory must be preserved while sibling attachments remain"
+        );
     }
 
     #[tokio::test]

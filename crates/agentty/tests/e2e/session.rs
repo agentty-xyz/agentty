@@ -335,10 +335,14 @@ fn session_list_empty_state() -> E2eResult {
     Ok(())
 }
 
-/// Verify that pressing `Enter` while a session is `InProgress` opens the
-/// chat composer, queues the typed message inline beneath the running
-/// turn, and that `Ctrl+c` clears the queue alongside cancelling the
-/// active turn.
+/// Verify the per-press LIFO `Ctrl+c` flow for queued chat messages: pressing
+/// `Enter` while a session is `InProgress` opens the chat composer and queues
+/// the typed message inline beneath the running turn; with two messages
+/// queued, the first `Ctrl+c` pops only the most recently queued entry while
+/// the older entry and the running turn remain (`Ctrl+c: stop` still
+/// rendered); a follow-up `Ctrl+c` pops the remaining queued entry; and a
+/// final `Ctrl+c` with an empty queue cancels the running turn and returns
+/// the session to review-ready controls.
 #[test]
 fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
     // Arrange, Act, Assert
@@ -354,31 +358,83 @@ fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     .wait_for_text("Ctrl+c: stop", 5000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
-                    .write_text("queued reply")
-                    .wait_for_text("queued reply", 3000)
+                    .write_text("first queued")
+                    .wait_for_text("first queued", 3000)
                     .press_key("Enter")
                     .wait_for_text("queued ›", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("second queued")
+                    .wait_for_text("second queued", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("second queued", 5000)
                     .viewing_pause_ms(1000)
                     .capture_labeled(
-                        "queued_message_visible",
-                        "Queued chat message rendered inline beneath the running turn",
+                        "two_queued_messages_visible",
+                        "Two queued chat messages rendered inline beneath the running turn",
+                    )
+                    .press_key("ctrl+c")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "first_ctrl_c_pops_last_queued",
+                        "First Ctrl+c pops the most recently queued chat message and leaves the \
+                         running turn",
+                    )
+                    .press_key("ctrl+c")
+                    .wait_for_stable_frame(300, 5000)
+                    .viewing_pause_ms(1000)
+                    .capture_labeled(
+                        "second_ctrl_c_pops_remaining_queued",
+                        "Second Ctrl+c pops the last remaining queued chat message and leaves the \
+                         running turn",
                     )
                     .press_key("ctrl+c")
                     .wait_for_text("Enter: reply", 5000)
                     .viewing_pause_ms(1000)
                     .capture_labeled(
-                        "queue_cleared_after_cancel",
-                        "Session view after Ctrl+c clears the queued chat message",
+                        "third_ctrl_c_cancels_turn",
+                        "Third Ctrl+c cancels the running turn and returns the session to review",
                     )
             },
             |frame, report| {
                 let queued_frame = common::frame_from_capture(&report.captures[0]);
                 let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
                 assertion::assert_text_in_region(&queued_frame, "queued ›", &queued_full);
-                assertion::assert_text_in_region(&queued_frame, "queued reply", &queued_full);
+                assertion::assert_text_in_region(&queued_frame, "first queued", &queued_full);
+                assertion::assert_text_in_region(&queued_frame, "second queued", &queued_full);
+
+                let after_first_frame = common::frame_from_capture(&report.captures[1]);
+                let after_first_full =
+                    Region::full(after_first_frame.cols(), after_first_frame.rows());
+                assertion::assert_text_in_region(
+                    &after_first_frame,
+                    "Ctrl+c: stop",
+                    &after_first_full,
+                );
+                assertion::assert_text_in_region(&after_first_frame, "queued ›", &after_first_full);
+                assertion::assert_text_in_region(
+                    &after_first_frame,
+                    "first queued",
+                    &after_first_full,
+                );
+                assertion::assert_not_visible(&after_first_frame, "second queued");
+
+                let after_second_frame = common::frame_from_capture(&report.captures[2]);
+                let after_second_full =
+                    Region::full(after_second_frame.cols(), after_second_frame.rows());
+                assertion::assert_text_in_region(
+                    &after_second_frame,
+                    "Ctrl+c: stop",
+                    &after_second_full,
+                );
+                assertion::assert_not_visible(&after_second_frame, "queued ›");
+                assertion::assert_not_visible(&after_second_frame, "first queued");
+                assertion::assert_not_visible(&after_second_frame, "second queued");
 
                 let cleared_full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: reply", &cleared_full);
+                assertion::assert_not_visible(frame, "Ctrl+c: stop");
                 assertion::assert_not_visible(frame, "queued ›");
             },
         )?;
