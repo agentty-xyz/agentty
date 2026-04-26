@@ -16,7 +16,7 @@ use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{SessionId, SessionSize, Status};
+use crate::domain::session::{COMMITTING_PROGRESS_LABEL, SessionId, SessionSize, Status};
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::agent;
@@ -36,7 +36,6 @@ const SESSION_COMMIT_DIFF_TRUNCATED_SECTION_MARKER: &str =
 const AUTO_COMMIT_ERROR_TRUNCATION_LIMIT: usize = 20_000;
 const AUTO_COMMIT_ERROR_TRUNCATED_SECTION_MARKER: &str =
     "[Commit error was truncated to fit context window]";
-
 /// Askama view model for rendering auto-commit recovery prompts.
 #[derive(Template)]
 #[template(path = "auto_commit_assist_prompt.md", escape = "none")]
@@ -203,8 +202,15 @@ impl SessionTaskService {
     /// history. Commit-message generation and any auto-commit recovery prompt
     /// use the resolved auto-commit model for the session. Successful commits
     /// also request an immediate git-status refresh so footer ahead/behind
-    /// counts do not wait for the background poller.
+    /// counts do not wait for the background poller. The active loader shows a
+    /// dedicated committing label for the full auto-commit phase.
     pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
+        Self::set_session_progress(
+            &context.app_event_tx,
+            &context.id,
+            Some(COMMITTING_PROGRESS_LABEL.to_string()),
+        );
+
         match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
                 SessionManager::update_session_title_from_commit_message(
@@ -237,6 +243,8 @@ impl SessionTaskService {
                 .await;
             }
         }
+
+        Self::clear_session_progress(&context.app_event_tx, &context.id);
     }
 
     /// Requests one immediate reducer-driven git-status refresh.
@@ -1769,6 +1777,10 @@ mod tests {
             .unwrap_or_default();
         let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
         assert!(!output_text.contains("[Commit] No changes to commit."));
+        assert!(events.contains(&AppEvent::SessionProgressUpdated {
+            progress_message: Some(COMMITTING_PROGRESS_LABEL.to_string()),
+            session_id: "session-id".into(),
+        }));
         assert!(events.iter().any(|event| matches!(
             event,
             AppEvent::SessionWorkflowNoticeUpdated {
@@ -1777,6 +1789,10 @@ mod tests {
             } if session_id.as_str() == "session-id"
                 && notice == "[Commit] No changes to commit."
         )));
+        assert!(events.contains(&AppEvent::SessionProgressUpdated {
+            progress_message: None,
+            session_id: "session-id".into(),
+        }));
     }
 
     #[tokio::test]

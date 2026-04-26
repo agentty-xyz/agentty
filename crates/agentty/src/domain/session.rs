@@ -18,6 +18,10 @@ use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";
 
+/// Full in-progress loader label shown while post-turn commit-message
+/// generation and git commit orchestration are running.
+pub(crate) const COMMITTING_PROGRESS_LABEL: &str = "Committing...";
+
 /// Lead sentence used when seeding a follow-on prompt from a terminal session.
 const TERMINAL_CONTINUATION_PROMPT_INTRO: &str =
     "Continue the work from this previous Agentty session.";

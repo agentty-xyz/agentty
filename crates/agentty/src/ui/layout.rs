@@ -8,7 +8,9 @@ use crate::app;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
 use crate::domain::review;
-use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
+use crate::domain::session::{
+    COMMITTING_PROGRESS_LABEL, PublishedBranchSyncStatus, Session, Status,
+};
 use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::file_index;
@@ -41,7 +43,6 @@ const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const CLARIFICATION_HEADER_LINE: &str = " › Clarifications:";
 const SINGLE_LINE_FOOTER_HEIGHT: u16 = 1;
 const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
-
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     help_action::HelpAction::new("stage draft", "Enter", "Stage draft"),
     help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
@@ -1081,6 +1082,10 @@ fn user_prompt_block_end_index(raw_lines: &[&str], start_index: usize) -> usize 
 }
 
 /// Returns the loader label for active session states.
+///
+/// Most in-progress details are agent thinking snippets appended to the
+/// generic working label. Post-turn auto-commit sends a complete loader label
+/// so commit-message generation and git commit work render as committing.
 fn session_output_status_message(
     status: Status,
     active_progress: Option<&str>,
@@ -1093,7 +1098,13 @@ fn session_output_status_message(
             .filter(|progress| !progress.is_empty())
             .map_or_else(
                 || "Working...".to_string(),
-                |progress| format!("Working... {progress}"),
+                |progress| {
+                    if progress == COMMITTING_PROGRESS_LABEL {
+                        progress.to_string()
+                    } else {
+                        format!("Working... {progress}")
+                    }
+                },
             ),
         Status::AgentReview => review_status_message
             .map(str::trim)
@@ -2238,6 +2249,24 @@ mod tests {
             status_line
                 .to_string()
                 .contains("Working... Inspecting changed files")
+        );
+    }
+
+    #[test]
+    fn test_session_output_status_line_for_in_progress_uses_committing_label() {
+        // Arrange
+
+        // Act
+        let status_line =
+            session_output_status_line(Status::InProgress, Some(COMMITTING_PROGRESS_LABEL), None)
+                .expect("in-progress sessions should render a status line");
+
+        // Assert
+        assert!(status_line.to_string().contains(COMMITTING_PROGRESS_LABEL));
+        assert!(
+            !status_line
+                .to_string()
+                .contains(&format!("Working... {COMMITTING_PROGRESS_LABEL}"))
         );
     }
 
