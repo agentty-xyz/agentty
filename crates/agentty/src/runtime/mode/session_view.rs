@@ -81,8 +81,8 @@ struct ViewSessionSnapshot {
 const REVIEW_NO_DIFF_MESSAGE: &str = "No diff changes found for review.";
 
 /// Processes view-mode key presses and keeps shortcut availability aligned with
-/// session status (`o` disabled for `Done`/`Canceled`/`Merging`/`Queued`, and
-/// diff/review available for review-ready statuses).
+/// session status (`o` disabled outside editable/review-ready local
+/// worktrees, and diff/review available for review-ready statuses).
 pub(crate) async fn handle<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
@@ -504,7 +504,12 @@ fn apply_view_scroll_and_output_mode(
 fn is_view_worktree_open_allowed(status: Status) -> bool {
     !matches!(
         status,
-        Status::Done | Status::Canceled | Status::Merging | Status::Queued
+        Status::Done
+            | Status::Canceled
+            | Status::InProgress
+            | Status::Rebasing
+            | Status::Merging
+            | Status::Queued
     )
 }
 
@@ -1313,7 +1318,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_view_worktree_open_allowed_returns_true_for_in_progress() {
+    fn test_is_view_worktree_open_allowed_returns_false_for_in_progress() {
         // Arrange
         let status = Status::InProgress;
 
@@ -1321,7 +1326,19 @@ mod tests {
         let can_open = is_view_worktree_open_allowed(status);
 
         // Assert
-        assert!(can_open);
+        assert!(!can_open);
+    }
+
+    #[test]
+    fn test_is_view_worktree_open_allowed_returns_false_for_rebasing() {
+        // Arrange
+        let status = Status::Rebasing;
+
+        // Act
+        let can_open = is_view_worktree_open_allowed(status);
+
+        // Assert
+        assert!(!can_open);
     }
 
     #[test]

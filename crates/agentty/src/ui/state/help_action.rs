@@ -36,11 +36,11 @@ pub enum ViewSessionState {
     /// Session was canceled locally; a seeded continuation prompt can be
     /// opened while the rest of the view stays read-only.
     Canceled,
-    /// Session is currently running; worktree-open remains available, while
-    /// reply and diff shortcuts are hidden.
+    /// Session is currently running; queued replies and stop remain available
+    /// while worktree-open and diff shortcuts are hidden.
     InProgress,
-    /// Session is rebasing; worktree-open remains available, while reply and
-    /// diff shortcuts are hidden.
+    /// Session is rebasing; worktree-open, reply, and diff shortcuts are
+    /// hidden until the rebase finishes.
     Rebasing,
     /// Session is in merge-queue processing; only read-only navigation
     /// shortcuts are available.
@@ -233,9 +233,7 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         && matches!(
             state.session_state,
             ViewSessionState::Interactive
-                | ViewSessionState::InProgress
                 | ViewSessionState::NewSession
-                | ViewSessionState::Rebasing
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         );
@@ -329,9 +327,7 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
         && matches!(
             state.session_state,
             ViewSessionState::Interactive
-                | ViewSessionState::InProgress
                 | ViewSessionState::NewSession
-                | ViewSessionState::Rebasing
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         );
@@ -646,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_in_progress_shows_open_and_stop_and_hides_edit_actions() {
+    fn test_view_actions_in_progress_shows_stop_and_hides_open_and_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -660,7 +656,7 @@ mod tests {
         // Assert
         assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
-        assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "d"));
     }
 
@@ -681,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_rebasing_shows_open_without_stop() {
+    fn test_view_actions_rebasing_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -694,7 +690,7 @@ mod tests {
 
         // Assert
         assert!(!actions.iter().any(|action| action.key == "Enter"));
-        assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "d"));
     }
@@ -884,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_rebasing_shows_open_without_stop() {
+    fn test_view_footer_actions_rebasing_hides_open_and_stop() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -896,7 +892,7 @@ mod tests {
         let actions = view_footer_actions(state);
 
         // Assert
-        assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Ctrl+c"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
@@ -1033,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_in_progress_shows_stop_and_open() {
+    fn test_view_footer_actions_in_progress_shows_stop_and_hides_open() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -1046,7 +1042,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
-        assert!(actions.iter().any(|action| action.key == "o"));
+        assert!(!actions.iter().any(|action| action.key == "o"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
     }

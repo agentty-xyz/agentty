@@ -1598,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_view_footer_line_in_progress_shows_stop_and_open_and_hides_diff() {
+    fn test_session_view_footer_line_in_progress_shows_stop_and_hides_open_and_diff() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::InProgress;
@@ -1610,18 +1610,18 @@ mod tests {
         assert!(help_text.contains("q: back"));
         assert!(help_text.contains("Ctrl+c: stop"));
         assert!(help_text.contains("j/k: scroll"));
-        assert!(help_text.contains("o: open"));
+        assert!(!help_text.contains("o: open"));
         assert!(!help_text.contains("d: diff"));
         assert!(!help_text.contains("Enter: reply"));
     }
 
     #[test]
-    fn test_session_view_footer_line_merge_queue_statuses_hide_worktree_open_hint() {
+    fn test_session_view_footer_line_noninteractive_busy_statuses_hide_worktree_open_hint() {
         // Arrange
-        let merge_queue_statuses = [Status::Queued, Status::Merging];
+        let busy_statuses = [Status::Rebasing, Status::Queued, Status::Merging];
 
         // Act
-        let help_texts: Vec<String> = merge_queue_statuses
+        let help_texts: Vec<String> = busy_statuses
             .iter()
             .map(|session_status| {
                 let mut session = session_fixture();

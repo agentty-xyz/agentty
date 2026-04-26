@@ -500,6 +500,7 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
                 let running_frame = common::frame_from_capture(&report.captures[0]);
                 let running_full = Region::full(running_frame.cols(), running_frame.rows());
                 assertion::assert_text_in_region(&running_frame, "Ctrl+c: stop", &running_full);
+                assertion::assert_not_visible(&running_frame, "o: open");
 
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: reply", &full);

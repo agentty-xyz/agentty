@@ -75,25 +75,25 @@ worktree after the session has started, scroll, help | | **InProgress** | Agent 
 actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c`
 retracts the most recently queued chat message (LIFO) one press at a time without
 interrupting the running turn, then stops the current turn once the queue is empty, `c`
-from the session list stops and cancels the session after confirmation, `o` open
-worktree, scroll, help | | **Review** | Agent finished; changes are ready for review.
-Linked pull requests / merge requests refresh in the background; merged requests move
-the session to `Done`, and closed requests move it to `Canceled`. | `Enter` reply, `/`
-open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p`
-create or refresh forge review request, `d` diff, `f` focused review, scroll, help | |
-**AgentReview** | Agentty is generating the focused review output in the background.
-Linked pull requests / merge requests continue refreshing in the background. | `Enter`
-reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p`
-create or refresh forge review request, `d` diff, `f` focused review, scroll, help | |
-**Question** | Agent requested clarification before continuing. | question input mode
-(`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) | | **Queued** | Session is
-waiting in the merge queue. | read-only view (`q`, scroll, help) | | **Rebasing** |
-Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help | |
-**Merging** | Changes are being merged into the base branch. | read-only view (`q`,
-scroll, help) | | **Done** | Session completed, merged, and its worktree checkout was
-removed. | `c` confirm continuation into a new draft, scroll, help | | **Canceled** |
-Session was canceled by the user and its worktree checkout was removed. | `c` confirm
-continuation into a new draft, read-only view (`q`, scroll, help) |
+from the session list stops and cancels the session after confirmation, scroll, help | |
+**Review** | Agent finished; changes are ready for review. Linked pull requests / merge
+requests refresh in the background; merged requests move the session to `Done`, and
+closed requests move it to `Canceled`. | `Enter` reply, `/` open slash-command composer,
+`m` add to merge queue, `r` rebase, `o` open worktree, `p` create or refresh forge
+review request, `d` diff, `f` focused review, scroll, help | | **AgentReview** | Agentty
+is generating the focused review output in the background. Linked pull requests / merge
+requests continue refreshing in the background. | `Enter` reply, `/` open slash-command
+composer, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review
+request, `d` diff, `f` focused review, scroll, help | | **Question** | Agent requested
+clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle
+chat scroll, `Esc` end turn) | | **Queued** | Session is waiting in the merge queue. |
+read-only view (`q`, scroll, help) | | **Rebasing** | Worktree branch is rebasing onto
+the base branch. | read-only view (`q`, scroll, help) | | **Merging** | Changes are
+being merged into the base branch. | read-only view (`q`, scroll, help) | | **Done** |
+Session completed, merged, and its worktree checkout was removed. | `c` confirm
+continuation into a new draft, scroll, help | | **Canceled** | Session was canceled by
+the user and its worktree checkout was removed. | `c` confirm continuation into a new
+draft, read-only view (`q`, scroll, help) |
 
 Settings values for models, reasoning, commit trailers, and open commands are stored per
 active project. Switching projects reloads that project's `Default Reasoning Level`,
