@@ -7,12 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.8.4] - 2026-04-25
+
+### Added
+
+- Queue chat messages while a turn is running and include them in session output.
+- Animate in-progress session output with a Tachyonfx loader.
+- Split settings into global and project sections.
+- Surface FYI guidance for opening commands in the sessions list.
+- Gate `/apply` to verify focused-review suggestions before applying.
+
+### Changed
+
+- Render done-session transcript and summary as a single stream.
+- Use semantic text foreground for persisted user prompt content.
+- Align summary markdown spacing with the section layout.
+- Align UI component foreground style with session list text color.
+- Use a stable bar glyph for spinner status indicators.
+- Adopt theme-driven session status colors and broader theme styling refresh.
+- Return interrupted in-progress turns to `Review`.
+- Update `testty` crate description and document the feature module.
+
+### Fixed
+
+- Hide focused review output in terminal `Done` and `Canceled` sessions.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
+
 ## [v0.8.3] - 2026-04-24
 
 ### Changed
+
 - build: remove pinned version comments from release.yml
 
 ### Contributors
+
 - @minev-dev
 
 ## [v0.8.2] - 2026-04-24
