@@ -772,7 +772,7 @@ mod tests {
         AgentRequestKind, MockAgentChannel, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
         TurnResult,
     };
-    use crate::infra::db::{AppRepositories, OperationRepository};
+    use crate::infra::db::AppRepositories;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
     use crate::ui::state::app_mode::AppMode;

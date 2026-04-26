@@ -2261,7 +2261,7 @@ mod tests {
             Status::InProgress,
             Some(COMMITTING_PROGRESS_LABEL),
             None,
-            AgentModel::Gpt54,
+            AgentModel::ClaudeOpus47,
         )
         .expect("in-progress sessions should render a status line");
 
