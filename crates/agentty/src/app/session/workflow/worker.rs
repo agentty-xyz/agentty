@@ -156,8 +156,7 @@ impl SessionWorkerContext {
         // is the correct choice per CLAUDE.md §"Mutex Selection".
         self.status
             .lock()
-            .map(|guard| *guard)
-            .unwrap_or(Status::Review)
+            .map_or(Status::Review, |guard| *guard)
     }
 }
 
