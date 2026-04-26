@@ -243,6 +243,11 @@ impl<'a> InfoOverlay<'a> {
 
         required_height.max(min_height)
     }
+
+    /// Returns the default body foreground used by unhighlighted overlay text.
+    fn body_text_style() -> Style {
+        Style::default().fg(palette::text())
+    }
 }
 
 impl Component for InfoOverlay<'_> {
@@ -252,6 +257,7 @@ impl Component for InfoOverlay<'_> {
         let border_color = self.border_color();
         let paragraph = Paragraph::new(self.body_lines(message_width))
             .alignment(self.body_alignment())
+            .style(Self::body_text_style())
             .wrap(Wrap { trim: true })
             .block(overlay::overlay_block(self.title, border_color));
 
@@ -327,6 +333,9 @@ fn split_prefixed_title(line: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::theme::ColorTheme;
+    use crate::test_support;
+    use crate::ui::style;
 
     #[test]
     fn test_info_overlay_new_stores_fields() {
@@ -388,6 +397,31 @@ mod tests {
         assert!(text.contains("Sync in progress..."));
         assert!(!text.contains("Please wait."));
         assert!(!text.contains("OK"));
+    }
+
+    #[test]
+    fn test_info_overlay_hacker_theme_uses_session_list_text_color_for_body_text() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let backend = ratatui::backend::TestBackend::new(100, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let overlay = InfoOverlay::new("Sync blocked", "Use the session list text color.");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Component::render(&overlay, frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let body_cell = test_support::rendered_text_start_cell(
+            terminal.backend().buffer(),
+            "Use the session list text color.",
+        )
+        .expect("body text should render");
+        assert_eq!(body_cell.fg, palette::text());
     }
 
     #[test]

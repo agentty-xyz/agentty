@@ -79,6 +79,11 @@ impl<'a> PublishBranchOverlay<'a> {
         }
     }
 
+    /// Returns the foreground style for non-editable branch text.
+    fn locked_branch_text_style() -> Style {
+        Style::default().fg(palette::text())
+    }
+
     /// Renders a non-editable branch field when the session already tracks one
     /// remote branch.
     fn render_locked_branch_field(&self, f: &mut Frame, area: Rect) {
@@ -97,7 +102,9 @@ impl<'a> PublishBranchOverlay<'a> {
                     .fg(palette::accent())
                     .add_modifier(Modifier::BOLD),
             ));
-        let paragraph = Paragraph::new(self.input.text()).block(block);
+        let paragraph = Paragraph::new(self.input.text())
+            .style(Self::locked_branch_text_style())
+            .block(block);
 
         f.render_widget(Clear, area);
         f.render_widget(paragraph, area);
@@ -147,6 +154,9 @@ impl Component for PublishBranchOverlay<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::theme::ColorTheme;
+    use crate::test_support;
+    use crate::ui::style;
 
     #[test]
     fn test_publish_branch_overlay_popup_area_is_centered() {
@@ -221,6 +231,34 @@ mod tests {
         assert!(text.contains("review/custom"));
         assert!(text.contains("review request"));
         assert!(text.contains(REVIEW_REQUEST_LOCKED_HELP_TEXT));
+    }
+
+    #[test]
+    fn test_publish_branch_overlay_hacker_theme_uses_session_list_text_color_for_locked_branch() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let input = InputState::with_text("review/custom".to_string());
+        let overlay =
+            PublishBranchOverlay::new(&input, "wt/ff45463f", Some("origin/review/custom"));
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                overlay.render(frame, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let branch_cells =
+            test_support::rendered_text_start_cells(terminal.backend().buffer(), "review/custom");
+        assert!(
+            branch_cells
+                .iter()
+                .any(|branch_cell| branch_cell.fg == style::palette::text())
+        );
     }
 
     #[test]

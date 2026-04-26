@@ -138,6 +138,11 @@ impl<'a> ChatInput<'a> {
             ))
     }
 
+    /// Returns the default foreground style for typed prompt content.
+    fn input_text_style() -> Style {
+        Style::default().fg(style::palette::text())
+    }
+
     /// Renders the suggestion dropdown using the shared chat input chrome.
     ///
     /// This method is also used by the question-mode panel to render the
@@ -188,7 +193,9 @@ impl<'a> ChatInput<'a> {
             })
             .collect::<Vec<_>>();
 
-        let dropdown = Paragraph::new(rows).block(Self::dropdown_block(&suggestion_list.title));
+        let dropdown = Paragraph::new(rows)
+            .style(Self::input_text_style())
+            .block(Self::dropdown_block(&suggestion_list.title));
 
         f.render_widget(Clear, area);
         f.render_widget(dropdown, area);
@@ -216,7 +223,9 @@ impl<'a> ChatInput<'a> {
                 ),
             ])];
 
-            let widget = Paragraph::new(display_lines).block(block);
+            let widget = Paragraph::new(display_lines)
+                .style(Self::input_text_style())
+                .block(block);
             f.render_widget(Clear, area);
             f.render_widget(widget, area);
             if self.active {
@@ -236,6 +245,7 @@ impl<'a> ChatInput<'a> {
         let (scroll_offset, cursor_row) =
             calculate_input_viewport(total_line_count, cursor_y, viewport_height);
         let widget = Paragraph::new(display_lines)
+            .style(Self::input_text_style())
             .scroll((scroll_offset, 0))
             .block(block);
 
@@ -277,7 +287,10 @@ impl Component for ChatInput<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::theme::ColorTheme;
+    use crate::test_support;
 
+    /// Returns the rendered symbols for one buffer row.
     fn buffer_row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
         let start = usize::from(row) * usize::from(width);
         let end = start + usize::from(width);
@@ -401,6 +414,30 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let top_left_cell = &buffer.content()[0];
         assert_eq!(top_left_cell.fg, style::palette::border());
+    }
+
+    #[test]
+    fn test_render_hacker_theme_uses_session_list_text_color_for_input_text() {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::Hacker);
+        let width = 48;
+        let backend = ratatui::backend::TestBackend::new(width, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let chat_input = ChatInput::new("Prompt", "typed-green", "typed-green".chars().count());
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                chat_input.render(frame, area);
+            })
+            .expect("failed to draw prompt input");
+
+        // Assert
+        let typed_cell =
+            test_support::rendered_text_start_cell(terminal.backend().buffer(), "typed-green")
+                .expect("typed input should render");
+        assert_eq!(typed_cell.fg, style::palette::text());
     }
 
     #[test]
