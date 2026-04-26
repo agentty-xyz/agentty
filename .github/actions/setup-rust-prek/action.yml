@@ -1,0 +1,49 @@
+name: Setup Rust Prek Workspace
+description: Install the shared Rust and `prek` CI tooling after checkout.
+
+inputs:
+  cargo-llvm-cov:
+    description: Install `cargo-llvm-cov` for coverage-producing jobs.
+    required: false
+    default: "false"
+  llvm-tools-preview:
+    description: Install the Rust `llvm-tools-preview` component for coverage-producing jobs.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup `uv`
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+    - name: Install `prek`
+      shell: bash
+      run: uv tool install prek
+
+    - name: Install Rust nightly toolchain
+      if: ${{ inputs.llvm-tools-preview != 'true' }}
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      with:
+        toolchain: nightly
+
+    - name: Install Rust nightly toolchain with LLVM tools
+      if: ${{ inputs.llvm-tools-preview == 'true' }}
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      with:
+        toolchain: nightly
+        components: llvm-tools-preview
+
+    - name: Install `cargo-llvm-cov`
+      if: ${{ inputs.cargo-llvm-cov == 'true' }}
+      uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
+      with:
+        tool: cargo-llvm-cov
+
+    - name: Install `cargo-nextest`
+      uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
+      with:
+        tool: nextest
+
+    - name: Restore Rust cache
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1

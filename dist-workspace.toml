@@ -15,6 +15,8 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 install-path = "CARGO_HOME"
 # Publish jobs to run in CI
 publish-jobs = ["npm"]
+# Repository checks that must pass before generated release build and publish jobs.
+plan-jobs = ["./release-checks"]
 # Whether to install an updater program
 install-updater = true
 

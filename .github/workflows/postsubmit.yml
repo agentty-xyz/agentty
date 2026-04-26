@@ -38,24 +38,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup `uv`
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-
-      - name: Install `prek`
-        run: uv tool install prek
-
-      - name: Install Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: nightly
-
-      - name: Install `cargo-nextest`
-        uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
-        with:
-          tool: nextest
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Setup Rust and `prek`
+        uses: ./.github/actions/setup-rust-prek
 
       - name: Run source tests
         run: uv tool run prek run ${{ matrix.hook }} --all-files --hook-stage manual
@@ -67,30 +51,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup `uv`
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-
-      - name: Install `prek`
-        run: uv tool install prek
-
-      - name: Install Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - name: Setup Rust and `prek`
+        uses: ./.github/actions/setup-rust-prek
         with:
-          toolchain: nightly
-          components: llvm-tools-preview
-
-      - name: Install `cargo-llvm-cov`
-        uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
-        with:
-          tool: cargo-llvm-cov
-
-      - name: Install `cargo-nextest`
-        uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
-        with:
-          tool: nextest
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+          cargo-llvm-cov: "true"
+          llvm-tools-preview: "true"
 
       - name: Generate coverage report
         run: uv tool run prek run coverage-lcov --all-files --hook-stage manual
@@ -138,24 +103,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup `uv`
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-
-      - name: Install `prek`
-        run: uv tool install prek
-
-      - name: Install Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: nightly
-
-      - name: Install `cargo-nextest`
-        uses: taiki-e/install-action@787505cde8a44ea468a00478fe52baf23b15bccd # v2.75.21
-        with:
-          tool: nextest
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Setup Rust and `prek`
+        uses: ./.github/actions/setup-rust-prek
 
       - name: Run end-to-end feature suite
         run: uv tool run prek run test-agentty-e2e --all-files --hook-stage manual

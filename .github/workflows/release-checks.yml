@@ -1,7 +1,7 @@
-name: Presubmit
+name: Release Checks
 
 on:
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,6 +19,8 @@ jobs:
 
       - name: Setup Rust and `prek`
         uses: ./.github/actions/setup-rust-prek
+        with:
+          llvm-tools-preview: "true"
 
       - name: Default validation hooks
         run: uv tool run prek run --all-files
