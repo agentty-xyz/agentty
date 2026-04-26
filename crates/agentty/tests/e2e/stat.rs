@@ -33,7 +33,7 @@ fn stats_tab_shows_heatmap_and_tokens() {
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
-                assertion::assert_text_in_region(frame, "TokenStats", &full);
+                assertion::assert_text_in_region(frame, "Token Stats", &full);
             },
         )
         .expect("feature test failed");

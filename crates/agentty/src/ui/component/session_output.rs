@@ -37,9 +37,10 @@ const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
 ///
 /// The key is intentionally tied to the session identifier plus observable
 /// update version and `updated_at` timestamp instead of hashing the full
-/// transcript on every frame. Width, active prompt, review text/status,
-/// progress text, and markdown style version cover the transient inputs that
-/// can alter rendered lines without changing the stored session row.
+/// transcript on every frame. Width, active prompt, queued messages, review
+/// text/status, progress text, and markdown style version cover the transient
+/// inputs that can alter rendered lines without changing the stored session
+/// row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
@@ -47,6 +48,7 @@ struct SessionOutputLayoutCacheKey {
     draft_prompt: TextFingerprint,
     markdown_render_version: u64,
     output_width: u16,
+    queued_messages: TextFingerprint,
     review_status_message: TextFingerprint,
     review_text: TextFingerprint,
     session_id: SessionId,
@@ -82,6 +84,27 @@ impl TextFingerprint {
             content_hash: hasher.finish(),
             content_len: text.len(),
             is_some: true,
+        }
+    }
+
+    /// Builds a cheap identity for a list of render inputs without joining
+    /// strings or retaining borrowed text in the cache key.
+    fn from_texts<'a>(texts: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut content_len = 0;
+        let mut content_count = 0;
+        let mut hasher = FxHasher::default();
+
+        for text in texts {
+            hasher.write(text.as_bytes());
+            hasher.write_u8(0xff);
+            content_len += text.len();
+            content_count += 1;
+        }
+
+        Self {
+            content_hash: hasher.finish(),
+            content_len,
+            is_some: content_count > 0,
         }
     }
 }
@@ -420,6 +443,9 @@ impl<'a> SessionOutput<'a> {
             draft_prompt: Self::draft_prompt_fingerprint(session),
             markdown_render_version,
             output_width: u16::try_from(inner_width).unwrap_or(u16::MAX),
+            queued_messages: TextFingerprint::from_texts(
+                session.queued_messages.iter().map(String::as_str),
+            ),
             review_status_message: TextFingerprint::from_text(context.review_status_message),
             review_text: TextFingerprint::from_text(context.review_text),
             session_id: session.id.clone(),
@@ -1240,6 +1266,44 @@ mod tests {
         // Assert
         assert!(!Arc::ptr_eq(&empty_layout.lines, &staged_layout.lines));
         assert!(staged_text.contains("First staged draft"));
+    }
+
+    #[test]
+    /// Verifies queued chat rows invalidate the output layout cache so
+    /// in-progress replies appear as soon as they are staged.
+    fn test_output_layout_cache_keys_queued_messages() {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = Status::InProgress;
+        session.output = " › running prompt".to_string();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = line_context(None, None, None);
+
+        // Act
+        let empty_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        session.queued_messages = vec!["queued reply".to_string()];
+        let queued_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        let queued_text = queued_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(!Arc::ptr_eq(&empty_layout.lines, &queued_layout.lines));
+        assert!(queued_text.contains("queued › queued reply"));
     }
 
     #[test]
