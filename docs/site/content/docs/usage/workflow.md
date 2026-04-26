@@ -68,7 +68,7 @@ Session statuses and what you can do in each state:
 | **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
 | **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
 | **Merging** | Changes are being merged into the base branch. | read-only view (`q`, scroll, help) |
-| **Done** | Session completed, merged, and its worktree checkout was removed. | `c` confirm continuation into a new draft, `t` toggle summary/output, scroll, help |
+| **Done** | Session completed, merged, and its worktree checkout was removed. | `c` confirm continuation into a new draft, scroll, help |
 | **Canceled** | Session was canceled by the user and its worktree checkout was removed. | `c` confirm continuation into a new draft, read-only view (`q`, scroll, help) |
 
 Settings values for models, reasoning, commit trailers, and open commands are

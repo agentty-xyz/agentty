@@ -11,8 +11,8 @@ use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
 use crate::infra::file_index;
 use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
-use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
-use crate::ui::state::help_action::{self, ViewHelpState, ViewSessionState};
+use crate::ui::state::app_mode::QuestionFocus;
+use crate::ui::state::help_action::{self, ViewHelpState};
 use crate::ui::state::prompt::{
     PromptAtMentionState, PromptSlashState, PromptSuggestionList,
     build_prompt_slash_suggestion_list,
@@ -235,16 +235,8 @@ pub fn session_metadata_text(
 }
 
 /// Builds the footer help line shown in session view mode.
-pub fn session_view_footer_line(
-    session: &Session,
-    can_open_worktree: bool,
-    done_session_output_mode: DoneSessionOutputMode,
-) -> Line<'static> {
-    help_action::footer_line(&session_view_footer_actions(
-        session,
-        can_open_worktree,
-        done_session_output_mode,
-    ))
+pub fn session_view_footer_line(session: &Session, can_open_worktree: bool) -> Line<'static> {
+    help_action::footer_line(&session_view_footer_actions(session, can_open_worktree))
 }
 
 /// Builds the prompt-mode footer help line shown below the composer.
@@ -573,14 +565,10 @@ pub fn session_output_panel_border_style(status: Status) -> Style {
     Style::default().fg(style::status_color(status))
 }
 
-/// Builds the inline shortcut hint for toggling done-session content.
-pub fn session_output_done_toggle_line(
-    done_session_output_mode: DoneSessionOutputMode,
-) -> Line<'static> {
-    let toggle_target = done_toggle_action_label(done_session_output_mode);
-
+/// Builds the inline shortcut hint for continuing a completed session.
+pub fn session_output_done_line() -> Line<'static> {
     Line::from(vec![Span::styled(
-        format!("Press 't' to switch to {toggle_target}. Press 'c' to continue in a new session."),
+        "Press 'c' to continue in a new session.",
         Style::default().fg(style::palette::text_subtle()),
     )])
 }
@@ -972,32 +960,13 @@ pub fn first_table_column_width(
 fn session_view_footer_actions(
     session: &Session,
     can_open_worktree: bool,
-    done_session_output_mode: DoneSessionOutputMode,
 ) -> Vec<help_action::HelpAction> {
     let session_state = help_action::session_view_state(session);
-    let mut actions = help_action::view_footer_actions(ViewHelpState {
+    help_action::view_footer_actions(ViewHelpState {
         can_open_worktree,
         publish_pull_request_action: session.publish_pull_request_action(),
         session_state,
-    });
-
-    if session_state == ViewSessionState::Done {
-        let toggle_action_label = done_toggle_action_label(done_session_output_mode);
-        if let Some(toggle_action_index) = actions.iter().position(|action| action.key == "t") {
-            actions[toggle_action_index] =
-                help_action::HelpAction::new(toggle_action_label, "t", "Switch summary/output");
-        }
-    }
-
-    actions
-}
-
-/// Returns the `t` footer label for `Status::Done` output mode toggling.
-fn done_toggle_action_label(done_session_output_mode: DoneSessionOutputMode) -> &'static str {
-    match done_session_output_mode {
-        DoneSessionOutputMode::Summary => "output",
-        DoneSessionOutputMode::Output | DoneSessionOutputMode::Review => "summary",
-    }
+    })
 }
 
 /// Returns the fixed prompt-mode actions rendered in the composer footer.
@@ -1426,7 +1395,7 @@ mod tests {
     use crate::domain::theme::ColorTheme;
     use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::infra::file_index::FileEntry;
-    use crate::ui::state::app_mode::{DoneSessionOutputMode, QuestionFocus};
+    use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
 
     fn session_fixture() -> Session {
@@ -1435,12 +1404,8 @@ mod tests {
             .build()
     }
 
-    fn view_footer_text(
-        session: &Session,
-        can_open_worktree: bool,
-        done_session_output_mode: DoneSessionOutputMode,
-    ) -> String {
-        session_view_footer_line(session, can_open_worktree, done_session_output_mode).to_string()
+    fn view_footer_text(session: &Session, can_open_worktree: bool) -> String {
+        session_view_footer_line(session, can_open_worktree).to_string()
     }
 
     fn summary_fixture() -> String {
@@ -1609,7 +1574,7 @@ mod tests {
         session.status = Status::InProgress;
 
         // Act
-        let help_text = view_footer_text(&session, true, DoneSessionOutputMode::Summary);
+        let help_text = view_footer_text(&session, true);
 
         // Assert
         assert!(help_text.contains("q: back"));
@@ -1632,7 +1597,7 @@ mod tests {
                 let mut session = session_fixture();
                 session.status = *session_status;
 
-                view_footer_text(&session, true, DoneSessionOutputMode::Summary)
+                view_footer_text(&session, true)
             })
             .collect();
 
@@ -1653,7 +1618,7 @@ mod tests {
         session.is_draft = true;
 
         // Act
-        let help_text = view_footer_text(&session, false, DoneSessionOutputMode::Summary);
+        let help_text = view_footer_text(&session, false);
 
         // Assert
         assert!(help_text.contains("Enter: add draft"));
@@ -1666,20 +1631,16 @@ mod tests {
     }
 
     #[test]
-    fn test_session_view_footer_line_done_modes_switch_toggle_label() {
+    fn test_session_view_footer_line_done_session_shows_continue_action() {
         // Arrange
         let mut session = session_fixture();
         session.status = Status::Done;
 
         // Act
-        let summary_help_text = view_footer_text(&session, true, DoneSessionOutputMode::Summary);
-        let output_help_text = view_footer_text(&session, true, DoneSessionOutputMode::Output);
-        let review_help_text = view_footer_text(&session, true, DoneSessionOutputMode::Review);
+        let help_text = view_footer_text(&session, true);
 
         // Assert
-        assert!(summary_help_text.contains("t: output"));
-        assert!(output_help_text.contains("t: summary"));
-        assert!(review_help_text.contains("t: summary"));
+        assert!(help_text.contains("c: continue"));
     }
 
     #[test]
@@ -2188,26 +2149,16 @@ mod tests {
     }
 
     #[test]
-    fn test_session_output_done_toggle_line_switches_targets() {
+    fn test_session_output_done_line_shows_continue_hint() {
         // Arrange
 
         // Act
-        let summary_line = session_output_done_toggle_line(DoneSessionOutputMode::Summary);
-        let output_line = session_output_done_toggle_line(DoneSessionOutputMode::Output);
-        let review_line = session_output_done_toggle_line(DoneSessionOutputMode::Review);
+        let done_line = session_output_done_line();
 
         // Assert
         assert_eq!(
-            summary_line.to_string(),
-            "Press 't' to switch to output. Press 'c' to continue in a new session."
-        );
-        assert_eq!(
-            output_line.to_string(),
-            "Press 't' to switch to summary. Press 'c' to continue in a new session."
-        );
-        assert_eq!(
-            review_line.to_string(),
-            "Press 't' to switch to summary. Press 'c' to continue in a new session."
+            done_line.to_string(),
+            "Press 'c' to continue in a new session."
         );
     }
 

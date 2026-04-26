@@ -195,7 +195,7 @@ mod tests {
     use crate::db::Database;
     use crate::domain::session::tests::SessionFixtureBuilder;
     use crate::domain::session::{SessionHandles, Status};
-    use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
+    use crate::ui::state::app_mode::AppMode;
 
     /// Test-only loop state that records call counts and scripted outcomes.
     struct TestLoopState {
@@ -480,7 +480,6 @@ mod tests {
         );
 
         app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Output,
             review_status_message: None,
             review_text: None,
             session_id: session_id.clone().into(),

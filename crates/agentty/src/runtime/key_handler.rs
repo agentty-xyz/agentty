@@ -10,9 +10,7 @@ use crate::app::{App, ReviewCacheEntry, diff_content_hash, review_loading_messag
 use crate::domain::session::SessionId;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, backend_err, mode};
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DoneSessionOutputMode,
-};
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
@@ -504,7 +502,6 @@ async fn handle_regenerate_review_confirmation(
 
     if diff.trim().is_empty() || diff.starts_with("Failed to run git diff:") {
         let mut view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
@@ -534,7 +531,6 @@ async fn handle_regenerate_review_confirmation(
     );
 
     let mut view_mode = restore_view.unwrap_or(ConfirmationViewMode {
-        done_session_output_mode: DoneSessionOutputMode::Summary,
         review_status_message: None,
         review_text: None,
         scroll_offset: None,
@@ -563,7 +559,7 @@ mod tests {
     use crate::domain::agent::AgentModel;
     use crate::infra::app_server;
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-    use crate::ui::state::app_mode::{ConfirmationViewMode, DoneSessionOutputMode};
+    use crate::ui::state::app_mode::ConfirmationViewMode;
 
     fn setup_test_git_repo(path: &Path) {
         Command::new("git")
@@ -711,7 +707,6 @@ mod tests {
             loading_label: "Refreshing review request...".to_string(),
             message: "Review request refreshed.".to_string(),
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(2),
@@ -839,7 +834,6 @@ mod tests {
         source_session.status = crate::domain::session::Status::Done;
         source_session.title = Some("Done source".to_string());
         app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: source_session_id.clone().into(),
@@ -885,7 +879,6 @@ mod tests {
             confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Review output".to_string()),
                 scroll_offset: Some(6),
@@ -904,7 +897,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(ref review_status_message),
                 review_text: Some(ref review_text),
                 session_id: ref session_id_in_mode,
@@ -930,7 +922,6 @@ mod tests {
                 .to_string(),
             confirmation_title: "Confirm Continue".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
@@ -949,7 +940,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 session_id: ref session_id_in_mode,
                 scroll_offset: Some(4),
                 ..
@@ -983,7 +973,6 @@ mod tests {
                 .to_string(),
             confirmation_title: "Confirm Continue".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
@@ -1040,7 +1029,6 @@ mod tests {
             confirmation_message: "Add this session to merge queue?".to_string(),
             confirmation_title: "Confirm Merge".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(2),
@@ -1059,7 +1047,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 session_id: ref session_id_in_mode,
@@ -1081,7 +1068,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(7),
@@ -1100,7 +1086,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(ref status_message),
                 review_text: Some(ref review_text),
                 ref session_id,
@@ -1130,7 +1115,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::PublishPullRequest,
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
@@ -1168,7 +1152,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
@@ -1210,7 +1193,6 @@ mod tests {
                 locked_upstream_ref: None,
                 publish_branch_action: crate::domain::session::PublishBranchAction::Push,
                 restore_view: ConfirmationViewMode {
-                    done_session_output_mode: DoneSessionOutputMode::Summary,
                     review_status_message: None,
                     review_text: None,
                     scroll_offset: None,
@@ -1251,7 +1233,6 @@ mod tests {
             locked_upstream_ref: None,
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
@@ -1284,7 +1265,6 @@ mod tests {
             locked_upstream_ref: Some("origin/review/custom".to_string()),
             publish_branch_action: crate::domain::session::PublishBranchAction::Push,
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
@@ -1343,7 +1323,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(3),
@@ -1364,7 +1343,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(ref status_message),
                 review_text: Some(ref review_text),
                 ref session_id,
@@ -1382,7 +1360,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
@@ -1416,7 +1393,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: Vec::new(),
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
@@ -1450,7 +1426,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(4),
@@ -1471,7 +1446,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 ref session_id,
@@ -1502,7 +1476,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: Some(2),
@@ -1523,7 +1496,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 ref session_id,
@@ -1539,7 +1511,6 @@ mod tests {
         app.mode = AppMode::OpenCommandSelector {
             commands: vec!["cargo test".to_string(), "npm run dev".to_string()],
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
                 review_text: Some("Critical finding".to_string()),
                 scroll_offset: Some(1),
@@ -1564,7 +1535,6 @@ mod tests {
                 ref commands,
                 restore_view:
                     ConfirmationViewMode {
-                        done_session_output_mode: DoneSessionOutputMode::Review,
                         review_status_message: Some(ref status_message),
                         review_text: Some(ref review_text),
                         scroll_offset: Some(1),
@@ -1590,7 +1560,6 @@ mod tests {
             confirmation_message: "Regenerate focused review?".to_string(),
             confirmation_title: "Confirm Regenerate".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: None,
                 review_text: Some("Previous review".to_string()),
                 scroll_offset: Some(4),
@@ -1609,7 +1578,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_text: Some(ref review_text),
                 scroll_offset: Some(4),
                 ..
@@ -1640,7 +1608,6 @@ mod tests {
             confirmation_message: "Regenerate focused review?".to_string(),
             confirmation_title: "Confirm Regenerate".to_string(),
             restore_view: Some(ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: None,
                 review_text: Some("Old review".to_string()),
                 scroll_offset: None,
@@ -1659,7 +1626,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(_),
                 review_text: None,
                 ..

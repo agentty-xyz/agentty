@@ -11,9 +11,7 @@ use crate::runtime::EventResult;
 use crate::runtime::mode::{at_mention, input_key};
 use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
-use crate::ui::state::app_mode::{
-    AppMode, DiffRightPanel, DoneSessionOutputMode, QuestionFocus, QuestionModeSnapshot,
-};
+use crate::ui::state::app_mode::{AppMode, DiffRightPanel, QuestionFocus, QuestionModeSnapshot};
 use crate::ui::state::prompt::PromptAtMentionState;
 
 /// Default response stored when users skip one model question.
@@ -191,7 +189,6 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
                 SessionOutputLineContext {
                     active_prompt_output,
                     active_progress,
-                    done_session_output_mode: DoneSessionOutputMode::Summary,
                     review_status_message,
                     review_text,
                     session_update_version: app.session_update_version(session_id),
@@ -770,7 +767,6 @@ async fn submit_response(app: &mut App, response: String) {
 
     let question_reply = build_question_reply_prompt(&questions, &responses);
     app.mode = AppMode::View {
-        done_session_output_mode: DoneSessionOutputMode::Summary,
         review_status_message: None,
         review_text: None,
         session_id: session_id.clone(),
@@ -845,7 +841,6 @@ async fn end_turn_no_answer(app: &mut App) {
     let (review_status_message, review_text) = app.review_view_state(&session_id);
 
     app.mode = AppMode::View {
-        done_session_output_mode: DoneSessionOutputMode::Summary,
         review_status_message,
         review_text,
         session_id,
@@ -1053,7 +1048,6 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: Some(ref review_text),
                 ..
@@ -1315,7 +1309,6 @@ mod tests {
             app.mode,
             AppMode::View {
                 ref session_id,
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 ..
             } if session_id == "missing-session"
         ));

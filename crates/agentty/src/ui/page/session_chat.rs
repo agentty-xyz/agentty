@@ -11,7 +11,7 @@ use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode, QuestionFocus};
+use crate::ui::state::app_mode::{AppMode, QuestionFocus};
 use crate::ui::state::prompt::PromptAtMentionState;
 use crate::ui::util::{
     calculate_input_height, overlay_area_above, question_panel_areas,
@@ -149,29 +149,6 @@ impl<'a> SessionChatPage<'a> {
         )
     }
 
-    /// Returns the selected `Done`-session output mode for the active page
-    /// mode.
-    fn done_session_output_mode(&self) -> DoneSessionOutputMode {
-        match self.mode {
-            AppMode::View {
-                done_session_output_mode,
-                ..
-            } => *done_session_output_mode,
-            AppMode::OpenCommandSelector { restore_view, .. }
-            | AppMode::PublishBranchInput { restore_view, .. } => {
-                restore_view.done_session_output_mode
-            }
-            AppMode::ViewInfoPopup { restore_view, .. } => restore_view.done_session_output_mode,
-            AppMode::List
-            | AppMode::Confirmation { .. }
-            | AppMode::SyncBlockedPopup { .. }
-            | AppMode::Prompt { .. }
-            | AppMode::Question { .. }
-            | AppMode::Diff { .. }
-            | AppMode::Help { .. } => DoneSessionOutputMode::Summary,
-        }
-    }
-
     /// Returns focused-review status text for the active session transcript.
     ///
     /// Prompt mode preserves the last focused-review loader text so the output
@@ -279,7 +256,6 @@ impl<'a> SessionChatPage<'a> {
         let session_areas = layout::session_chat_areas(area, bottom_height);
 
         let mut output = SessionOutput::new(session)
-            .done_session_output_mode(self.done_session_output_mode())
             .markdown_render_cache(self.markdown_render_cache)
             .output_layout_cache(self.output_layout_cache)
             .session_update_version(self.session_update_version);
@@ -428,7 +404,6 @@ impl<'a> SessionChatPage<'a> {
         let help_message = Paragraph::new(layout::session_view_footer_line(
             session,
             self.can_open_worktree,
-            self.done_session_output_mode(),
         ));
         f.render_widget(help_message, bottom_area);
     }
@@ -683,7 +658,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 session_update_version: 0,
@@ -760,7 +734,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 session_update_version: 0,
@@ -776,7 +749,6 @@ mod tests {
             SessionOutputLineContext {
                 active_prompt_output: None,
                 active_progress: None,
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: Some("Preparing review..."),
                 review_text: Some("## Review\n\n- Focused finding"),
                 session_update_version: 0,

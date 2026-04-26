@@ -758,7 +758,7 @@ mod tests {
     use crate::infra::db::AppRepositories;
     use crate::infra::fs::{self as fs, FsClient};
     use crate::infra::{app_server, git};
-    use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
+    use crate::ui::state::app_mode::AppMode;
     use crate::ui::util;
 
     /// Returns a mock app-server client wrapped in `Arc` for test injection.
@@ -3207,7 +3207,6 @@ mod tests {
         .await;
         let selected_session_id = app.sessions.sessions[1].id.clone();
         app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: selected_session_id.clone(),

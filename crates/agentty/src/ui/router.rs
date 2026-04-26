@@ -822,7 +822,6 @@ mod tests {
     use crate::domain::agent::ReasoningLevel;
     use crate::domain::session::Status;
     use crate::domain::session::tests::SessionFixtureBuilder;
-    use crate::ui::state::app_mode::DoneSessionOutputMode;
 
     /// Builds one deterministic session fixture for router render tests.
     fn session_fixture(session_id: &str) -> Session {
@@ -854,7 +853,6 @@ mod tests {
         let session_id = "session-1234";
         let sessions = vec![session_fixture(session_id)];
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: session_id.into(),
@@ -901,7 +899,6 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 20);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: "missing-session".into(),
@@ -1011,7 +1008,6 @@ mod tests {
             selected_confirmation_index: 0,
         };
         let view_mode = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: None,

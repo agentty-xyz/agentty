@@ -12,7 +12,7 @@ use crate::domain::session::SessionId;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
-use crate::ui::state::app_mode::{AppMode, DoneSessionOutputMode};
+use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
     PromptAtMentionState, PromptSlashStage,
     apply_prompt_delete_range as apply_prompt_delete_range_components,
@@ -604,7 +604,6 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
     }
 
     app.mode = AppMode::View {
-        done_session_output_mode: DoneSessionOutputMode::Summary,
         review_status_message: None,
         review_text: None,
         session_id: prompt_context.session_id.clone(),
@@ -841,7 +840,6 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
     }
 
     app.mode = AppMode::View {
-        done_session_output_mode: DoneSessionOutputMode::Summary,
         review_status_message: prompt_review_status_message(app),
         review_text: prompt_review_text(app),
         session_id: prompt_context.session_id.clone(),
@@ -1038,7 +1036,6 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
     app.reply(&prompt_context.session_id, prompt).await;
 
     app.mode = AppMode::View {
-        done_session_output_mode: DoneSessionOutputMode::Summary,
         review_status_message: None,
         review_text: None,
         session_id: prompt_context.session_id.clone(),

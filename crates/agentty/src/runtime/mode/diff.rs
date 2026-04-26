@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use crate::app::App;
 use crate::runtime::EventResult;
 use crate::ui::component::file_explorer::FileExplorer;
-use crate::ui::state::app_mode::{AppMode, DiffScrollCache, DoneSessionOutputMode, HelpContext};
+use crate::ui::state::app_mode::{AppMode, DiffScrollCache, HelpContext};
 use crate::ui::util::{diff_view_max_scroll_offset, parse_diff_lines, selected_diff_lines};
 
 /// Handles key input while the app is in `AppMode::Diff`.
@@ -100,7 +100,6 @@ fn handle_exit_key(app: &mut App, key: KeyEvent) -> bool {
             let (review_status_message, review_text) = app.review_view_state(&session_id);
 
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message,
                 review_text,
                 session_id,

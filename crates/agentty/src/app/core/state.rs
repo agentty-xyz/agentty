@@ -51,9 +51,7 @@ use crate::infra::tmux::{RealTmuxClient, TmuxClient};
 use crate::infra::{agent, app_server};
 use crate::runtime::mode::{at_mention, question};
 use crate::ui::markdown;
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationViewMode, DoneSessionOutputMode, QuestionFocus,
-};
+use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -1333,7 +1331,6 @@ impl App {
         let (review_status_message, review_text) = self.review_view_state(target_session_id);
 
         self.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message,
             review_text,
             session_id: SessionId::from(target_session_id),
@@ -1557,7 +1554,7 @@ mod tests {
         HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient,
     };
     use crate::infra::tmux::{MockTmuxClient, TmuxClient};
-    use crate::ui::state::app_mode::{ConfirmationViewMode, DoneSessionOutputMode};
+    use crate::ui::state::app_mode::ConfirmationViewMode;
 
     /// Builds one mock app-server client wrapped in `Arc`.
     fn mock_app_server() -> Arc<dyn app_server::AppServerClient> {
@@ -1641,7 +1638,6 @@ mod tests {
     /// tests.
     fn test_confirmation_view_mode(session_id: &str) -> ConfirmationViewMode {
         ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: None,
@@ -2173,7 +2169,6 @@ mod tests {
     fn branch_publish_popup_helpers_format_copy() {
         // Arrange
         let expected_restore_view = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(2),
@@ -2555,7 +2550,6 @@ mod tests {
         )
         .await;
         let expected_restore_view = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(1),
@@ -2614,7 +2608,6 @@ mod tests {
         )
         .await;
         let expected_restore_view = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(1),
@@ -2675,7 +2668,6 @@ mod tests {
         )
         .await;
         let expected_restore_view = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: Some(2),
@@ -3518,7 +3510,6 @@ mod tests {
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-question-view")));
         app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Focused review".to_string()),
             session_id: "session-1".into(),
@@ -4025,9 +4016,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies a viewed session keeps summary mode when its live status
+    /// Verifies a viewed session keeps its review state when its live status
     /// transition reaches `Done`.
-    async fn apply_app_events_session_updated_keeps_done_view_in_summary_mode() {
+    async fn apply_app_events_session_updated_keeps_done_view_review_state() {
         // Arrange
         let mut app = new_test_app().await;
         app.sessions
@@ -4037,7 +4028,6 @@ mod tests {
             SessionHandles::new("Merge finished".to_string(), Status::Done),
         );
         app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
             review_text: Some("Review text".to_string()),
             session_id: "session-1".into(),
@@ -4055,7 +4045,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 scroll_offset: Some(9),
                 ..
             }
@@ -4103,7 +4092,6 @@ mod tests {
             SessionHandles::new("Merging".to_string(), Status::Merging),
         );
         app.mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: "session-1".into(),

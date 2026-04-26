@@ -86,7 +86,7 @@ pub(crate) fn rotating_message<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::state::app_mode::{DiffRightPanel, DoneSessionOutputMode};
+    use crate::ui::state::app_mode::DiffRightPanel;
 
     #[test]
     fn rotating_message_cycles_through_messages() {
@@ -132,7 +132,6 @@ mod tests {
     fn current_page_messages_returns_session_chat_guidance_for_view_mode() {
         // Arrange
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: "session-id".into(),

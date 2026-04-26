@@ -281,7 +281,6 @@ mod tests {
 
     use super::*;
     use crate::domain::session::tests::SessionFixtureBuilder;
-    use crate::ui::state::app_mode::DoneSessionOutputMode;
 
     /// Builds one deterministic session fixture for footer render tests.
     fn session_fixture(session_id: &str, folder: &str) -> Session {
@@ -320,7 +319,6 @@ mod tests {
         let session_id = "session-view-mode";
         let session = session_fixture(session_id, "/tmp/session-view-folder");
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: session_id.into(),
@@ -368,7 +366,6 @@ mod tests {
         let mut session = session_fixture(session_id, "/tmp/session-view-folder");
         session.published_upstream_ref = Some("origin/wt/upstream".to_string());
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: session_id.into(),
@@ -419,7 +416,6 @@ mod tests {
             loading_label: "Publishing branch".to_string(),
             message: "Published".to_string(),
             restore_view: ConfirmationViewMode {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 scroll_offset: None,
@@ -511,7 +507,6 @@ mod tests {
         let mut session = session_fixture(session_id, "/tmp/session-status-folder");
         session.published_upstream_ref = Some("origin/wt/session-status".to_string());
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: session_id.into(),
@@ -566,7 +561,6 @@ mod tests {
         let session_id = "session-unpublished-status";
         let session = session_fixture(session_id, "/tmp/session-unpublished-status-folder");
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: session_id.into(),
@@ -621,7 +615,6 @@ mod tests {
         let session_id = "legacy";
         let session = session_fixture(session_id, "/tmp/session-legacy-folder");
         let mode = AppMode::View {
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             session_id: session_id.into(),

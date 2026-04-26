@@ -8,28 +8,6 @@ use crate::domain::input::InputState;
 use crate::domain::session::{PublishBranchAction, SessionId};
 use crate::infra::agent::protocol::QuestionItem;
 
-/// Selects the visible panel content for session view output.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DoneSessionOutputMode {
-    /// Renders the concise final summary, when available.
-    Summary,
-    /// Renders the full captured session output stream.
-    Output,
-    /// Renders a concise review view with critical diff highlights.
-    Review,
-}
-
-impl DoneSessionOutputMode {
-    /// Returns the opposite done-session output mode.
-    #[must_use]
-    pub const fn toggled(self) -> Self {
-        match self {
-            Self::Summary => Self::Output,
-            Self::Output | Self::Review => Self::Summary,
-        }
-    }
-}
-
 /// Semantic intent for a `Confirmation` overlay interaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfirmationIntent {
@@ -49,7 +27,6 @@ pub enum ConfirmationIntent {
 /// confirmations and overlays.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfirmationViewMode {
-    pub done_session_output_mode: DoneSessionOutputMode,
     pub review_status_message: Option<String>,
     pub review_text: Option<String>,
     pub scroll_offset: Option<u16>,
@@ -61,7 +38,6 @@ impl ConfirmationViewMode {
     #[must_use]
     pub fn into_view_mode(self) -> AppMode {
         AppMode::View {
-            done_session_output_mode: self.done_session_output_mode,
             review_status_message: self.review_status_message,
             review_text: self.review_text,
             session_id: self.session_id,
@@ -252,8 +228,6 @@ pub enum AppMode {
         scroll_offset: Option<u16>,
     },
     View {
-        /// Selected content view for the session output panel.
-        done_session_output_mode: DoneSessionOutputMode,
         /// Optional status line shown while review text is loading or
         /// unavailable.
         review_status_message: Option<String>,
@@ -328,7 +302,6 @@ pub enum HelpContext {
     List { keybindings: Vec<HelpAction> },
     View {
         can_open_worktree: bool,
-        done_session_output_mode: DoneSessionOutputMode,
         review_status_message: Option<String>,
         review_text: Option<String>,
         publish_pull_request_action: Option<PublishBranchAction>,
@@ -374,7 +347,6 @@ impl HelpContext {
         match self {
             HelpContext::List { .. } => AppMode::List,
             HelpContext::View {
-                done_session_output_mode,
                 review_status_message,
                 review_text,
                 publish_pull_request_action: _,
@@ -382,7 +354,6 @@ impl HelpContext {
                 scroll_offset,
                 ..
             } => AppMode::View {
-                done_session_output_mode,
                 review_status_message,
                 review_text,
                 session_id,
@@ -421,28 +392,9 @@ mod tests {
     use crate::domain::session::PublishBranchAction;
 
     #[test]
-    fn test_done_session_output_mode_toggle_switches_between_variants() {
-        // Arrange
-        let summary_mode = DoneSessionOutputMode::Summary;
-        let output_mode = DoneSessionOutputMode::Output;
-        let review_mode = DoneSessionOutputMode::Review;
-
-        // Act
-        let toggled_from_summary = summary_mode.toggled();
-        let toggled_from_output = output_mode.toggled();
-        let toggled_from_review = review_mode.toggled();
-
-        // Assert
-        assert_eq!(toggled_from_summary, DoneSessionOutputMode::Output);
-        assert_eq!(toggled_from_output, DoneSessionOutputMode::Summary);
-        assert_eq!(toggled_from_review, DoneSessionOutputMode::Summary);
-    }
-
-    #[test]
     fn test_confirmation_view_mode_into_view_mode_restores_snapshot_values() {
         // Arrange
         let confirmation_view_mode = ConfirmationViewMode {
-            done_session_output_mode: DoneSessionOutputMode::Review,
             review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
             review_text: Some("Critical finding".to_string()),
             scroll_offset: Some(7),
@@ -456,7 +408,6 @@ mod tests {
         assert!(matches!(
             mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Review,
                 review_status_message: Some(ref review_status_message),
                 review_text: Some(ref review_text),
                 ref session_id,
@@ -472,7 +423,6 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_open_worktree: true,
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: None,
@@ -501,7 +451,6 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_open_worktree: true,
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: Some("Preparing review...".to_string()),
             review_text: Some("Ready".to_string()),
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),
@@ -533,7 +482,6 @@ mod tests {
         // Arrange
         let context = HelpContext::View {
             can_open_worktree: true,
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: Some(PublishBranchAction::PublishPullRequest),

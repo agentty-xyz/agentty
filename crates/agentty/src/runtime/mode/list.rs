@@ -8,9 +8,7 @@ use crate::domain::session::{Session, Status};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::question;
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationIntent, DoneSessionOutputMode, HelpContext, QuestionFocus,
-};
+use crate::ui::state::app_mode::{AppMode, ConfirmationIntent, HelpContext, QuestionFocus};
 use crate::ui::state::help_action::{
     HelpAction, project_list_actions, session_list_actions, settings_actions, stats_actions,
     task_actions,
@@ -154,7 +152,6 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
                 } else {
                     let (review_status_message, review_text) = app.review_view_state(&session_id);
                     app.mode = AppMode::View {
-                        done_session_output_mode: DoneSessionOutputMode::Summary,
                         review_status_message,
                         review_text,
                         session_id,
@@ -818,7 +815,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 ref session_id,
@@ -852,7 +848,6 @@ mod tests {
         assert!(matches!(
             app.mode,
             AppMode::View {
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 ref session_id,

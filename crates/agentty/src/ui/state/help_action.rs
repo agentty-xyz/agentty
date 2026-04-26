@@ -31,8 +31,7 @@ impl HelpAction {
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
-    /// Session is completed; a seeded continuation prompt can be opened and
-    /// output toggling remains available.
+    /// Session is completed; a seeded continuation prompt can be opened.
     Done,
     /// Session was canceled locally; a seeded continuation prompt can be
     /// opened while the rest of the view stays read-only.
@@ -277,8 +276,6 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         ViewSessionState::Done | ViewSessionState::Canceled
     );
     let can_stop_session = state.session_state == ViewSessionState::InProgress;
-    let can_toggle_done_output = state.session_state == ViewSessionState::Done;
-
     let mut actions = vec![HelpAction::new("back", "q", "Back to list")];
 
     append_view_prompt_actions(&mut actions, state.session_state, can_edit_session);
@@ -323,10 +320,6 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_continue_terminal_session {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
-    }
-
-    if can_toggle_done_output {
-        actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
     }
 
     actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
@@ -396,10 +389,6 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
 
     if can_continue_terminal_session {
         actions.push(HelpAction::new("continue", "c", "Continue in new session"));
-    }
-
-    if state.session_state == ViewSessionState::Done {
-        actions.push(HelpAction::new("toggle view", "t", "Switch summary/output"));
     }
 
     actions.push(HelpAction::new("scroll", "j/k", "Scroll output"));
@@ -837,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_actions_done_shows_toggle_and_hides_edit_actions() {
+    fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -850,7 +839,6 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "c"));
-        assert!(actions.iter().any(|action| action.key == "t"));
         assert!(!actions.iter().any(|action| action.key == "p"));
         assert!(!actions.iter().any(|action| action.key == "Enter"));
         assert!(!actions.iter().any(|action| action.key == "d"));
@@ -982,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn test_view_footer_actions_done_shows_continue_before_toggle() {
+    fn test_view_footer_actions_done_shows_continue_before_scroll() {
         // Arrange
         let state = ViewHelpState {
             can_open_worktree: true,
@@ -995,7 +983,7 @@ mod tests {
         let ordered_keys = actions.iter().map(|action| action.key).collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(&ordered_keys[..5], ["q", "c", "t", "j/k", "?"]);
+        assert_eq!(&ordered_keys[..4], ["q", "c", "j/k", "?"]);
     }
 
     #[test]

@@ -193,12 +193,6 @@ The printed session-chat data comes from these sources:
   `AppEvent::SessionProgressUpdated` from
   `crates/agentty/src/app/session/workflow/task.rs`, the reducer batches those
   updates, and session view mode reads the latest message before rendering.
-- `done_session_output_mode`
-  Stored on `AppMode::View` and related restore-view snapshots in
-  `crates/agentty/src/ui/state/app_mode.rs`. This mode does not change what is
-  persisted; it only changes whether the panel uses the summary as its primary
-  body (`Summary`) or uses transcript output as the primary body (`Output` and
-  `Review`).
 
 ### Output Assembly Diagram
 
@@ -215,8 +209,7 @@ flowchart TD
   base["Choose base body text"]
   lines --> base
   base --> draft["Draft preview<br/>(draft New session)"]
-  base --> done_summary["Rendered summary markdown<br/>(Done + Summary mode)"]
-  base --> transcript["session.output<br/>(all other modes and statuses)"]
+  base --> transcript["session.output<br/>(all other statuses)"]
 
   split["Split transcript with active_prompt_output"]
   completed["Completed-turn text"]
@@ -235,7 +228,7 @@ flowchart TD
   footer --> active_prompt["Append active-turn prompt block"]
   active_prompt --> review["Append focused review markdown<br/>(review_text)"]
   review --> branch_sync["Append published-branch sync row<br/>(auto-push started, completed, or failed)"]
-  branch_sync --> final_row["Append final status row<br/>or t toggle hint"]
+  branch_sync --> final_row["Append final status row<br/>or done continuation hint"]
 ```
 
 This means `session.output` stays the durable transcript, while summary and
@@ -247,10 +240,9 @@ that transcript string.
 router, overlay restore state, and `SessionChatPage`. The markdown cache
 deduplicates rendered markdown blocks, while the layout cache deduplicates the
 fully assembled `Line` list and line count for matching session id/update
-version, width, mode, active prompt, review text/status, progress text, and
-markdown style version. Changes in this area should keep caches bounded and
-avoid introducing separate layout-only render passes that bypass the shared
-cache.
+version, width, active prompt, review text/status, progress text, and markdown
+style version. Changes in this area should keep caches bounded and avoid
+introducing separate layout-only render passes that bypass the shared cache.
 
 ### Render Path
 
@@ -258,25 +250,24 @@ The exact session-chat render path is:
 
 1. `crates/agentty/src/runtime/mode/session_view.rs` calculates the visible
    output height by calling `SessionChatPage::rendered_output_line_count(...)`
-   with the selected `Session`, the current `DoneSessionOutputMode`,
-   `review_status_message`, `review_text`, and the latest `active_progress`.
+   with the selected `Session`, `review_status_message`, `review_text`, and the
+   latest `active_progress`.
 1. `crates/agentty/src/ui/page/session_chat.rs` builds `SessionOutput` inside
    `render_session()`, forwarding the same render inputs plus scroll offset.
 1. `SessionChatPage::render_session_header()` prints the single-line session
    header above the bordered output region.
 1. `SessionOutput::output_text()` in
    `crates/agentty/src/ui/component/session_output.rs` selects the base text:
-   staged draft preview for draft `New` sessions, rendered summary text for
-   `Status::Done` summary mode, otherwise `session.output`.
+   staged draft preview for draft `New` sessions, otherwise `session.output`.
 1. `SessionOutput::output_lines()` converts that source text into final panel
    lines: it optionally splits the transcript using `active_prompt_output`,
    normalizes prompt spacing, splits any trailing commit footer, renders the
-   completed-turn markdown, reattaches the trailing commit footer, appends the
-   active prompt block, appends the synthetic summary block from
-   `session.summary` when the current status/mode allows it, appends focused
-   review markdown from `review_text`, appends
+   completed-turn markdown, appends the synthetic summary block from
+   `session.summary` when the current status and prompt state allow it,
+   reattaches the trailing commit footer, appends the active prompt block,
+   appends focused review markdown from `review_text`, appends
    the published-branch sync row when a detached auto-push starts, completes,
-   or fails, and finally adds the loader row or `t` toggle hint when the
+   or fails, and finally adds the loader row or done continuation hint when the
    current status requires it.
 1. `SessionOutput::render()` writes the final `Line` list into a `ratatui`
    `Paragraph`, then applies a Tachyonfx pulse over the active loader glyph
@@ -335,9 +326,7 @@ stays readable on narrow screens.
 - Comes from: `session.output`
 - Prints: after a successful turn when protocol `answer` is non-empty.
 - Hidden or removed: durable transcript entry; not removed by
-  `SessionOutput`. It can be hidden from view only when
-  `DoneSessionOutputMode::Summary` replaces the base body with rendered summary
-  text.
+  `SessionOutput`.
 
 #### Clarification question text from the assistant
 
@@ -370,10 +359,10 @@ stays readable on narrow screens.
 #### Summary block
 
 - Comes from: `session.summary`
-- Prints: appended after transcript content for most statuses. In `Done + Summary` mode it becomes the primary body instead.
-- Hidden or removed: hidden for `Canceled` sessions. It is also not appended a
-  second time when `Done + Summary` mode already uses the summary as the base
-  body.
+- Prints: appended after transcript content for most statuses.
+- Hidden or removed: hidden for `Canceled` sessions and while a newer prompt is
+  active, so stale change metadata disappears as soon as the user posts the
+  next prompt.
 
 #### Commit footer
 
@@ -413,17 +402,9 @@ stays readable on narrow screens.
 
 ### Mode Rules
 
-- `DoneSessionOutputMode::Summary`
-  Uses rendered summary text as the primary body for `Status::Done`. The panel
-  still appends the `t` toggle hint.
-- `DoneSessionOutputMode::Output`
-  Uses `session.output` as the primary body, then appends the synthetic summary
-  section.
-- `DoneSessionOutputMode::Review`
-  Still uses transcript output as the primary body. If focused review text is
-  available, it is appended after the transcript; if not, the transcript
-  remains visible. The mode mainly changes the view-state selection and the `t`
-  toggle target back to summary.
+- `Status::Done`
+  Keeps transcript output as the primary body, appends the synthetic summary
+  section, and ends with the continuation hint.
 - `Status::Question`
   Keeps the transcript panel visible above, while the question/options/input UI
   is rendered in the bottom panel rather than inside `SessionOutput`.

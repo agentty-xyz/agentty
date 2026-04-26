@@ -10,9 +10,7 @@ use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
 use crate::ui::router::{ListBackgroundRenderContext, render_list_background};
-use crate::ui::state::app_mode::{
-    AppMode, ConfirmationViewMode, DiffRightPanel, DoneSessionOutputMode, HelpContext,
-};
+use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, DiffRightPanel, HelpContext};
 use crate::ui::style::palette;
 use crate::ui::{Component, Page, component, markdown, page};
 
@@ -358,7 +356,6 @@ fn overlay_title_style(border_color: Color) -> Style {
 enum ResolvedHelpBackground<'a> {
     List,
     View {
-        done_session_output_mode: DoneSessionOutputMode,
         review_status_message: &'a Option<String>,
         review_text: &'a Option<String>,
         scroll_offset: Option<u16>,
@@ -384,7 +381,6 @@ fn resolve_help_background<'a>(
     match help_context {
         HelpContext::List { .. } => Some(ResolvedHelpBackground::List),
         HelpContext::View {
-            done_session_output_mode,
             review_status_message,
             review_text,
             session_id,
@@ -394,7 +390,6 @@ fn resolve_help_background<'a>(
             .iter()
             .position(|session| session.id == *session_id)
             .map(|session_index| ResolvedHelpBackground::View {
-                done_session_output_mode: *done_session_output_mode,
                 review_status_message,
                 review_text,
                 scroll_offset: *scroll_offset,
@@ -441,7 +436,6 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             render_list_background(f, area, list_background, wall_clock_unix_seconds);
         }
         Some(ResolvedHelpBackground::View {
-            done_session_output_mode,
             review_status_message,
             review_text,
             session_id,
@@ -449,7 +443,6 @@ fn render_help_background(f: &mut Frame, area: Rect, context: HelpBackgroundRend
             scroll_offset,
         }) => {
             let bg_mode = AppMode::View {
-                done_session_output_mode,
                 review_status_message: review_status_message.clone(),
                 review_text: review_text.clone(),
                 session_id: session_id.into(),
@@ -677,7 +670,6 @@ mod tests {
         // Arrange
         let help_context = HelpContext::View {
             can_open_worktree: true,
-            done_session_output_mode: DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             publish_pull_request_action: None,

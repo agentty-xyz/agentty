@@ -648,7 +648,6 @@ mod tests {
             ReviewCacheEntry::Suppressed { diff_hash },
         )]);
         let mut mode = AppMode::View {
-            done_session_output_mode: crate::ui::state::app_mode::DoneSessionOutputMode::Summary,
             review_status_message: None,
             review_text: None,
             scroll_offset: None,

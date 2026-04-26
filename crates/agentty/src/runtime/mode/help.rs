@@ -38,7 +38,7 @@ mod tests {
 
     use super::*;
     use crate::infra::db::Database;
-    use crate::ui::state::app_mode::{DiffRightPanel, DoneSessionOutputMode, HelpContext};
+    use crate::ui::state::app_mode::{DiffRightPanel, HelpContext};
     use crate::ui::state::help_action::{HelpAction, ViewSessionState};
 
     /// Builds one client bundle with deterministic agent availability for
@@ -99,7 +99,6 @@ mod tests {
         app.mode = AppMode::Help {
             context: HelpContext::View {
                 can_open_worktree: true,
-                done_session_output_mode: DoneSessionOutputMode::Summary,
                 review_status_message: None,
                 review_text: None,
                 publish_pull_request_action: None,
