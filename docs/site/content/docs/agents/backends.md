@@ -312,6 +312,7 @@ Stored project defaults or session rows that still reference
 | Model ID | Description | Default |
 |----------|-------------|---------|
 | `gpt-5.4` | Broadly available Codex model for coding quality. | Yes |
+| `gpt-5.4-mini` | Small, fast Codex model for simpler coding tasks. | |
 | `gpt-5.5` | Newer Codex model with stronger coding performance when available. | |
 | `gpt-5.3-codex-spark` | Codex spark model for quick coding iterations. | |
 

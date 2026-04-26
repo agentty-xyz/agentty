@@ -127,6 +127,44 @@ mod tests {
         );
     }
 
+    /// Verifies `gpt-5.4-mini` is forwarded to the Codex app-server command.
+    #[test]
+    fn build_command_accepts_gpt_54_mini_model() {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let backend = CodexBackend;
+
+        // Act
+        let command = AgentBackend::build_command(
+            &backend,
+            BuildCommandRequest {
+                attachments: &[],
+                folder: temp_directory.path(),
+                prompt: "Run a quick edit",
+                request_kind: &session_start_request_kind(),
+                model: crate::domain::agent::AgentModel::Gpt54Mini.as_str(),
+                reasoning_level: crate::domain::agent::ReasoningLevel::Medium,
+            },
+        )
+        .expect("mini model command build should succeed");
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(
+            arguments,
+            vec![
+                "--model",
+                "gpt-5.4-mini",
+                "app-server",
+                "--listen",
+                "stdio://"
+            ]
+        );
+    }
+
     /// Verifies utility prompts use the same app-server runtime launch path.
     #[test]
     fn build_command_builds_app_server_runtime_for_utility_prompts() {

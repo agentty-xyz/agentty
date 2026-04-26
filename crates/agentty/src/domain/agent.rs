@@ -23,6 +23,8 @@ pub enum AgentModel {
     Gemini31ProPreview,
     /// Codex model backed by `gpt-5.4`.
     Gpt54,
+    /// Smaller Codex model backed by `gpt-5.4-mini`.
+    Gpt54Mini,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
     Gpt53CodexSpark,
     /// Claude Opus model backed by `claude-opus-4-7`.
@@ -65,6 +67,7 @@ impl AgentModel {
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54 => "gpt-5.4",
+            Self::Gpt54Mini => "gpt-5.4-mini",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
             Self::ClaudeOpus47 => "claude-opus-4-7",
             Self::ClaudeSonnet46 => "claude-sonnet-4-6",
@@ -88,7 +91,7 @@ impl AgentModel {
     pub fn kind(self) -> AgentKind {
         match self {
             Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
-            Self::Gpt55 | Self::Gpt54 | Self::Gpt53CodexSpark => AgentKind::Codex,
+            Self::Gpt55 | Self::Gpt54 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
             Self::ClaudeOpus47 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
             }
@@ -225,6 +228,7 @@ impl FromStr for AgentModel {
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.5" => Ok(Self::Gpt55),
             "gpt-5.4" => Ok(Self::Gpt54),
+            "gpt-5.4-mini" => Ok(Self::Gpt54Mini),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
             "claude-opus-4-7" => Ok(Self::ClaudeOpus47),
             "claude-sonnet-4-6" => Ok(Self::ClaudeSonnet46),
@@ -245,6 +249,7 @@ impl AgentSelectionMetadata for AgentModel {
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
             Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gpt54 => "Broadly available Codex model for coding quality.",
+            Self::Gpt54Mini => "Small, fast Codex model for simpler coding tasks.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
             Self::ClaudeOpus47 => "Latest Claude Opus model for complex tasks.",
             Self::ClaudeSonnet46 => "Balanced Claude model for quality and latency.",
@@ -288,6 +293,7 @@ impl AgentKind {
         ];
         const CODEX_MODELS: &[AgentModel] = &[
             AgentModel::Gpt54,
+            AgentModel::Gpt54Mini,
             AgentModel::Gpt55,
             AgentModel::Gpt53CodexSpark,
         ];
@@ -402,6 +408,19 @@ mod tests {
     }
 
     #[test]
+    /// Ensures `gpt-5.4-mini` parses as a Codex model.
+    fn test_parse_model_parses_gpt_54_mini() {
+        // Arrange
+        let codex_kind = AgentKind::Codex;
+
+        // Act
+        let parsed_model = codex_kind.parse_model("gpt-5.4-mini");
+
+        // Assert
+        assert_eq!(parsed_model, Some(AgentModel::Gpt54Mini));
+    }
+
+    #[test]
     /// Ensures retired Claude models no longer parse as selectable models.
     fn test_parse_model_rejects_retired_claude_opus_46() {
         // Arrange
@@ -461,13 +480,18 @@ mod tests {
     /// Ensures Codex models still resolve their owning provider correctly.
     fn test_codex_model_kind_is_codex() {
         // Arrange
-        let model = AgentModel::Gpt55;
+        let models = [
+            AgentModel::Gpt54,
+            AgentModel::Gpt54Mini,
+            AgentModel::Gpt55,
+            AgentModel::Gpt53CodexSpark,
+        ];
 
         // Act
-        let kind = model.kind();
+        let kinds = models.map(AgentModel::kind);
 
         // Assert
-        assert_eq!(kind, AgentKind::Codex);
+        assert_eq!(kinds, [AgentKind::Codex; 4]);
     }
 
     #[test]
@@ -519,6 +543,7 @@ mod tests {
             selectable_models,
             vec![
                 AgentModel::Gpt54,
+                AgentModel::Gpt54Mini,
                 AgentModel::Gpt55,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31ProPreview,

@@ -1128,6 +1128,7 @@ mod tests {
             labels,
             vec![
                 "gpt-5.4".to_string(),
+                "gpt-5.4-mini".to_string(),
                 "gpt-5.5".to_string(),
                 "gpt-5.3-codex-spark".to_string(),
             ]
