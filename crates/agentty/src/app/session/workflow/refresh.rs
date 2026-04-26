@@ -454,6 +454,7 @@ mod tests {
             summary: None,
             title: Some("Add forge review support".to_string()),
             updated_at: 0,
+            workflow_notice: None,
         }
     }
 

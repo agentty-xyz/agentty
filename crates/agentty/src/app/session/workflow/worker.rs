@@ -2205,7 +2205,7 @@ mod tests {
         );
         let output = context.output.lock().expect("output lock poisoned");
         assert!(output.starts_with("Implemented the change.\n\n"));
-        assert!(output.contains("[Commit] No changes to commit."));
+        assert!(!output.contains("[Commit] No changes to commit."));
         assert!(!output.contains("## Change Summary"));
         assert!(!output.contains("Document the worker summary flow."));
     }
@@ -2578,7 +2578,7 @@ mod tests {
         assert!(
             output.starts_with("Hey! How can I help you today?Hey! How can I help you today?\n\n")
         );
-        assert!(output.contains("[Commit] No changes to commit."));
+        assert!(!output.contains("[Commit] No changes to commit."));
         assert!(!output.contains("## Change Summary"));
     }
 

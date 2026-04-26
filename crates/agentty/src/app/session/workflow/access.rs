@@ -102,6 +102,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         }
     }
 

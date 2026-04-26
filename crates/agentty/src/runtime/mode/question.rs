@@ -1093,6 +1093,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         });
         app.mode = AppMode::Question {
             at_mention_state: None,
@@ -1167,6 +1168,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         });
         app.sessions.handles.insert(
             session_id.to_string().into(),
@@ -2727,6 +2729,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         });
 
         app.mode = AppMode::Question {

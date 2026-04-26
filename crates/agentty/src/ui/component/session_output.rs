@@ -55,6 +55,7 @@ struct SessionOutputLayoutCacheKey {
     session_update_version: u64,
     session_updated_at: i64,
     status: Status,
+    workflow_notice: TextFingerprint,
 }
 
 /// Compact optional-text identity used by the layout cache key.
@@ -452,6 +453,7 @@ impl<'a> SessionOutput<'a> {
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
             status: session.status,
+            workflow_notice: TextFingerprint::from_text(session.workflow_notice.as_deref()),
         }
     }
 
@@ -552,6 +554,12 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
+        Self::append_workflow_notice_lines(
+            &mut lines,
+            session.workflow_notice.as_deref(),
+            inner_width,
+            markdown_render_cache,
+        );
         if Self::append_published_branch_sync_lines(&mut lines, session) {
             published_loader_line_index = Some(lines.len().saturating_sub(1));
         }
@@ -601,6 +609,24 @@ impl<'a> SessionOutput<'a> {
         lines.push(sync_line);
 
         true
+    }
+
+    /// Appends the latest transient workflow notice without reading from or
+    /// mutating the persisted transcript text.
+    fn append_workflow_notice_lines(
+        lines: &mut Vec<Line<'static>>,
+        workflow_notice: Option<&str>,
+        inner_width: usize,
+        markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    ) {
+        let Some(workflow_notice) = workflow_notice.map(str::trim) else {
+            return;
+        };
+        if workflow_notice.is_empty() {
+            return;
+        }
+
+        Self::append_markdown_lines(lines, workflow_notice, inner_width, markdown_render_cache);
     }
 
     /// Splits the transcript before the current active-turn prompt block.
@@ -1306,6 +1332,45 @@ mod tests {
         // Assert
         assert!(!Arc::ptr_eq(&empty_layout.lines, &queued_layout.lines));
         assert!(queued_text.contains("queued › queued reply"));
+    }
+
+    #[test]
+    /// Verifies transient workflow notices invalidate layout cache entries and
+    /// render outside the persisted transcript text.
+    fn test_output_layout_cache_keys_workflow_notice() {
+        // Arrange
+        let mut session = session_fixture();
+        session.output = "implemented the feature".to_string();
+        session.status = Status::Review;
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let output_layout_cache = SessionOutputLayoutCache::default();
+        let context = line_context(None, None, None);
+
+        // Act
+        let base_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        session.workflow_notice = Some("[Commit] No changes to commit.".to_string());
+        let notice_layout = output_layout_cache.layout(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            context,
+            Some(&markdown_render_cache),
+        );
+        let notice_text = notice_layout
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Assert
+        assert!(!session.output.contains("[Commit] No changes to commit."));
+        assert!(!Arc::ptr_eq(&base_layout.lines, &notice_layout.lines));
+        assert!(notice_text.contains("[Commit] No changes to commit."));
     }
 
     #[test]

@@ -1608,6 +1608,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         }
     }
 
@@ -3399,6 +3400,50 @@ mod tests {
                 version: "v2.0.0".to_string()
             })
         );
+        assert!(app.needs_redraw());
+    }
+
+    #[tokio::test]
+    /// Verifies workflow notices append to in-memory session state without
+    /// changing persisted transcript output.
+    async fn apply_app_events_session_workflow_notice_updates_session_state() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let mut session = test_session(PathBuf::from("/tmp/session-review"));
+        session.id = "session-1".into();
+        session.output = "assistant output".to_string();
+        app.sessions.push_session(session);
+        app.services
+            .event_sender()
+            .send(AppEvent::SessionWorkflowNoticeUpdated {
+                notice: "[Merge] Successfully merged wt/session-1 into main".to_string(),
+                session_id: "session-1".into(),
+            })
+            .expect("queued workflow notice should send");
+        app.clear_redraw();
+
+        // Act
+        app.apply_app_events(AppEvent::SessionWorkflowNoticeUpdated {
+            notice: "[Commit] No changes to commit.".to_string(),
+            session_id: "session-1".into(),
+        })
+        .await;
+
+        // Assert
+        let session = app
+            .sessions
+            .sessions
+            .iter()
+            .find(|session| session.id == "session-1")
+            .expect("session should exist");
+        assert_eq!(
+            session.workflow_notice.as_deref(),
+            Some(
+                "[Commit] No changes to commit.\n\n[Merge] Successfully merged wt/session-1 into \
+                 main"
+            )
+        );
+        assert_eq!(session.output, "assistant output");
         assert!(app.needs_redraw());
     }
 

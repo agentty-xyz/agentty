@@ -940,13 +940,15 @@ impl SessionManager {
         Ok(trimmed_commit_message.to_string())
     }
 
-    /// Finalizes one merge task by appending the outcome and restoring review
+    /// Finalizes one merge task by reporting the outcome and restoring review
     /// state only when the merge failed.
     ///
     /// Successful merges request an immediate git-status refresh so footer
     /// branch stats reflect the new refs without waiting for the periodic
-    /// poller. The `Done` status transition also emits a full session refresh,
-    /// which refreshes active-project roadmap task data.
+    /// poller. The success notice is transient so the completed transcript does
+    /// not persist merge bookkeeping as standalone chat content. The `Done`
+    /// status transition also emits a full session refresh, which refreshes
+    /// active-project roadmap task data.
     async fn finalize_merge_task(input: FinalizeMergeInput<'_>) {
         let FinalizeMergeInput {
             clock,
@@ -961,16 +963,8 @@ impl SessionManager {
 
         match result {
             Ok(message) => {
-                let merge_message = TranscriptNotice::Merge.format(message);
-                SessionTaskService::append_session_output(
-                    output,
-                    db,
-                    app_event_tx,
-                    session_update_versions,
-                    id,
-                    &merge_message,
-                )
-                .await;
+                let merge_message = TranscriptNotice::Merge.format_line(message);
+                SessionTaskService::emit_session_workflow_notice(app_event_tx, id, merge_message);
                 SessionTaskService::request_git_status_refresh(app_event_tx);
             }
             Err(error) => {
@@ -1380,29 +1374,21 @@ impl SessionManager {
                 .await;
 
                 let commit_message = TranscriptNotice::Commit
-                    .format(format!("committed with hash `{}`", outcome.commit_hash));
-                SessionTaskService::append_session_output(
-                    &input.output,
-                    &input.db,
+                    .format_line(format!("committed with hash `{}`", outcome.commit_hash));
+                SessionTaskService::emit_session_workflow_notice(
                     &input.app_event_tx,
-                    &input.session_update_versions,
                     &input.id,
-                    &commit_message,
-                )
-                .await;
+                    commit_message,
+                );
                 SessionTaskService::request_git_status_refresh(&input.app_event_tx);
             }
             Err(error) if error.to_string().contains("Nothing to commit") => {
-                let commit_message = TranscriptNotice::Commit.format("No changes to commit.");
-                SessionTaskService::append_session_output(
-                    &input.output,
-                    &input.db,
+                let commit_message = TranscriptNotice::Commit.format_line("No changes to commit.");
+                SessionTaskService::emit_session_workflow_notice(
                     &input.app_event_tx,
-                    &input.session_update_versions,
                     &input.id,
-                    &commit_message,
-                )
-                .await;
+                    commit_message,
+                );
             }
             Err(error) => {
                 return Err(SessionError::Workflow(format!(

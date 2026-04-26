@@ -509,6 +509,7 @@ mod tests {
                 summary: None,
                 title: Some("Title".to_string()),
                 updated_at: 0,
+                workflow_notice: None,
             }],
             TableState::default(),
             Arc::new(RealClock),

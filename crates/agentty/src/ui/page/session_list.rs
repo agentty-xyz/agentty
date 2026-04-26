@@ -478,6 +478,7 @@ mod tests {
             summary: None,
             title: Some(id.to_string()),
             updated_at: 0,
+            workflow_notice: None,
         }
     }
 

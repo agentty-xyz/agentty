@@ -70,7 +70,13 @@ impl TranscriptNotice {
 
     /// Formats one transcript notice as a newline-delimited paragraph.
     pub(crate) fn format(self, detail: impl fmt::Display) -> String {
-        format!("\n{} {}\n", self.prefix(), detail)
+        format!("\n{}\n", self.format_line(detail))
+    }
+
+    /// Formats one transcript notice as a single display line without
+    /// paragraph separators.
+    pub(crate) fn format_line(self, detail: impl fmt::Display) -> String {
+        format!("{} {}", self.prefix(), detail)
     }
 }
 
@@ -113,6 +119,18 @@ mod tests {
             formatted,
             "\n[Rebase Assist] Attempt 1/3. Resolving conflicts in:\n- src/main.rs\n"
         );
+    }
+
+    #[test]
+    fn test_transcript_notice_format_line_omits_paragraph_spacing() {
+        // Arrange
+        let notice = TranscriptNotice::Commit;
+
+        // Act
+        let formatted = notice.format_line("No changes to commit.");
+
+        // Assert
+        assert_eq!(formatted, "[Commit] No changes to commit.");
     }
 
     #[test]

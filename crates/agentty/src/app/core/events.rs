@@ -121,6 +121,11 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         turn_applied_state: TurnAppliedState,
     },
+    /// Indicates a transient workflow notice changed for one session.
+    SessionWorkflowNoticeUpdated {
+        notice: String,
+        session_id: SessionId,
+    },
     /// Indicates that one published session branch started or finished a
     /// background auto-push after a completed turn.
     PublishedBranchSyncUpdated {
@@ -161,6 +166,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_size_updates: HashMap<SessionId, (u64, u64, SessionSize)>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
+    pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
     pub(super) should_refresh_git_status: bool,
     pub(super) should_force_reload: bool,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
@@ -282,6 +288,13 @@ impl AppEventBatch {
                 session_id,
                 turn_applied_state,
             } => self.collect_agent_response_received(session_id, turn_applied_state),
+            AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
+                self.session_ids.insert(session_id.clone());
+                self.session_workflow_notice_updates
+                    .entry(session_id)
+                    .or_default()
+                    .push(notice);
+            }
             AppEvent::PublishedBranchSyncUpdated {
                 session_id,
                 sync_operation_id,
@@ -555,6 +568,13 @@ impl App {
         for (session_id, turn_applied_state) in event_batch.applied_turns {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
         }
+        for (session_id, notices) in
+            std::mem::take(&mut event_batch.session_workflow_notice_updates)
+        {
+            for notice in notices {
+                self.sessions.append_workflow_notice(&session_id, notice);
+            }
+        }
         for (session_id, sync_update) in event_batch.published_branch_sync_updates {
             self.apply_published_branch_sync_update(&session_id, sync_update);
         }
@@ -699,6 +719,7 @@ impl App {
             || !event_batch.session_reasoning_level_updates.is_empty()
             || !event_batch.session_size_updates.is_empty()
             || !event_batch.session_title_generation_finished.is_empty()
+            || !event_batch.session_workflow_notice_updates.is_empty()
             || event_batch.sync_main_result.is_some()
     }
 

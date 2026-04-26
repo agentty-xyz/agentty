@@ -300,6 +300,7 @@ impl SessionManager {
             summary: input.session_summary,
             title: input.row.title,
             updated_at: input.row.updated_at,
+            workflow_notice: None,
         }
     }
 

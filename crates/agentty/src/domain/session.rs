@@ -529,6 +529,9 @@ pub struct Session {
     pub title: Option<String>,
     /// Last update timestamp (Unix seconds).
     pub updated_at: i64,
+    /// Transient workflow notice block shown in the output panel without
+    /// being appended to the persisted transcript.
+    pub workflow_notice: Option<String>,
 }
 
 impl Session {
@@ -832,6 +835,7 @@ pub(crate) mod tests {
                     summary: None,
                     title: None,
                     updated_at: 0,
+                    workflow_notice: None,
                 },
             }
         }
@@ -1338,6 +1342,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
 
         // Act
@@ -1376,6 +1381,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
 
         // Act
@@ -1414,6 +1420,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
 
         // Act
@@ -1452,6 +1459,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
 
         // Act
@@ -1490,6 +1498,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
 
         // Act
@@ -1528,6 +1537,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
 
         // Act

@@ -2571,6 +2571,7 @@ mod tests {
             summary: None,
             title: title.map(ToString::to_string),
             updated_at: 0,
+            workflow_notice: None,
         }
     }
 

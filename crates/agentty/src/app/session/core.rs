@@ -392,6 +392,23 @@ impl SessionManager {
         }
     }
 
+    /// Appends one transient workflow notice shown for one session.
+    pub(crate) fn append_workflow_notice(&mut self, session_id: &str, notice: String) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            if let Some(workflow_notice) = &mut session.workflow_notice {
+                workflow_notice.push_str("\n\n");
+                workflow_notice.push_str(&notice);
+            } else {
+                session.workflow_notice = Some(notice);
+            }
+        }
+    }
+
     /// Applies one completed-turn projection to the matching in-memory
     /// session snapshot.
     pub(crate) fn apply_turn_applied_state(
@@ -1293,6 +1310,7 @@ mod tests {
             summary: None,
             title: Some(prompt.to_string()),
             updated_at: 0,
+            workflow_notice: None,
         });
         if app.sessions.table_state.selected().is_none() {
             app.sessions.table_state.select(Some(0));
@@ -1349,6 +1367,7 @@ mod tests {
                 summary: None,
                 title: Some("Title".to_string()),
                 updated_at: 0,
+                workflow_notice: None,
             }],
             ratatui::widgets::TableState::default(),
             clock,
@@ -3868,6 +3887,18 @@ mod tests {
             .expect_diff()
             .times(2)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_fetch_remote()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_branch_tracking_statuses()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
         install_mock_git_client(&mut app, mock_git_client);
 
         // Create a session that writes a file so commit_all has something to commit
@@ -3901,12 +3932,18 @@ mod tests {
         // Act — wait for agent to finish and auto-commit
         wait_for_status(&mut app, &session_id, Status::Review).await;
 
-        // Assert — output should include commit completion details
+        // Assert — commit completion details are transient workflow notice
+        // state, not persisted transcript output.
         let session = &app.sessions.sessions[0];
         let output = session.output.clone();
+        let workflow_notice = session.workflow_notice.as_deref();
         assert!(
-            output.contains("[Commit] committed with hash") || output.contains("[Commit Error]"),
-            "expected commit completion output, got: {output}"
+            !output.contains("[Commit] committed with hash"),
+            "commit completion should not be persisted, got: {output}"
+        );
+        assert_eq!(
+            workflow_notice,
+            Some("[Commit] committed with hash `abc1234`")
         );
     }
 
@@ -4014,6 +4051,18 @@ mod tests {
             .expect_diff()
             .times(0..)
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+        mock_git_client
+            .expect_fetch_remote()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock_git_client
+            .expect_branch_tracking_statuses()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+        mock_git_client
+            .expect_get_ref_ahead_behind()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
         install_mock_git_client(&mut app, mock_git_client);
 
         // Agent that produces no file changes
@@ -4044,13 +4093,15 @@ mod tests {
         // Act — wait for agent to finish
         wait_for_status(&mut app, &session_id, Status::Review).await;
 
-        // Assert — no-op commit output is visible
+        // Assert — no-op commit output is visible as transient workflow state.
         let session = &app.sessions.sessions[0];
         let output = session.output.clone();
+        let workflow_notice = session.workflow_notice.as_deref();
         assert!(
-            output.contains("[Commit] No changes to commit."),
-            "should contain no-op commit output when nothing to commit"
+            !output.contains("[Commit] No changes to commit."),
+            "no-op commit output should not be persisted when nothing to commit"
         );
+        assert_eq!(workflow_notice, Some("[Commit] No changes to commit."));
         assert!(
             !output.contains("[Commit Error]"),
             "should not contain commit error when nothing to commit"

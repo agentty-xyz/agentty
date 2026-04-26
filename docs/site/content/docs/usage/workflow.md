@@ -121,8 +121,10 @@ at one evolving commit. It regenerates that commit message from the cumulative
 session diff using the active project's `Default Fast Model`, applies the
 active project's `Coauthored by Agentty` setting to the final commit trailer,
 amends `HEAD`, and refreshes the session title from the same commit text
-before merge begins. If the auto-commit needs agent assistance to recover from
-a git failure, that recovery prompt also uses the `Default Fast Model`. Once
+before merge begins. Successful commit and no-change notices appear as
+transient session-output status rows rather than persisted transcript messages.
+If the auto-commit needs agent assistance to recover from a git failure, that
+recovery prompt also uses the `Default Fast Model`. Once
 the session reaches **Done**, Agentty rewrites the persisted summary into
 markdown with a `# Summary` section sourced from the final agent
 `summary.session` value and a `# Commit` section sourced from the canonical
@@ -132,6 +134,8 @@ When a session enters **Merging**, Agentty reuses the session branch `HEAD`
 commit message for the final squash commit on the base branch. Merge still
 stops and returns the session to **Review** if rebase or squash-merge git steps
 fail, but it no longer runs a separate merge-only commit-message prompt.
+Successful merge notices use the same transient session-output status row as
+commit notices, so the persisted transcript remains focused on agent output.
 
 When `Open Commands` in Settings contains multiple entries (one command per
 line), pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open,

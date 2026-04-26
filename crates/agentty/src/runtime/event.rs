@@ -447,6 +447,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         });
         app.mode = AppMode::Prompt {
             at_mention_state: None,

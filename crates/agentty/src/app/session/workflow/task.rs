@@ -195,14 +195,15 @@ impl SessionTaskService {
         Some((computed_size, added_lines, deleted_lines))
     }
 
-    /// Commits pending worktree changes and appends user-visible outcomes.
+    /// Commits pending worktree changes and reports user-visible outcomes.
     ///
-    /// Successful commit hashes, no-op commit notices, and commit errors are
-    /// emitted into session output for user visibility. Commit-message
-    /// generation and any auto-commit recovery prompt use the resolved
-    /// auto-commit model for the session. Successful commits also request an
-    /// immediate git-status refresh so footer ahead/behind counts do not wait
-    /// for the background poller.
+    /// Successful commit hashes and no-op commit notices are emitted as
+    /// transient workflow notices so the transcript stays focused on agent
+    /// output. Commit errors remain persisted in session output for diagnostic
+    /// history. Commit-message generation and any auto-commit recovery prompt
+    /// use the resolved auto-commit model for the session. Successful commits
+    /// also request an immediate git-status refresh so footer ahead/behind
+    /// counts do not wait for the background poller.
     pub(in crate::app) async fn handle_auto_commit(context: AssistContext) {
         match Self::commit_changes_with_assist(&context).await {
             Ok(Some(outcome)) => {
@@ -215,29 +216,13 @@ impl SessionTaskService {
                 .await;
 
                 let message = TranscriptNotice::Commit
-                    .format(format!("committed with hash `{}`", outcome.commit_hash));
-                Self::append_session_output(
-                    &context.output,
-                    &context.db,
-                    &context.app_event_tx,
-                    &context.session_update_versions,
-                    &context.id,
-                    &message,
-                )
-                .await;
+                    .format_line(format!("committed with hash `{}`", outcome.commit_hash));
+                Self::emit_session_workflow_notice(&context.app_event_tx, &context.id, message);
                 Self::request_git_status_refresh(&context.app_event_tx);
             }
             Ok(None) => {
-                let message = TranscriptNotice::Commit.format("No changes to commit.");
-                Self::append_session_output(
-                    &context.output,
-                    &context.db,
-                    &context.app_event_tx,
-                    &context.session_update_versions,
-                    &context.id,
-                    &message,
-                )
-                .await;
+                let message = TranscriptNotice::Commit.format_line("No changes to commit.");
+                Self::emit_session_workflow_notice(&context.app_event_tx, &context.id, message);
             }
             Err(commit_error) => {
                 let message = TranscriptNotice::CommitError.format(&commit_error);
@@ -261,6 +246,23 @@ impl SessionTaskService {
             AppEvent::RefreshGitStatus,
             None,
             "RefreshGitStatus",
+        );
+    }
+
+    /// Emits one transient workflow notice for the session output panel.
+    pub(super) fn emit_session_workflow_notice(
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        id: &str,
+        message: String,
+    ) {
+        Self::send_app_event(
+            app_event_tx,
+            AppEvent::SessionWorkflowNoticeUpdated {
+                notice: message,
+                session_id: SessionId::from(id),
+            },
+            Some(id),
+            "SessionWorkflowNoticeUpdated",
         );
     }
 
@@ -1732,8 +1734,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Verifies auto-commit reports clean-worktree no-op commits in the
-    /// session output.
+    /// Verifies auto-commit reports clean-worktree no-op commits as transient
+    /// workflow notices without appending to the transcript.
     async fn test_handle_auto_commit_reports_when_no_changes_exist() {
         // Arrange
         let mut mock_git_client = MockGitClient::new();
@@ -1743,7 +1745,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok::<_, GitError>(true) }));
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
-        let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let output = Arc::new(Mutex::new(String::new()));
         let context = AssistContext {
             app_event_tx,
@@ -1765,7 +1767,16 @@ mod tests {
             .lock()
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
-        assert!(output_text.contains("[Commit] No changes to commit."));
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(!output_text.contains("[Commit] No changes to commit."));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AppEvent::SessionWorkflowNoticeUpdated {
+                notice,
+                session_id,
+            } if session_id.as_str() == "session-id"
+                && notice == "[Commit] No changes to commit."
+        )));
     }
 
     #[tokio::test]
@@ -1881,12 +1892,20 @@ mod tests {
             sessions[0].summary.as_deref(),
             Some("- Session branch updates README formatting.")
         );
+        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
         let output_text = output
             .lock()
             .map(|buffer| buffer.clone())
             .unwrap_or_default();
-        assert!(output_text.contains("[Commit] committed with hash `abc1234`"));
-        let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(!output_text.contains("[Commit] committed with hash `abc1234`"));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AppEvent::SessionWorkflowNoticeUpdated {
+                notice,
+                session_id,
+            } if session_id.as_str() == "session-id"
+                && notice == "[Commit] committed with hash `abc1234`"
+        )));
         assert!(events.contains(&AppEvent::RefreshGitStatus));
     }
 

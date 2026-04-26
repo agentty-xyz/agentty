@@ -466,6 +466,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let handles: HashMap<SessionId, SessionHandles> = HashMap::from([(
             session_id.into(),
@@ -518,6 +519,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let handles = SessionHandles::new("New".to_string(), Status::InProgress);
 
@@ -559,6 +561,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let handles =
             SessionHandles::new("first line\nsecond line\n".to_string(), Status::InProgress);
@@ -602,6 +605,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let mut state = SessionState::new(
             HashMap::new(),
@@ -651,6 +655,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let replacement_session = Session {
             base_branch: "main".to_string(),
@@ -678,6 +683,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let mut state = SessionState::new(
             HashMap::new(),
@@ -727,6 +733,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let second_session = Session {
             base_branch: "main".to_string(),
@@ -754,6 +761,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let mut state = SessionState::new(
             HashMap::new(),
@@ -807,6 +815,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let handles = SessionHandles::new("xyzq".to_string(), Status::Review);
 
@@ -900,6 +909,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         surviving_session
             .follow_up_tasks
@@ -935,6 +945,7 @@ mod tests {
             summary: None,
             title: None,
             updated_at: 0,
+            workflow_notice: None,
         };
         let mut state = SessionState::new(
             HashMap::new(),
