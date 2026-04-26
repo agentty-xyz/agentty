@@ -6,6 +6,7 @@ use serde_json;
 
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
+use crate::domain::review;
 use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
 use crate::icon::Icon;
 use crate::infra::agent::protocol::AgentResponseSummary;
@@ -288,18 +289,26 @@ pub fn question_help_footer_line(focus: QuestionFocus) -> Line<'static> {
 /// Slash-command input renders the command/model suggestion set. Otherwise an
 /// active `@` mention query renders the matching file lookup list. The
 /// returned dropdown is already windowed so the highlighted row stays visible.
+/// `allow_apply_command` must match runtime slash selection so the visible
+/// rows and submitted command indexes stay synchronized.
 pub(crate) fn prompt_suggestion_list(
     input: &crate::domain::input::InputState,
     slash_state: &PromptSlashState,
     at_mention_state: Option<&PromptAtMentionState>,
     agent_kind: AgentKind,
+    allow_apply_command: bool,
 ) -> Option<SuggestionList> {
     let input_text = input.text();
     let cursor = input.cursor;
 
     if input_text.starts_with('/') {
-        return build_prompt_slash_suggestion_list(input_text, slash_state, agent_kind)
-            .map(render_prompt_suggestion_list);
+        return build_prompt_slash_suggestion_list(
+            input_text,
+            slash_state,
+            agent_kind,
+            allow_apply_command,
+        )
+        .map(render_prompt_suggestion_list);
     }
 
     at_mention_state.and_then(|state| {
@@ -495,9 +504,13 @@ pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
     )
 }
 
-/// Adds the verification-gated `/apply` hint to the exact focused-review
+/// Adds the verification-gated `/apply` hint to an actionable focused-review
 /// suggestions header.
 pub(crate) fn annotate_review_suggestions_header(review_markdown: &str) -> String {
+    if !review::has_actionable_review_suggestions(Some(review_markdown)) {
+        return review_markdown.to_string();
+    }
+
     let mut annotated_lines = Vec::with_capacity(review_markdown.lines().count());
     for line in review_markdown.lines() {
         if line.trim_end() == REVIEW_SUGGESTIONS_HEADER {
@@ -1699,7 +1712,7 @@ mod tests {
         let slash_state = PromptSlashState::default();
 
         // Act
-        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
             .expect("expected suggestion list");
 
         // Assert
@@ -1721,7 +1734,7 @@ mod tests {
         };
 
         // Act
-        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
             .expect("expected suggestion list");
 
         // Assert
@@ -1741,7 +1754,7 @@ mod tests {
         slash_state.stage = PromptSlashStage::Agent;
 
         // Act
-        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
             .expect("expected suggestion list");
 
         // Assert
@@ -1760,7 +1773,7 @@ mod tests {
         };
 
         // Act
-        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex)
+        let menu = prompt_suggestion_list(&input, &slash_state, None, AgentKind::Codex, true)
             .expect("expected suggestion list");
 
         // Assert
@@ -1778,15 +1791,41 @@ mod tests {
         let input = InputState::with_text("/".to_string());
 
         // Act
-        let menu =
-            prompt_suggestion_list(&input, &PromptSlashState::default(), None, AgentKind::Codex)
-                .expect("expected suggestion list");
+        let menu = prompt_suggestion_list(
+            &input,
+            &PromptSlashState::default(),
+            None,
+            AgentKind::Codex,
+            true,
+        )
+        .expect("expected suggestion list");
         let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
 
         // Assert
         assert!(labels.contains(&"/model"));
         assert!(labels.contains(&"/reasoning"));
         assert!(labels.contains(&"/stats"));
+    }
+
+    #[test]
+    fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
+        // Arrange
+        let input = InputState::with_text("/".to_string());
+
+        // Act
+        let menu = prompt_suggestion_list(
+            &input,
+            &PromptSlashState::default(),
+            None,
+            AgentKind::Codex,
+            false,
+        )
+        .expect("expected suggestion list");
+        let labels: Vec<&str> = menu.items.iter().map(|item| item.label.as_str()).collect();
+
+        // Assert
+        assert_eq!(labels, vec!["/model", "/reasoning", "/stats"]);
+        assert_eq!(menu.selected_index, 0);
     }
 
     #[test]
@@ -2119,6 +2158,19 @@ mod tests {
 
         // Assert
         assert_eq!(annotated, review_markdown);
+    }
+
+    #[test]
+    fn test_annotate_review_suggestions_header_skips_empty_suggestions() {
+        // Arrange
+        let review_markdown = "## Review\n### Suggestions\n- None\n### Project Impact\n- None";
+
+        // Act
+        let annotated = annotate_review_suggestions_header(review_markdown);
+
+        // Assert
+        assert_eq!(annotated, review_markdown);
+        assert!(!annotated.contains("(type \"/apply\" to verify and apply)"));
     }
 
     #[test]

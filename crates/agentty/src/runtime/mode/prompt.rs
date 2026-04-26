@@ -8,6 +8,7 @@ use tracing::warn;
 use crate::app::{App, ReviewCacheEntry, SessionStatsUsage, diff_content_hash};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
+use crate::domain::review;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::channel::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
@@ -15,7 +16,7 @@ use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
 use crate::ui::state::app_mode::AppMode;
 use crate::ui::state::prompt::{
-    PromptAtMentionState, PromptSlashStage,
+    PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
     apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
     insert_prompt_character, insert_prompt_local_image, insert_prompt_text,
@@ -501,6 +502,7 @@ fn navigate_prompt_history_down(app: &mut App) {
 }
 
 fn advance_prompt_slash_selection(app: &mut App) {
+    let allow_apply_command = prompt_apply_command_is_available(app);
     let (
         available_agent_kinds,
         input_text,
@@ -529,6 +531,7 @@ fn advance_prompt_slash_selection(app: &mut App) {
         selected_agent,
         &available_agent_kinds,
         session_agent_kind,
+        allow_apply_command,
     );
     if option_count == 0 {
         return;
@@ -707,20 +710,25 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
     let selection = match &app.mode {
         AppMode::Prompt {
             input, slash_state, ..
-        } => resolve_prompt_slash_selection(input.text(), slash_state, session_agent_kind),
+        } => resolve_prompt_slash_selection(
+            input.text(),
+            slash_state,
+            session_agent_kind,
+            apply_command_has_actionable_review_suggestions(app, prompt_context),
+        ),
         _ => None,
     };
 
     match selection {
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/apply")) => {
+        Some(PromptSuggestionSelection::Command("/apply")) => {
             reset_prompt_slash_input(app);
             handle_apply_command(app, prompt_context).await;
         }
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/stats")) => {
+        Some(PromptSuggestionSelection::Command("/stats")) => {
             reset_prompt_slash_input(app);
             handle_stats_command(app, prompt_context).await;
         }
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command("/reasoning")) => {
+        Some(PromptSuggestionSelection::Command("/reasoning")) => {
             let selected_reasoning_level = app
                 .session_at(prompt_context.session_index)
                 .map_or(app.settings.reasoning_level, |session| {
@@ -737,25 +745,25 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 slash_state.selected_index = selected_index;
             }
         }
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Command(_)) => {
+        Some(PromptSuggestionSelection::Command(_)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
                 slash_state.stage = PromptSlashStage::Agent;
                 slash_state.selected_agent = None;
                 slash_state.selected_index = 0;
             }
         }
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Agent(selected_agent)) => {
+        Some(PromptSuggestionSelection::Agent(selected_agent)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
                 slash_state.selected_agent = Some(selected_agent);
                 slash_state.stage = PromptSlashStage::Model;
                 slash_state.selected_index = 0;
             }
         }
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Model(selected_model)) => {
+        Some(PromptSuggestionSelection::Model(selected_model)) => {
             reset_prompt_slash_input(app);
             update_prompt_session_model(app, prompt_context, selected_model).await;
         }
-        Some(crate::ui::state::prompt::PromptSuggestionSelection::Reasoning(reasoning_level)) => {
+        Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
             reset_prompt_slash_input(app);
             update_prompt_session_reasoning_level(app, prompt_context, reasoning_level).await;
         }
@@ -883,6 +891,43 @@ fn clear_prompt_review_state(app: &mut App) {
 
 async fn append_output_for_session(app: &App, session_id: &str, output: &str) {
     app.append_output_for_session(session_id, output).await;
+}
+
+/// Returns whether the selected session has cached focused-review suggestions
+/// that make `/apply` executable from the slash menu.
+fn apply_command_has_actionable_review_suggestions(
+    app: &App,
+    prompt_context: &PromptContext,
+) -> bool {
+    review_cache_has_actionable_suggestions(app, &prompt_context.session_id)
+}
+
+/// Returns whether the active prompt session has cached focused-review
+/// suggestions that make `/apply` selectable.
+fn prompt_apply_command_is_available(app: &App) -> bool {
+    let Some(session_id) = prompt_session_id(app) else {
+        return false;
+    };
+
+    review_cache_has_actionable_suggestions(app, &session_id)
+}
+
+/// Returns the active prompt session id without mutating prompt state.
+fn prompt_session_id(app: &App) -> Option<SessionId> {
+    match &app.mode {
+        AppMode::Prompt { session_id, .. } => Some(session_id.clone()),
+        _ => None,
+    }
+}
+
+/// Returns whether cached focused-review text contains actionable
+/// suggestions for one session.
+fn review_cache_has_actionable_suggestions(app: &App, session_id: &str) -> bool {
+    let Some(ReviewCacheEntry::Ready { text, .. }) = app.review_cache.get(session_id) else {
+        return false;
+    };
+
+    review::has_actionable_review_suggestions(Some(text))
 }
 
 /// Appends one prompt-mode status line to the session transcript shown above
@@ -1018,7 +1063,7 @@ async fn handle_apply_command(app: &mut App, prompt_context: &PromptContext) {
         return;
     }
 
-    let Some(suggestions) = extract_review_suggestions(&cached_text) else {
+    let Some(suggestions) = review::review_suggestions(&cached_text) else {
         append_prompt_status_line(
             app,
             &prompt_context.session_id,
@@ -1055,23 +1100,6 @@ fn build_apply_review_prompt(suggestions: &str) -> TurnPrompt {
          anything. Apply only the suggestions that are still correct and relevant; explain any \
          suggestions you leave unapplied.\n\n{suggestions}"
     ))
-}
-
-/// Extracts the `### Suggestions` section content from focused review
-/// markdown, returning `None` when suggestions are absent or empty.
-fn extract_review_suggestions(review_text: &str) -> Option<String> {
-    let suggestions_header = "### Suggestions";
-    let header_start = review_text.find(suggestions_header)?;
-    let content_start = header_start + suggestions_header.len();
-    let content = &review_text[content_start..];
-    let section_end = content.find("\n### ").unwrap_or(content.len());
-    let suggestions = content[..section_end].trim();
-
-    if suggestions.is_empty() || suggestions == "- None" {
-        return None;
-    }
-
-    Some(suggestions.to_string())
 }
 
 /// Handles `/stats` by loading stats through the app layer and appending the
@@ -1863,6 +1891,7 @@ mod tests {
             "/m",
             &PromptSlashState::default(),
             AgentKind::Codex,
+            true,
         )
         .expect("expected suggestion list");
         let commands = suggestion_list
@@ -1882,6 +1911,7 @@ mod tests {
             "/",
             &PromptSlashState::default(),
             AgentKind::Codex,
+            true,
         )
         .expect("expected suggestion list");
         let commands = suggestion_list
@@ -1901,6 +1931,7 @@ mod tests {
             "/s",
             &PromptSlashState::default(),
             AgentKind::Codex,
+            true,
         )
         .expect("expected suggestion list");
         let commands = suggestion_list
@@ -1920,6 +1951,7 @@ mod tests {
             "/x",
             &PromptSlashState::default(),
             AgentKind::Codex,
+            true,
         );
 
         // Assert
@@ -1935,6 +1967,7 @@ mod tests {
             None,
             AgentKind::ALL,
             AgentKind::Codex,
+            true,
         );
 
         // Assert
@@ -1950,6 +1983,7 @@ mod tests {
             Some(AgentKind::Claude),
             AgentKind::ALL,
             AgentKind::Codex,
+            true,
         );
 
         // Assert
@@ -1968,6 +2002,7 @@ mod tests {
             None,
             &available_agent_kinds,
             AgentKind::Codex,
+            true,
         );
 
         // Assert
@@ -2110,6 +2145,23 @@ mod tests {
         } = &app.mode
         {
             assert_eq!(input.text(), "/model");
+            assert_eq!(slash_state.stage, PromptSlashStage::Agent);
+            assert_eq!(slash_state.selected_agent, None);
+            assert_eq!(slash_state.selected_index, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_maps_filtered_first_command_to_model() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/", None).await;
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        if let AppMode::Prompt { slash_state, .. } = &app.mode {
             assert_eq!(slash_state.stage, PromptSlashStage::Agent);
             assert_eq!(slash_state.selected_agent, None);
             assert_eq!(slash_state.selected_index, 0);
@@ -3240,112 +3292,6 @@ mod tests {
         assert!(prompt.text.contains(suggestions));
     }
 
-    #[test]
-    fn test_extract_review_suggestions_returns_suggestions_content() {
-        // Arrange
-        let review_text = "\
-## Review
-
-### Project Impact
-
-- Adds a new endpoint for user preferences.
-
-### Suggestions
-
-- Add input validation for the `max_items` parameter at `api/handler.rs:42`.
-- Consider adding rate limiting to the new endpoint.";
-
-        // Act
-        let suggestions = extract_review_suggestions(review_text);
-
-        // Assert
-        assert_eq!(
-            suggestions,
-            Some(
-                "- Add input validation for the `max_items` parameter at `api/handler.rs:42`.\n- \
-                 Consider adding rate limiting to the new endpoint."
-                    .to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn test_extract_review_suggestions_returns_none_for_no_suggestions() {
-        // Arrange
-        let review_text = "\
-## Review
-
-### Project Impact
-
-- Minor refactoring.
-
-### Suggestions
-
-- None";
-
-        // Act
-        let suggestions = extract_review_suggestions(review_text);
-
-        // Assert
-        assert_eq!(suggestions, None);
-    }
-
-    #[test]
-    fn test_extract_review_suggestions_returns_none_when_section_missing() {
-        // Arrange
-        let review_text = "\
-## Review
-
-### Project Impact
-
-- All looks good.";
-
-        // Act
-        let suggestions = extract_review_suggestions(review_text);
-
-        // Assert
-        assert_eq!(suggestions, None);
-    }
-
-    #[test]
-    fn test_extract_review_suggestions_stops_at_next_heading() {
-        // Arrange
-        let review_text = "\
-### Suggestions
-
-- Fix the typo in `README.md:10`.
-
-### Additional Notes
-
-- Great work overall.";
-
-        // Act
-        let suggestions = extract_review_suggestions(review_text);
-
-        // Assert
-        assert_eq!(
-            suggestions,
-            Some("- Fix the typo in `README.md:10`.".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_review_suggestions_returns_none_for_empty_section() {
-        // Arrange
-        let review_text = "\
-### Suggestions
-
-### Project Impact
-
-- None";
-
-        // Act
-        let suggestions = extract_review_suggestions(review_text);
-
-        // Assert
-        assert_eq!(suggestions, None);
-    }
-
     #[tokio::test]
     async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
         // Arrange
@@ -3615,6 +3561,42 @@ mod tests {
             attachment_state.attachments.len(),
             1,
             "attachments must survive validation failure so the user keeps their pasted files",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_prompt_slash_submit_ignores_apply_when_suggestions_are_empty() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/apply", None).await;
+        app.sessions.sessions[0].status = crate::domain::session::Status::Review;
+        let session_id = app.sessions.sessions[0].id.clone();
+        app.review_cache.insert(
+            session_id.clone(),
+            crate::app::ReviewCacheEntry::Ready {
+                diff_hash: 0,
+                text: "## Review\n### Suggestions\n- None".to_string(),
+            },
+        );
+        let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+
+        // Act
+        handle_prompt_slash_submit(&mut app, &prompt_context).await;
+
+        // Assert
+        let AppMode::Prompt {
+            input, slash_state, ..
+        } = &app.mode
+        else {
+            unreachable!("expected AppMode::Prompt after unavailable /apply");
+        };
+        assert_eq!(input.text(), "/apply");
+        assert_eq!(*slash_state, PromptSlashState::default());
+        assert!(
+            matches!(
+                app.review_cache.get(session_id.as_str()),
+                Some(crate::app::ReviewCacheEntry::Ready { .. }),
+            ),
+            "unavailable /apply should not consume the cached review",
         );
     }
 }

@@ -4,8 +4,8 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::domain::agent::ReasoningLevel;
-use crate::domain::input;
 use crate::domain::session::Session;
+use crate::domain::{input, review};
 use crate::infra::agent::protocol::QuestionItem;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
@@ -207,6 +207,7 @@ impl<'a> SessionChatPage<'a> {
             at_mention_state,
             attachment_state,
             input,
+            review_text,
             slash_state,
             ..
         } = self.mode
@@ -219,6 +220,7 @@ impl<'a> SessionChatPage<'a> {
         // the slash dropdown to avoid implying the menu is actionable. The
         // `@` mention dropdown is still useful for editing queued messages.
         let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
+        let allow_apply_command = review::has_actionable_review_suggestions(review_text.as_deref());
         let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
             None
         } else {
@@ -227,6 +229,7 @@ impl<'a> SessionChatPage<'a> {
                 slash_state,
                 at_mention_state.as_ref(),
                 session.model.kind(),
+                allow_apply_command,
             )
         };
         let dropdown_row_count = layout::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());

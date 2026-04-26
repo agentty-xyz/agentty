@@ -761,10 +761,10 @@ impl<'a> SessionOutput<'a> {
     /// Appends focused-review output or non-loading fallback text to the
     /// transcript for the current session view.
     ///
-    /// The `### Suggestions` header is annotated with a `(type "/apply" to
-    /// verify and apply)` hint at render time so users discover the apply
-    /// shortcut without polluting the persisted review markdown consumed by
-    /// suggestion extraction.
+    /// The `### Suggestions` header is annotated with a `/apply` hint at
+    /// render time only when the review contains actionable suggestions, so
+    /// users discover available apply behavior without polluting the persisted
+    /// review markdown consumed by suggestion extraction.
     fn append_review_lines(
         lines: &mut Vec<Line<'static>>,
         review_status_message: Option<&str>,

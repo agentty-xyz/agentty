@@ -305,7 +305,12 @@ impl PromptComposerState {
         &self,
         session_agent_kind: AgentKind,
     ) -> Option<PromptSuggestionList> {
-        build_prompt_slash_suggestion_list(self.input.text(), &self.slash_state, session_agent_kind)
+        build_prompt_slash_suggestion_list(
+            self.input.text(),
+            &self.slash_state,
+            session_agent_kind,
+            true,
+        )
     }
 
     /// Resolves the semantic action behind the currently highlighted prompt
@@ -315,7 +320,12 @@ impl PromptComposerState {
         &self,
         session_agent_kind: AgentKind,
     ) -> Option<PromptSuggestionSelection> {
-        resolve_prompt_slash_selection(self.input.text(), &self.slash_state, session_agent_kind)
+        resolve_prompt_slash_selection(
+            self.input.text(),
+            &self.slash_state,
+            session_agent_kind,
+            true,
+        )
     }
 
     /// Inserts pasted prompt text by delegating to the canonical field-level
@@ -382,6 +392,9 @@ impl Default for PromptComposerState {
 }
 
 /// Returns the number of selectable options in the active slash stage.
+///
+/// `allow_apply_command` controls whether `/apply` participates in the
+/// command-stage list so navigation counts match the visible slash menu.
 #[must_use]
 pub fn prompt_slash_option_count(
     input: &str,
@@ -389,6 +402,7 @@ pub fn prompt_slash_option_count(
     selected_agent: Option<AgentKind>,
     available_agent_kinds: &[AgentKind],
     session_agent_kind: AgentKind,
+    allow_apply_command: bool,
 ) -> usize {
     build_prompt_slash_suggestion_list(
         input,
@@ -399,6 +413,7 @@ pub fn prompt_slash_option_count(
             stage,
         },
         session_agent_kind,
+        allow_apply_command,
     )
     .map_or(0, |suggestion_list| suggestion_list.items.len())
 }
@@ -624,11 +639,15 @@ pub fn render_prompt_text_for_agent(text: &str) -> String {
 
 /// Builds the render-ready prompt slash suggestion list for the provided
 /// input and slash state.
+///
+/// `allow_apply_command` controls whether `/apply` participates in the
+/// command-stage list so rendered rows stay aligned with selection indexes.
 #[must_use]
 pub fn build_prompt_slash_suggestion_list(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
+    allow_apply_command: bool,
 ) -> Option<PromptSuggestionList> {
     build_slash_suggestion_list(
         input,
@@ -637,6 +656,7 @@ pub fn build_prompt_slash_suggestion_list(
         slash_state.selected_agent,
         session_agent_kind,
         slash_state.selected_index,
+        allow_apply_command,
     )
 }
 
@@ -645,11 +665,14 @@ pub fn build_prompt_slash_suggestion_list(
 /// The resolved item is clamped to the same visible selection range used by
 /// [`build_prompt_slash_suggestion_list`] so submit behavior stays aligned with
 /// the currently rendered highlight even when `selected_index` is stale.
+/// `allow_apply_command` must match the value used for rendering and
+/// navigation counts.
 #[must_use]
 pub fn resolve_prompt_slash_selection(
     input: &str,
     slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
+    allow_apply_command: bool,
 ) -> Option<PromptSuggestionSelection> {
     selected_slash_action(
         input,
@@ -658,6 +681,7 @@ pub fn resolve_prompt_slash_selection(
         slash_state.selected_agent,
         slash_state.selected_index,
         session_agent_kind,
+        allow_apply_command,
     )
 }
 
@@ -669,6 +693,7 @@ fn build_slash_suggestion_list(
     selected_agent: Option<AgentKind>,
     session_agent_kind: AgentKind,
     selected_index: usize,
+    allow_apply_command: bool,
 ) -> Option<PromptSuggestionList> {
     if !input.starts_with('/') {
         return None;
@@ -676,7 +701,7 @@ fn build_slash_suggestion_list(
 
     let (title, items): (&str, Vec<PromptSuggestionItem>) = match stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(input)
+            let commands = prompt_slash_commands(input, allow_apply_command)
                 .into_iter()
                 .map(|command| PromptSuggestionItem {
                     badge: None,
@@ -746,10 +771,11 @@ fn selected_slash_action(
     selected_agent: Option<AgentKind>,
     selected_index: usize,
     session_agent_kind: AgentKind,
+    allow_apply_command: bool,
 ) -> Option<PromptSuggestionSelection> {
     match stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(input);
+            let commands = prompt_slash_commands(input, allow_apply_command);
             let selected_command = commands
                 .get(clamp_selected_index(selected_index, commands.len()))
                 .copied()?;
@@ -820,9 +846,12 @@ fn command_description(command: &str) -> &'static str {
 }
 
 /// Returns all slash commands whose prefixes match the current input.
-fn prompt_slash_commands(input: &str) -> Vec<&'static str> {
+fn prompt_slash_commands(input: &str, allow_apply_command: bool) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
     let mut commands = vec!["/apply", "/model", "/reasoning", "/stats"];
+    if !allow_apply_command {
+        commands.retain(|command| *command != "/apply");
+    }
     commands.retain(|command| command.starts_with(&lowered));
 
     commands
@@ -1278,6 +1307,44 @@ mod tests {
         assert_eq!(
             suggestion_list.items[0].detail.as_deref(),
             Some("Verify focused-review suggestions, then apply the correct ones.")
+        );
+    }
+
+    #[test]
+    fn test_prompt_slash_command_list_omits_apply_when_disabled() {
+        // Arrange
+        let slash_state = PromptSlashState::default();
+
+        // Act
+        let suggestion_list =
+            build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, false)
+                .expect("expected suggestion list");
+        let labels = suggestion_list
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(labels, vec!["/model", "/reasoning", "/stats"]);
+        assert_eq!(suggestion_list.selected_index, 0);
+    }
+
+    #[test]
+    fn test_prompt_slash_selection_uses_filtered_command_indexes() {
+        // Arrange
+        let slash_state = PromptSlashState {
+            selected_index: 0,
+            ..PromptSlashState::default()
+        };
+
+        // Act
+        let selection = resolve_prompt_slash_selection("/", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(
+            selection,
+            Some(PromptSuggestionSelection::Command("/model"))
         );
     }
 }
