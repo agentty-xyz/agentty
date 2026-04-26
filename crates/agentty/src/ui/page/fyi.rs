@@ -13,11 +13,12 @@ const SESSION_LIST_FYI_MESSAGES: [&str; 3] = [
 
 /// Rotating FYI messages shown in the top status bar while session chat is
 /// visible.
-const SESSION_CHAT_FYI_MESSAGES: [&str; 8] = [
+const SESSION_CHAT_FYI_MESSAGES: [&str; 9] = [
     "Press ? to inspect the shortcuts available for the current session state.",
     "Press / to open slash commands without typing into the composer first.",
     "Press d to review the current worktree diff for this session.",
     "Use @ to attach files or project context to the next prompt.",
+    "You can queue new messages while a session is in progress.",
     "Press o to open the session worktree when one is available.",
     "Agentty starts focused review automatically after each turn.",
     "Press f to open or regenerate focused review output on demand.",
