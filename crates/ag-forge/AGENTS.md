@@ -12,4 +12,5 @@ Workspace library crate for forge review-request orchestration and remote parsin
 ## Change Guidance
 
 - Keep subprocess execution behind the existing command boundary.
-- Keep provider-specific behavior inside the forge-specific modules rather than in callers.
+- Keep provider-specific behavior inside the forge-specific modules rather than in
+  callers.

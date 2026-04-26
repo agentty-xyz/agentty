@@ -2,46 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Added
 
-- testty: curate the stable public surface at `testty::prelude` and lock it
-  down with a `tests/public_api.rs` compile-time tripwire so accidental
-  renames or removals fail before publication. The tripwire also pins the
-  source-compatibility patterns we still want to support (struct-literal
-  construction for `Region` and `CellColor`, and `..` rest-pattern
-  destructuring for every `SnapshotError` variant).
-- testty: document an explicit upgrade path from earlier `0.x` releases in
-  the testty README, including the new prelude import, the removal of the
+- testty: curate the stable public surface at `testty::prelude` and lock it down with a
+  `tests/public_api.rs` compile-time tripwire so accidental renames or removals fail
+  before publication. The tripwire also pins the source-compatibility patterns we still
+  want to support (struct-literal construction for `Region` and `CellColor`, and `..`
+  rest-pattern destructuring for every `SnapshotError` variant).
+- testty: document an explicit upgrade path from earlier `0.x` releases in the testty
+  README, including the new prelude import, the removal of the
   `artifact`/`calibration`/`overlay` modules, the removal of the
   `testty::snapshot::is_update_mode()` free function, and the configurable
   `SnapshotConfig::with_update_env_var` baseline trigger.
-- testty: add `SnapshotConfig::with_update_mode` and the
-  `update_mode_override` field as an injected update-mode boundary so tests
-  and programmatic callers can drive baseline-update behavior without
-  mutating process-global environment state through `unsafe`
-  `std::env::set_var` calls.
+- testty: add `SnapshotConfig::with_update_mode` and the `update_mode_override` field as
+  an injected update-mode boundary so tests and programmatic callers can drive
+  baseline-update behavior without mutating process-global environment state through
+  `unsafe` `std::env::set_var` calls.
 
 ### Changed (breaking)
 
-- testty: `SnapshotConfig` is now `#[non_exhaustive]` and grew two private
-  fields (`update_env_var`, `update_mode_override`). Downstream callers that
-  used struct-literal construction (`SnapshotConfig { .. }`) must switch to
-  `SnapshotConfig::new(..)` plus the `with_*` builder methods. Future field
-  additions stay non-breaking under the `#[non_exhaustive]` lock-down.
-- testty: `SnapshotError` and each of its struct-shaped variants
-  (`Mismatch`, `MissingBaseline`, `FrameMismatch`) are now
-  `#[non_exhaustive]`. Downstream `match` arms must include a fallback `_`
-  arm and any field destructuring must use the `..` rest-pattern. The
-  `MissingBaseline` variant additionally carries a new `update_env_var`
-  field used to surface the configured trigger in the error message.
-- testty: this release intentionally breaks source compatibility for the
-  items above and requires the next published `testty` version to be a
-  semver-major bump (in pre-1.0 terms, `0.8.x` → `0.9.0`).
+- testty: `SnapshotConfig` is now `#[non_exhaustive]` and grew two private fields
+  (`update_env_var`, `update_mode_override`). Downstream callers that used
+  struct-literal construction (`SnapshotConfig { .. }`) must switch to
+  `SnapshotConfig::new(..)` plus the `with_*` builder methods. Future field additions
+  stay non-breaking under the `#[non_exhaustive]` lock-down.
+- testty: `SnapshotError` and each of its struct-shaped variants (`Mismatch`,
+  `MissingBaseline`, `FrameMismatch`) are now `#[non_exhaustive]`. Downstream `match`
+  arms must include a fallback `_` arm and any field destructuring must use the `..`
+  rest-pattern. The `MissingBaseline` variant additionally carries a new
+  `update_env_var` field used to surface the configured trigger in the error message.
+- testty: this release intentionally breaks source compatibility for the items above and
+  requires the next published `testty` version to be a semver-major bump (in pre-1.0
+  terms, `0.8.x` → `0.9.0`).
 
 ## [v0.8.4] - 2026-04-25
 
@@ -101,8 +98,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Show review fallback status when no review text is available and refresh staged-draft sessions immediately.
-- Preserve focused review visibility after completion across prompt, question, and done sessions.
+- Show review fallback status when no review text is available and refresh staged-draft
+  sessions immediately.
+- Preserve focused review visibility after completion across prompt, question, and done
+  sessions.
 - Preserve user-cancelled turns as canceled sessions.
 - Track turn prompt source to preserve agent payload text.
 - Restrict protocol questions to genuine clarifications.
@@ -116,7 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Preview review-request comments inside the diff page. Press `d` from a review-ready session to open the diff page, then press `c` inside the page to toggle the right panel between the git diff and the cached comments. The comments panel lists inline threads and pull-request-level "General discussion" comments for GitHub-linked sessions; GitLab support is tracked as a follow-up.
+- Preview review-request comments inside the diff page. Press `d` from a review-ready
+  session to open the diff page, then press `c` inside the page to toggle the right
+  panel between the git diff and the cached comments. The comments panel lists inline
+  threads and pull-request-level "General discussion" comments for GitHub-linked
+  sessions; GitLab support is tracked as a follow-up.
 - Add theme setting and theme-aware palette rendering.
 - Add `gpt-5.5` Codex model support.
 - Render session summary above active prompt during in-progress turns.
@@ -143,20 +146,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add terminal session continuation that seeds a new session from completed or canceled work.
-- Add `/apply` so focused-review suggestions can be sent back to the agent as a new prompt.
-- Add background review-request polling plus refreshed session-view guidance and demo coverage.
+- Add terminal session continuation that seeds a new session from completed or canceled
+  work.
+- Add `/apply` so focused-review suggestions can be sent back to the agent as a new
+  prompt.
+- Add background review-request polling plus refreshed session-view guidance and demo
+  coverage.
 
 ### Changed
 
-- Refactor app orchestration, database repositories, and UI layout/state into narrower modules with typed `SessionId` handling.
-- Improve forge workflow handling, including remote working-directory GitHub CLI execution and stacked review-request planning.
-- Refresh release-policy, workflow, keybinding, and architecture documentation for the new session and review flows.
+- Refactor app orchestration, database repositories, and UI layout/state into narrower
+  modules with typed `SessionId` handling.
+- Improve forge workflow handling, including remote working-directory GitHub CLI
+  execution and stacked review-request planning.
+- Refresh release-policy, workflow, keybinding, and architecture documentation for the
+  new session and review flows.
 
 ### Fixed
 
-- Add SQLite busy-timeout handling and align WAL persistence settings for more reliable session storage.
-- Debounce stale `@`-mention loading, clear pending session tasks correctly, and preserve focused-review output through clarification flows.
+- Add SQLite busy-timeout handling and align WAL persistence settings for more reliable
+  session storage.
+- Debounce stale `@`-mention loading, clear pending session tasks correctly, and
+  preserve focused-review output through clarification flows.
 
 ### Contributors
 
@@ -235,8 +246,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Delay draft-session worktree creation until the staged bundle starts so the branch is based on the latest local base branch.
-- Split branch publishing onto `p` and forge review-request publishing onto `Shift+P`, with the same optional custom branch-name flow.
+- Delay draft-session worktree creation until the staged bundle starts so the branch is
+  based on the latest local base branch.
+- Split branch publishing onto `p` and forge review-request publishing onto `Shift+P`,
+  with the same optional custom branch-name flow.
 
 ### Fixed
 
@@ -321,7 +334,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Constrain draft prompt routing to new sessions.
 - Normalize @lookups for agent delivery while preserving raw prompt text.
 - Refactor prompt composer into shared domain module.
-- Preserve focused review when exiting diff mode and suppress rebase during `AgentReview`.
+- Preserve focused review when exiting diff mode and suppress rebase during
+  `AgentReview`.
 - Refine docs table wrapping, runtime-flow guidance, and session workflow diagrams.
 - Adopt promotion-based roadmap ownership process.
 
@@ -371,16 +385,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add draft session workflow state and staged draft metadata handling.
 - Add session diff stats plus base and remote git status tracking in the UI.
-- Add broader unit and E2E coverage, including modular `testty`-backed session, navigation, confirmation, and showcase flows.
+- Add broader unit and E2E coverage, including modular `testty`-backed session,
+  navigation, confirmation, and showcase flows.
 - Add a features page with per-feature GIF demos to the docs site.
 
 ### Changed
 
 - Persist and reuse app-server instruction bootstrap state across restored sessions.
-- Scope model selection and auto-commit defaults to locally runnable backends and project setting names.
-- Propagate typed error enums through app, session, app-server transport, and CLI boundaries.
-- Restrict follow-up tasks to code changes and default new follow-up prompts to the first available task.
-- Restructure E2E coverage into multi-module tests and refresh roadmap planning guidance.
+- Scope model selection and auto-commit defaults to locally runnable backends and
+  project setting names.
+- Propagate typed error enums through app, session, app-server transport, and CLI
+  boundaries.
+- Restrict follow-up tasks to code changes and default new follow-up prompts to the
+  first available task.
+- Restructure E2E coverage into multi-module tests and refresh roadmap planning
+  guidance.
 
 ### Contributors
 
@@ -416,13 +435,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add a docs-site blog section.
-- Add roadmap metadata requirements for step headings, IDs, assignees, and claim commits.
+- Add roadmap metadata requirements for step headings, IDs, assignees, and claim
+  commits.
 
 ### Changed
 
-- Rename the Rust-native TUI E2E crate from `ag-tui-test` to `testty` and prepare it for crates.io publishing.
-- Remove the manual review-request sync flow and keep `end_turn_no_answer` aligned with `Review`.
-- Refocus implementation-roadmap guidance on active follow-up work and simpler step operations.
+- Rename the Rust-native TUI E2E crate from `ag-tui-test` to `testty` and prepare it for
+  crates.io publishing.
+- Remove the manual review-request sync flow and keep `end_turn_no_answer` aligned with
+  `Review`.
+- Refocus implementation-roadmap guidance on active follow-up work and simpler step
+  operations.
 - Remove `#[ignore]` gates from E2E tests.
 - Clarify session commit prompt guidance to consult repository commit conventions.
 
@@ -535,7 +558,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Publish session branches with `git push --force-with-lease`.
-- Update agent test expectations for generic agent wording and the current commit message model.
+- Update agent test expectations for generic agent wording and the current commit
+  message model.
 
 ### Contributors
 
@@ -721,11 +745,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agent:** Add predefined answer options for agent questions.
 - **Agent:** Add mandatory per-turn change summaries to agent protocol.
-- **Infra:** Implement forge CLI review-request adapters (GitHub/GitLab PR/MR workflows).
+- **Infra:** Implement forge CLI review-request adapters (GitHub/GitLab PR/MR
+  workflows).
 - **UI:** Add session view review request workflows (create, open, refresh).
 - **UI:** Show project scope in list tabs.
 - **Settings:** Scope settings per project.
-- **Review:** Auto-start focused review generation on session Review transition and cache results.
+- **Review:** Auto-start focused review generation on session Review transition and
+  cache results.
 
 ### Changed
 
@@ -748,7 +774,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs:** Add GitHub issue form templates and directory indexing.
 - **Infra:** Add default pull request template for the repository.
 - **UI:** Add Agentty info panel to the project list.
-- **UI:** Chat panel gets polished chrome and unified overlay styling with dimmed backdrop.
+- **UI:** Chat panel gets polished chrome and unified overlay styling with dimmed
+  backdrop.
 
 ### Changed
 
@@ -783,8 +810,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **UI:** Support `Alt+Enter` and `Shift+Enter` newline entry across settings and prompt.
-- **Session:** Generate session titles from user intent when the first start turn begins.
+- **UI:** Support `Alt+Enter` and `Shift+Enter` newline entry across settings and
+  prompt.
+- **Session:** Generate session titles from user intent when the first start turn
+  begins.
 
 ### Changed
 
@@ -796,7 +825,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **UI:** Stop `@mention` highlighting before trailing punctuation.
 - **Session Output:** Improve verbatim markdown wrapping and Unicode width handling.
 - **Session Output:** Preserve multiline user prompts across persistence and rendering.
-- **Review:** Tighten review suggestion severity criteria and require concise actionable suggestions.
+- **Review:** Tighten review suggestion severity criteria and require concise actionable
+  suggestions.
 - **Architecture:** Refactor module roots into router-only modules.
 - **Claude:** Enforce strict MCP config for Claude backend.
 - **Docs:** Reframe UI beautification plan around implementation status.
@@ -815,16 +845,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **UI:** Support multiline open command editing in the settings tab.
 - **UI:** Render session status header directly above the output panel.
-- **Session:** Add open command selector when multiple launch commands are configured for a worktree.
+- **Session:** Add open command selector when multiple launch commands are configured
+  for a worktree.
 - **Docs:** Add `CLAUDE` and `GEMINI` symlinks for module-level `AGENTS.md` files.
 
 ### Changed
 
-- **Architecture:** Rename `app` and `ui` module roots to singular names (`app.rs`, `ui.rs`, `domain.rs`, `infra.rs`, `runtime.rs`).
+- **Architecture:** Rename `app` and `ui` module roots to singular names (`app.rs`,
+  `ui.rs`, `domain.rs`, `infra.rs`, `runtime.rs`).
 - **Architecture:** Parse merge commit messages from structured protocol output.
-- **Architecture:** Harden `AGENTS.md` index validation and normalize directory index links.
-- **Docs:** Prevent content and table-of-contents text overflow on the documentation site.
-- **Docs:** Expand runtime flow documentation and add doc comments across migration, runtime, UI, and database helpers.
+- **Architecture:** Harden `AGENTS.md` index validation and normalize directory index
+  links.
+- **Docs:** Prevent content and table-of-contents text overflow on the documentation
+  site.
+- **Docs:** Expand runtime flow documentation and add doc comments across migration,
+  runtime, UI, and database helpers.
 
 ### Contributors
 
@@ -836,18 +871,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **UI:** Show active session count in the project list.
 - **Review:** Run focused review assist in isolated start mode.
-- **Docs:** Split architecture documentation into a dedicated section and document structured response protocol.
+- **Docs:** Split architecture documentation into a dedicated section and document
+  structured response protocol.
 
 ### Changed
 
 - **Protocol:** Harden structured protocol handling across providers.
-- **Architecture:** Standardize module-oriented imports across the `app` and `ui` layers.
-- **Architecture:** Align architecture docs with runtime mode, channel schema, and test boundaries.
-- **Quality:** Require explicit user approval to retain legacy behavior during development.
+- **Architecture:** Standardize module-oriented imports across the `app` and `ui`
+  layers.
+- **Architecture:** Align architecture docs with runtime mode, channel schema, and test
+  boundaries.
+- **Quality:** Require explicit user approval to retain legacy behavior during
+  development.
 
 ### Fixed
 
-- **UI:** Fix active session count calculation to exclude `Question` status and ensure projects reload on session refresh.
+- **UI:** Fix active session count calculation to exclude `Question` status and ensure
+  projects reload on session refresh.
 
 ### Contributors
 
@@ -858,19 +898,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **UI:** Handle agent clarification questions in a dedicated question mode with persistent history.
+- **UI:** Handle agent clarification questions in a dedicated question mode with
+  persistent history.
 - **UI:** Highlight `@mention` tokens in chat input.
 - **UI:** Improve chat input wrapping and viewport scrolling.
 - **UI:** Align session output wrapping with panel borders.
-- **Architecture:** Switch agent output to schema-validated JSON messages and normalize assist protocol output.
-- **Architecture:** Inject `FsClient` and `Clock` dependencies into session workflows for better testability.
+- **Architecture:** Switch agent output to schema-validated JSON messages and normalize
+  assist protocol output.
+- **Architecture:** Inject `FsClient` and `Clock` dependencies into session workflows
+  for better testability.
 - **Architecture:** Route session stats and filesystem workflows through the app layer.
 - **Docs:** Add diff-first verification guidance and refine site responsiveness.
 
 ### Changed
 
-- **Session:** Move first-turn title generation to the start-turn worker and use plain text.
-- **Session:** Filter Codex thought/reasoning text from persisted assistant output and handle it separately during streaming.
+- **Session:** Move first-turn title generation to the start-turn worker and use plain
+  text.
+- **Session:** Filter Codex thought/reasoning text from persisted assistant output and
+  handle it separately during streaming.
 - **Session:** Remove plan messages from the agent response protocol.
 - **Session:** Prefer active sessions for initial selection in the UI.
 - **Protocol:** Prefer agent message content over trailing reasoning payloads.
@@ -882,7 +927,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Session:** Ensure merge cleanup (worktree/branch removal) completes before marking session as `Done`.
+- **Session:** Ensure merge cleanup (worktree/branch removal) completes before marking
+  session as `Done`.
 - **Sync:** Optimize session output synchronization for append-heavy updates.
 - **Review:** Parse structured agent responses in focused review assist correctly.
 
@@ -895,16 +941,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **UI:** Add `Ctrl+u` prompt-line deletion and intent-aware confirmations for merge, delete, and quit actions.
-- **Settings:** Persist Codex reasoning levels and propagate reasoning identifiers through runtime integrations.
+- **UI:** Add `Ctrl+u` prompt-line deletion and intent-aware confirmations for merge,
+  delete, and quit actions.
+- **Settings:** Persist Codex reasoning levels and propagate reasoning identifiers
+  through runtime integrations.
 - **Environment:** Allow `AGENTTY_ROOT` to override the default agentty data root.
 
 ### Changed
 
-- **UI:** Remove the session list project column and highlight the active project name in the `Sessions` tab.
-- **Session:** Preserve live session state during reload and unify child PID propagation across assist/rebase/merge flows.
-- **Docs:** Split usage docs into dedicated workflow and keybindings pages and refine rebase conflict guidance.
-- **Quality:** Require full validation checks during execution and standardize the full test command to single-threaded runs.
+- **UI:** Remove the session list project column and highlight the active project name
+  in the `Sessions` tab.
+- **Session:** Preserve live session state during reload and unify child PID propagation
+  across assist/rebase/merge flows.
+- **Docs:** Split usage docs into dedicated workflow and keybindings pages and refine
+  rebase conflict guidance.
+- **Quality:** Require full validation checks during execution and standardize the full
+  test command to single-threaded runs.
 
 ### Fixed
 
@@ -926,8 +978,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs:** Add design and architecture documentation page.
 - **Docs:** Add GitHub metadata badges and right-side anchor links.
 - **Docs:** Add tooling setup instructions for `uv` and `pre-commit`.
-- **Session:** Generate session titles once in background and refine generation instructions.
-- **Session:** Persist and resume provider-native conversation identifiers across restarts.
+- **Session:** Generate session titles once in background and refine generation
+  instructions.
+- **Session:** Persist and resume provider-native conversation identifiers across
+  restarts.
 - **Architecture:** Add structured agent response protocol with metadata delimiter.
 - **Architecture:** Unify session turn execution through agent channels.
 
@@ -936,7 +990,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codex:** Load usage limits lazily and remove usage panel/polling.
 - **Codex:** Update model defaults and remove `gpt-5.2-codex`.
 - **UI:** Refine info overlay and session list padding.
-- **Architecture:** Extract process boundaries (tmux, editor, sync) and inject dependencies (clock, sleeper, git) for better testability.
+- **Architecture:** Extract process boundaries (tmux, editor, sync) and inject
+  dependencies (clock, sleeper, git) for better testability.
 - **Architecture:** Propagate assistant phase metadata in app-server streams.
 - **Sync:** Render sync success details as markdown sections.
 
@@ -956,13 +1011,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **UI:** Add Cmd+Backspace current-line deletion in prompt.
 - **Settings:** Add default review model and separate default smart/fast model settings.
-- **Review:** Enforce read-only constraints for focused review assist and refine prompt structure.
+- **Review:** Enforce read-only constraints for focused review assist and refine prompt
+  structure.
 
 ### Changed
 
 - **UI:** Show diff line-change totals in diff panel title.
 - **UI:** Center loading sync text in info overlay and show only OK action.
-- **Sync:** Improve sync completion details and info overlay presentation; show newly pulled commit titles.
+- **Sync:** Improve sync completion details and info overlay presentation; show newly
+  pulled commit titles.
 - **Settings:** Rename DevServer setting to OpenCommand.
 - **Session:** Session manager replays review history after restart.
 - **Tokens:** Read turn usage from thread token usage updates.
@@ -995,8 +1052,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **UI:** Keep info overlay action row visible for multiline messages.
-- **UI:** Handle shifted J/K scrolling in diff mode and block actions for canceled sessions.
-- **Sync:** Improve sync popup guidance for push authentication failures and render sync success metrics on separate lines.
+- **UI:** Handle shifted J/K scrolling in diff mode and block actions for canceled
+  sessions.
+- **Sync:** Improve sync popup guidance for push authentication failures and render sync
+  success metrics on separate lines.
 - **Git:** Set non-interactive git prompt defaults for repo commands.
 - **Architecture:** Backend command construction uses one build API.
 
@@ -1035,25 +1094,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **UI:** Add `Shift+Arrow` and `Alt/Shift+Backspace` word-wise cursor movement in prompt mode.
-- **Models:** Stream Gemini assistant chunks to the UI during turns and handle ACP permission requests.
+- **UI:** Add `Shift+Arrow` and `Alt/Shift+Backspace` word-wise cursor movement in
+  prompt mode.
+- **Models:** Stream Gemini assistant chunks to the UI during turns and handle ACP
+  permission requests.
 - **Skills:** Add code review skill.
 - **Tests:** Add regression tests and improve coverage with mocked clients.
 
 ### Changed
 
-- **UI:** Project switcher supports `j`/`k` navigation, unfiltered list navigation, and visible selection.
-- **UI:** Report sync outcome details in completion popup and keep confirmation choices visible.
+- **UI:** Project switcher supports `j`/`k` navigation, unfiltered list navigation, and
+  visible selection.
+- **UI:** Report sync outcome details in completion popup and keep confirmation choices
+  visible.
 - **UX:** List mode opens canceled sessions on `Enter`.
-- **Models:** Codex resume uses `--last` only without replay history and enforces high reasoning effort.
+- **Models:** Codex resume uses `--last` only without replay history and enforces high
+  reasoning effort.
 - **Models:** Rename Gemini Pro preview variant to Gemini 3.1.
-- **Session Output:** Keep clean auto-commit silent, report no-op states, and ignore synthetic Codex completion messages.
-- **Architecture:** Centralize git command execution and isolate Codex usage-limit loading.
-- **Docs:** Update documentation to highlight Agentty self-hosting and align docs page widths.
+- **Session Output:** Keep clean auto-commit silent, report no-op states, and ignore
+  synthetic Codex completion messages.
+- **Architecture:** Centralize git command execution and isolate Codex usage-limit
+  loading.
+- **Docs:** Update documentation to highlight Agentty self-hosting and align docs page
+  widths.
 
 ### Fixed
 
-- **Models:** Handle Gemini `session/new` error responses explicitly and ignore empty assistant chunks.
+- **Models:** Handle Gemini `session/new` error responses explicitly and ignore empty
+  assistant chunks.
 - **UI:** Stabilize site header across routes.
 
 ### Removed
@@ -1077,8 +1145,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **App:** Resolve main repository roots via git and exclude session worktrees.
 - **UI:** Switch to `Sessions` after project selection and compact footer help actions.
-- **Runtime:** Route app-server turns by provider, include root `AGENTS.md` instructions, and pass session folder/model in Codex payloads.
-- **Docs:** Reorganize site sections, standardize skill headers, and migrate the docs site to compiled Sass styling.
+- **Runtime:** Route app-server turns by provider, include root `AGENTS.md`
+  instructions, and pass session folder/model in Codex payloads.
+- **Docs:** Reorganize site sections, standardize skill headers, and migrate the docs
+  site to compiled Sass styling.
 - **Models:** Add support for the `gpt-5.3-codex-spark` model.
 
 ### Fixed
@@ -1155,15 +1225,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Session Output:** Add toggle to switch between summary and full output for completed sessions.
+- **Session Output:** Add toggle to switch between summary and full output for completed
+  sessions.
 - **Release:** Require explicit confirmation for version bump type in release skill.
 - **Runtime:** Track active turn ID to prevent race conditions during turn completion.
 
 ### Changed
 
-- **Architecture:** Refactor UI routing and overlays into dedicated modules and centralize frame drawing.
-- **Session:** Defer session cleanup and load at-mention entries asynchronously for faster startup.
-- **Git:** Retry git commands on index lock contention and simplify session view handling.
+- **Architecture:** Refactor UI routing and overlays into dedicated modules and
+  centralize frame drawing.
+- **Session:** Defer session cleanup and load at-mention entries asynchronously for
+  faster startup.
+- **Git:** Retry git commands on index lock contention and simplify session view
+  handling.
 - **Settings:** Only persist default model when the "last-used" option is enabled.
 - **Rebase:** Improve recovery from stale metadata during rebase assist.
 - **Permissions:** Consolidate permission handling into a single "Auto Edit" mode.
@@ -1190,14 +1264,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stats:** Persist session-creation activity and render by local day.
 - **Stats:** Persist and display all-time model usage and longest session duration.
 - **Help:** Help system uses state-aware action projection.
-- **Dev Server:** Add editable Dev Server setting and run when opening session tmux window.
+- **Dev Server:** Add editable Dev Server setting and run when opening session tmux
+  window.
 - **UX:** Add `h`/`l` shortcuts for confirmation selection.
 
 ### Changed
 
 - **Architecture:** Refactor agent infrastructure into provider modules.
 - **Architecture:** Split git infrastructure and UI utilities into focused modules.
-- **Architecture:** Inject `GitClient` into app workflows and isolate multi-command git tests.
+- **Architecture:** Inject `GitClient` into app workflows and isolate multi-command git
+  tests.
 - **Refactor:** Move file indexing into infra module and parse using `pulldown-cmark`.
 - **Refactor:** Rename state, file, and mode modules for clarity.
 - **Refactor:** Move module roots from `mod.rs` to sibling files.
@@ -1206,13 +1282,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Plan:** Improve plan follow-ups and Codex stats limit rendering.
 - **UX:** Use shared confirmation mode for quit and session deletion.
 - **UX:** Confirmation prompts default to "No" selection.
-- **UX:** Hide open-worktree shortcut for done sessions and restrict view actions while running.
+- **UX:** Hide open-worktree shortcut for done sessions and restrict view actions while
+  running.
 - **Commit:** Preserve a single evolving session commit.
 - **Search:** Prioritize basename matches in file list fuzzy scoring.
 
 ### Fixed
 
-- **Codex:** Fix app-server error status recovery and wait for responses before parsing limits.
+- **Codex:** Fix app-server error status recovery and wait for responses before parsing
+  limits.
 - **Stability:** Fix launch and lint regressions after rebase.
 - **UI:** Deduplicate list background rendering and reset grouped session table offset.
 
@@ -1233,7 +1311,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stats:** Add activity heatmap to the Stats tab.
 - **Stats:** Track per-model session usage and render usage summaries.
 - **Settings:** Add settings tab and persist default model.
-- **Diff View:** Split diff view into file list and content panels with file explorer navigation.
+- **Diff View:** Split diff view into file list and content panels with file explorer
+  navigation.
 - **Diff View:** Render changed files as a tree in the file explorer.
 - **Diff View:** Filter diff view content by selected file explorer item.
 - **Site:** Add agentty.xyz documentation site with GitHub Pages deployment workflow.
@@ -1242,25 +1321,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Architecture:** Refactor codebase into domain, infrastructure, and UI state modules.
 - **Architecture:** Move tab state into a dedicated tab manager.
-- **Session List:** Group sessions by merge queue and separate archived sessions with placeholders.
+- **Session List:** Group sessions by merge queue and separate archived sessions with
+  placeholders.
 - **Session List:** Align session navigation with grouped list order.
 - **Session Output:** Render session output and user prompt blocks as markdown.
-- **Session Output:** Preserve multiline user prompt block spacing and verbatim rendering.
-- **Merge Queue:** Queue session merges in FIFO order and handle queued sessions across app and UI.
+- **Session Output:** Preserve multiline user prompt block spacing and verbatim
+  rendering.
+- **Merge Queue:** Queue session merges in FIFO order and handle queued sessions across
+  app and UI.
 - **Merge Queue:** Advance merge queue progression and retry on git index lock failures.
 - **Merge:** Treat already-applied squash merges as successful.
 - **Rebase:** Harden rebase assist loop against partially resolved conflicts.
 - **Output:** Task service batches streamed output before flushing.
 - **Output:** Separate streamed response messages for Codex output spacing.
 - **Models:** Load default session model from persisted setting.
-- **Models:** Use npm semver for version checks and restore version display in status bar.
+- **Models:** Use npm semver for version checks and restore version display in status
+  bar.
 - **Prompt:** Handle multiline paste and control-key newlines in prompt input.
-- **Site:** Redesign landing page with dark terminal theme, Tailwind CSS v4, and theme selector.
+- **Site:** Redesign landing page with dark terminal theme, Tailwind CSS v4, and theme
+  selector.
 - **Deps:** Bump dependency versions.
 
 ### Fixed
 
-- **Build:** Fix refactor regressions and restore build stability after module restructure.
+- **Build:** Fix refactor regressions and restore build stability after module
+  restructure.
 
 ### Contributors
 
@@ -1281,12 +1366,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Session Metadata:** Move session status to output panel title and metadata to chat input border.
+- **Session Metadata:** Move session status to output panel title and metadata to chat
+  input border.
 - **Session Titles:** Persist session title and summary from squash commit message.
 - **Session Titles:** Use full prompt as session title for new sessions.
 - **Session Replay:** Replay session transcript once after model switch.
 - **Git Actions:** Remove session commit count and always show git actions.
-- **Diff View:** Use merge-base for session diff to accurately exclude base branch updates.
+- **Diff View:** Use merge-base for session diff to accurately exclude base branch
+  updates.
 - **Rebase:** Refactor rebase logic into a reusable workflow.
 - **Database:** Make session token stats non-nullable with zero defaults.
 - **NPM:** Update package name to `agentty` in docs and badges.
@@ -1305,16 +1392,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Session UX:** Added a delete confirmation mode with selectable actions for session deletion.
-- **Output Streaming:** Added a live single-line progress indicator in chat and spacing before the first streamed response chunk.
-- **Agent Runtime:** Added Codex output streaming during non-interactive runs and follow-up actions for plan mode replies.
+- **Session UX:** Added a delete confirmation mode with selectable actions for session
+  deletion.
+- **Output Streaming:** Added a live single-line progress indicator in chat and spacing
+  before the first streamed response chunk.
+- **Agent Runtime:** Added Codex output streaming during non-interactive runs and
+  follow-up actions for plan mode replies.
 
 ### Changed
 
-- **Git Runtime:** Completed async `git` module transition to `spawn_blocking` and updated call sites.
-- **Session Model:** Refactored sessions to derive `AgentKind` from `AgentModel`, removed the session `agent` column, and migrated legacy PR statuses to `Review`.
-- **Merge/Rebase:** Improved merge and rebase robustness by auto-committing pending changes before merge/rebase and broadening auto-commit assistance handling.
-- **UI:** Improved session list layout with minimum-width columns and title truncation, and added spacing around user input in session chat output.
+- **Git Runtime:** Completed async `git` module transition to `spawn_blocking` and
+  updated call sites.
+- **Session Model:** Refactored sessions to derive `AgentKind` from `AgentModel`,
+  removed the session `agent` column, and migrated legacy PR statuses to `Review`.
+- **Merge/Rebase:** Improved merge and rebase robustness by auto-committing pending
+  changes before merge/rebase and broadening auto-commit assistance handling.
+- **UI:** Improved session list layout with minimum-width columns and title truncation,
+  and added spacing around user input in session chat output.
 - **Automation:** Split pre-commit workflow into separate autofix and validation phases.
 - **Config:** Removed `npm-scope` from `dist-workspace.toml`.
 
@@ -1332,7 +1426,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Permissions:** Add per-session permission mode toggle and `Plan` permission mode with denial-gated response parsing.
+- **Permissions:** Add per-session permission mode toggle and `Plan` permission mode
+  with denial-gated response parsing.
 - **Session Control:** Add `Ctrl+c` to stop running agent sessions.
 - **Prompt History:** Implement prompt history navigation with up/down arrows.
 - **Stats Page:** Add project and model columns to the stats page.
@@ -1343,16 +1438,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Architecture:** Refactor app into manager composition with event-driven session state updates and reducer-based routing for git status, PR control, and session mutations.
-- **Architecture:** Split session module and centralize lookups; separate session snapshots from runtime handles.
-- **Session Defaults:** New sessions inherit the latest session's agent, model, and permission mode.
+- **Architecture:** Refactor app into manager composition with event-driven session
+  state updates and reducer-based routing for git status, PR control, and session
+  mutations.
+- **Architecture:** Split session module and centralize lookups; separate session
+  snapshots from runtime handles.
+- **Session Defaults:** New sessions inherit the latest session's agent, model, and
+  permission mode.
 - **File Listing:** Include non-ignored dotfiles in file listing.
-- **Merge Flow:** Run session merges asynchronously, harden merge messaging, and increase merge commit message timeout.
-- **Rebase Flow:** Improve assisted rebase continuation flow and auto-commit pending changes before rebasing.
+- **Merge Flow:** Run session merges asynchronously, harden merge messaging, and
+  increase merge commit message timeout.
+- **Rebase Flow:** Improve assisted rebase continuation flow and auto-commit pending
+  changes before rebasing.
 - **Auto-Commit:** Improve auto-commit recovery with agent assistance.
 - **Session Summary:** Backfill and use session summary for finished sessions.
-- **UI:** Move open worktree keybinding to chat view and update session size color palette.
-- **Docs:** Document app module architecture and public API docs; add cargo install instructions to README.
+- **UI:** Move open worktree keybinding to chat view and update session size color
+  palette.
+- **Docs:** Document app module architecture and public API docs; add cargo install
+  instructions to README.
 
 ### Removed
 
@@ -1367,16 +1470,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Review Workflow:** Added an explicit `Merging` session status and a review-session rebase action.
-- **Session UX:** Added read-only controls for done sessions and a `/clear` slash command.
-- **Help UI:** Added a `?` keybinding with an updated overlay and descriptive slash-command menu.
+- **Review Workflow:** Added an explicit `Merging` session status and a review-session
+  rebase action.
+- **Session UX:** Added read-only controls for done sessions and a `/clear` slash
+  command.
+- **Help UI:** Added a `?` keybinding with an updated overlay and descriptive
+  slash-command menu.
 
 ### Changed
 
-- **Session List:** Split session metadata into `Project`, `Model`, and `Status` columns with dynamic width sizing.
-- **Runtime:** Run session commands through per-session workers and restore interrupted sessions into `Review`.
+- **Session List:** Split session metadata into `Project`, `Model`, and `Status` columns
+  with dynamic width sizing.
+- **Runtime:** Run session commands through per-session workers and restore interrupted
+  sessions into `Review`.
 - **Stats:** Accumulate token usage over time and preserve stats after `/clear`.
-- **Merge Flow:** Enforce merge commit message formatting and normalize co-author trailer handling.
+- **Merge Flow:** Enforce merge commit message formatting and normalize co-author
+  trailer handling.
 - **UI Cleanup:** Removed agent labels from session list rows and session chat titles.
 
 ### Contributors
@@ -1389,15 +1498,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Diff View:** Added diff content wrapping to render long changed lines without truncation.
-- **Diff View:** Added structured parsing with line-number gutters (`old│new`) for unified diffs.
+- **Diff View:** Added diff content wrapping to render long changed lines without
+  truncation.
+- **Diff View:** Added structured parsing with line-number gutters (`old│new`) for
+  unified diffs.
 - **Docs:** Added a demo GIF to the README and documented GIF generation with VHS.
 
 ### Changed
 
-- **Diff View:** Compare against each session's base branch so review shows all accumulated changes.
-- **Workflow:** Simplified commit flow by auto-committing after agent iterations and removing manual commit mode.
-- **Release Docs:** Added contributor-list requirements and examples to the release workflow documentation.
+- **Diff View:** Compare against each session's base branch so review shows all
+  accumulated changes.
+- **Workflow:** Simplified commit flow by auto-committing after agent iterations and
+  removing manual commit mode.
+- **Release Docs:** Added contributor-list requirements and examples to the release
+  workflow documentation.
 
 ### Contributors
 
@@ -1408,13 +1522,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Onboarding:** Added a full-screen onboarding page shown when no sessions exist.
-- **Tests:** Added onboarding behavior coverage for app state, list mode `Enter` handling, and UI rendering conditions.
+- **Tests:** Added onboarding behavior coverage for app state, list mode `Enter`
+  handling, and UI rendering conditions.
 
 ### Changed
 
-- **UX:** Pressing `Enter` from the onboarding view now creates a new session and opens prompt mode directly.
-- **Error Handling:** Session creation errors in list mode are now surfaced instead of being silently ignored.
-- **UI:** Kept the footer visible during onboarding and simplified session list rendering to consistently use the table layout.
+- **UX:** Pressing `Enter` from the onboarding view now creates a new session and opens
+  prompt mode directly.
+- **Error Handling:** Session creation errors in list mode are now surfaced instead of
+  being silently ignored.
+- **UI:** Kept the footer visible during onboarding and simplified session list
+  rendering to consistently use the table layout.
 
 ### Contributors
 
@@ -1424,15 +1542,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **UI:** Show session worktree path and branch in the footer bar for better context awareness.
+- **UI:** Show session worktree path and branch in the footer bar for better context
+  awareness.
 - **UI:** Display commit count in the session chat title.
 - **Stats:** Add session token usage statistics to the Stats page.
 
 ### Changed
 
-- **Persistence:** Moved application data directory from `/var/tmp/.agentty` to `~/.agentty` for better persistence and standard compliance.
+- **Persistence:** Moved application data directory from `/var/tmp/.agentty` to
+  `~/.agentty` for better persistence and standard compliance.
 - **UX:** Renamed "Roadmap" tab to "Stats" to better reflect its content.
-- **UX:** Use shortened 8-character UUIDs for session folders and git branches to reduce clutter.
+- **UX:** Use shortened 8-character UUIDs for session folders and git branches to reduce
+  clutter.
 - **Internal:** Standardized session ID variable naming across the codebase.
 
 ### Contributors
@@ -1444,20 +1565,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Session Status:** Added a `Committing` status to make commit progress explicit in the session lifecycle.
+- **Session Status:** Added a `Committing` status to make commit progress explicit in
+  the session lifecycle.
 
 ### Changed
 
-- **Persistence:** Persist session prompt/output history in SQLite and load it on startup so chat history survives app reloads.
-- **Session Output:** Parse agent JSON output and display only the response message in session output.
-- **GitHub Integration:** Parse GitHub PR responses using typed serde structs and move GitHub CLI logic into a dedicated `gh` module.
-- **PR Workflow:** Treat closed pull requests as canceled sessions and show a loader while PR creation is in flight.
-- **Commit Flow:** Improve asynchronous session commit handling and remove placeholder commit output in view mode.
+- **Persistence:** Persist session prompt/output history in SQLite and load it on
+  startup so chat history survives app reloads.
+- **Session Output:** Parse agent JSON output and display only the response message in
+  session output.
+- **GitHub Integration:** Parse GitHub PR responses using typed serde structs and move
+  GitHub CLI logic into a dedicated `gh` module.
+- **PR Workflow:** Treat closed pull requests as canceled sessions and show a loader
+  while PR creation is in flight.
+- **Commit Flow:** Improve asynchronous session commit handling and remove placeholder
+  commit output in view mode.
 - **Documentation:** Extract git commit guidance into the shared skills documentation.
 
 ### Fixed
 
-- **Tests:** Stabilized merge cleanup testing to avoid environment-dependent blocking during release verification.
+- **Tests:** Stabilized merge cleanup testing to avoid environment-dependent blocking
+  during release verification.
 
 ### Contributors
 
@@ -1475,11 +1603,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Architecture:** Modularized app and runtime into focused modules (`app/` and `runtime/`).
+- **Architecture:** Modularized app and runtime into focused modules (`app/` and
+  `runtime/`).
 - **Runtime:** Injected event source into the runtime event loop for better testability.
 - **Session:** Made agent and model configurations session-scoped.
-- **Linting:** Refined clippy lint configuration, tightening policies and re-enabling pedantic rules.
-- **Skills:** Symlinked the entire skills directory for agents and refactored release skill.
+- **Linting:** Refined clippy lint configuration, tightening policies and re-enabling
+  pedantic rules.
+- **Skills:** Symlinked the entire skills directory for agents and refactored release
+  skill.
 - **Refactor:** Refactored long handlers to enforce clippy line limits.
 
 ### Contributors
@@ -1497,8 +1628,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Session Ordering:** Sessions are now strictly ordered by `updated_at` (latest first).
-- **Performance:** Implemented incremental session state refresh to reduce database load.
+- **Session Ordering:** Sessions are now strictly ordered by `updated_at` (latest
+  first).
+- **Performance:** Implemented incremental session state refresh to reduce database
+  load.
 - **UX:** Moved prompt cursor by visual wrapped lines for better navigation.
 - **Internal:** Use `String` directly for session IDs in `AppMode` and command flows.
 - **Internal:** Refactored health checks into flat pass/fail checks.
@@ -1548,7 +1681,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **GitHub Integration:** Added 'p' command to create GitHub Pull Requests (draft by default).
+- **GitHub Integration:** Added 'p' command to create GitHub Pull Requests (draft by
+  default).
 - **GitHub Integration:** Added GitHub CLI health check with nested auth sub-check.
 - **UI:** Centralized icons into a reusable `Icon` enum.
 - **UI:** Improve command palette with arrow navigation and auto-select.

@@ -8,9 +8,8 @@ insert_anchor_links = "right"
 in_search_index = true
 render = true
 transparent = false
-aliases = ["/documentation/"]
+aliases = [ "/documentation/"]
 redirect_to = "docs/getting-started/overview/"
 +++
 
-<a id="docs-overview"></a>
-Browse setup and workflow guides for `agentty`.
+<a id="docs-overview"></a> Browse setup and workflow guides for `agentty`.

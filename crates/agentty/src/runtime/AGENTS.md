@@ -12,4 +12,6 @@ Terminal runtime loop and mode dispatch.
 ## Change Guidance
 
 - Keep runtime orchestration free of direct host filesystem access.
-- Route pasted-image persistence, path canonicalization, and external-path validation through infra traits instead of calling `std::fs`, `tokio::fs`, or `Path` helpers directly from runtime code.
+- Route pasted-image persistence, path canonicalization, and external-path validation
+  through infra traits instead of calling `std::fs`, `tokio::fs`, or `Path` helpers
+  directly from runtime code.

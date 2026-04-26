@@ -4,9 +4,8 @@ description = "Interface layout, session lifecycle, slash commands, and data loc
 weight = 1
 +++
 
-<a id="usage-workflow-introduction"></a>
-This page covers the Agentty interface layout, session lifecycle, session sizes,
-slash commands, and data location.
+<a id="usage-workflow-introduction"></a> This page covers the Agentty interface layout,
+session lifecycle, session sizes, slash commands, and data location.
 
 For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 
@@ -14,235 +13,246 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 
 ## Interface Layout
 
-<a id="usage-interface-layout"></a>
-Agentty organizes its interface into four primary tabs, with one conditional
-`Tasks` tab also accessible with `Tab` when the active project has a roadmap:
+<a id="usage-interface-layout"></a> Agentty organizes its interface into four primary
+tabs, with one conditional `Tasks` tab also accessible with `Tab` when the active
+project has a roadmap:
 
-| Tab | Purpose |
-|-----|---------|
-| **Projects** | Select between projects (git repositories) in a split view: Agentty info (ASCII art, version, short description) on top, project table below. Agentty skips stale entries whose project directories no longer exist. |
-| **Sessions** | List, create, and manage agent sessions. When a project is active, this tab appears as `Sessions (<project-name>)`. |
-| **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`, `Queued Next`, and `Parked` task queues. |
-| **Stats** | View usage statistics. |
-| **Settings** | Configure the color theme, default reasoning level, smart/fast/review model defaults, the optional `Last used model as default` smart-model mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
+| Tab | Purpose | |-----|---------| | **Projects** | Select between projects (git
+repositories) in a split view: Agentty info (ASCII art, version, short description) on
+top, project table below. Agentty skips stale entries whose project directories no
+longer exist. | | **Sessions** | List, create, and manage agent sessions. When a project
+is active, this tab appears as `Sessions (<project-name>)`. | | **Tasks** | Shown only
+when the active project contains `docs/plan/roadmap.md`, summarizing the roadmap's
+`Ready Now`, `Queued Next`, and `Parked` task queues. | | **Stats** | View usage
+statistics. | | **Settings** | Configure the color theme, default reasoning level,
+smart/fast/review model defaults, the optional `Last used model as default` smart-model
+mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
 
-In session chat view, the status-colored session title renders in a dedicated
-header row above the output panel. A second metadata row shows the persisted
-size bucket, current `+added` / `-deleted` line totals, the cumulative
-active-work timer, the current model, the effective reasoning level, and
-token usage. When a session already tracks a published upstream branch, the
-output panel also shows a short branch-sync status row while Agentty is
-auto-pushing the latest completed turn or when the most recent automatic push
-failed. The timer keeps ticking only while the session is actively working and
-freezes between turns.
+In session chat view, the status-colored session title renders in a dedicated header row
+above the output panel. A second metadata row shows the persisted size bucket, current
+`+added` / `-deleted` line totals, the cumulative active-work timer, the current model,
+the effective reasoning level, and token usage. When a session already tracks a
+published upstream branch, the output panel also shows a short branch-sync status row
+while Agentty is auto-pushing the latest completed turn or when the most recent
+automatic push failed. The timer keeps ticking only while the session is actively
+working and freezes between turns.
 
-The grouped **Sessions** tab also shows that same cumulative active-work timer
-in its own `Timer` column, so in-progress rows keep ticking live there while
-completed sessions retain their frozen total.
+The grouped **Sessions** tab also shows that same cumulative active-work timer in its
+own `Timer` column, so in-progress rows keep ticking live there while completed sessions
+retain their frozen total.
 
-The top status bar keeps the current version and update status visible, and it
-also rotates short page-scoped `FYI:` messages once per minute while you are in
-the **Sessions** list or a session chat view.
+The top status bar keeps the current version and update status visible, and it also
+rotates short page-scoped `FYI:` messages once per minute while you are in the
+**Sessions** list or a session chat view.
 
 The footer always shows the active directory. When the current branch tracks an
 upstream, the footer branch badge renders `local -> remote`, for example
-`main -> origin/main`. When you open an active session, the footer switches to
-that session directory and shows the session branch's ahead/behind counts
-relative to its base branch (for example `main`). If the session branch already
-tracks a remote, the footer also shows a second ahead/behind segment using the
-compact form `[stats] main | [stats] local -> remote`. Before first publish,
-the same second segment still renders for the local branch as `[stats] local`.
+`main -> origin/main`. When you open an active session, the footer switches to that
+session directory and shows the session branch's ahead/behind counts relative to its
+base branch (for example `main`). If the session branch already tracks a remote, the
+footer also shows a second ahead/behind segment using the compact form
+`[stats] main | [stats] local -> remote`. Before first publish, the same second segment
+still renders for the local branch as `[stats] local`.
 
-When the active base branch tracks an upstream, new session worktrees start from
-the locally cached upstream ref while still targeting the local base branch name
-for diffs, merges, and review requests. This keeps unpublished local commits on
-branches such as `main` out of pull requests created from session branches. Run
-list-mode sync first if the local upstream ref may be stale; otherwise the
-session worktree can be missing commits that already exist on the remote.
+When the active base branch tracks an upstream, new session worktrees start from the
+locally cached upstream ref while still targeting the local base branch name for diffs,
+merges, and review requests. This keeps unpublished local commits on branches such as
+`main` out of pull requests created from session branches. Run list-mode sync first if
+the local upstream ref may be stale; otherwise the session worktree can be missing
+commits that already exist on the remote.
 
 ## Session Lifecycle
 
-<a id="usage-session-lifecycle"></a>
-Session statuses and what you can do in each state:
+<a id="usage-session-lifecycle"></a> Session statuses and what you can do in each state:
 
 | Status | Description | Available actions |
-|--------|-------------|-------------------|
-| **New** | Session created but not yet started. Regular sessions submit their first prompt immediately; draft sessions can stage multiple prompts locally first and only create their worktree when the staged bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open worktree after the session has started, scroll, help |
-| **InProgress** | Agent is actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c` retracts the most recently queued chat message (LIFO) one press at a time without interrupting the running turn, then stops the current turn once the queue is empty, `c` from the session list stops and cancels the session after confirmation, `o` open worktree, scroll, help |
-| **Review** | Agent finished; changes are ready for review. Linked pull requests / merge requests refresh in the background; merged requests move the session to `Done`, and closed requests move it to `Canceled`. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
-| **AgentReview** | Agentty is generating the focused review output in the background. Linked pull requests / merge requests continue refreshing in the background. | `Enter` reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review request, `d` diff, `f` focused review, scroll, help |
-| **Question** | Agent requested clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) |
-| **Queued** | Session is waiting in the merge queue. | read-only view (`q`, scroll, help) |
-| **Rebasing** | Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help |
-| **Merging** | Changes are being merged into the base branch. | read-only view (`q`, scroll, help) |
-| **Done** | Session completed, merged, and its worktree checkout was removed. | `c` confirm continuation into a new draft, scroll, help |
-| **Canceled** | Session was canceled by the user and its worktree checkout was removed. | `c` confirm continuation into a new draft, read-only view (`q`, scroll, help) |
+|--------|-------------|-------------------| | **New** | Session created but not yet
+started. Regular sessions submit their first prompt immediately; draft sessions can
+stage multiple prompts locally first and only create their worktree when the staged
+bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command
+composer, `s` start staged draft session, `m` add to merge queue, `r` rebase, `o` open
+worktree after the session has started, scroll, help | | **InProgress** | Agent is
+actively working. | `Enter` open the chat composer to queue the next message, `Ctrl+c`
+retracts the most recently queued chat message (LIFO) one press at a time without
+interrupting the running turn, then stops the current turn once the queue is empty, `c`
+from the session list stops and cancels the session after confirmation, `o` open
+worktree, scroll, help | | **Review** | Agent finished; changes are ready for review.
+Linked pull requests / merge requests refresh in the background; merged requests move
+the session to `Done`, and closed requests move it to `Canceled`. | `Enter` reply, `/`
+open slash-command composer, `m` add to merge queue, `r` rebase, `o` open worktree, `p`
+create or refresh forge review request, `d` diff, `f` focused review, scroll, help | |
+**AgentReview** | Agentty is generating the focused review output in the background.
+Linked pull requests / merge requests continue refreshing in the background. | `Enter`
+reply, `/` open slash-command composer, `m` add to merge queue, `o` open worktree, `p`
+create or refresh forge review request, `d` diff, `f` focused review, scroll, help | |
+**Question** | Agent requested clarification before continuing. | question input mode
+(`Enter` submit, `Tab` toggle chat scroll, `Esc` end turn) | | **Queued** | Session is
+waiting in the merge queue. | read-only view (`q`, scroll, help) | | **Rebasing** |
+Worktree branch is rebasing onto the base branch. | `o` open worktree, scroll, help | |
+**Merging** | Changes are being merged into the base branch. | read-only view (`q`,
+scroll, help) | | **Done** | Session completed, merged, and its worktree checkout was
+removed. | `c` confirm continuation into a new draft, scroll, help | | **Canceled** |
+Session was canceled by the user and its worktree checkout was removed. | `c` confirm
+continuation into a new draft, read-only view (`q`, scroll, help) |
 
-Settings values for models, reasoning, commit trailers, and open commands are
-stored per active project. Switching projects reloads that project's
-`Default Reasoning Level`, `Default Smart Model` mode (explicit model or
-`Last used model as default`), `Default Fast Model`, `Default Review Model`,
-`Coauthored by Agentty` toggle, and `Open Commands`. The global `Theme` setting
-switches between `Current`, `Hacker`, and `Dark Horizon`, with `Current` used by default. The
-Settings tab renders these scopes separately as `Global settings` and
-`'<project>' settings`. New projects default the coauthor toggle to disabled
-until you enable it.
+Settings values for models, reasoning, commit trailers, and open commands are stored per
+active project. Switching projects reloads that project's `Default Reasoning Level`,
+`Default Smart Model` mode (explicit model or `Last used model as default`),
+`Default Fast Model`, `Default Review Model`, `Coauthored by Agentty` toggle, and
+`Open Commands`. The global `Theme` setting switches between `Current`, `Hacker`, and
+`Dark Horizon`, with `Current` used by default. The Settings tab renders these scopes
+separately as `Global settings` and `'<project>' settings`. New projects default the
+coauthor toggle to disabled until you enable it.
 
-When a session enters **Review**, Agentty starts generating the focused review
-in the background. While that review-assist job is running, the session
-temporarily shows **AgentReview** and keeps the review-oriented shortcuts
-available, except `r`, which stays hidden until the session returns to
-**Review**.
-When `Ctrl+c` finally cancels an active turn (after the queued chat messages,
-if any, have been retracted by earlier presses), Agentty returns the session
-to **Review** without completing the turn and does not automatically start
-focused review for that stopped turn; press `f` if you still want a manual
-focused review.
-Confirming `c` from the session list on an **InProgress** session requests
-operation cancellation, stops the active turn, and moves the session directly
-to **Canceled**.
-Pressing `f` appends the cached review directly into the normal session output
-panel when it is ready, or shows a loading message there while generation is
-still running. That appended review remains visible when you leave and reopen
-the session, including after round-tripping through `d` diff mode or entering
-**Question** mode for clarifications, and it is cleared when you submit the
-next prompt.
-Pressing `/` from an editable session view opens the same composer with a
-prefilled `/` so you can pick a slash command without typing the leading
-character first.
-Pressing `c` from a **Done** or **Canceled** session first opens a confirmation
-dialog. Confirming creates a brand-new draft session and focuses its composer
-immediately so you can add more notes before starting it. For merged **Done**
-sessions, Agentty stores the merged base-branch commit hash and stages the
-first draft message as `Summarize changes from <full-hash> to use it as an initial context for this session`. When that hash is unavailable, or when the source session is **Canceled**, Agentty stages the saved summary or transcript context instead. The original terminal session stays closed while the new draft session carries the follow-on work.
+When a session enters **Review**, Agentty starts generating the focused review in the
+background. While that review-assist job is running, the session temporarily shows
+**AgentReview** and keeps the review-oriented shortcuts available, except `r`, which
+stays hidden until the session returns to **Review**. When `Ctrl+c` finally cancels an
+active turn (after the queued chat messages, if any, have been retracted by earlier
+presses), Agentty returns the session to **Review** without completing the turn and does
+not automatically start focused review for that stopped turn; press `f` if you still
+want a manual focused review. Confirming `c` from the session list on an **InProgress**
+session requests operation cancellation, stops the active turn, and moves the session
+directly to **Canceled**. Pressing `f` appends the cached review directly into the
+normal session output panel when it is ready, or shows a loading message there while
+generation is still running. That appended review remains visible when you leave and
+reopen the session, including after round-tripping through `d` diff mode or entering
+**Question** mode for clarifications, and it is cleared when you submit the next prompt.
+Pressing `/` from an editable session view opens the same composer with a prefilled `/`
+so you can pick a slash command without typing the leading character first. Pressing `c`
+from a **Done** or **Canceled** session first opens a confirmation dialog. Confirming
+creates a brand-new draft session and focuses its composer immediately so you can add
+more notes before starting it. For merged **Done** sessions, Agentty stores the merged
+base-branch commit hash and stages the first draft message as
+`Summarize changes from <full-hash> to use it as an initial context for this session`.
+When that hash is unavailable, or when the source session is **Canceled**, Agentty
+stages the saved summary or transcript context instead. The original terminal session
+stays closed while the new draft session carries the follow-on work.
 
-After each successful turn with file changes, Agentty keeps the session branch
-at one evolving commit. It regenerates that commit message from the cumulative
-session diff using the active project's `Default Fast Model`, applies the
-active project's `Coauthored by Agentty` setting to the final commit trailer,
-amends `HEAD`, and refreshes the session title from the same commit text
-before merge begins. Successful commit and no-change notices appear as
-transient session-output status rows rather than persisted transcript messages.
-If the auto-commit needs agent assistance to recover from a git failure, that
-recovery prompt also uses the `Default Fast Model`. Once
-the session reaches **Done**, Agentty rewrites the persisted summary into
-markdown with a `# Summary` section sourced from the final agent
-`summary.session` value and a `# Commit` section sourced from the canonical
-squash-merge commit message.
+After each successful turn with file changes, Agentty keeps the session branch at one
+evolving commit. It regenerates that commit message from the cumulative session diff
+using the active project's `Default Fast Model`, applies the active project's
+`Coauthored by Agentty` setting to the final commit trailer, amends `HEAD`, and
+refreshes the session title from the same commit text before merge begins. Successful
+commit and no-change notices appear as transient session-output status rows rather than
+persisted transcript messages. If the auto-commit needs agent assistance to recover from
+a git failure, that recovery prompt also uses the `Default Fast Model`. Once the session
+reaches **Done**, Agentty rewrites the persisted summary into markdown with a
+`# Summary` section sourced from the final agent `summary.session` value and a
+`# Commit` section sourced from the canonical squash-merge commit message.
 
-When a session enters **Merging**, Agentty reuses the session branch `HEAD`
-commit message for the final squash commit on the base branch. Merge still
-stops and returns the session to **Review** if rebase or squash-merge git steps
-fail, but it no longer runs a separate merge-only commit-message prompt.
-Successful merge notices use the same transient session-output status row as
-commit notices, so the persisted transcript remains focused on agent output.
+When a session enters **Merging**, Agentty reuses the session branch `HEAD` commit
+message for the final squash commit on the base branch. Merge still stops and returns
+the session to **Review** if rebase or squash-merge git steps fail, but it no longer
+runs a separate merge-only commit-message prompt. Successful merge notices use the same
+transient session-output status row as commit notices, so the persisted transcript
+remains focused on agent output.
 
-When `Open Commands` in Settings contains multiple entries (one command per
-line), pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open,
-`Esc` to cancel).
+When `Open Commands` in Settings contains multiple entries (one command per line),
+pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open, `Esc` to cancel).
 
-In prompt input, `Ctrl+V` and `Alt+V` paste one clipboard image into the
-current draft or reply. Agentty stores the image under
-`AGENTTY_ROOT/tmp/<session-id>/images/`, inserts a highlighted inline token
-such as `[Image #1]`, and submits the ordered local attachments with the
-prompt. Text paste remains unchanged on the normal terminal paste event path.
-Codex turns serialize the local image items directly through the app-server,
-Gemini turns send ordered ACP text-plus-image content blocks, and Claude turns
-rewrite the inline placeholders to local image paths before the prompt is
-streamed to `claude`. Draft image files are removed when you cancel the
-composer, after a submitted turn finishes using them, and when a session is
-deleted or canceled.
+In prompt input, `Ctrl+V` and `Alt+V` paste one clipboard image into the current draft
+or reply. Agentty stores the image under `AGENTTY_ROOT/tmp/<session-id>/images/`,
+inserts a highlighted inline token such as `[Image #1]`, and submits the ordered local
+attachments with the prompt. Text paste remains unchanged on the normal terminal paste
+event path. Codex turns serialize the local image items directly through the app-server,
+Gemini turns send ordered ACP text-plus-image content blocks, and Claude turns rewrite
+the inline placeholders to local image paths before the prompt is streamed to `claude`.
+Draft image files are removed when you cancel the composer, after a submitted turn
+finishes using them, and when a session is deleted or canceled.
 
-When you use `@` file lookups in prompt or clarification input, Agentty keeps
-the raw `@path/to/file` text visible in the composer and transcript. The
-agent-facing transport rewrites those lookups to quoted `path/to/file` tokens
-before the prompt is sent to the model.
+When you use `@` file lookups in prompt or clarification input, Agentty keeps the raw
+`@path/to/file` text visible in the composer and transcript. The agent-facing transport
+rewrites those lookups to quoted `path/to/file` tokens before the prompt is sent to the
+model.
 
 ## Branch Publish Flow
 
-<a id="usage-review-request-flow"></a>
-Session view exposes one publish shortcut:
+<a id="usage-review-request-flow"></a> Session view exposes one publish shortcut:
 
-- In **Review** and **AgentReview**, `p` opens a publish popup for the linked forge review request.
-- Leave the field empty to keep the default branch target for that session, or type a custom remote branch name before pressing `Enter`.
-- After the session branch already tracks a remote branch, Agentty locks the popup to that same remote branch instead of allowing renames.
-- Agentty publishes with `git push --force-with-lease` so rebased or amended session branches can update safely without overwriting unseen remote changes.
-- After the push succeeds, Agentty creates or refreshes the linked review request and shows the resulting pull request or merge request URL.
+- In **Review** and **AgentReview**, `p` opens a publish popup for the linked forge
+  review request.
+- Leave the field empty to keep the default branch target for that session, or type a
+  custom remote branch name before pressing `Enter`.
+- After the session branch already tracks a remote branch, Agentty locks the popup to
+  that same remote branch instead of allowing renames.
+- Agentty publishes with `git push --force-with-lease` so rebased or amended session
+  branches can update safely without overwriting unseen remote changes.
+- After the push succeeds, Agentty creates or refreshes the linked review request and
+  shows the resulting pull request or merge request URL.
 - GitHub projects publish pull requests, while GitLab projects publish merge requests.
-- When the session already tracks a review request, Agentty refreshes that same review request instead of creating a duplicate.
-- After a session branch has been published once, later completed turns automatically push that same remote branch in the background so linked review requests stay current without reopening the publish popup. The session output shows when that post-turn auto-push starts and when it completes or fails.
-- Automatic pushes reuse the locked upstream branch name from the first publish. If a background push fails, Agentty keeps the stored upstream reference, adds the failure details to the session output, and leaves the manual `p` publish flow available for retry.
+- When the session already tracks a review request, Agentty refreshes that same review
+  request instead of creating a duplicate.
+- After a session branch has been published once, later completed turns automatically
+  push that same remote branch in the background so linked review requests stay current
+  without reopening the publish popup. The session output shows when that post-turn
+  auto-push starts and when it completes or fails.
+- Automatic pushes reuse the locked upstream branch name from the first publish. If a
+  background push fails, Agentty keeps the stored upstream reference, adds the failure
+  details to the session output, and leaves the manual `p` publish flow available for
+  retry.
 
-Review-request publishing stays inside session view by using a publish input
-popup on `p`, followed by informational popups for loading, success, and
-blocked states.
+Review-request publishing stays inside session view by using a publish input popup on
+`p`, followed by informational popups for loading, success, and blocked states.
 
-<a id="usage-review-request-prerequisites"></a>
-Review-request publishing on `p` uses regular Git authentication first:
+<a id="usage-review-request-prerequisites"></a> Review-request publishing on `p` uses
+regular Git authentication first:
 
 - HTTPS remotes need a working credential helper or PAT.
 - SSH remotes need a working SSH key.
 
-Review-request publishing on `p` also requires the forge CLI for the
-repository remote: authenticated `gh` access for GitHub projects and
-authenticated `glab` access for GitLab projects.
-For the GitHub and GitLab CLI setup steps, see
+Review-request publishing on `p` also requires the forge CLI for the repository remote:
+authenticated `gh` access for GitHub projects and authenticated `glab` access for GitLab
+projects. For the GitHub and GitLab CLI setup steps, see
 [Forge Authentication](@/docs/usage/forge-authentication.md).
 
 ## Review Request Sync
 
-<a id="usage-review-request-sync"></a>
-After a branch has been published, Agentty refreshes review-request status in
-the background for **Review** and **AgentReview** sessions that have either a
-published branch or a linked review request. Linked requests are refreshed by
-display id; sessions that only know their published branch are matched by
-source branch. The session-view `s` shortcut is reserved for starting staged
-draft sessions, while list-mode `s` syncs the active project branch.
+<a id="usage-review-request-sync"></a> After a branch has been published, Agentty
+refreshes review-request status in the background for **Review** and **AgentReview**
+sessions that have either a published branch or a linked review request. Linked requests
+are refreshed by display id; sessions that only know their published branch are matched
+by source branch. The session-view `s` shortcut is reserved for starting staged draft
+sessions, while list-mode `s` syncs the active project branch.
 
 The session list shows forge indicators next to the status label:
 
-| Indicator | Meaning |
-|-----------|---------|
-| `↑` | Branch published, no review request found yet. |
-| `⊙ <id>` | Review request `<id>` is open, such as GitHub `#42` or GitLab `!42`. |
-| `✓ <id>` | Review request `<id>` was merged. |
-| `✗ <id>` | Review request `<id>` was closed. |
+| Indicator | Meaning | |-----------|---------| | `↑` | Branch published, no review
+request found yet. | | `⊙ <id>` | Review request `<id>` is open, such as GitHub `#42` or
+GitLab `!42`. | | `✓ <id>` | Review request `<id>` was merged. | | `✗ <id>` | Review
+request `<id>` was closed. |
 
-When a sync detects that the review request was merged, Agentty transitions the
-session straight to **Done**.
+When a sync detects that the review request was merged, Agentty transitions the session
+straight to **Done**.
 
-<a id="usage-review-comments-preview"></a>
-While in **Review** or **AgentReview**, press `d` to open the diff page. Its
-right panel starts on the git diff and renders cached pull-request or
-merge-request line comments directly below matching diff lines. Press `c`
-inside the diff page to toggle the right panel between the annotated git diff
-and the cached review-request comments overview so you can flip between code
-and feedback without leaving the view. The comments panel includes inline
-threads grouped by file (pre-sorted by line number and diff side) and
-pull-request-level or merge-request-level "General discussion" comments at the
-top. Threads are fetched by the same background sync that refreshes
-review-request status. The panel is read-only — replies still happen on the
-forge web UI.
+<a id="usage-review-comments-preview"></a> While in **Review** or **AgentReview**, press
+`d` to open the diff page. Its right panel starts on the git diff and renders cached
+pull-request or merge-request line comments directly below matching diff lines. Press
+`c` inside the diff page to toggle the right panel between the annotated git diff and
+the cached review-request comments overview so you can flip between code and feedback
+without leaving the view. The comments panel includes inline threads grouped by file
+(pre-sorted by line number and diff side) and pull-request-level or merge-request-level
+"General discussion" comments at the top. Threads are fetched by the same background
+sync that refreshes review-request status. The panel is read-only — replies still happen
+on the forge web UI.
 
-From the **Sessions** tab, press `a` to choose between `Regular` and `Draft`
-session creation. `Regular` sessions keep the fast path: type the first prompt
-and press `Enter` to start the agent immediately. `Draft` sessions stage each
-`Enter` as one ordered draft message, immediately show a `Draft Session`
-guidance block in session view, keep the `o` shortcut hidden until a worktree
-exists, and start only after you press `s`.
-Once drafts are staged, the same panel previews the staged bundle before
-launch. The draft worktree is created at that start step so the branch is
-based on the base branch's tracked upstream ref when one is configured,
-instead of the moment the draft session was first created. Until that deferred
-worktree exists, prompt `@` lookup suggestions index the active project root
-so file search still works while you stage the draft bundle.
-If you decide not to start that staged bundle, return to the **Sessions** list
-and press `c` to cancel the still-unstarted draft session directly.
+From the **Sessions** tab, press `a` to choose between `Regular` and `Draft` session
+creation. `Regular` sessions keep the fast path: type the first prompt and press `Enter`
+to start the agent immediately. `Draft` sessions stage each `Enter` as one ordered draft
+message, immediately show a `Draft Session` guidance block in session view, keep the `o`
+shortcut hidden until a worktree exists, and start only after you press `s`. Once drafts
+are staged, the same panel previews the staged bundle before launch. The draft worktree
+is created at that start step so the branch is based on the base branch's tracked
+upstream ref when one is configured, instead of the moment the draft session was first
+created. Until that deferred worktree exists, prompt `@` lookup suggestions index the
+active project root so file search still works while you stage the draft bundle. If you
+decide not to start that staged bundle, return to the **Sessions** list and press `c` to
+cancel the still-unstarted draft session directly.
 
 ### Typical Transitions
 
-The lifecycle below groups session setup, active execution, and completion
-states into separate lanes so the main path is easier to scan.
+The lifecycle below groups session setup, active execution, and completion states into
+separate lanes so the main path is easier to scan.
 
 ```mermaid
 %%{init: { "flowchart": { "curve": "linear" } } }%%
@@ -299,115 +309,101 @@ flowchart TB
   class done,canceled terminal
 ```
 
-While a session is **InProgress**, Agentty keeps an animated loader row in the
-session output panel and may update its transient loader text from provider
-thought or tool-status events until the turn completes. The chat transcript
-itself is updated only after the final turn result is parsed and persisted.
-All active loading indicators use the same animated `▌▌▌` Tachyon loader so
-session rows, popups, and follow-on sync messages read consistently.
+While a session is **InProgress**, Agentty keeps an animated loader row in the session
+output panel and may update its transient loader text from provider thought or
+tool-status events until the turn completes. The chat transcript itself is updated only
+after the final turn result is parsed and persisted. All active loading indicators use
+the same animated `▌▌▌` Tachyon loader so session rows, popups, and follow-on sync
+messages read consistently.
 
-While the running turn is still active, pressing `Enter` opens the chat
-composer (the `/` slash-command composer remains gated to **Review** and
-**AgentReview**). Submitting a non-slash message during **InProgress** stages
-the prompt onto an in-memory queue rendered inline beneath the running turn
-with a `queued ›` prefix. Once the running turn finishes, Agentty dispatches
-queued messages one-by-one as new turns without bouncing the session through
-**Review** between them. Drainage pauses while the session sits in
-**Question** state and resumes only after the clarification flow returns to a
-runnable state. While the queue is non-empty, each `Ctrl+c` press retracts
-the most recently queued chat message (LIFO) without interrupting the running
-turn so you can undo queue entries one-by-one in the reverse order they were
-added. Once the queue is empty, the next `Ctrl+c` cancels the running turn
-and returns the session to **Review** as usual. The queue is session-local
-and lives only for the active app session, so queued messages are discarded
-if `agentty` restarts before they dispatch.
+While the running turn is still active, pressing `Enter` opens the chat composer (the
+`/` slash-command composer remains gated to **Review** and **AgentReview**). Submitting
+a non-slash message during **InProgress** stages the prompt onto an in-memory queue
+rendered inline beneath the running turn with a `queued ›` prefix. Once the running turn
+finishes, Agentty dispatches queued messages one-by-one as new turns without bouncing
+the session through **Review** between them. Drainage pauses while the session sits in
+**Question** state and resumes only after the clarification flow returns to a runnable
+state. While the queue is non-empty, each `Ctrl+c` press retracts the most recently
+queued chat message (LIFO) without interrupting the running turn so you can undo queue
+entries one-by-one in the reverse order they were added. Once the queue is empty, the
+next `Ctrl+c` cancels the running turn and returns the session to **Review** as usual.
+The queue is session-local and lives only for the active app session, so queued messages
+are discarded if `agentty` restarts before they dispatch.
 
-The session-chat timer measures only cumulative **active work** across
-`InProgress` intervals. That differs from `/stats`, whose `Session Time`
-reflects the overall session lifetime between creation and the latest update.
+The session-chat timer measures only cumulative **active work** across `InProgress`
+intervals. That differs from `/stats`, whose `Session Time` reflects the overall session
+lifetime between creation and the latest update.
 
-<a id="usage-title-refinement"></a>
-When the first prompt is submitted for a new session, Agentty stores that
-prompt as the initial title and starts one background title-generation task
-using the configured **Default Fast Model**. Draft sessions follow the same
-pattern for staged bundles: the first staged draft seeds the fallback title,
-and each later staged draft keeps the current visible title in place while
-Agentty cancels any superseded in-flight draft-title task and queues one fresh
-background title-generation pass for the full updated bundle.
+<a id="usage-title-refinement"></a> When the first prompt is submitted for a new
+session, Agentty stores that prompt as the initial title and starts one background
+title-generation task using the configured **Default Fast Model**. Draft sessions follow
+the same pattern for staged bundles: the first staged draft seeds the fallback title,
+and each later staged draft keeps the current visible title in place while Agentty
+cancels any superseded in-flight draft-title task and queues one fresh background
+title-generation pass for the full updated bundle.
 
 ## Clarification Interaction Loop
 
-<a id="usage-clarification-loop"></a>
-If an agent emits structured clarification questions in the `questions`
-array, the session moves to
-**Question** status. You answer each question in sequence, and Agentty sends
-one consolidated follow-up message back to the same session before returning
-it to normal execution. Submitting a blank free-text answer stores
-`no answer` for that question. Pressing `Esc` ends the clarification turn
-immediately, restores the session to **Review**, and does not send the
-follow-up message.
+<a id="usage-clarification-loop"></a> If an agent emits structured clarification
+questions in the `questions` array, the session moves to **Question** status. You answer
+each question in sequence, and Agentty sends one consolidated follow-up message back to
+the same session before returning it to normal execution. Submitting a blank free-text
+answer stores `no answer` for that question. Pressing `Esc` ends the clarification turn
+immediately, restores the session to **Review**, and does not send the follow-up
+message.
 
-<a id="usage-question-options"></a>
-Questions may include predefined answer options. Agentty displays them as an
-optional numbered list under an "Options:" header with the first option
-pre-selected when options exist. Use `j`/`k` or `Up`/`Down` to navigate
-options and `Enter` to submit the highlighted choice. Moving above the first
-option or below the last option switches into the free-text answer input shown
-below the list. Questions without predefined options open directly in that
-free-text input. Submitting a blank free-text answer stores `no answer` for
-that question. Press `Esc` at any point to end the clarification turn
-immediately and return the session to **Review** without sending a reply.
+<a id="usage-question-options"></a> Questions may include predefined answer options.
+Agentty displays them as an optional numbered list under an "Options:" header with the
+first option pre-selected when options exist. Use `j`/`k` or `Up`/`Down` to navigate
+options and `Enter` to submit the highlighted choice. Moving above the first option or
+below the last option switches into the free-text answer input shown below the list.
+Questions without predefined options open directly in that free-text input. Submitting a
+blank free-text answer stores `no answer` for that question. Press `Esc` at any point to
+end the clarification turn immediately and return the session to **Review** without
+sending a reply.
 
 ## Session Sizes
 
-<a id="usage-session-size"></a>
-Agentty classifies sessions by the number of changed lines in their diff:
+<a id="usage-session-size"></a> Agentty classifies sessions by the number of changed
+lines in their diff:
 
-| Size | Changed Lines |
-|------|---------------|
-| **XS** | 0-10 |
-| **S** | 11-30 |
-| **M** | 31-80 |
-| **L** | 81-200 |
-| **XL** | 201-500 |
-| **XXL** | 501+ |
+| Size | Changed Lines | |------|---------------| | **XS** | 0-10 | | **S** | 11-30 | |
+**M** | 31-80 | | **L** | 81-200 | | **XL** | 201-500 | | **XXL** | 501+ |
 
-Session size is recalculated after each completed agent turn and persisted to
-the session record.
+Session size is recalculated after each completed agent turn and persisted to the
+session record.
 
 ## Slash Commands
 
-<a id="usage-slash-commands"></a>
-Type these in the prompt input to access special actions. From an editable
-session view, press `/` to open the composer with the leading slash already
-inserted:
+<a id="usage-slash-commands"></a> Type these in the prompt input to access special
+actions. From an editable session view, press `/` to open the composer with the leading
+slash already inserted:
 
-| Command | Description |
-|---------|-------------|
-| `/apply` | Ask the agent to verify focused-review suggestions against the current code, then apply only the ones that are still correct and relevant. Requires a completed focused review (`f` key). |
-| `/model` | Switch the model for the current session using only locally available backend CLIs. |
-| `/reasoning` | Override the reasoning level for the current session, with the current effective level preselected from settings or any existing session override. |
-| `/stats` | Show token usage statistics for the session. |
+| Command | Description | |---------|-------------| | `/apply` | Ask the agent to verify
+focused-review suggestions against the current code, then apply only the ones that are
+still correct and relevant. Requires a completed focused review (`f` key). | | `/model`
+| Switch the model for the current session using only locally available backend CLIs. |
+| `/reasoning` | Override the reasoning level for the current session, with the current
+effective level preselected from settings or any existing session override. | | `/stats`
+| Show token usage statistics for the session. |
 
-Agentty requires at least one supported backend CLI (`codex`, `claude`, or
-`gemini`) on `PATH` at startup. Once launched, `/model` only offers runnable
-backends, and stored default-model settings still fall back to the first
-available backend default when the saved backend is missing locally. Retired
-stored model ids such as `claude-opus-4-6` are upgraded to the current
-supported replacement when projects and sessions load.
+Agentty requires at least one supported backend CLI (`codex`, `claude`, or `gemini`) on
+`PATH` at startup. Once launched, `/model` only offers runnable backends, and stored
+default-model settings still fall back to the first available backend default when the
+saved backend is missing locally. Retired stored model ids such as `claude-opus-4-6` are
+upgraded to the current supported replacement when projects and sessions load.
 
 ## Auto-Update
 
-<a id="usage-auto-update"></a>
-When Agentty launches, it checks npmjs for a newer version in the background.
-If a newer version is detected, it automatically runs `npm i -g agentty@latest`
-without blocking the UI:
+<a id="usage-auto-update"></a> When Agentty launches, it checks npmjs for a newer
+version in the background. If a newer version is detected, it automatically runs
+`npm i -g agentty@latest` without blocking the UI:
 
-| Status bar text | Meaning |
-|-----------------|---------|
-| **Updating to vX.Y.Z...** | Background npm install is running. |
-| **Updated to vX.Y.Z — restart to use new version** | Install succeeded; relaunch to use the new version. |
-| **vX.Y.Z version available update with npm i -g agentty@latest** | Install failed; manual update hint shown as fallback. |
+| Status bar text | Meaning | |-----------------|---------| | **Updating to vX.Y.Z...**
+| Background npm install is running. | | **Updated to vX.Y.Z — restart to use new
+version** | Install succeeded; relaunch to use the new version. | | **vX.Y.Z version
+available update with npm i -g agentty@latest** | Install failed; manual update hint
+shown as fallback. |
 
 To disable automatic updates, launch with `--no-update`:
 
@@ -415,20 +411,19 @@ To disable automatic updates, launch with `--no-update`:
 agentty --no-update
 ```
 
-When `--no-update` is set, Agentty still checks for newer versions and shows the
-manual update hint, but does not run `npm i -g agentty@latest` automatically.
+When `--no-update` is set, Agentty still checks for newer versions and shows the manual
+update hint, but does not run `npm i -g agentty@latest` automatically.
 
 ## Data Location
 
-<a id="usage-data-location"></a>
-Agentty stores its data in `~/.agentty/` by default. This includes the
-SQLite database, session logs, and worktree checkouts (under `~/.agentty/wt/`).
+<a id="usage-data-location"></a> Agentty stores its data in `~/.agentty/` by default.
+This includes the SQLite database, session logs, and worktree checkouts (under
+`~/.agentty/wt/`).
 
-Per-session worktree folders are removed automatically after a session reaches
-`Done` or `Canceled`, and when a session record is deleted.
+Per-session worktree folders are removed automatically after a session reaches `Done` or
+`Canceled`, and when a session record is deleted.
 
-You can override this location by setting the `AGENTTY_ROOT` environment
-variable:
+You can override this location by setting the `AGENTTY_ROOT` environment variable:
 
 ```bash
 # Run agentty with a custom root directory

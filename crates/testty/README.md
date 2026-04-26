@@ -1,15 +1,14 @@
 # testty
 
 Rust-native TUI end-to-end testing framework. Drives a real TUI binary in a
-pseudo-terminal, captures location-aware terminal state with `vt100`, and
-provides a semantic assertion API for text, style, color, and region checks.
-Scenarios can also be compiled into [VHS](https://github.com/charmbracelet/vhs)
-tapes for visual screenshot capture.
+pseudo-terminal, captures location-aware terminal state with `vt100`, and provides a
+semantic assertion API for text, style, color, and region checks. Scenarios can also be
+compiled into [VHS](https://github.com/charmbracelet/vhs) tapes for visual screenshot
+capture.
 
 ## Installation
 
-Add `testty` as a dev-dependency in the crate that contains your E2E
-tests:
+Add `testty` as a dev-dependency in the crate that contains your E2E tests:
 
 ```toml
 [dev-dependencies]
@@ -26,45 +25,40 @@ testty = { workspace = true }
 tempfile = { workspace = true }
 ```
 
-> **Note:** `workspace = true` requires matching entries in the root
-> `Cargo.toml` under `[workspace.dependencies]`.
+> **Note:** `workspace = true` requires matching entries in the root `Cargo.toml` under
+> `[workspace.dependencies]`.
 
 ## Upgrading
 
-The curated stable surface lives at `testty::prelude` and is locked down
-by the `tests/public_api.rs` tripwire test. Any breaking change to a
-prelude item or to the documented auxiliary items
-(`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
-`SnapshotConfig::with_update_env_var`,
-`SnapshotConfig::with_update_mode`,
-`SnapshotConfig::is_update_mode`) requires a deliberate update to
-that test and a `testty` major version bump.
+The curated stable surface lives at `testty::prelude` and is locked down by the
+`tests/public_api.rs` tripwire test. Any breaking change to a prelude item or to the
+documented auxiliary items (`testty::recipe`,
+`testty::snapshot::DEFAULT_UPDATE_ENV_VAR`, `SnapshotConfig::with_update_env_var`,
+`SnapshotConfig::with_update_mode`, `SnapshotConfig::is_update_mode`) requires a
+deliberate update to that test and a `testty` major version bump.
 
 When upgrading from earlier `0.x` releases:
 
-- Replace `use testty::scenario::Scenario;` / `use testty::session::*;`
-  imports with `use testty::prelude::*;`.
-- The `artifact`, `calibration`, and `overlay` modules have been removed.
-  Use the [proof pipeline](#proof-pipeline) backends and the
+- Replace `use testty::scenario::Scenario;` / `use testty::session::*;` imports with
+  `use testty::prelude::*;`.
+- The `artifact`, `calibration`, and `overlay` modules have been removed. Use the
+  [proof pipeline](#proof-pipeline) backends and the
   [snapshot testing](#snapshot-testing) helpers instead.
 - `testty::snapshot::is_update_mode()` has been removed. Use
-  `SnapshotConfig::is_update_mode(&self)` instead, which now resolves
-  the per-config env var or the programmatic override set via
-  `SnapshotConfig::with_update_env_var` /
+  `SnapshotConfig::is_update_mode(&self)` instead, which now resolves the per-config env
+  var or the programmatic override set via `SnapshotConfig::with_update_env_var` /
   `SnapshotConfig::with_update_mode`.
-- Snapshot baseline updates still default to `TUI_TEST_UPDATE=1`. Custom
-  CI integrations can override the trigger via
-  `SnapshotConfig::with_update_env_var` and read the default from
-  `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`.
-- `SnapshotConfig` is now `#[non_exhaustive]`. Replace any struct-literal
-  construction (`SnapshotConfig { .. }`) with `SnapshotConfig::new(..)`
-  plus the `with_*` builder chain.
-- `SnapshotError` and its struct-shaped variants (`Mismatch`,
-  `MissingBaseline`, `FrameMismatch`) are now `#[non_exhaustive]`. `match`
-  arms must include a fallback `_` arm and any field destructuring must
-  use the `..` rest-pattern. The `MissingBaseline` variant also carries a
-  new `update_env_var` field that surfaces the configured trigger in the
-  error message.
+- Snapshot baseline updates still default to `TUI_TEST_UPDATE=1`. Custom CI integrations
+  can override the trigger via `SnapshotConfig::with_update_env_var` and read the
+  default from `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`.
+- `SnapshotConfig` is now `#[non_exhaustive]`. Replace any struct-literal construction
+  (`SnapshotConfig { .. }`) with `SnapshotConfig::new(..)` plus the `with_*` builder
+  chain.
+- `SnapshotError` and its struct-shaped variants (`Mismatch`, `MissingBaseline`,
+  `FrameMismatch`) are now `#[non_exhaustive]`. `match` arms must include a fallback `_`
+  arm and any field destructuring must use the `..` rest-pattern. The `MissingBaseline`
+  variant also carries a new `update_env_var` field that surfaces the configured trigger
+  in the error message.
 
 ## Quick start
 
@@ -104,9 +98,8 @@ cargo test -p my-app --test e2e
 
 ### Scenario
 
-A `Scenario` is an ordered sequence of `Step` actions that describe a user
-journey. Built with a fluent API, then executed in a PTY or compiled into a
-VHS tape.
+A `Scenario` is an ordered sequence of `Step` actions that describe a user journey.
+Built with a fluent API, then executed in a PTY or compiled into a VHS tape.
 
 ```rust
 use std::time::Duration;
@@ -123,24 +116,23 @@ let scenario = Scenario::new("tab_navigation")
 
 Each `Step` represents a single user action or wait condition:
 
-| Step | Description | Example |
-|------|-------------|---------|
-| `WriteText` | Type text into the terminal | `.write_text("hello world")` |
-| `PressKey` | Send a named key press | `.press_key("Enter")` |
-| `Sleep` | Pause for a fixed duration | `.sleep_ms(200)` |
-| `WaitForText` | Poll until text appears | `.wait_for_text("Ready", 5000)` |
-| `WaitForStableFrame` | Wait for rendering to stabilize | `.wait_for_stable_frame(500, 5000)` |
-| `Capture` | Snapshot the current terminal state | `.capture()` |
-| `CaptureLabeled` | Labeled snapshot for proof reports | `.capture_labeled("init", "App launched")` |
+| Step | Description | Example | |------|-------------|---------| | `WriteText` | Type
+text into the terminal | `.write_text("hello world")` | | `PressKey` | Send a named key
+press | `.press_key("Enter")` | | `Sleep` | Pause for a fixed duration |
+`.sleep_ms(200)` | | `WaitForText` | Poll until text appears |
+`.wait_for_text("Ready", 5000)` | | `WaitForStableFrame` | Wait for rendering to
+stabilize | `.wait_for_stable_frame(500, 5000)` | | `Capture` | Snapshot the current
+terminal state | `.capture()` | | `CaptureLabeled` | Labeled snapshot for proof reports
+| `.capture_labeled("init", "App launched")` |
 
-**Supported key names:** `Enter`, `Tab`, `Escape` / `Esc`, `Backspace`,
-`Up`, `Down`, `Left`, `Right`, `Home`, `End`, `Delete`, `PageUp`, `PageDown`,
-`Space`, `Ctrl+<letter>` (e.g., `Ctrl+C`). Unknown keys are sent as raw bytes.
+**Supported key names:** `Enter`, `Tab`, `Escape` / `Esc`, `Backspace`, `Up`, `Down`,
+`Left`, `Right`, `Home`, `End`, `Delete`, `PageUp`, `PageDown`, `Space`, `Ctrl+<letter>`
+(e.g., `Ctrl+C`). Unknown keys are sent as raw bytes.
 
 ### PtySession and PtySessionBuilder
 
-`PtySession` spawns the binary in a real PTY using `portable-pty`. Configure
-it with `PtySessionBuilder`:
+`PtySession` spawns the binary in a real PTY using `portable-pty`. Configure it with
+`PtySessionBuilder`:
 
 ```rust
 use testty::session::PtySessionBuilder;
@@ -163,8 +155,8 @@ let frame = session.wait_for_text("response", std::time::Duration::from_secs(5))
 
 ### TerminalFrame
 
-A `TerminalFrame` is a snapshot of the terminal state parsed through `vt100`.
-It provides structured access to text, colors, and styles:
+A `TerminalFrame` is a snapshot of the terminal state parsed through `vt100`. It
+provides structured access to text, colors, and styles:
 
 ```rust
 use testty::frame::TerminalFrame;
@@ -207,8 +199,8 @@ let custom = Region::new(10, 5, 30, 3);      // col=10, row=5, 30x3
 
 ### MatchedSpan
 
-When text is found in a frame, you get a `MatchedSpan` with position, color,
-and style metadata:
+When text is found in a frame, you get a `MatchedSpan` with position, color, and style
+metadata:
 
 ```rust
 let matches = frame.find_text("Projects");
@@ -250,13 +242,13 @@ assertion::assert_text_has_fg_color(&frame, "Error", &CellColor::new(128, 0, 0))
 assertion::assert_text_has_bg_color(&frame, "Active", &CellColor::new(0, 0, 128));
 ```
 
-All assertion functions panic with detailed messages on failure, including
-the match position, actual colors/styles, and region contents.
+All assertion functions panic with detailed messages on failure, including the match
+position, actual colors/styles, and region contents.
 
 ### Recipe helpers (`recipe` module)
 
-High-level, composable helpers for common TUI patterns. Prefer these over
-raw assertions:
+High-level, composable helpers for common TUI patterns. Prefer these over raw
+assertions:
 
 ```rust
 use testty::recipe;
@@ -280,8 +272,8 @@ recipe::expect_not_visible(&frame, "Loading...");
 
 ## Snapshot testing
 
-The framework supports two snapshot modes: **frame text** (semantic) and
-**visual screenshot** (pixel-level via VHS).
+The framework supports two snapshot modes: **frame text** (semantic) and **visual
+screenshot** (pixel-level via VHS).
 
 ### Frame text snapshots
 
@@ -334,10 +326,9 @@ the default is exposed as `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`.
 
 For tests and other programmatic callers,
 [`SnapshotConfig::with_update_mode`](https://docs.rs/testty/latest/testty/snapshot/struct.SnapshotConfig.html)
-injects the update-mode decision directly. This bypasses the environment
-variable, which is the recommended way to drive update behavior from a test
-without mutating process-global env state through `unsafe` `std::env::set_var`
-calls:
+injects the update-mode decision directly. This bypasses the environment variable, which
+is the recommended way to drive update behavior from a test without mutating
+process-global env state through `unsafe` `std::env::set_var` calls:
 
 ```rust
 let config = SnapshotConfig::new("tests/baselines", "tests/artifacts")
@@ -358,9 +349,9 @@ let config = SnapshotConfig::new("tests/baselines", "tests/artifacts")
 
 ## Proof pipeline
 
-The proof pipeline captures labeled terminal states during scenario execution
-and renders them through swappable backends. Use `capture_labeled()` steps
-and `run_with_proof()` to collect a `ProofReport`:
+The proof pipeline captures labeled terminal states during scenario execution and
+renders them through swappable backends. Use `capture_labeled()` steps and
+`run_with_proof()` to collect a `ProofReport`:
 
 ```rust
 use testty::scenario::Scenario;
@@ -389,18 +380,16 @@ report.save(&HtmlBackend, Path::new("proof.html")).unwrap();
 
 ### Proof formats
 
-| Format | Backend | Output | Use case |
-|--------|---------|--------|----------|
-| Frame text | `FrameTextBackend` | `.txt` | CI logs, quick inspection |
-| PNG strip | `ScreenshotStripBackend` | `.png` | Review comments, docs |
-| Animated GIF | `GifBackend` | `.gif` | PR descriptions, demos |
-| HTML report | `HtmlBackend` | `.html` | Detailed review with diffs and assertions |
+| Format | Backend | Output | Use case | |--------|---------|--------|----------| |
+Frame text | `FrameTextBackend` | `.txt` | CI logs, quick inspection | | PNG strip |
+`ScreenshotStripBackend` | `.png` | Review comments, docs | | Animated GIF |
+`GifBackend` | `.gif` | PR descriptions, demos | | HTML report | `HtmlBackend` | `.html`
+| Detailed review with diffs and assertions |
 
 ## Composable journeys
 
-`Journey` provides reusable building blocks for declarative scenario authoring.
-Instead of repeating low-level step sequences, compose scenarios from
-pre-built journeys:
+`Journey` provides reusable building blocks for declarative scenario authoring. Instead
+of repeating low-level step sequences, compose scenarios from pre-built journeys:
 
 ```rust
 use testty::journey::Journey;
@@ -420,18 +409,17 @@ let scenario = Scenario::new("settings_search")
 
 ### Built-in journeys
 
-| Journey | Steps | Description |
-|---------|-------|-------------|
-| `wait_for_startup(stable_ms, timeout_ms)` | 1 | Wait for app to render and stabilize |
-| `navigate_with_key(key, expected, timeout)` | 2 | Press key, wait for expected text |
-| `type_and_confirm(text)` | 2 | Type text and press Enter |
-| `press_and_wait(key, ms)` | 2 | Press key and sleep briefly |
-| `capture_labeled(label, desc)` | 1 | Capture with label for proofs |
+| Journey | Steps | Description | |---------|-------|-------------| |
+`wait_for_startup(stable_ms, timeout_ms)` | 1 | Wait for app to render and stabilize | |
+`navigate_with_key(key, expected, timeout)` | 2 | Press key, wait for expected text | |
+`type_and_confirm(text)` | 2 | Type text and press Enter | | `press_and_wait(key, ms)` |
+2 | Press key and sleep briefly | | `capture_labeled(label, desc)` | 1 | Capture with
+label for proofs |
 
 ## Frame diffing
 
-The diff engine computes cell-level differences between terminal frames
-and generates human-readable change summaries:
+The diff engine computes cell-level differences between terminal frames and generates
+human-readable change summaries:
 
 ```rust
 use testty::diff::FrameDiff;
@@ -457,28 +445,26 @@ for line in diff.summary() {
 }
 ```
 
-Diffs are automatically computed between consecutive captures in a
-`ProofReport` and displayed in the HTML proof backend.
+Diffs are automatically computed between consecutive captures in a `ProofReport` and
+displayed in the HTML proof backend.
 
 ## Module overview
 
-| Module | Purpose |
-|--------|---------|
-| `scenario` | Fluent builder for composing test scenarios from steps |
-| `step` | Step enum: `WriteText`, `PressKey`, `Sleep`, `WaitForText`, `WaitForStableFrame`, `Capture`, `CaptureLabeled` |
-| `session` | PTY executor: `PtySession` + `PtySessionBuilder` |
-| `frame` | Terminal state parser: `TerminalFrame`, `CellColor`, `CellStyle` |
-| `region` | Rectangular region definitions with named anchors |
-| `locator` | `MatchedSpan` with text, position, color, and style metadata |
-| `assertion` | Structured assertion functions with detailed failure messages |
-| `recipe` | High-level helpers for tabs, footer, dialogs, status messages |
-| `snapshot` | Baseline management: frame text and visual image comparison |
-| `vhs` | VHS tape compiler for visual screenshot capture |
-| `proof` | Proof pipeline: report collector, backend trait, and format implementations |
-| `diff` | Cell-level frame diffing with changed region detection |
-| `journey` | Composable journey building blocks for declarative test authoring |
-| `feature` | `FeatureDemo` builder: scenario execution with hash-cached VHS GIF generation |
-| `prelude` | Curated re-exports for the common testty workflow (`use testty::prelude::*;`) |
+| Module | Purpose | |--------|---------| | `scenario` | Fluent builder for composing
+test scenarios from steps | | `step` | Step enum: `WriteText`, `PressKey`, `Sleep`,
+`WaitForText`, `WaitForStableFrame`, `Capture`, `CaptureLabeled` | | `session` | PTY
+executor: `PtySession` + `PtySessionBuilder` | | `frame` | Terminal state parser:
+`TerminalFrame`, `CellColor`, `CellStyle` | | `region` | Rectangular region definitions
+with named anchors | | `locator` | `MatchedSpan` with text, position, color, and style
+metadata | | `assertion` | Structured assertion functions with detailed failure messages
+| | `recipe` | High-level helpers for tabs, footer, dialogs, status messages | |
+`snapshot` | Baseline management: frame text and visual image comparison | | `vhs` | VHS
+tape compiler for visual screenshot capture | | `proof` | Proof pipeline: report
+collector, backend trait, and format implementations | | `diff` | Cell-level frame
+diffing with changed region detection | | `journey` | Composable journey building blocks
+for declarative test authoring | | `feature` | `FeatureDemo` builder: scenario execution
+with hash-cached VHS GIF generation | | `prelude` | Curated re-exports for the common
+testty workflow (`use testty::prelude::*;`) |
 
 ## Full example
 
@@ -535,13 +521,13 @@ cargo run --example journey_composition -p testty
 
 ## Tips
 
-- **Use `wait_for_stable_frame`** instead of `sleep_ms` when waiting for
-  rendering. It adapts to actual render speed rather than hard-coding delays.
-- **Use recipe helpers** over raw assertions. They encode common TUI layout
-  patterns (header tabs, footer hints) so you don't rebuild locator logic.
-- **Set deterministic terminal size** (e.g., 80x24) to keep frame snapshots
-  stable across machines.
-- **Isolate state** with `tempfile::TempDir` and environment variables so
-  tests don't interfere with each other or the real app data.
-- **E2E tests run automatically** with `cargo test`. Cargo builds the binary
-  before running integration tests, so `CARGO_BIN_EXE_*` is always available.
+- **Use `wait_for_stable_frame`** instead of `sleep_ms` when waiting for rendering. It
+  adapts to actual render speed rather than hard-coding delays.
+- **Use recipe helpers** over raw assertions. They encode common TUI layout patterns
+  (header tabs, footer hints) so you don't rebuild locator logic.
+- **Set deterministic terminal size** (e.g., 80x24) to keep frame snapshots stable
+  across machines.
+- **Isolate state** with `tempfile::TempDir` and environment variables so tests don't
+  interfere with each other or the real app data.
+- **E2E tests run automatically** with `cargo test`. Cargo builds the binary before
+  running integration tests, so `CARGO_BIN_EXE_*` is always available.

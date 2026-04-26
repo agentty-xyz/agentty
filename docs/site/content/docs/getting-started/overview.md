@@ -4,19 +4,18 @@ description = "Understand how Agentty organizes AI agent sessions and workflows.
 weight = 0
 +++
 
-<a id="overview-introduction"></a>
-`agentty` is an ADE (Agentic Development Environment) for structured, controllable AI-assisted software development.
-This project is built using `agentty` itself, including the docs and docs-site you are reading.
+<a id="overview-introduction"></a> `agentty` is an ADE (Agentic Development Environment)
+for structured, controllable AI-assisted software development. This project is built
+using `agentty` itself, including the docs and docs-site you are reading.
 
-<a id="overview-ai-sessions"></a>
-It runs AI coding agents in dedicated AI sessions.
+<a id="overview-ai-sessions"></a> It runs AI coding agents in dedicated AI sessions.
 
 <!-- more -->
 
 ## What Agentty Provides
 
-<a id="overview-operational-lift"></a>
-When you start a session, Agentty does the operational heavy lifting for workflow safety:
+<a id="overview-operational-lift"></a> When you start a session, Agentty does the
+operational heavy lifting for workflow safety:
 
 - Spawns a clean worktree branch for every live session.
 - Runs agent-driven edits in isolation from your base branch.
@@ -28,53 +27,57 @@ When you start a session, Agentty does the operational heavy lifting for workflo
 1. Open a repository and start `agentty`.
 1. Press `a` and choose `Regular` or `Draft`.
 1. For regular sessions, type the first prompt and press `Enter` to start immediately.
-1. For draft sessions, stage one or more draft messages, then press `s` to start the bundle.
+1. For draft sessions, stage one or more draft messages, then press `s` to start the
+   bundle.
 1. Let the agent modify files in its worktree.
 1. Review the diff (`d`) and decide to apply or discard.
 
 ## Worktree Isolation
 
-<a id="overview-worktree-isolation"></a>
-Every session runs in its own [git worktree](https://git-scm.com/docs/git-worktree),
-created automatically when the live session starts:
+<a id="overview-worktree-isolation"></a> Every session runs in its own
+[git worktree](https://git-scm.com/docs/git-worktree), created automatically when the
+live session starts:
 
-- The worktree branch is named `wt/<hash>`, where `<hash>` is derived from
-  the session ID.
-- The branch targets whichever branch was active when you launched `agentty`.
-  When that branch tracks an upstream, Agentty starts the worktree from the
-  locally cached upstream ref so unpublished local base-branch commits do not
-  appear in session pull requests.
-- Regular sessions create the worktree as soon as you start the first prompt.
-  Draft sessions delay worktree creation until you press `s` to start the
-  staged bundle.
-- All agent edits happen inside the worktree, keeping your base branch untouched
-  until you explicitly merge.
+- The worktree branch is named `wt/<hash>`, where `<hash>` is derived from the session
+  ID.
+- The branch targets whichever branch was active when you launched `agentty`. When that
+  branch tracks an upstream, Agentty starts the worktree from the locally cached
+  upstream ref so unpublished local base-branch commits do not appear in session pull
+  requests.
+- Regular sessions create the worktree as soon as you start the first prompt. Draft
+  sessions delay worktree creation until you press `s` to start the staged bundle.
+- All agent edits happen inside the worktree, keeping your base branch untouched until
+  you explicitly merge.
 - If worktree creation fails (e.g., git is not installed or permissions are
   insufficient), session creation fails atomically and displays an error.
 
-<a id="overview-worktree-cleanup"></a>
-Worktrees are stored under `~/.agentty/wt/` and are cleaned up automatically
-when a session reaches `Done` or `Canceled`, or when you delete a session.
+<a id="overview-worktree-cleanup"></a> Worktrees are stored under `~/.agentty/wt/` and
+are cleaned up automatically when a session reaches `Done` or `Canceled`, or when you
+delete a session.
 
 ## Auto-Update
 
-<a id="overview-auto-update"></a>
-Agentty checks npmjs for newer versions at startup and automatically installs
-updates in the background. Progress is shown in the status bar. The new version
-takes effect on next launch. Use `--no-update` to disable automatic updates.
+<a id="overview-auto-update"></a> Agentty checks npmjs for newer versions at startup and
+automatically installs updates in the background. Progress is shown in the status bar.
+The new version takes effect on next launch. Use `--no-update` to disable automatic
+updates.
 
 ## Key Concepts
 
-| Concept | Description |
-|---------|-------------|
-| **Agent** | An external AI CLI backend (Gemini, Claude, or Codex) that performs coding work. See [Agents & Models](@/docs/agents/backends.md). |
-| **Session** | An isolated unit of work: one prompt, one worktree branch, one reviewable diff. See [Workflow](@/docs/usage/workflow.md) and [Keybindings](@/docs/usage/keybindings.md). |
-| **Project** | A git repository registered in Agentty. Select between projects with the Projects tab. |
-| **Diff view** | Press `d` in a review-state session to see exactly what the agent changed. |
+| Concept | Description | |---------|-------------| | **Agent** | An external AI CLI
+backend (Gemini, Claude, or Codex) that performs coding work. See
+[Agents & Models](@/docs/agents/backends.md). | | **Session** | An isolated unit of
+work: one prompt, one worktree branch, one reviewable diff. See
+[Workflow](@/docs/usage/workflow.md) and [Keybindings](@/docs/usage/keybindings.md). | |
+**Project** | A git repository registered in Agentty. Select between projects with the
+Projects tab. | | **Diff view** | Press `d` in a review-state session to see exactly
+what the agent changed. |
 
 ## Next Steps
 
 - [Installation](./installation) — install Agentty and run it for the first time.
 - [Agents & Models](@/docs/agents/backends.md) — configure backends and choose models.
-- [Workflow](@/docs/usage/workflow.md) — learn the interface layout and session lifecycle.
-- [Keybindings](@/docs/usage/keybindings.md) — learn the keyboard shortcuts for each view.
+- [Workflow](@/docs/usage/workflow.md) — learn the interface layout and session
+  lifecycle.
+- [Keybindings](@/docs/usage/keybindings.md) — learn the keyboard shortcuts for each
+  view.

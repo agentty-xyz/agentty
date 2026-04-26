@@ -1,7 +1,6 @@
 You are helping fix a failed git commit in an agent session worktree.
 
-Commit error:
-{{ commit_error }}
+Commit error: {{ commit_error }}
 
 Requirements:
 
@@ -9,4 +8,5 @@ Requirements:
 - Do not run git commands.
 - Do not create commits.
 - Keep changes minimal and preserve intended behavior.
-- After editing, return the required protocol JSON object and put a short summary of what was fixed in the `answer` field only.
+- After editing, return the required protocol JSON object and put a short summary of
+  what was fixed in the `answer` field only.

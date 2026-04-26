@@ -1,24 +1,38 @@
 # Start Step
 
-Use this guide when implementation is about to start for an existing `Ready Now` roadmap step.
+Use this guide when implementation is about to start for an existing `Ready Now` roadmap
+step.
 
 ## Goal
 
-Start the exact planned implementation for one assigned `Ready Now` step without reshaping the scope mid-flight.
+Start the exact planned implementation for one assigned `Ready Now` step without
+reshaping the scope mid-flight.
 
 ## Workflow
 
-1. Read `docs/plan/roadmap.md` and find the target step by the UUID in its `[UUID] Stream: Title` heading.
-1. Confirm the current authenticated forge user for the active project, then verify the target lives in `## Ready Now` and that its `#### Assignee` already names that user.
-1. Re-read that step's `#### Why now`, `#### Usable outcome`, `#### Substeps`, `#### Tests`, and `#### Docs` sections before editing code.
-1. Implement the step exactly as written. Treat the roadmap text as the current execution contract instead of rewriting the step while work is in progress.
-1. If implementation reveals a real scope mistake, or the diff is trending beyond the roadmap's buffered estimate and threatens the `500`-line ceiling, stop the execution flow and handle that roadmap change separately with `references/update-step.md`.
-1. Keep tests and docs attached to the same implementation slice described in the step before considering the work complete.
-1. Once the step is complete, actualize `docs/plan/roadmap.md` by removing the implemented item from `## Ready Now`, refreshing any changed snapshot rows, and adding or updating a compact queued or parked card if follow-up work still remains.
+1. Read `docs/plan/roadmap.md` and find the target step by the UUID in its
+   `[UUID] Stream: Title` heading.
+1. Confirm the current authenticated forge user for the active project, then verify the
+   target lives in `## Ready Now` and that its `#### Assignee` already names that user.
+1. Re-read that step's `#### Why now`, `#### Usable outcome`, `#### Substeps`,
+   `#### Tests`, and `#### Docs` sections before editing code.
+1. Implement the step exactly as written. Treat the roadmap text as the current
+   execution contract instead of rewriting the step while work is in progress.
+1. If implementation reveals a real scope mistake, or the diff is trending beyond the
+   roadmap's buffered estimate and threatens the `500`-line ceiling, stop the execution
+   flow and handle that roadmap change separately with `references/update-step.md`.
+1. Keep tests and docs attached to the same implementation slice described in the step
+   before considering the work complete.
+1. Once the step is complete, actualize `docs/plan/roadmap.md` by removing the
+   implemented item from `## Ready Now`, refreshing any changed snapshot rows, and
+   adding or updating a compact queued or parked card if follow-up work still remains.
 
 ## Guardrails
 
-- Do not use this flow to silently reassign ownership. If the step is unassigned because it predates the promotion rule, assign it in the smallest roadmap edit first; if it is assigned to someone else, stop and clarify.
+- Do not use this flow to silently reassign ownership. If the step is unassigned because
+  it predates the promotion rule, assign it in the smallest roadmap edit first; if it is
+  assigned to someone else, stop and clarify.
 - Do not quietly expand one step into multiple sibling outcomes during implementation.
-- Do not leave roadmap-only assignee changes mixed into unrelated implementation reshaping.
+- Do not leave roadmap-only assignee changes mixed into unrelated implementation
+  reshaping.
 - Do not keep completed implementation detail in `## Ready Now` after the step lands.

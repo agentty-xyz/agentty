@@ -8,7 +8,8 @@ Pure business logic and domain entities, decoupled from UI and infrastructure.
 
 - `agent.rs` defines provider kinds, models, and model metadata.
 - `session.rs` defines persisted session entities, statuses, and sizing logic.
-- `project.rs`, `setting.rs`, `permission.rs`, and `input.rs` define shared application concepts.
+- `project.rs`, `setting.rs`, `permission.rs`, and `input.rs` define shared application
+  concepts.
 
 ## Docs
 

@@ -12,5 +12,4 @@ Rules:
 - Return only the title text.
 - Do not include markdown fences, quotes, explanations, or any extra text.
 
-User Request:
-{{ prompt }}
+User Request: {{ prompt }}

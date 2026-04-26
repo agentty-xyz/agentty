@@ -4,61 +4,54 @@ description = "Supported agent backends, available models, and how to configure 
 weight = 1
 +++
 
-<a id="backends-introduction"></a>
-Agentty delegates coding work to external AI agent CLIs. Each backend is a
-standalone CLI tool that Agentty launches in an isolated worktree. This page
-covers the supported backends, available models, and configuration options.
+<a id="backends-introduction"></a> Agentty delegates coding work to external AI agent
+CLIs. Each backend is a standalone CLI tool that Agentty launches in an isolated
+worktree. This page covers the supported backends, available models, and configuration
+options.
 
 <!-- more -->
 
 ## Supported Backends
 
-<a id="backends-supported-backends"></a>
-Agentty supports three agent backends. Each requires its respective CLI to be
-installed and available on your `PATH`.
+<a id="backends-supported-backends"></a> Agentty supports three agent backends. Each
+requires its respective CLI to be installed and available on your `PATH`.
 
-| Backend | CLI command | Description |
-|---------|-------------|-------------|
-| Gemini | `gemini` | Google Gemini CLI agent. |
-| Claude | `claude` | Anthropic Claude Code agent. |
-| Codex | `codex` | OpenAI Codex CLI agent. |
+| Backend | CLI command | Description | |---------|-------------|-------------| | Gemini
+| `gemini` | Google Gemini CLI agent. | | Claude | `claude` | Anthropic Claude Code
+agent. | | Codex | `codex` | OpenAI Codex CLI agent. |
 
-All three session backends accept pasted local prompt images from the Agentty
-composer (`Ctrl+V` or `Alt+V` in prompt mode). Transport details differ by
-backend:
+All three session backends accept pasted local prompt images from the Agentty composer
+(`Ctrl+V` or `Alt+V` in prompt mode). Transport details differ by backend:
 
 - Codex app-server turns send `localImage` input items in placeholder order.
 - Gemini ACP turns send ordered `text` and `image` ACP content blocks.
-- Claude Code turns receive the prompt over stdin with `[Image #n]`
-  placeholders rewritten to local image paths that Claude can inspect.
+- Claude Code turns receive the prompt over stdin with `[Image #n]` placeholders
+  rewritten to local image paths that Claude can inspect.
 
-Codex now always runs through `codex app-server`, including isolated utility
-prompts such as title generation, review assist, commit-message generation,
-auto-commit recovery, and rebase-conflict assistance. Agentty no longer uses a
-direct `codex exec` path.
+Codex now always runs through `codex app-server`, including isolated utility prompts
+such as title generation, review assist, commit-message generation, auto-commit
+recovery, and rebase-conflict assistance. Agentty no longer uses a direct `codex exec`
+path.
 
 ## Project Instruction Files
 
-<a id="backends-project-instruction-files"></a>
-Agentty relies on each backend's native project-instruction discovery instead
-of inlining repository guidance into prompts.
+<a id="backends-project-instruction-files"></a> Agentty relies on each backend's native
+project-instruction discovery instead of inlining repository guidance into prompts.
 
 - Codex loads `AGENTS.md`.
 - Claude Code loads `CLAUDE.md`.
 - Gemini CLI loads `GEMINI.md`.
 
-This repository keeps `CLAUDE.md` and `GEMINI.md` as symlinks to the canonical
-root `AGENTS.md`, and keeps additional `AGENTS.md` files only at major module
-boundaries. This gives all three backends shared repo-wide instructions plus a
-small amount of higher-signal local guidance without maintaining per-directory
-file inventories.
+This repository keeps `CLAUDE.md` and `GEMINI.md` as symlinks to the canonical root
+`AGENTS.md`, and keeps additional `AGENTS.md` files only at major module boundaries.
+This gives all three backends shared repo-wide instructions plus a small amount of
+higher-signal local guidance without maintaining per-directory file inventories.
 
 ## Claude Authentication
 
-<a id="backends-claude-authentication"></a>
-If Claude session turns or utility prompts fail with `authentication_error`,
-`Failed to authenticate`, or `OAuth token has expired`, refresh the Claude CLI
-session and retry:
+<a id="backends-claude-authentication"></a> If Claude session turns or utility prompts
+fail with `authentication_error`, `Failed to authenticate`, or
+`OAuth token has expired`, refresh the Claude CLI session and retry:
 
 ```bash
 claude auth login
@@ -69,11 +62,10 @@ For SSO-backed accounts, use `claude auth login --sso`.
 
 ## File Path Output Format
 
-<a id="backends-path-output-format"></a>
-Agentty prompts all backends to reference files using repository-root-relative
-POSIX paths. This keeps file references consistent in session output and reviews.
-The rule is carried by the shared Askama markdown prompt templates under
-`crates/agentty/src/infra/agent/template/`, with
+<a id="backends-path-output-format"></a> Agentty prompts all backends to reference files
+using repository-root-relative POSIX paths. This keeps file references consistent in
+session output and reviews. The rule is carried by the shared Askama markdown prompt
+templates under `crates/agentty/src/infra/agent/template/`, with
 `protocol_instruction_prompt.md` owning the full bootstrap wrapper and
 `protocol_refresh_prompt.md` owning the compact app-server reminder.
 
@@ -83,62 +75,52 @@ The rule is carried by the shared Askama markdown prompt templates under
 
 ## Structured Response Protocol
 
-<a id="backends-structured-response-protocol"></a>
-Agentty prepends one shared protocol preamble from
-`crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`.
-That template contains the repository-root-relative file path rules, the
-structured response instructions, the explicit `---` separator that separates
-the task body, and the full self-descriptive JSON Schema generated from the
-protocol subsystem in `crates/agentty/src/infra/agent/protocol.rs`.
-Profile-specific usage guidance now lives in sibling markdown templates:
-`protocol_instruction_session_turn_usage.md` and
-`protocol_instruction_utility_prompt_usage.md`. Compact app-server refresh
-prompts are rendered from `protocol_refresh_prompt.md` plus the matching
-profile-specific reminder template. The router delegates to `protocol/model.rs`,
-`protocol/schema.rs`, and `protocol/parse.rs`, while
-`crates/agentty/src/infra/agent/prompt.rs` owns the shared prompt-preparation
-path used by CLI and app-server turns.
+<a id="backends-structured-response-protocol"></a> Agentty prepends one shared protocol
+preamble from `crates/agentty/src/infra/agent/template/protocol_instruction_prompt.md`.
+That template contains the repository-root-relative file path rules, the structured
+response instructions, the explicit `---` separator that separates the task body, and
+the full self-descriptive JSON Schema generated from the protocol subsystem in
+`crates/agentty/src/infra/agent/protocol.rs`. Profile-specific usage guidance now lives
+in sibling markdown templates: `protocol_instruction_session_turn_usage.md` and
+`protocol_instruction_utility_prompt_usage.md`. Compact app-server refresh prompts are
+rendered from `protocol_refresh_prompt.md` plus the matching profile-specific reminder
+template. The router delegates to `protocol/model.rs`, `protocol/schema.rs`, and
+`protocol/parse.rs`, while `crates/agentty/src/infra/agent/prompt.rs` owns the shared
+prompt-preparation path used by CLI and app-server turns.
 
-Each request path now selects one canonical `AgentRequestKind` before the
-backend sees the prompt, and the backend derives the protocol-owned
-`ProtocolRequestProfile` from that request kind:
+Each request path now selects one canonical `AgentRequestKind` before the backend sees
+the prompt, and the backend derives the protocol-owned `ProtocolRequestProfile` from
+that request kind:
 
 - Session turns use `AgentRequestKind::SessionStart` or
-  `AgentRequestKind::SessionResume`, which both derive the `SessionTurn`
-  profile.
-- One-shot utility prompts use `AgentRequestKind::UtilityPrompt`, which
-  derives the `UtilityPrompt` profile.
-- Strict and permissive request paths still share the same protocol contract
-  after that derivation step.
+  `AgentRequestKind::SessionResume`, which both derive the `SessionTurn` profile.
+- One-shot utility prompts use `AgentRequestKind::UtilityPrompt`, which derives the
+  `UtilityPrompt` profile.
+- Strict and permissive request paths still share the same protocol contract after that
+  derivation step.
 
-Persistent app-server session turns no longer resend that full prompt wrapper
-on every follow-up. Agentty now tracks an instruction-profile bootstrap marker
-per stored `provider_conversation_id` and switches among three delivery modes:
+Persistent app-server session turns no longer resend that full prompt wrapper on every
+follow-up. Agentty now tracks an instruction-profile bootstrap marker per stored
+`provider_conversation_id` and switches among three delivery modes:
 
-- `BootstrapFull`: first turn in a provider context sends the full preamble
-  plus schema.
-- `DeltaOnly`: later Codex/Gemini follow-up turns in the same restored
-  provider context send only a compact reminder of the existing file-path and
-  JSON contract.
-- `BootstrapWithReplay`: runtime restarts or context resets resend the full
-  contract and pair it with transcript replay when provider context was not
-  restored.
+- `BootstrapFull`: first turn in a provider context sends the full preamble plus schema.
+- `DeltaOnly`: later Codex/Gemini follow-up turns in the same restored provider context
+  send only a compact reminder of the existing file-path and JSON contract.
+- `BootstrapWithReplay`: runtime restarts or context resets resend the full contract and
+  pair it with transcript replay when provider context was not restored.
 
-The shared schema defines a top-level `answer` markdown string, a `questions`
-array, and the optional top-level `summary` object. Session turns typically
-populate:
+The shared schema defines a top-level `answer` markdown string, a `questions` array, and
+the optional top-level `summary` object. Session turns typically populate:
 
 - `summary.turn` describes only the work completed in the current turn
-- `summary.session` describes the cumulative session-branch diff that still
-  applies
+- `summary.session` describes the cumulative session-branch diff that still applies
 
-One-shot utility prompts, such as title generation, session commit-message
-generation, focused review preparation, auto-commit assistance, and rebase
-conflict assistance, still return the same protocol JSON shape. They may leave
-`summary` unused, while session discussion turns typically populate it.
-Final parsing accepts any payload that deserializes to the shared protocol wire
-type, so session-turn responses can carry meaning in `summary` even when
-`answer` is blank and `questions` is empty.
+One-shot utility prompts, such as title generation, session commit-message generation,
+focused review preparation, auto-commit assistance, and rebase conflict assistance,
+still return the same protocol JSON shape. They may leave `summary` unused, while
+session discussion turns typically populate it. Final parsing accepts any payload that
+deserializes to the shared protocol wire type, so session-turn responses can carry
+meaning in `summary` even when `answer` is blank and `questions` is empty.
 
 Example payload:
 
@@ -158,182 +140,159 @@ Example payload:
 }
 ```
 
-<a id="backends-structured-response-routing"></a>
-Top-level `answer` text is appended to the normal session transcript.
-Structured `questions` are persisted separately and move the session to
-**Question** status so Agentty can collect clarifications in question input
-mode. The top-level `summary` object is persisted separately and rendered in
-the session summary panel instead of being parsed back out of answer markdown.
+<a id="backends-structured-response-routing"></a> Top-level `answer` text is appended to
+the normal session transcript. Structured `questions` are persisted separately and move
+the session to **Question** status so Agentty can collect clarifications in question
+input mode. The top-level `summary` object is persisted separately and rendered in the
+session summary panel instead of being parsed back out of answer markdown.
 
 ## Protocol Validation
 
-<a id="backends-protocol-validation-repair"></a>
-Agentty validates final agent output against the structured response protocol.
+<a id="backends-protocol-validation-repair"></a> Agentty validates final agent output
+against the structured response protocol.
 
-- Claude, Gemini, and Codex session turns use strict parsing and fail closed
-  when output does not match the protocol schema.
-- Strict parsing accepts summary-only protocol payloads because the parser now
-  relies on the shared protocol wire type instead of extra top-level field
-  checks.
-- One-shot utility prompts use the same strict final validation across both
-  CLI and app-server transports. Plain text, blank responses, trailing junk
-  after a schema object, and other non-schema output are rejected instead of
-  being coerced into `answer`. Provider prose that appears before one final
-  protocol JSON object is now tolerated so Claude-style wrapped completions
-  still recover the authoritative payload.
-- When strict validation fails, the surfaced error now includes parse-oriented
-  debug details such as response sizing, JSON parser location/category, and
-  visible top-level keys from any parsed JSON object so malformed provider
-  output is easier to diagnose.
-- Provider-specific transport, stdin-vs-argv prompt delivery, strict final
-  parsing, and app-server thought-phase handling are centralized in the
-  shared provider registry in `crates/agentty/src/infra/agent/provider.rs`.
-- Concrete backends in `crates/agentty/src/infra/agent/` now also own app-server
-  client selection and runtime command construction, so Codex and Gemini
-  transport wiring stays with their provider-specific implementations instead
-  of top-level `infra/` modules.
+- Claude, Gemini, and Codex session turns use strict parsing and fail closed when output
+  does not match the protocol schema.
+- Strict parsing accepts summary-only protocol payloads because the parser now relies on
+  the shared protocol wire type instead of extra top-level field checks.
+- One-shot utility prompts use the same strict final validation across both CLI and
+  app-server transports. Plain text, blank responses, trailing junk after a schema
+  object, and other non-schema output are rejected instead of being coerced into
+  `answer`. Provider prose that appears before one final protocol JSON object is now
+  tolerated so Claude-style wrapped completions still recover the authoritative payload.
+- When strict validation fails, the surfaced error now includes parse-oriented debug
+  details such as response sizing, JSON parser location/category, and visible top-level
+  keys from any parsed JSON object so malformed provider output is easier to diagnose.
+- Provider-specific transport, stdin-vs-argv prompt delivery, strict final parsing, and
+  app-server thought-phase handling are centralized in the shared provider registry in
+  `crates/agentty/src/infra/agent/provider.rs`.
+- Concrete backends in `crates/agentty/src/infra/agent/` now also own app-server client
+  selection and runtime command construction, so Codex and Gemini transport wiring stays
+  with their provider-specific implementations instead of top-level `infra/` modules.
 - Claude turns use native schema validation via `claude --json-schema` and
-  `--output-format stream-json`, so tool/progress events can stream live while
-  the final response remains schema-validated.
-- Prompt-side protocol instructions rely on the raw self-descriptive
-  `schemars` metadata (`title`, `description`, and related annotations),
-  while transport `outputSchema` payloads are normalized separately for
-  provider compatibility. The same prompt instructions also restrict any git
-  usage during session turns to read-only commands such as `git diff` and
-  `git show`, and explicitly forbid mutating operations such as `git commit`
-  or `git push`.
-- Claude and Gemini stream the rendered prompt body through stdin for CLI
-  one-shot flows so large diffs and review prompts do not hit OS argv length
-  limits.
-- Claude turns pass `--strict-mcp-config`, so only MCP servers explicitly
-  provided by Agentty are allowed (none by default).
-- Claude turns allow file-modifying tools (`Edit`, `MultiEdit`, `Write`) plus
-  `Bash`, `EnterPlanMode`, and `ExitPlanMode` for unattended worktree edits.
-- Codex app-server turns enforce structured output through transport
-  `outputSchema`; the same transport is also used for one-shot Codex utility
-  prompts, and prompt instructions embed the same full self-descriptive schema
-  for consistency across providers.
-- Claude always uses structured protocol output, including isolated one-shot
-  utility prompts, through native schema enforcement plus prompt instructions.
-- Codex app-server turns include `outputSchema` at transport level and still
-  require the final assistant payload itself to parse as the shared protocol
-  JSON object.
-- Codex keeps transport-level `outputSchema` enforcement even when a follow-up
-  turn uses the compact `DeltaOnly` reminder instead of the full prompt-side
-  schema block.
-- Partial protocol JSON fragments are suppressed during streaming so raw JSON
-  wrappers do not leak into live transcript output.
-- Wrapped stream chunks that end in one valid protocol JSON object are reduced
-  to that payload's `answer`, so prefatory provider prose is not persisted
-  when recovery succeeds.
-- Gemini ACP final turn assembly now prefers the completed `session/prompt`
-  payload when it contains valid protocol JSON and the earlier streamed chunk
-  accumulation does not, so strict validation sees the authoritative
-  structured response.
+  `--output-format stream-json`, so tool/progress events can stream live while the final
+  response remains schema-validated.
+- Prompt-side protocol instructions rely on the raw self-descriptive `schemars` metadata
+  (`title`, `description`, and related annotations), while transport `outputSchema`
+  payloads are normalized separately for provider compatibility. The same prompt
+  instructions also restrict any git usage during session turns to read-only commands
+  such as `git diff` and `git show`, and explicitly forbid mutating operations such as
+  `git commit` or `git push`.
+- Claude and Gemini stream the rendered prompt body through stdin for CLI one-shot flows
+  so large diffs and review prompts do not hit OS argv length limits.
+- Claude turns pass `--strict-mcp-config`, so only MCP servers explicitly provided by
+  Agentty are allowed (none by default).
+- Claude turns allow file-modifying tools (`Edit`, `MultiEdit`, `Write`) plus `Bash`,
+  `EnterPlanMode`, and `ExitPlanMode` for unattended worktree edits.
+- Codex app-server turns enforce structured output through transport `outputSchema`; the
+  same transport is also used for one-shot Codex utility prompts, and prompt
+  instructions embed the same full self-descriptive schema for consistency across
+  providers.
+- Claude always uses structured protocol output, including isolated one-shot utility
+  prompts, through native schema enforcement plus prompt instructions.
+- Codex app-server turns include `outputSchema` at transport level and still require the
+  final assistant payload itself to parse as the shared protocol JSON object.
+- Codex keeps transport-level `outputSchema` enforcement even when a follow-up turn uses
+  the compact `DeltaOnly` reminder instead of the full prompt-side schema block.
+- Partial protocol JSON fragments are suppressed during streaming so raw JSON wrappers
+  do not leak into live transcript output.
+- Wrapped stream chunks that end in one valid protocol JSON object are reduced to that
+  payload's `answer`, so prefatory provider prose is not persisted when recovery
+  succeeds.
+- Gemini ACP final turn assembly now prefers the completed `session/prompt` payload when
+  it contains valid protocol JSON and the earlier streamed chunk accumulation does not,
+  so strict validation sees the authoritative structured response.
 
 ## Session Resume Behavior
 
-<a id="backends-session-resume"></a>
-Agentty persists provider-native conversation identifiers for app-server
-backends and uses them to restore context after runtime restarts. It also
-persists which provider conversation already received the full bootstrap so
-restored contexts can keep using the compact reminder path.
+<a id="backends-session-resume"></a> Agentty persists provider-native conversation
+identifiers for app-server backends and uses them to restore context after runtime
+restarts. It also persists which provider conversation already received the full
+bootstrap so restored contexts can keep using the compact reminder path.
 
-- Codex app-server: resumes by stored `threadId` via `thread/resume`, so
-  restored threads can keep the existing bootstrap and use the compact
-  reminder on later turns.
-- Gemini ACP: currently creates a fresh ACP `session/new` on runtime restart,
-  so Agentty treats the new `sessionId` as a fresh context, resends the full
-  bootstrap, and falls back to transcript replay when needed.
+- Codex app-server: resumes by stored `threadId` via `thread/resume`, so restored
+  threads can keep the existing bootstrap and use the compact reminder on later turns.
+- Gemini ACP: currently creates a fresh ACP `session/new` on runtime restart, so Agentty
+  treats the new `sessionId` as a fresh context, resends the full bootstrap, and falls
+  back to transcript replay when needed.
 
 ## App-Server Turn Timeout
 
-<a id="backends-app-server-turn-timeout"></a>
-App-server-backed turns can run for a long time. Agentty waits up to 4 hours
-for turn completion by default for both Codex app-server and Gemini ACP.
+<a id="backends-app-server-turn-timeout"></a> App-server-backed turns can run for a long
+time. Agentty waits up to 4 hours for turn completion by default for both Codex
+app-server and Gemini ACP.
 
 ## Selecting a Backend
 
-<a id="backends-selecting-a-backend"></a>
-Choose the backend from the `/model` picker:
+<a id="backends-selecting-a-backend"></a> Choose the backend from the `/model` picker:
 
 ```bash
 # Open model selection (backend first, then model)
 /model
 ```
 
-Agentty now filters that picker to the backend CLIs currently available on the
-machine. If only `codex` is installed, `/model` shows only Codex and its
-models. If none of `codex`, `claude`, or `gemini` are installed, Agentty now
-fails at startup with an error telling you to install a supported CLI on
-`PATH`.
+Agentty now filters that picker to the backend CLIs currently available on the machine.
+If only `codex` is installed, `/model` shows only Codex and its models. If none of
+`codex`, `claude`, or `gemini` are installed, Agentty now fails at startup with an error
+telling you to install a supported CLI on `PATH`.
 
-<a id="backends-persistent-defaults"></a>
-For persistent defaults, choose a default model in the **Settings** tab
-(`Tab` to navigate, `Enter` to edit). The selected model determines which
-backend is used for new sessions. Stored defaults that point at an unavailable
-backend automatically fall back to the first available backend default instead
-of leaving the selector on a hidden choice.
+<a id="backends-persistent-defaults"></a> For persistent defaults, choose a default
+model in the **Settings** tab (`Tab` to navigate, `Enter` to edit). The selected model
+determines which backend is used for new sessions. Stored defaults that point at an
+unavailable backend automatically fall back to the first available backend default
+instead of leaving the selector on a hidden choice.
 
-<a id="backends-reasoning-level"></a>
-For Codex and Claude sessions, the **Settings** tab also exposes
-`Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`). The selected
-level is persisted per project and is sent with turns unless a session-specific
-override is active.
-For Claude, `xhigh` maps to `--effort max`, which is currently only supported
-by `claude-opus-4-7`.
+<a id="backends-reasoning-level"></a> For Codex and Claude sessions, the **Settings**
+tab also exposes `Default Reasoning Level` (`low`, `medium`, `high`, `xhigh`). The
+selected level is persisted per project and is sent with turns unless a session-specific
+override is active. For Claude, `xhigh` maps to `--effort max`, which is currently only
+supported by `claude-opus-4-7`.
 
 ## Available Models
 
-<a id="backends-available-models"></a>
-Each backend offers multiple models with different trade-offs between speed,
-quality, and cost.
+<a id="backends-available-models"></a> Each backend offers multiple models with
+different trade-offs between speed, quality, and cost.
 
 ### Gemini Models
 
-| Model ID | Description | Default |
-|----------|-------------|---------|
-| `gemini-3.1-pro-preview` | Higher-quality Gemini model for deeper reasoning. | Yes |
-| `gemini-3-flash-preview` | Fast Gemini model for quick iterations. | |
+| Model ID | Description | Default | |----------|-------------|---------| |
+`gemini-3.1-pro-preview` | Higher-quality Gemini model for deeper reasoning. | Yes | |
+`gemini-3-flash-preview` | Fast Gemini model for quick iterations. | |
 
 ### Claude Models
 
-| Model ID | Description | Default |
-|----------|-------------|---------|
-| `claude-opus-4-7` | Latest Claude Opus model for complex tasks. | Yes |
-| `claude-sonnet-4-6` | Balanced Claude model for quality and latency. | |
-| `claude-haiku-4-5-20251001` | Fast Claude model for lighter tasks. | |
+| Model ID | Description | Default | |----------|-------------|---------| |
+`claude-opus-4-7` | Latest Claude Opus model for complex tasks. | Yes | |
+`claude-sonnet-4-6` | Balanced Claude model for quality and latency. | | |
+`claude-haiku-4-5-20251001` | Fast Claude model for lighter tasks. | |
 
-Stored project defaults or session rows that still reference
-`claude-opus-4-6` are upgraded to `claude-opus-4-7` when Agentty loads them.
+Stored project defaults or session rows that still reference `claude-opus-4-6` are
+upgraded to `claude-opus-4-7` when Agentty loads them.
 
 ### Codex Models
 
-| Model ID | Description | Default |
-|----------|-------------|---------|
-| `gpt-5.4` | Broadly available Codex model for coding quality. | Yes |
-| `gpt-5.4-mini` | Small, fast Codex model for simpler coding tasks. | |
-| `gpt-5.5` | Newer Codex model with stronger coding performance when available. | |
-| `gpt-5.3-codex-spark` | Codex spark model for quick coding iterations. | |
+| Model ID | Description | Default | |----------|-------------|---------| | `gpt-5.4` |
+Broadly available Codex model for coding quality. | Yes | | `gpt-5.4-mini` | Small, fast
+Codex model for simpler coding tasks. | | | `gpt-5.5` | Newer Codex model with stronger
+coding performance when available. | | | `gpt-5.3-codex-spark` | Codex spark model for
+quick coding iterations. | |
 
 OpenAI announced GPT‑5.5 rollout to Codex on April 23, 2026, but described the
-availability as gradual, so Agentty keeps `gpt-5.4` as the default until
-`gpt-5.5` access is more consistently available across Codex users.
+availability as gradual, so Agentty keeps `gpt-5.4` as the default until `gpt-5.5`
+access is more consistently available across Codex users.
 
 ## Switching Models
 
-<a id="backends-switching-models"></a>
-You can switch the model for the current session using the `/model` slash
-command in the prompt input. This opens a two-step picker: first choose the
-backend, then choose one of its models. Both steps are filtered to locally
-available backends, and the current session backend remains preselected when it
+<a id="backends-switching-models"></a> You can switch the model for the current session
+using the `/model` slash command in the prompt input. This opens a two-step picker:
+first choose the backend, then choose one of its models. Both steps are filtered to
+locally available backends, and the current session backend remains preselected when it
 is still runnable on the current machine.
 
-You can also switch the reasoning level for the current session with the
-`/reasoning` slash command. The picker preselects the current effective
-reasoning level, using the active project's `Default Reasoning Level` whenever
-the session does not already have its own override.
+You can also switch the reasoning level for the current session with the `/reasoning`
+slash command. The picker preselects the current effective reasoning level, using the
+active project's `Default Reasoning Level` whenever the session does not already have
+its own override.
 
-<a id="backends-switching-default-model"></a>
-To change the **default model** persistently, use the **Settings** tab
-(`Tab` to navigate to it, `Enter` to edit).
+<a id="backends-switching-default-model"></a> To change the **default model**
+persistently, use the **Settings** tab (`Tab` to navigate to it, `Enter` to edit).

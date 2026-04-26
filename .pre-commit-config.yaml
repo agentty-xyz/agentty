@@ -19,7 +19,10 @@ repos:
         description: Format Markdown files.
         entry: mdformat
         language: python
-        additional_dependencies: [mdformat==0.7.22]
+        additional_dependencies:
+          - mdformat==0.7.22
+          - mdformat-front-matters==2.0.0
+        args: ['--wrap', '88']
         files: \.(md|markdown)$
         exclude: ^skills/[^/]+/SKILL\.md$
       - id: djlint-reformat
