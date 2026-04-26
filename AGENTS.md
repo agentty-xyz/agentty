@@ -11,9 +11,13 @@ TUI tool to manage agents.
 - **Update AGENTS.md:** Update the relevant `AGENTS.md` file only when a user instruction establishes a critical, persistent preference, convention, or workflow rule. Do not update it for one-off tasks.
 - **Semantic Guidance Only:** Keep `AGENTS.md` files focused on purpose, entry points, invariants, change routing, and docs-sync notes. Do not maintain exhaustive per-directory file inventories.
 - **Local Paths Only:** In `AGENTS.md`, do not use parent-directory relative paths. Each file should describe only its own directory or module boundary.
-- **Context First:** Before broad exploration, read the nearest available `AGENTS.md`. If the current directory does not have one, fall back to the closest ancestor guide and the architecture docs in `docs/site/content/docs/architecture/`.
-- **Context7 First:** If Context7 is connected as an MCP server, try it first for the latest documentation and API details for external tools and libraries relevant to the task. If Context7 is unavailable, use official docs as the fallback and note the fallback in your response.
+- **Context First:** Before broad exploration, read the nearest available `AGENTS.md`. Root invariants always apply; nearer guides add or specialize local behavior. If the current directory does not have one, fall back to the closest ancestor guide and the architecture docs in `docs/site/content/docs/architecture/`.
+- **Context7 First:** When a task asks about external library, framework, SDK, API, CLI, or cloud-service usage, and Context7 is connected as an MCP server, try Context7 before relying on memory. If Context7 is unavailable, use official docs as the fallback and note the fallback in your response.
 - **Test Isolation for External Commands:** Keep isolated single-command tests real when they validate one external command call, but for higher-level flows that involve multiple external command calls, always extract trait boundaries and mock them with `mockall` (`#[cfg_attr(test, mockall::automock)]`) to reduce runtime and flakiness.
+- **Diff-First Verification:** In every non-`main` branch, when a user asks for something that is not currently present on `main`, inspect the full worktree diff against the branch base/fork point before concluding what changed or remains. Include committed changes, uncommitted changes, and untracked files; avoid counting commits already applied to the base branch.
+- **Test Coverage:** Cover all touched behavior with automated tests when practical. Critical logic always needs regression coverage; boilerplate or untestable I/O can use a pragmatic exception.
+- **Feature Test Gate:** Every user-visible feature must ship with a corresponding E2E feature test in `crates/agentty/tests/e2e/` using the `FeatureTest` builder from `common.rs`. If infrastructure blocks the feature test, queue a feature-test card in `docs/plan/roadmap.md`.
+- **Legacy Retention Approval:** Prefer removing legacy code or behavior during development. If retaining legacy code or behavior for any reason, obtain explicit user approval first.
 
 ## Project Facts
 
@@ -24,6 +28,16 @@ TUI tool to manage agents.
 - **Workflow**: Agents are run in isolated git worktrees.
 - **Review**: Users review changes using the Diff view (`d` key in chat) which shows the output of `git diff` in the session's worktree.
 - **Output**: Agent `stdout` and `stderr` are captured in parallel using `tokio` tasks to ensure prompts and errors are visible.
+
+## Task Start Checklist
+
+1. Resolve whether the request targets Agentty product behavior or this local repository.
+1. Read the nearest applicable `AGENTS.md`; apply this root guide as the baseline and the nearest guide as the local specialization.
+1. Read `skills/AGENTS.md` and activate the smallest matching skill set when the task names a skill or matches a skill description.
+1. If the request involves external library, framework, SDK, API, CLI, or cloud-service details, query Context7 before answering or coding.
+1. On a non-`main` branch, inspect the full diff against the fork point before deciding what is already implemented or still missing.
+1. Before editing, identify any docs-sync targets, feature-test requirements, dependency impact, and validation hooks for the files likely to change.
+1. Preserve user changes. Never revert unrelated work unless explicitly asked.
 
 ## Product-vs-Repository Prompt Scope
 
@@ -191,28 +205,17 @@ dependencies and dependents. Use the dependency graph from workspace manifests o
 confidently prove the targeted checks cover the full impact, run the full
 repository suite instead.
 
-- **Markdown and docs:** Run `prek run mdformat --files <paths>` and
-  `prek run --files <paths>`. If `docs/site/` content changes, also run
-  `prek run zola-check --all-files --hook-stage manual`.
-- **Rust sources:** Run `prek run rustfmt-fix --files <paths> --hook-stage manual`
-  while iterating, then run `prek run cargo-check --files <paths>`. Add focused
-  tests for the changed crate and dependent crates, using the narrowest matching
-  hook when one exists. Source-test hooks such as `test-ag-forge-src`,
-  `test-agentty-src`, `test-ag-xtask-src`, and `test-testty-src` are appropriate
-  local checks when the touched Rust code maps cleanly to those workspace
-  members.
-- **Cargo manifests and lockfile:** Run `prek run cargo-check --files <paths>`,
-  `prek run clippy --files <paths> --hook-stage manual`, and tests for
-  affected workspace crates plus dependents. Use `prek run test-workspace --all-files --hook-stage manual` when dependency impact is broad or
-  uncertain.
-- **SQL migrations:** Run `prek run check-migrations --files <paths>` plus the
-  Rust checks and tests for crates that embed or query those migrations.
-- **Planning docs:** Run `prek run check-roadmap --all-files` when `docs/plan/`
-  changes.
-- **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml` when `.pre-commit-config.yaml` changes.
-- **User-visible UI behavior:** Add or update the required `FeatureTest` coverage.
-  Do not run the end-to-end feature suite locally; `.github/workflows/postsubmit.yml`
-  runs `test-agentty-e2e` on GitHub after merge to `main`.
+| Touched area | Required validation |
+| --- | --- |
+| Markdown and docs | Run `prek run mdformat --files <paths>` and `prek run --files <paths>`. |
+| `docs/site/` content | Run markdown/docs checks and `prek run zola-check --all-files --hook-stage manual`. |
+| Rust sources | Run `prek run rustfmt-fix --files <paths> --hook-stage manual` while iterating, then `prek run cargo-check --files <paths>`. Add focused tests for the changed crate and affected dependents. |
+| Workspace crate source tests | Use the narrowest matching hook when one exists: `test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, or `test-testty-src`. |
+| Cargo manifests and lockfile | Run `prek run cargo-check --files <paths>`, `prek run clippy --files <paths> --hook-stage manual`, and tests for affected workspace crates plus dependents. Use `prek run test-workspace --all-files --hook-stage manual` when dependency impact is broad or uncertain. |
+| SQL migrations | Run `prek run check-migrations --files <paths>` plus Rust checks and tests for crates that embed or query those migrations. |
+| Planning docs | Run `prek run check-roadmap --all-files`. |
+| Hook catalog | Run `prek run validate-prek-config --files .pre-commit-config.yaml`. |
+| User-visible UI behavior | Add or update required `FeatureTest` coverage. Do not run the E2E feature suite locally; `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub after merge to `main`. |
 
 ### Autofix Discipline
 
@@ -258,21 +261,29 @@ Use these slower hygiene checks in CI or when making broader changes:
 - **Boundary Governance:** In `app/` and `runtime/` orchestration code, reject direct `Command::new`, `Instant::now`, `SystemTime::now`, and direct filesystem/process calls unless they are routed behind an explicit trait boundary.
   - Treat directory walking, `Path::exists`, `Path::is_dir`, `Path::is_file`, `std::fs`, `tokio::fs`, and path canonicalization or copy helpers as filesystem boundary calls too; keep them in `infra/` and inject traits into orchestration layers.
 
-## Documentation Conventions
-
-- **Code Element Formatting:** Always wrap code elements in backticks (\`) when referencing them in documentation, commit messages, PR descriptions, or bullet points:
-  - Enum variants: `Sessions`, `Roadmap`
-  - Struct/Type names: `RoadmapPage`, `Tab`, `AppMode`
-  - Function names: `next_tab()`, `render()`
-  - Field names: `current_tab`, `table_state`
-  - Key bindings: `Tab`, `Enter`, `Esc`
-  - File names: `model.rs`, `AGENTS.md`
-  - Configuration values: `workspace = true`
-- This improves readability and clearly distinguishes code from prose.
-- **Rust Docs:** Add `///` doc comments to structs and all public functions/types in touched Rust files.
-- **Contextual Docs:** When touching a file for code changes and updating docs, also add or refresh missing/stale doc comments for related sibling and parent elements (for example `struct`, `enum`, `impl`, and closely related items) when needed for clarity.
-
 ## Documentation Sync
+
+Apply the smallest documentation update that matches the change. When multiple
+triggers apply, update all matching docs before handoff.
+
+| Trigger | Required documentation action |
+| --- | --- |
+| Added or updated code | Document the added or updated behavior using docstrings. In Rust, add or refresh `///` doc comments for touched public structs, functions, types, and closely related sibling or parent elements when needed for clarity. |
+| Documentation, commit messages, PR descriptions, or bullets reference code elements | Wrap code elements in backticks. |
+| User-facing features, agent backends, models, keybindings, session states, UI pages, or visible behavior change | Update the corresponding page under `docs/site/content/docs/`. |
+| Architecture boundaries, runtime flow, trait boundaries, workspace crate ownership, modules, or change-path guidance change | Update the matching architecture docs listed below. |
+| End-user prerequisites, usage instructions, features, or crate information changes | Update `README.md`. |
+| Release work changes shipped behavior | Update `CHANGELOG.md` using Keep a Changelog format. |
+
+Always wrap these code elements in backticks when referenced in prose:
+
+- Enum variants: `Sessions`, `Roadmap`
+- Struct/Type names: `RoadmapPage`, `Tab`, `AppMode`
+- Function names: `next_tab()`, `render()`
+- Field names: `current_tab`, `table_state`
+- Key bindings: `Tab`, `Enter`, `Esc`
+- File names: `model.rs`, `AGENTS.md`
+- Configuration values: `workspace = true`
 
 When adding, removing, or changing user-facing features (agent backends, models, keybindings, session states, UI pages), update the corresponding documentation page in `docs/site/content/docs/`. Source-side `AGENTS.md` files indicate which doc pages track their area.
 
@@ -324,31 +335,20 @@ Update architecture docs whenever you change:
 
 ## Git Worktree Integration
 
-Agentty automatically creates isolated git worktrees for sessions when launched from within a git repository:
-
-- **Automatic Behavior:** When `agentty` is launched from a git repository, each new session automatically gets its own git worktree with a dedicated branch.
-- **Branch Naming:** Worktree branches follow the pattern `wt/<hash>`, where `<hash>` is the first 8 characters of the session UUID (e.g., `wt/a1b2c3d4`).
-- **Base Branch:** The worktree is based on the branch that was active when `agentty` was launched.
-- **Location:** Worktrees are created in the session folder (under `~/.agentty/wt/<hash>/` by default, or the location specified by `AGENTTY_ROOT`), separate from the main repository.
-- **Session Creation:** If worktree creation fails (e.g., git not installed, permission errors), session creation fails atomically and displays an error message.
-- **Cleanup:** When a session is deleted, its worktree is automatically removed using `git worktree remove --force` and the corresponding branch is deleted.
-- **Non-Git Directories:** Sessions in non-git directories work normally without worktrees.
+Agentty automatically creates isolated git worktrees for sessions launched from a
+git repository. Treat this as product behavior, not as an instruction to mutate
+the local development checkout. Keep worktree lifecycle details aligned with
+`docs/site/content/docs/getting-started/overview.md` and
+`docs/site/content/docs/usage/workflow.md`.
 
 ## Agent Instructions
 
 - **Pragmatic Abstractions:** Introduce new abstractions only when they provide clear payoff (reuse, reduced complexity, or materially better testability). For straightforward changes, prefer direct in-place edits with minimal diff.
 - **No Pass-Through Wrappers:** Do not introduce functions whose body only forwards to another function call. Inline the call instead unless the wrapper adds real behavior, a meaningful boundary, or clear naming value that justifies the extra indirection.
-- **Test Coverage:** Try to maintain 100% test coverage when it makes sense. Ensure critical logic is always covered, but pragmatic exceptions are allowed for boilerplate or untestable I/O.
-- **Feature Test Gate:** Every user-visible feature (new UI page, keybinding, overlay, session state, prompt mode, or visual behavior change) must ship with a corresponding E2E feature test in `crates/agentty/tests/e2e/` using the `FeatureTest` builder from `common.rs`. Internal refactoring, protocol changes, and non-visual behavior do not require feature tests. Use the `FeatureTest` builder exclusively for new tests — do not use the legacy `save_feature_gif` pattern. When a feature test is blocked on missing infrastructure (e.g., mock agent channel for stateful session flows), queue a feature test card in `docs/plan/roadmap.md` instead of skipping coverage. Features that landed before this gate was established are tracked as backlog quality cards in the roadmap and do not block new work.
 - **Readability:** Use descriptive variable names. Do NOT use single-letter variables (e.g., `f`, `p`, `c`) or single-letter prefixes. Code should be self-documenting.
-- **Legacy Retention Approval:** Prefer removing legacy code/behavior during development. If retaining legacy code/behavior for any reason, obtain explicit user approval first.
-- **Diff-First Verification:** In every non-`main` branch, when a user asks for something that is not currently present on `main`, always inspect the full worktree diff against the branch base/fork point (typically `main`) before concluding what changed or what still needs to be implemented. This check must include committed and uncommitted changes, include untracked files, and avoid counting commits already applied to the base branch (for example via squash merge or cherry-pick).
-- Always cover all touched code with auto tests to prevent regressions and ensure stability.
 - When removing behavior, do not add tests or assertions that only verify the removed shortcut, label, or action is absent. Prefer tests that cover the remaining supported behavior.
 - Structure tests using "Arrange, Act, Assert" comments to clearly separate setup, execution, and verification phases.
 - When creating a new `AGENTS.md` file in any directory, always create corresponding symlinks: `ln -s AGENTS.md CLAUDE.md && ln -s AGENTS.md GEMINI.md` in the same directory.
-- Keep the root `README.md` up to date whenever new information is relevant to end users (e.g., new crates, features, usage instructions, or prerequisites).
-- **Changelog:** Update `CHANGELOG.md` when releasing a new version. Follow the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
 ## Skills
 
