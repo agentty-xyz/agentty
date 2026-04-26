@@ -252,33 +252,34 @@ const HACKER_PALETTE: ThemePalette = ThemePalette {
     warning_soft: Color::Rgb(198, 187, 116),
 };
 
-/// Warm dark palette inspired by the Horizon editor theme: deep navy surfaces,
-/// pink accent, peach warning, mint success, and soft lavender text.
+/// Cool dark palette inspired by the Horizon editor theme: deep navy surfaces,
+/// signature cyan accent, mint-green success, peach warning, crimson danger,
+/// and lavender question highlights.
 ///
-/// Token roles are tuned for visual harmony: `accent` keeps Horizon's signature
-/// pink while `danger` shifts to a crimson red so destructive states do not
-/// blend into focused chrome, `accent_soft` is a same-hue softer pink so
-/// `question` retains exclusive use of Horizon purple, and each `*_soft`
-/// variant is a desaturated same-hue companion to its base token rather than a
-/// different hue.
+/// Token roles are tuned for visual harmony: `accent` carries Horizon's cyan so
+/// borders and focused chrome read as the dominant brand, `danger` keeps a
+/// crimson red so destructive states stay semantically distinct, `info` shifts
+/// to a softer steel-blue so it does not collide with the cyan accent, and
+/// each `*_soft` variant is a desaturated same-hue companion to its base token
+/// rather than a different hue.
 const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
-    accent: Color::Rgb(233, 86, 120),
-    accent_soft: Color::Rgb(238, 142, 168),
-    border: Color::Rgb(64, 70, 92),
+    accent: Color::Rgb(89, 225, 227),
+    accent_soft: Color::Rgb(140, 232, 234),
+    border: Color::Rgb(52, 60, 82),
     danger: Color::Rgb(209, 67, 76),
     danger_soft: Color::Rgb(189, 105, 108),
-    info: Color::Rgb(38, 187, 217),
+    info: Color::Rgb(106, 158, 214),
     question: Color::Rgb(184, 119, 219),
-    surface: Color::Rgb(35, 37, 48),
-    surface_clarification: Color::Rgb(40, 47, 66),
+    surface: Color::Rgb(22, 24, 31),
+    surface_clarification: Color::Rgb(28, 32, 44),
     surface_danger: Color::Rgb(63, 32, 42),
-    surface_elevated: Color::Rgb(46, 49, 64),
+    surface_elevated: Color::Rgb(33, 36, 48),
     surface_success: Color::Rgb(28, 64, 54),
-    surface_overlay: Color::Rgb(22, 24, 32),
+    surface_overlay: Color::Rgb(14, 16, 22),
     text: Color::Rgb(214, 217, 232),
     text_muted: Color::Rgb(132, 136, 168),
     text_subtle: Color::Rgb(96, 100, 128),
-    success: Color::Rgb(64, 207, 160),
+    success: Color::Rgb(41, 211, 152),
     success_soft: Color::Rgb(126, 219, 188),
     warning: Color::Rgb(250, 194, 154),
     warning_soft: Color::Rgb(252, 215, 188),
@@ -546,12 +547,12 @@ mod tests {
         let palette = palette::active();
 
         // Assert
-        assert_eq!(palette.surface, Color::Rgb(35, 37, 48));
-        assert_eq!(palette.surface_elevated, Color::Rgb(46, 49, 64));
-        assert_eq!(palette.border, Color::Rgb(64, 70, 92));
+        assert_eq!(palette.surface, Color::Rgb(22, 24, 31));
+        assert_eq!(palette.surface_elevated, Color::Rgb(33, 36, 48));
+        assert_eq!(palette.border, Color::Rgb(52, 60, 82));
         assert_eq!(palette.text, Color::Rgb(214, 217, 232));
         assert_eq!(palette.text_muted, Color::Rgb(132, 136, 168));
-        assert_eq!(palette.accent, Color::Rgb(233, 86, 120));
+        assert_eq!(palette.accent, Color::Rgb(89, 225, 227));
     }
 
     #[test]
@@ -563,7 +564,7 @@ mod tests {
         let palette = palette::active();
 
         // Assert
-        assert_eq!(palette.success, Color::Rgb(64, 207, 160));
+        assert_eq!(palette.success, Color::Rgb(41, 211, 152));
         assert_eq!(palette.warning, Color::Rgb(250, 194, 154));
         assert_eq!(palette.danger, Color::Rgb(209, 67, 76));
         assert_eq!(palette.question, Color::Rgb(184, 119, 219));
