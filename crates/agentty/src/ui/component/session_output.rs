@@ -1824,6 +1824,43 @@ mod tests {
         assert!(text.contains("Session output now renders persisted summary markdown."));
     }
 
+    /// Verifies structured summaries render a blank row after their top-level
+    /// `Change Summary` heading just like focused-review output.
+    #[test]
+    fn test_output_lines_structured_summary_spaces_change_summary_header() {
+        // Arrange
+        let mut session = session_fixture();
+        session.summary = Some(summary_fixture());
+        session.status = Status::Review;
+
+        // Act
+        let lines = output_lines(
+            &session,
+            Rect::new(0, 0, 80, 8),
+            line_context(DoneSessionOutputMode::Summary, None, None, None),
+            None,
+        );
+        let rendered_lines = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let summary_header_index = rendered_lines
+            .iter()
+            .position(|line| line == "Change Summary")
+            .expect("structured summary header should be rendered");
+
+        // Assert
+        assert_eq!(
+            rendered_lines
+                .get(summary_header_index + 1)
+                .map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            rendered_lines
+                .get(summary_header_index + 2)
+                .map(String::as_str),
+            Some("Current Turn")
+        );
+    }
+
     /// Verifies previous-turn summaries stay above the currently active user
     /// prompt while a reply is running.
     #[test]

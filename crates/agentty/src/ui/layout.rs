@@ -480,13 +480,14 @@ pub(crate) fn question_at_mention_max_visible(
 /// Renders persisted summary payloads into display markdown.
 ///
 /// Structured JSON summaries are expanded into `Current Turn` and `Session
-/// Changes` sections. Plain text falls back unchanged, and empty content uses
-/// the shared `No changes` placeholder for both sections.
+/// Changes` sections with a blank line after the section headers. Plain text
+/// falls back unchanged, and empty content uses the shared `No changes`
+/// placeholder for both sections.
 pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
     let trimmed_summary = summary_text.trim();
     if let Ok(summary_payload) = serde_json::from_str::<AgentResponseSummary>(trimmed_summary) {
         return format!(
-            "## Change Summary\n### Current Turn\n{}\n\n### Session Changes\n{}",
+            "## Change Summary\n\n### Current Turn\n{}\n\n### Session Changes\n{}",
             summary_section_text(&summary_payload.turn),
             summary_section_text(&summary_payload.session)
         );
@@ -497,7 +498,7 @@ pub(crate) fn session_output_summary_markdown(summary_text: &str) -> String {
     }
 
     format!(
-        "## Change Summary\n### Current Turn\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}\n\n### \
+        "## Change Summary\n\n### Current Turn\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}\n\n### \
          Session Changes\n{SESSION_OUTPUT_DEFAULT_SUMMARY_TEXT}"
     )
 }
@@ -2068,6 +2069,7 @@ mod tests {
         let rendered_summary = session_output_summary_markdown(&summary_text);
 
         // Assert
+        assert!(rendered_summary.starts_with("## Change Summary\n\n### Current Turn\n"));
         assert!(rendered_summary.contains("Current Turn"));
         assert!(rendered_summary.contains("Session Changes"));
         assert!(rendered_summary.contains("Added the structured protocol summary."));
