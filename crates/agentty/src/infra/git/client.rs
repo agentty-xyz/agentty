@@ -11,15 +11,15 @@ use super::rebase::RebaseStepResult;
 use super::sync;
 use super::sync::{BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy};
 use super::{
-    abort_rebase, branch_tracking_statuses, commit_all, commit_all_preserving_single_commit,
-    create_worktree, current_upstream_reference, delete_branch, detect_git_info, diff,
-    fetch_remote, find_git_repo_root, get_ahead_behind, get_ref_ahead_behind, has_commits_since,
-    has_unmerged_paths, head_commit_message, head_hash, head_short_hash, is_rebase_in_progress,
-    is_worktree_clean, list_conflicted_files, list_local_commit_titles,
-    list_staged_conflict_marker_files, list_upstream_commit_titles, main_repo_root, pull_rebase,
-    push_current_branch, push_current_branch_to_remote_branch, rebase, rebase_continue,
-    rebase_start, remote_branch_exists, remove_worktree, repo_url, squash_merge, squash_merge_diff,
-    stage_all,
+    abort_rebase, branch_tracking_statuses, branch_upstream_reference, commit_all,
+    commit_all_preserving_single_commit, create_worktree, current_upstream_reference,
+    delete_branch, detect_git_info, diff, fetch_remote, find_git_repo_root, get_ahead_behind,
+    get_ref_ahead_behind, has_commits_since, has_unmerged_paths, head_commit_message, head_hash,
+    head_short_hash, is_rebase_in_progress, is_worktree_clean, list_conflicted_files,
+    list_local_commit_titles, list_staged_conflict_marker_files, list_upstream_commit_titles,
+    main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
+    rebase_continue, rebase_start, remote_branch_exists, remove_worktree, repo_url, squash_merge,
+    squash_merge_diff, stage_all,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -43,7 +43,7 @@ pub trait GitClient: Send + Sync {
     fn find_git_repo_root(&self, dir: PathBuf) -> GitFuture<Option<PathBuf>>;
 
     /// Creates a new worktree at `worktree_path` on `branch_name` from
-    /// `base_branch` inside `repo_path`.
+    /// `start_ref` inside `repo_path`.
     ///
     /// # Errors
     /// Returns an error when any underlying git command fails, when branches
@@ -53,7 +53,7 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         worktree_path: PathBuf,
         branch_name: String,
-        base_branch: String,
+        start_ref: String,
     ) -> GitFuture<Result<(), GitError>>;
 
     /// Removes the existing worktree at `worktree_path`.
@@ -284,6 +284,16 @@ pub trait GitClient: Send + Sync {
     fn current_upstream_reference(&self, repo_path: PathBuf)
     -> GitFuture<Result<String, GitError>>;
 
+    /// Resolves the upstream reference configured for `branch_name`.
+    ///
+    /// # Errors
+    /// Returns an error when the branch has no upstream tracking reference.
+    fn branch_upstream_reference(
+        &self,
+        repo_path: PathBuf,
+        branch_name: String,
+    ) -> GitFuture<Result<String, GitError>>;
+
     /// Fetches remote refs for `repo_path`.
     ///
     /// # Errors
@@ -374,11 +384,11 @@ impl GitClient for RealGitClient {
         repo_path: PathBuf,
         worktree_path: PathBuf,
         branch_name: String,
-        base_branch: String,
+        start_ref: String,
     ) -> GitFuture<Result<(), GitError>> {
-        Box::pin(async move {
-            create_worktree(repo_path, worktree_path, branch_name, base_branch).await
-        })
+        Box::pin(
+            async move { create_worktree(repo_path, worktree_path, branch_name, start_ref).await },
+        )
     }
 
     fn remove_worktree(&self, worktree_path: PathBuf) -> GitFuture<Result<(), GitError>> {
@@ -552,6 +562,14 @@ impl GitClient for RealGitClient {
         repo_path: PathBuf,
     ) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move { current_upstream_reference(repo_path).await })
+    }
+
+    fn branch_upstream_reference(
+        &self,
+        repo_path: PathBuf,
+        branch_name: String,
+    ) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { branch_upstream_reference(repo_path, branch_name).await })
     }
 
     fn fetch_remote(&self, repo_path: PathBuf) -> GitFuture<Result<(), GitError>> {

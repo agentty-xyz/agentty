@@ -592,6 +592,25 @@ pub async fn current_upstream_reference(repo_path: PathBuf) -> Result<String, Gi
     spawn_blocking(move || primary_upstream_reference(&repo_path)).await?
 }
 
+/// Returns the upstream reference configured for one local branch.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+/// * `branch_name` - Local branch whose upstream should be resolved
+///
+/// # Returns
+/// The configured upstream reference, for example `origin/main`.
+///
+/// # Errors
+/// Returns a [`GitError`] when the branch has no upstream or the upstream
+/// cannot be resolved.
+pub async fn branch_upstream_reference(
+    repo_path: PathBuf,
+    branch_name: String,
+) -> Result<String, GitError> {
+    spawn_blocking(move || branch_upstream_reference_sync(&repo_path, &branch_name)).await?
+}
+
 /// Fetches from the configured remote.
 ///
 /// # Arguments
@@ -779,6 +798,43 @@ fn parse_commit_titles(output: &str) -> Vec<String> {
         .filter(|title| !title.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+/// Resolves the first configured upstream reference for one local branch.
+fn branch_upstream_reference_sync(repo_path: &Path, branch_name: &str) -> Result<String, GitError> {
+    ensure_local_branch_exists(repo_path, branch_name)?;
+
+    let local_branch_ref = format!("refs/heads/{branch_name}");
+    let upstream_reference = run_git_command_sync(
+        repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(upstream:short)",
+            &local_branch_ref,
+        ],
+        "Failed to resolve upstream branch",
+    )?;
+    let upstream_reference = upstream_reference.trim().to_string();
+    if upstream_reference.is_empty() {
+        return Err(GitError::NoUpstream {
+            branch_name: branch_name.to_string(),
+        });
+    }
+
+    Ok(upstream_reference)
+}
+
+/// Verifies the local branch exists before upstream lookup falls back to
+/// [`GitError::NoUpstream`] for an empty tracking ref.
+fn ensure_local_branch_exists(repo_path: &Path, branch_name: &str) -> Result<(), GitError> {
+    let local_branch_ref = format!("refs/heads/{branch_name}");
+    run_git_command_sync(
+        repo_path,
+        &["show-ref", "--verify", "--quiet", &local_branch_ref],
+        "Failed to resolve local branch",
+    )?;
+
+    Ok(())
 }
 
 /// Parses repo-wide branch tracking information from `git for-each-ref`.
@@ -1378,6 +1434,71 @@ main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
 
         // Assert
         assert_eq!(upstream_reference, "origin/main");
+    }
+
+    #[tokio::test]
+    async fn branch_upstream_reference_resolves_named_branch_when_not_checked_out() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let remote_dir = tempdir().expect("failed to create remote temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(remote_dir.path(), &["init", "--bare"]);
+        let remote_path = remote_dir.path().to_string_lossy().to_string();
+        run_git_command(temp_dir.path(), &["remote", "add", "origin", &remote_path]);
+        run_git_command(temp_dir.path(), &["push", "-u", "origin", "main"]);
+        run_git_command(temp_dir.path(), &["checkout", "-b", "feature/local"]);
+
+        // Act
+        let upstream_reference =
+            branch_upstream_reference(temp_dir.path().to_path_buf(), "main".to_string())
+                .await
+                .expect("failed to resolve named branch upstream reference");
+
+        // Assert
+        assert_eq!(upstream_reference, "origin/main");
+    }
+
+    #[tokio::test]
+    async fn branch_upstream_reference_returns_no_upstream_for_untracked_branch() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+
+        // Act
+        let error = branch_upstream_reference(temp_dir.path().to_path_buf(), "main".to_string())
+            .await
+            .expect_err("untracked branch should report no upstream");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::NoUpstream {
+                ref branch_name
+            } if branch_name == "main"
+        ));
+    }
+
+    #[tokio::test]
+    async fn branch_upstream_reference_errors_for_missing_branch() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+
+        // Act
+        let error =
+            branch_upstream_reference(temp_dir.path().to_path_buf(), "missing-branch".to_string())
+                .await
+                .expect_err("missing branch should fail before upstream fallback");
+
+        // Assert
+        assert!(matches!(
+            error,
+            GitError::CommandFailed {
+                ref command,
+                ref stderr,
+            } if command == "git show-ref --verify --quiet refs/heads/missing-branch"
+                && stderr == "Failed to resolve local branch: Unknown git error"
+        ));
     }
 
     #[tokio::test]

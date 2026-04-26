@@ -872,12 +872,17 @@ mod tests {
         mock
     }
 
-    /// Allows branch detection calls to fall back to derived session branch
-    /// names in tests that do not care about exact detected refs.
+    /// Allows branch and upstream-ref discovery calls to fall back to defaults
+    /// in tests that do not care about exact detected refs.
     fn allow_detect_git_info(mock: &mut git::MockGitClient) {
         mock.expect_detect_git_info()
             .times(0..)
             .returning(|_| Box::pin(async { None }));
+        mock.expect_branch_upstream_reference()
+            .times(0..)
+            .returning(|_, branch_name| {
+                Box::pin(async move { Ok(format!("origin/{branch_name}")) })
+            });
     }
 
     /// Builds a merge-focused mock git client for no-op merge scenarios.
@@ -946,6 +951,9 @@ mod tests {
         mock.expect_current_upstream_reference()
             .times(0..)
             .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
+        mock.expect_branch_upstream_reference()
+            .times(0..)
+            .returning(|_, _| Box::pin(async { Ok("origin/main".to_string()) }));
         mock.expect_find_git_repo_root()
             .times(0..)
             .returning(move |_| {

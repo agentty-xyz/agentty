@@ -31,7 +31,7 @@ pub async fn find_git_repo_root(dir: PathBuf) -> Option<PathBuf> {
 /// * `repo_path` - Path to the git repository root
 /// * `worktree_path` - Path where the worktree should be created
 /// * `branch_name` - Name of the new branch to create
-/// * `base_branch` - Name of the branch to base the new branch on
+/// * `start_ref` - Git ref used as the new worktree branch starting point
 ///
 /// # Returns
 /// Ok(()) on success, Err([`GitError`]) on failure.
@@ -43,7 +43,7 @@ pub async fn create_worktree(
     repo_path: PathBuf,
     worktree_path: PathBuf,
     branch_name: String,
-    base_branch: String,
+    start_ref: String,
 ) -> Result<(), GitError> {
     spawn_blocking(move || {
         let worktree_path = worktree_path.to_string_lossy().to_string();
@@ -55,7 +55,7 @@ pub async fn create_worktree(
                 "-b",
                 branch_name.as_str(),
                 worktree_path.as_str(),
-                base_branch.as_str(),
+                start_ref.as_str(),
             ],
             "Git worktree command failed",
         )?;

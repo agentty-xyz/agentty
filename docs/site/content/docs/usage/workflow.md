@@ -53,6 +53,13 @@ tracks a remote, the footer also shows a second ahead/behind segment using the
 compact form `[stats] main | [stats] local -> remote`. Before first publish,
 the same second segment still renders for the local branch as `[stats] local`.
 
+When the active base branch tracks an upstream, new session worktrees start from
+the locally cached upstream ref while still targeting the local base branch name
+for diffs, merges, and review requests. This keeps unpublished local commits on
+branches such as `main` out of pull requests created from session branches. Run
+list-mode sync first if the local upstream ref may be stale; otherwise the
+session worktree can be missing commits that already exist on the remote.
+
 ## Session Lifecycle
 
 <a id="usage-session-lifecycle"></a>
@@ -218,10 +225,10 @@ each `Enter` as one ordered draft message, immediately show a
 shortcut hidden until a worktree exists, and start only after you press `s`.
 Once drafts are staged, the same panel previews the staged bundle before
 launch. The draft worktree is created at that start step so the branch is
-based on the latest local base-branch state instead of the moment the draft
-session was first created. Until that deferred worktree exists, prompt `@`
-lookup suggestions index the active project root so file search still works
-while you stage the draft bundle.
+based on the base branch's tracked upstream ref when one is configured,
+instead of the moment the draft session was first created. Until that deferred
+worktree exists, prompt `@` lookup suggestions index the active project root
+so file search still works while you stage the draft bundle.
 If you decide not to start that staged bundle, return to the **Sessions** list
 and press `c` to cancel the still-unstarted draft session directly.
 

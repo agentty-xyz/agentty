@@ -2290,9 +2290,13 @@ mod tests {
         )));
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
-            .expect_push_current_branch()
+            .expect_push_current_branch_to_remote_branch()
             .once()
-            .returning(|_| {
+            .with(
+                mockall::predicate::eq(PathBuf::from("/tmp/review-session")),
+                mockall::predicate::eq(session::session_branch("session-1")),
+            )
+            .returning(|_, _| {
                 Box::pin(async {
                     Err(crate::infra::git::GitError::OutputParse(
                         "Git push failed: fatal: could not read Username for \
@@ -2506,9 +2510,13 @@ mod tests {
         )));
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
-            .expect_push_current_branch()
+            .expect_push_current_branch_to_remote_branch()
+            .with(
+                mockall::predicate::eq(PathBuf::from("/tmp/review-session")),
+                mockall::predicate::eq(session::session_branch("session-1")),
+            )
             .once()
-            .returning(|_| Box::pin(async { Ok("origin/wt/session-1".to_string()) }));
+            .returning(|_, _| Box::pin(async { Ok("origin/wt/session-1".to_string()) }));
         mock_git_client
             .expect_repo_url()
             .with(mockall::predicate::eq(PathBuf::from("/tmp/review-session")))

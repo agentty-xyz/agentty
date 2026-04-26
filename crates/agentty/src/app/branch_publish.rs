@@ -469,7 +469,9 @@ async fn publish_pull_request(
 ///
 /// When `remote_branch_name` is supplied and the session has no prior
 /// `published_upstream_ref`, a pre-flight `git ls-remote` check blocks
-/// the push if the remote branch already exists.
+/// the push if the remote branch already exists. Without a caller-supplied
+/// branch name, the default session branch name is still pushed explicitly so
+/// Git does not reuse an inherited base-branch upstream such as `origin/main`.
 pub(crate) async fn push_session_branch_to_remote(
     db: &db::AppRepositories,
     folder: PathBuf,
@@ -480,6 +482,8 @@ pub(crate) async fn push_session_branch_to_remote(
     published_upstream_ref: Option<&str>,
 ) -> Result<String, BranchPublishTaskFailure> {
     let retry_text = retry_action_text(publish_branch_action);
+    let target_branch =
+        remote_branch_name.map_or_else(|| session::session_branch(session_id), str::to_string);
 
     if let Some(target_branch) = remote_branch_name
         && published_upstream_ref.is_none()
@@ -518,33 +522,28 @@ pub(crate) async fn push_session_branch_to_remote(
         }
     }
 
-    let upstream_reference = match remote_branch_name {
-        Some(remote_branch_name) => {
-            git_client
-                .push_current_branch_to_remote_branch(folder, remote_branch_name.to_string())
-                .await
-        }
-        None => git_client.push_current_branch(folder).await,
-    }
-    .map_err(|error| {
-        let detail = error.to_string();
-        let normalized = detail.to_ascii_lowercase();
+    let upstream_reference = git_client
+        .push_current_branch_to_remote_branch(folder, target_branch)
+        .await
+        .map_err(|error| {
+            let detail = error.to_string();
+            let normalized = detail.to_ascii_lowercase();
 
-        if has_authentication_error_keywords(&normalized) {
-            BranchPublishTaskFailure::blocked(
-                publish_branch_action,
-                git_push_authentication_message(
-                    detected_forge_kind_from_git_push_error(&detail),
-                    retry_text,
-                ),
-            )
-        } else {
-            BranchPublishTaskFailure::failed(
-                publish_branch_action,
-                format!("Failed to publish session branch: {error}"),
-            )
-        }
-    })?;
+            if has_authentication_error_keywords(&normalized) {
+                BranchPublishTaskFailure::blocked(
+                    publish_branch_action,
+                    git_push_authentication_message(
+                        detected_forge_kind_from_git_push_error(&detail),
+                        retry_text,
+                    ),
+                )
+            } else {
+                BranchPublishTaskFailure::failed(
+                    publish_branch_action,
+                    format!("Failed to publish session branch: {error}"),
+                )
+            }
+        })?;
 
     db.update_session_published_upstream_ref(session_id, Some(&upstream_reference))
         .await
@@ -1193,11 +1192,20 @@ mod tests {
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
+        let expected_folder = session_folder.clone();
+        let expected_branch = session::session_branch("session-id");
+        let expected_upstream = format!("origin/{expected_branch}");
+        let expected_upstream_assertion = expected_upstream.clone();
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
-            .expect_push_current_branch()
+            .expect_push_current_branch_to_remote_branch()
             .once()
-            .returning(|_| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+            .withf(move |folder, branch| folder == &expected_folder && branch == &expected_branch)
+            .returning(move |_, _| {
+                let expected_upstream = expected_upstream.clone();
+
+                Box::pin(async move { Ok(expected_upstream) })
+            });
 
         // Act
         let result = push_session_branch_to_remote(
@@ -1213,7 +1221,7 @@ mod tests {
 
         // Assert
         let upstream = result.expect("push should succeed");
-        assert_eq!(upstream, "origin/wt/session-id");
+        assert_eq!(upstream, expected_upstream_assertion);
     }
 
     #[tokio::test]
@@ -1234,7 +1242,7 @@ mod tests {
             .expect_remote_branch_exists()
             .once()
             .returning(|_, _| {
-                Box::pin(async {
+                Box::pin(async move {
                     Err(git::GitError::CommandFailed {
                         command: "git ls-remote".to_string(),
                         stderr: "fatal: could not read Username for \
@@ -1277,14 +1285,20 @@ mod tests {
             .await
             .expect("failed to insert session");
         let session_folder = PathBuf::from("/tmp/session-worktree");
+        let expected_folder = session_folder.clone();
+        let expected_branch = session::session_branch("session-id");
+        let expected_push_command = format!("git push origin HEAD:{expected_branch}");
         let mut mock_git_client = git::MockGitClient::new();
         mock_git_client
-            .expect_push_current_branch()
+            .expect_push_current_branch_to_remote_branch()
             .once()
-            .returning(|_| {
+            .withf(move |folder, branch| folder == &expected_folder && branch == &expected_branch)
+            .returning(move |_, _| {
+                let expected_push_command = expected_push_command.clone();
+
                 Box::pin(async {
                     Err(git::GitError::CommandFailed {
-                        command: "git push".to_string(),
+                        command: expected_push_command,
                         stderr:
                             "fatal: Authentication failed for 'https://gitlab.com/org/repo.git/'"
                                 .to_string(),

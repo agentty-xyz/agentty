@@ -21,6 +21,13 @@ pub enum GitError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
+    /// A local branch has no configured upstream tracking branch.
+    #[error("No upstream branch configured for `{branch_name}`")]
+    NoUpstream {
+        /// Local branch whose upstream tracking branch could not be resolved.
+        branch_name: String,
+    },
+
     /// A `tokio::task::spawn_blocking` join failed.
     #[error("Join error: {0}")]
     Join(#[from] tokio::task::JoinError),
@@ -78,5 +85,19 @@ mod tests {
         // Assert
         assert!(matches!(error, GitError::Io(_)));
         assert!(error.to_string().contains("file missing"));
+    }
+
+    #[test]
+    fn no_upstream_display_names_branch() {
+        // Arrange
+        let error = GitError::NoUpstream {
+            branch_name: "main".to_string(),
+        };
+
+        // Act / Assert
+        assert_eq!(
+            error.to_string(),
+            "No upstream branch configured for `main`"
+        );
     }
 }
