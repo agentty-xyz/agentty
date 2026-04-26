@@ -19,7 +19,7 @@ use super::{
     list_local_commit_titles, list_staged_conflict_marker_files, list_upstream_commit_titles,
     main_repo_root, pull_rebase, push_current_branch, push_current_branch_to_remote_branch, rebase,
     rebase_continue, rebase_start, remote_branch_exists, remove_worktree, repo_url, squash_merge,
-    squash_merge_diff, stage_all,
+    squash_merge_diff, stage_all, tracked_worktree_status, worktree_status,
 };
 
 /// Boxed async result used by [`GitClient`] trait methods.
@@ -228,6 +228,18 @@ pub trait GitClient: Send + Sync {
     /// # Errors
     /// Returns an error when status inspection fails.
     fn is_worktree_clean(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>>;
+
+    /// Returns raw porcelain status for the worktree in `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when status inspection fails.
+    fn worktree_status(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
+
+    /// Returns raw porcelain status for tracked files in `repo_path`.
+    ///
+    /// # Errors
+    /// Returns an error when tracked-file status inspection fails.
+    fn tracked_worktree_status(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>>;
 
     /// Returns whether `HEAD` contains commits not reachable from
     /// `base_branch`.
@@ -521,6 +533,14 @@ impl GitClient for RealGitClient {
 
     fn is_worktree_clean(&self, repo_path: PathBuf) -> GitFuture<Result<bool, GitError>> {
         Box::pin(async move { is_worktree_clean(repo_path).await })
+    }
+
+    fn worktree_status(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { worktree_status(repo_path).await })
+    }
+
+    fn tracked_worktree_status(&self, repo_path: PathBuf) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { tracked_worktree_status(repo_path).await })
     }
 
     fn has_commits_since(
@@ -989,6 +1009,42 @@ mod tests {
 
         // Assert
         assert!(!is_clean);
+    }
+
+    #[tokio::test]
+    async fn test_worktree_status_reports_dirty_repo_paths() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        fs::write(dir.path().join("README.md"), "dirty change").expect("failed to write change");
+        fs::write(dir.path().join("new-file.txt"), "new").expect("failed to write new file");
+
+        // Act
+        let status = worktree_status(dir.path().to_path_buf())
+            .await
+            .expect("failed to read worktree status");
+
+        // Assert
+        assert!(status.contains("README.md"));
+        assert!(status.contains("new-file.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_tracked_worktree_status_ignores_untracked_repo_paths() {
+        // Arrange
+        let dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(dir.path());
+        fs::write(dir.path().join("README.md"), "dirty change").expect("failed to write change");
+        fs::write(dir.path().join("new-file.txt"), "new").expect("failed to write new file");
+
+        // Act
+        let status = tracked_worktree_status(dir.path().to_path_buf())
+            .await
+            .expect("failed to read tracked worktree status");
+
+        // Assert
+        assert!(status.contains("README.md"));
+        assert!(!status.contains("new-file.txt"));
     }
 
     #[tokio::test]

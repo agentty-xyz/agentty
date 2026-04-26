@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use super::worker::{SessionCommand, TurnMetadata};
 use super::{
-    SessionTaskService, draft, session_branch, session_folder, unix_timestamp_from_system_time,
+    SessionTaskService, draft, isolation, session_branch, session_folder,
+    unix_timestamp_from_system_time,
 };
 use crate::app::session::SessionError;
 use crate::app::{
@@ -441,7 +442,15 @@ impl SessionManager {
             )
         };
 
+        let worktree_branch = session_branch(&persisted_session_id);
         if services.fs_client().is_dir(folder.clone()) {
+            isolation::validate_session_worktree(
+                services.fs_client().as_ref(),
+                services.git_client().as_ref(),
+                &folder,
+                &persisted_session_id,
+            )
+            .await?;
             agent::create_backend(session_model.kind())
                 .setup(&folder)
                 .map_err(|error| {
@@ -453,7 +462,6 @@ impl SessionManager {
         }
 
         let repo_root = self.load_session_repo_root(services, session_id).await?;
-        let worktree_branch = session_branch(&persisted_session_id);
 
         self.create_session_worktree(
             services,
@@ -3085,8 +3093,28 @@ mod tests {
         let database = database_with_session(&session).await;
         let mut session_manager = session_manager_with_one_session(session);
         let mut mock_fs_client = fs::MockFsClient::new();
-        mock_fs_client.expect_is_dir().once().return_const(true);
+        mock_fs_client.expect_is_dir().times(3).return_const(true);
+        mock_fs_client
+            .expect_canonicalize()
+            .times(2)
+            .returning(|path| {
+                Box::pin(async move {
+                    if path == PathBuf::from("/tmp/project") {
+                        Ok(PathBuf::from("/tmp/project"))
+                    } else {
+                        Ok(PathBuf::from("/tmp/session"))
+                    }
+                })
+            });
         let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/session-".to_string()) }));
+        mock_git_client
+            .expect_main_repo_root()
+            .once()
+            .returning(|_| Box::pin(async { Ok(PathBuf::from("/tmp/project")) }));
         mock_git_client.expect_create_worktree().times(0);
         mock_git_client.expect_find_git_repo_root().times(0);
         let services = test_services_with_fs_client(

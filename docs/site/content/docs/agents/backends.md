@@ -182,12 +182,16 @@ against the structured response protocol.
   so large diffs and review prompts do not hit OS argv length limits.
 - Claude turns pass `--strict-mcp-config`, so only MCP servers explicitly provided by
   Agentty are allowed (none by default).
-- Claude turns allow file-modifying tools (`Edit`, `MultiEdit`, `Write`) plus `Bash`,
-  `EnterPlanMode`, and `ExitPlanMode` for unattended worktree edits.
+- Claude turns allow shell execution (`Bash`), file-modifying tools (`Edit`,
+  `MultiEdit`, `Write`), plus `EnterPlanMode` and `ExitPlanMode` for unattended worktree
+  edits. Agentty runs Claude with the session worktree as the process working directory.
 - Codex app-server turns enforce structured output through transport `outputSchema`; the
   same transport is also used for one-shot Codex utility prompts, and prompt
   instructions embed the same full self-descriptive schema for consistency across
   providers.
+- Codex app-server file-change approvals are auto-accepted only when the declared paths
+  stay inside the session worktree. Codex command approvals and Gemini ACP permission
+  requests are denied/cancelled when Agentty cannot prove a session-local write set.
 - Claude always uses structured protocol output, including isolated one-shot utility
   prompts, through native schema enforcement plus prompt instructions.
 - Codex app-server turns include `outputSchema` at transport level and still require the

@@ -143,6 +143,7 @@ impl CodexSessionRuntime {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -625,16 +626,18 @@ mod tests {
     }
 
     #[test]
-    fn build_pre_action_approval_response_for_command_request_uses_mode_decision() {
+    fn build_pre_action_approval_response_rejects_command_requests() {
         // Arrange
         let response_value = serde_json::json!({
             "id": "approval-1",
             "method": "item/commandExecution/requestApproval",
         });
+        let session_folder = Path::new("/tmp/session");
 
         // Act
-        let approval_response = policy::build_pre_action_approval_response(&response_value)
-            .expect("approval response should be generated");
+        let approval_response =
+            policy::build_pre_action_approval_response(&response_value, session_folder)
+                .expect("approval response should be generated");
 
         // Assert
         assert_eq!(
@@ -642,9 +645,67 @@ mod tests {
             serde_json::json!({
                 "id": "approval-1",
                 "result": {
-                    "decision": "accept"
+                    "decision": "reject"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn build_pre_action_approval_response_accepts_session_local_file_change() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "approval-1",
+            "method": "item/fileChange/requestApproval",
+            "params": {
+                "changes": [{
+                    "path": "/tmp/session/src/main.rs"
+                }]
+            }
+        });
+        let session_folder = Path::new("/tmp/session");
+
+        // Act
+        let approval_response =
+            policy::build_pre_action_approval_response(&response_value, session_folder)
+                .expect("approval response should be generated");
+
+        // Assert
+        assert_eq!(
+            approval_response
+                .get("result")
+                .and_then(|result| result.get("decision"))
+                .and_then(Value::as_str),
+            Some("accept")
+        );
+    }
+
+    #[test]
+    fn build_pre_action_approval_response_rejects_outside_file_change() {
+        // Arrange
+        let response_value = serde_json::json!({
+            "id": "approval-1",
+            "method": "item/fileChange/requestApproval",
+            "params": {
+                "changes": [{
+                    "path": "/tmp/project/src/main.rs"
+                }]
+            }
+        });
+        let session_folder = Path::new("/tmp/session");
+
+        // Act
+        let approval_response =
+            policy::build_pre_action_approval_response(&response_value, session_folder)
+                .expect("approval response should be generated");
+
+        // Assert
+        assert_eq!(
+            approval_response
+                .get("result")
+                .and_then(|result| result.get("decision"))
+                .and_then(Value::as_str),
+            Some("reject")
         );
     }
 

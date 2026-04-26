@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::SessionTaskService;
+use super::{SessionTaskService, isolation};
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{
@@ -164,6 +164,68 @@ impl SessionWorkerContext {
 struct TurnPersistence<'a> {
     context: &'a SessionWorkerContext,
     session_model: AgentModel,
+}
+
+/// Main-checkout tracked-file status captured before one provider turn.
+struct MainCheckoutSnapshot {
+    main_repo_root: PathBuf,
+    tracked_status_output: String,
+}
+
+impl MainCheckoutSnapshot {
+    /// Captures the main repository checkout tracked status before a provider
+    /// turn.
+    ///
+    /// # Errors
+    /// Returns a workflow error when the session folder is not a valid linked
+    /// worktree or the main-checkout tracked status cannot be read.
+    async fn capture(context: &SessionWorkerContext) -> Result<Self, SessionError> {
+        let validation = isolation::validate_session_worktree(
+            context.fs_client.as_ref(),
+            context.git_client.as_ref(),
+            &context.folder,
+            &context.session_id,
+        )
+        .await?;
+        let tracked_status_output = context
+            .git_client
+            .tracked_worktree_status(validation.main_repo_root.clone())
+            .await
+            .map_err(Self::status_error)?;
+
+        Ok(Self {
+            main_repo_root: validation.main_repo_root,
+            tracked_status_output,
+        })
+    }
+
+    /// Verifies no provider turn changed tracked files in the main checkout.
+    ///
+    /// # Errors
+    /// Returns a workflow error when the main-checkout tracked status changed
+    /// or cannot be read after the provider turn.
+    async fn verify_unchanged(&self, context: &SessionWorkerContext) -> Result<(), SessionError> {
+        let current_status = context
+            .git_client
+            .tracked_worktree_status(self.main_repo_root.clone())
+            .await
+            .map_err(Self::status_error)?;
+        if current_status != self.tracked_status_output {
+            return Err(SessionError::Workflow(format!(
+                "Session isolation violation: main checkout `{}` changed during the session turn",
+                self.main_repo_root.display()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Converts main-checkout tracked status failures into workflow errors.
+    fn status_error(error: crate::infra::git::GitError) -> SessionError {
+        SessionError::Workflow(format!(
+            "Session isolation violation: failed to inspect main checkout tracked status: {error}"
+        ))
+    }
 }
 
 /// Runtime snapshot required to create or reuse one session worker.
@@ -533,6 +595,26 @@ impl SessionWorkerService {
             .await;
         }
 
+        let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                SessionManager::cleanup_prompt_attachment_paths(
+                    context.fs_client.clone(),
+                    prompt.local_image_paths().cloned().collect(),
+                )
+                .await;
+                let result = apply_turn_result(
+                    context,
+                    turn_metadata,
+                    Err(AgentError::Backend(error.to_string())),
+                )
+                .await;
+                finalize_channel_turn(context, &result).await;
+
+                return result.map(|_| ());
+            }
+        };
+
         let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
         let reasoning_level =
             load_session_reasoning_level(&context.db, &context.session_id, session_project_id)
@@ -588,40 +670,15 @@ impl SessionWorkerService {
 
         let _ = consumer.await;
 
+        let turn_result = match turn_result {
+            Ok(result) => match main_checkout_snapshot.verify_unchanged(context).await {
+                Ok(()) => Ok(result),
+                Err(error) => Err(AgentError::Backend(error.to_string())),
+            },
+            Err(error) => Err(error),
+        };
         let result = apply_turn_result(context, turn_metadata, turn_result).await;
-
-        if let Some((session_size, added_lines, deleted_lines)) =
-            SessionTaskService::refresh_persisted_session_diff_stats(
-                &context.db,
-                context.fs_client.as_ref(),
-                context.git_client.as_ref(),
-                &context.session_id,
-                &context.folder,
-            )
-            .await
-        {
-            // Fire-and-forget: receiver may be dropped during shutdown.
-            let _ = context.app_event_tx.send(AppEvent::SessionSizeUpdated {
-                added_lines,
-                deleted_lines,
-                session_id: context.session_id.clone(),
-                session_size,
-            });
-        }
-
-        if let Some(target_status) = status_update_after_turn_result(&result) {
-            // Best-effort: status transition failure is non-critical.
-            let _ = SessionTaskService::update_status(
-                &context.status,
-                context.clock.as_ref(),
-                &context.db,
-                &context.app_event_tx,
-                &context.session_update_versions,
-                &context.session_id,
-                target_status,
-            )
-            .await;
-        }
+        finalize_channel_turn(context, &result).await;
 
         result.map(|_| ())
     }
@@ -959,6 +1016,45 @@ async fn apply_turn_result(
 
             Err(SessionError::Workflow(error_text))
         }
+    }
+}
+
+/// Refreshes durable session projections and status after a turn result.
+async fn finalize_channel_turn(
+    context: &SessionWorkerContext,
+    result: &Result<Status, SessionError>,
+) {
+    if let Some((session_size, added_lines, deleted_lines)) =
+        SessionTaskService::refresh_persisted_session_diff_stats(
+            &context.db,
+            context.fs_client.as_ref(),
+            context.git_client.as_ref(),
+            &context.session_id,
+            &context.folder,
+        )
+        .await
+    {
+        // Fire-and-forget: receiver may be dropped during shutdown.
+        let _ = context.app_event_tx.send(AppEvent::SessionSizeUpdated {
+            added_lines,
+            deleted_lines,
+            session_id: context.session_id.clone(),
+            session_size,
+        });
+    }
+
+    if let Some(target_status) = status_update_after_turn_result(result) {
+        // Best-effort: status transition failure is non-critical.
+        let _ = SessionTaskService::update_status(
+            &context.status,
+            context.clock.as_ref(),
+            &context.db,
+            &context.app_event_tx,
+            &context.session_update_versions,
+            &context.session_id,
+            target_status,
+        )
+        .await;
     }
 }
 
@@ -1454,6 +1550,10 @@ mod tests {
     fn mock_fs_client_with_existing_directories() -> fs::MockFsClient {
         let mut fs_client = fs::MockFsClient::new();
         fs_client.expect_is_dir().times(0..).returning(|_| true);
+        fs_client
+            .expect_canonicalize()
+            .times(0..)
+            .returning(|path| Box::pin(async move { Ok(path) }));
 
         fs_client
     }
@@ -1718,6 +1818,23 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(()) }));
 
         let mut mock_git_client = MockGitClient::new();
+        let main_repo_root = base_dir.path().join("main");
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client.expect_main_repo_root().once().returning({
+            let main_repo_root = main_repo_root.clone();
+
+            move |_| {
+                let main_repo_root = main_repo_root.clone();
+                Box::pin(async move { Ok(main_repo_root) })
+            }
+        });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .once()
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
@@ -1829,6 +1946,23 @@ mod tests {
             });
 
         let mut mock_git_client = MockGitClient::new();
+        let main_repo_root = base_dir.path().join("main");
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client.expect_main_repo_root().once().returning({
+            let main_repo_root = main_repo_root.clone();
+
+            move |_| {
+                let main_repo_root = main_repo_root.clone();
+                Box::pin(async move { Ok(main_repo_root) })
+            }
+        });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));
@@ -1877,6 +2011,123 @@ mod tests {
             result.is_ok(),
             "stale cancelled token should not cancel the new turn"
         );
+    }
+
+    #[tokio::test]
+    /// Verifies a turn that dirties the main checkout is converted into a
+    /// session isolation error before the successful agent response is applied.
+    async fn test_run_channel_turn_rejects_main_checkout_status_changes() {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await;
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "sess1",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+
+        let mut mock_channel = MockAgentChannel::new();
+        mock_channel
+            .expect_run_turn()
+            .once()
+            .returning(|_session_id, _req, _events| {
+                Box::pin(async {
+                    Ok(TurnResult {
+                        assistant_message: AgentResponse {
+                            answer: "done".to_string(),
+                            questions: Vec::new(),
+                            summary: None,
+                        },
+                        context_reset: false,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        provider_conversation_id: None,
+                    })
+                })
+            });
+
+        let main_repo_root = base_dir.path().join("main");
+        let status_call_count = Arc::new(Mutex::new(0));
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_detect_git_info()
+            .once()
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client.expect_main_repo_root().once().returning({
+            let main_repo_root = main_repo_root.clone();
+
+            move |_| {
+                let main_repo_root = main_repo_root.clone();
+                Box::pin(async move { Ok(main_repo_root) })
+            }
+        });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(2)
+            .returning(move |_| {
+                let status_call_count = Arc::clone(&status_call_count);
+
+                Box::pin(async move {
+                    let mut call_count = status_call_count
+                        .lock()
+                        .expect("status call count lock poisoned");
+                    *call_count += 1;
+                    if *call_count == 1 {
+                        Ok(String::new())
+                    } else {
+                        Ok(" M README.md\n".to_string())
+                    }
+                })
+            });
+        mock_git_client
+            .expect_diff()
+            .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+
+        let output = Arc::new(Mutex::new(String::new()));
+        let context = SessionWorkerContext {
+            app_event_tx: mpsc::unbounded_channel().0,
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            channel: Arc::new(mock_channel),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::app::session::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().to_path_buf(),
+            fs_client: Arc::new(mock_fs_client_with_existing_directories()),
+            git_client: Arc::new(mock_git_client),
+            output: Arc::clone(&output),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_model: AgentModel::Gemini3FlashPreview,
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+
+        // Act
+        let result = SessionWorkerService::run_channel_turn(
+            &context,
+            TurnMetadata {
+                published_upstream_ref: None,
+                session_model: AgentModel::Gemini3FlashPreview,
+            },
+            AgentRequestKind::SessionStart,
+            "test prompt".into(),
+        )
+        .await;
+
+        // Assert
+        let error_message = result.expect_err("main checkout change should fail");
+        assert!(error_message.to_string().contains("main checkout"));
+        let output_text = output.lock().expect("output lock poisoned");
+        assert!(output_text.contains("Session isolation violation"));
+        assert!(!output_text.contains("done"));
     }
 
     #[tokio::test]
@@ -2941,6 +3192,26 @@ mod tests {
         .expect("failed to insert session");
 
         let mut mock_git_client = MockGitClient::new();
+        let main_repo_root = base_dir.path().join("main");
+        mock_git_client
+            .expect_detect_git_info()
+            .times(0..)
+            .returning(|_| Box::pin(async { Some("wt/sess1".to_string()) }));
+        mock_git_client
+            .expect_main_repo_root()
+            .times(0..)
+            .returning({
+                let main_repo_root = main_repo_root.clone();
+
+                move |_| {
+                    let main_repo_root = main_repo_root.clone();
+                    Box::pin(async move { Ok(main_repo_root) })
+                }
+            });
+        mock_git_client
+            .expect_tracked_worktree_status()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock_git_client
             .expect_diff()
             .returning(|_, _| Box::pin(async { Ok(String::new()) }));

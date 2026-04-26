@@ -48,6 +48,10 @@ live session starts:
   sessions delay worktree creation until you press `s` to start the staged bundle.
 - All agent edits happen inside the worktree, keeping your base branch untouched until
   you explicitly merge.
+- Before each turn, Agentty verifies that the session folder still exists, is on its
+  expected `wt/<hash>` branch, and resolves to a linked worktree rather than the main
+  checkout. It also compares the main checkout's tracked-file git status before and
+  after the turn and fails the turn if that checkout changed.
 - If worktree creation fails (e.g., git is not installed or permissions are
   insufficient), session creation fails atomically and displays an error.
 

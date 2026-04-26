@@ -516,7 +516,7 @@ pub(super) async fn execute_turn_event_loop_with_timeout<Transport: CodexRuntime
                 }
 
                 if let Some(approval_response) =
-                    policy::build_pre_action_approval_response(&response_value)
+                    policy::build_pre_action_approval_response(&response_value, input.folder)
                 {
                     transport.write_json_line(approval_response).await?;
 

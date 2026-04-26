@@ -892,14 +892,49 @@ mod tests {
     /// Allows branch and upstream-ref discovery calls to fall back to defaults
     /// in tests that do not care about exact detected refs.
     fn allow_detect_git_info(mock: &mut git::MockGitClient) {
-        mock.expect_detect_git_info()
+        mock.expect_detect_git_info().times(0..).returning(|path| {
+            let branch_name = path
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .filter(|folder_name| folder_name.len() == 8)
+                .map_or_else(
+                    || "main".to_string(),
+                    |folder_name| format!("wt/{folder_name}"),
+                );
+
+            Box::pin(async move { Some(branch_name) })
+        });
+        mock.expect_main_repo_root().times(0..).returning(|path| {
+            let repo_root = path
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or(path);
+
+            Box::pin(async move { Ok(repo_root) })
+        });
+        mock.expect_worktree_status()
             .times(0..)
-            .returning(|_| Box::pin(async { None }));
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock.expect_tracked_worktree_status()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock.expect_branch_upstream_reference()
             .times(0..)
             .returning(|_, branch_name| {
                 Box::pin(async move { Ok(format!("origin/{branch_name}")) })
             });
+        mock.expect_fetch_remote()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        mock.expect_branch_tracking_statuses()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(HashMap::new()) }));
+        mock.expect_get_ref_ahead_behind()
+            .times(0..)
+            .returning(|_, _, _| Box::pin(async { Ok((0, 0)) }));
+        mock.expect_get_ahead_behind()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok((0, 0)) }));
     }
 
     /// Builds a merge-focused mock git client for no-op merge scenarios.
@@ -962,9 +997,24 @@ mod tests {
     fn setup_mock_worktree_expectations(mock: &mut git::MockGitClient, repo_root: PathBuf) {
         let find_repo_root = repo_root.clone();
 
-        mock.expect_detect_git_info()
-            .times(0..)
-            .returning(|_| Box::pin(async { Some("main".to_string()) }));
+        mock.expect_detect_git_info().times(0..).returning({
+            let repo_root = repo_root.clone();
+
+            move |path| {
+                let branch_name = if path == repo_root {
+                    "main".to_string()
+                } else {
+                    path.file_name()
+                        .and_then(|file_name| file_name.to_str())
+                        .map_or_else(
+                            || "main".to_string(),
+                            |folder_name| format!("wt/{folder_name}"),
+                        )
+                };
+
+                Box::pin(async move { Some(branch_name) })
+            }
+        });
         mock.expect_current_upstream_reference()
             .times(0..)
             .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
@@ -1162,6 +1212,12 @@ mod tests {
         mock.expect_is_worktree_clean()
             .times(0..)
             .returning(|_| Box::pin(async { Ok(true) }));
+        mock.expect_worktree_status()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
+        mock.expect_tracked_worktree_status()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(String::new()) }));
         mock.expect_has_commits_since()
             .times(0..)
             .returning(|_, _| Box::pin(async { Ok(false) }));

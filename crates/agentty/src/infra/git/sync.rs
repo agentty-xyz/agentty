@@ -285,14 +285,62 @@ pub async fn diff(repo_path: PathBuf, base_branch: String) -> Result<String, Git
 /// # Errors
 /// Returns a [`GitError`] if `git status --porcelain` cannot be executed.
 pub async fn is_worktree_clean(repo_path: PathBuf) -> Result<bool, GitError> {
-    let status_output = run_git_command(
-        repo_path,
-        vec!["status".to_string(), "--porcelain".to_string()],
-        "Git status --porcelain failed".to_string(),
-    )
-    .await?;
+    let status_output = worktree_status(repo_path).await?;
 
     Ok(status_output.trim().is_empty())
+}
+
+/// Returns a stable porcelain status snapshot for a repository or worktree.
+///
+/// The snapshot includes untracked files so cleanup and review workflows can
+/// detect all local filesystem changes in the worktree.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// Raw `git status --porcelain=v1 --untracked-files=all` stdout.
+///
+/// # Errors
+/// Returns a [`GitError`] if the status command cannot be executed.
+pub async fn worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
+    run_git_command(
+        repo_path,
+        vec![
+            "status".to_string(),
+            "--porcelain=v1".to_string(),
+            "--untracked-files=all".to_string(),
+        ],
+        "Git status --porcelain=v1 failed".to_string(),
+    )
+    .await
+}
+
+/// Returns a stable porcelain status snapshot for tracked worktree files only.
+///
+/// This omits untracked files so session isolation checks can ignore unrelated
+/// editor or build artifacts while still catching modifications, deletions, and
+/// staged changes to tracked files in the main checkout.
+///
+/// # Arguments
+/// * `repo_path` - Path to the git repository or worktree
+///
+/// # Returns
+/// Raw `git status --porcelain=v1 --untracked-files=no` stdout.
+///
+/// # Errors
+/// Returns a [`GitError`] if the status command cannot be executed.
+pub async fn tracked_worktree_status(repo_path: PathBuf) -> Result<String, GitError> {
+    run_git_command(
+        repo_path,
+        vec![
+            "status".to_string(),
+            "--porcelain=v1".to_string(),
+            "--untracked-files=no".to_string(),
+        ],
+        "Git tracked status --porcelain=v1 failed".to_string(),
+    )
+    .await
 }
 
 /// Runs `git pull --rebase` and returns conflict outcome when applicable.

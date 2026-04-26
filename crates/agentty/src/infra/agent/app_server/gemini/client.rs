@@ -419,7 +419,15 @@ mod tests {
             .expect_write_json_line()
             .times(1)
             .in_sequence(sequence)
-            .withf(|payload| payload.get("id") == Some(&Value::String("permission-1".to_string())))
+            .withf(|payload| {
+                payload.get("id") == Some(&Value::String("permission-1".to_string()))
+                    && payload
+                        .get("result")
+                        .and_then(|result| result.get("outcome"))
+                        .and_then(|outcome| outcome.get("outcome"))
+                        .and_then(Value::as_str)
+                        == Some("cancelled")
+            })
             .returning(|_| Box::pin(async { Ok(()) }));
     }
 
@@ -552,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn build_permission_response_prefers_allow_always_over_allow_once() {
+    fn build_permission_response_cancels_unscoped_allow_options() {
         // Arrange
         let response_value = serde_json::json!({
             "jsonrpc": "2.0",
@@ -579,9 +587,9 @@ mod tests {
             permission_response
                 .get("result")
                 .and_then(|result| result.get("outcome"))
-                .and_then(|outcome| outcome.get("optionId"))
+                .and_then(|outcome| outcome.get("outcome"))
                 .and_then(Value::as_str),
-            Some("allow-always")
+            Some("cancelled")
         );
     }
 

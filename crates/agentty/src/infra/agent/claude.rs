@@ -8,9 +8,12 @@ use crate::infra::channel::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
 
-/// Lists the Claude tools Agentty enables for unattended sessions, including
-/// file editing, multi-edit, and write operations.
-const CLAUDE_ALLOWED_TOOLS: &str = "Edit,MultiEdit,Write,Bash,EnterPlanMode,ExitPlanMode";
+/// Lists the Claude tools Agentty enables for unattended sessions.
+///
+/// `Bash` remains available for Claude workflows that need shell commands,
+/// while Agentty keeps the process working directory scoped to the session
+/// worktree.
+const CLAUDE_ALLOWED_TOOLS: &str = "Bash,Edit,MultiEdit,Write,EnterPlanMode,ExitPlanMode";
 
 /// Backend implementation for the Claude CLI.
 ///
@@ -228,6 +231,7 @@ mod tests {
         // Assert
         assert!(debug_command.contains("--allowedTools"));
         assert!(debug_command.contains(CLAUDE_ALLOWED_TOOLS));
+        assert!(debug_command.contains("Bash"));
         assert!(debug_command.contains("MultiEdit"));
         assert!(debug_command.contains("Write"));
         assert!(debug_command.contains("--strict-mcp-config"));

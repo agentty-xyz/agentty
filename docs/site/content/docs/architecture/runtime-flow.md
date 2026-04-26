@@ -540,6 +540,27 @@ by `infra/channel.rs`):
 - Future `TurnRequest` loads and forwards both values so runtime restarts can resume
   native provider context and decide between a full bootstrap and a compact reminder.
 
+<a id="architecture-session-isolation-guards"></a>
+Session isolation guards:
+
+- Before every worker-dispatched turn, `worker.rs` calls
+  `workflow/isolation.rs` to verify the session folder exists, is checked out
+  on the expected `wt/<session-id-prefix>` branch, and resolves to a linked
+  worktree with a distinct main checkout.
+- The worker captures `git status --porcelain=v1 --untracked-files=no` for that
+  main checkout before provider execution and compares it again after a
+  successful turn. A changed tracked-file snapshot fails the turn before transcript
+  persistence and auto-commit, keeping reviewable output limited to the
+  session worktree.
+- Codex app-server approvals are scoped in `app_server/codex/policy.rs`:
+  file-change approvals are accepted only for paths inside the session folder,
+  while command approvals are rejected because they do not expose a reliable
+  path-scoped write set.
+- Gemini ACP permission requests are cancelled in
+  `app_server/gemini/policy.rs` for the same reason. Claude subprocess turns
+  keep `Bash` available while relying on the session worktree process directory
+  and main-checkout tracked-file guard for isolation.
+
 ## Agent Interaction Protocol Flow
 
 <a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
