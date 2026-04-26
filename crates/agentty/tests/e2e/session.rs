@@ -484,8 +484,8 @@ fn session_stop_turn_returns_to_review() -> E2eResult {
     Ok(())
 }
 
-/// Verify that pressing `a` on the Sessions tab creates a session and
-/// opens prompt mode with the submit footer.
+/// Verify that pressing `a` on the Sessions tab opens the creation selector,
+/// and choosing the regular option opens prompt mode with the submit footer.
 #[test]
 fn session_creation_opens_prompt_mode() -> E2eResult {
     // Arrange, Act, Assert
@@ -493,7 +493,7 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
         .with_git()
         .zola(
             "Session creation",
-            "Start a new agent session with a single keypress.",
+            "Choose a regular or draft session from the session creation selector.",
             30,
         )
         .run(
@@ -503,11 +503,23 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(1500)
                     .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .capture_labeled("creation_selector", "Session creation selector")
+                    .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("prompt_mode", "Prompt mode after pressing a")
+                    .capture_labeled("prompt_mode", "Prompt mode after choosing Regular")
             },
-            |frame, _report| {
+            |frame, report| {
+                let selector_frame = common::frame_from_capture(&report.captures[0]);
+                let selector_full = Region::full(selector_frame.cols(), selector_frame.rows());
+                assertion::assert_text_in_region(&selector_frame, "Regular", &selector_full);
+                assertion::assert_text_in_region(&selector_frame, "Draft", &selector_full);
+                assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
+                assertion::assert_text_in_region(&selector_frame, "Coming soon...", &selector_full);
+                assertion::assert_text_in_region(&selector_frame, "Enter: select", &selector_full);
+                assertion::assert_text_in_region(&selector_frame, "q: close", &selector_full);
+
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: submit", &full);
                 assertion::assert_text_in_region(frame, "Esc: cancel", &full);
@@ -517,8 +529,8 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
     Ok(())
 }
 
-/// Verify that pressing `Shift+A` opens draft-session staging with explicit
-/// draft guidance before any message is staged.
+/// Verify that choosing Draft in the creation selector opens draft-session
+/// staging with explicit draft guidance before any message is staged.
 #[test]
 fn draft_session_creation_opens_staging_mode() -> E2eResult {
     // Arrange, Act, Assert
@@ -536,7 +548,10 @@ fn draft_session_creation_opens_staging_mode() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(1500)
-                    .write_text("A")
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Down")
+                    .press_key("Enter")
                     .wait_for_text("Draft Session", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -574,6 +589,7 @@ fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .press_key("a")
+                    .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("prompt_open", "Prompt mode opened")
@@ -614,7 +630,10 @@ fn draft_session_at_lookup() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(1500)
-                    .write_text("A")
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Down")
+                    .press_key("Enter")
                     .wait_for_text("Enter: stage draft", 3000)
                     .viewing_pause_ms(1000)
                     .write_text("@draft_lookup")
@@ -1064,6 +1083,7 @@ fn prompt_typing_shows_text() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .press_key("a")
+                    .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("empty_prompt", "Empty prompt input")
@@ -1103,6 +1123,7 @@ fn prompt_multiline_via_alt_enter() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .press_key("a")
+                    .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .write_text("first line")

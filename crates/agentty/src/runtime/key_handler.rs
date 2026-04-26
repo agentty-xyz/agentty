@@ -34,6 +34,8 @@ where
         let decision = mode::confirmation::handle(selected_confirmation_index, key);
 
         handle_confirmation_decision(app, decision).await
+    } else if matches!(app.mode, AppMode::SessionCreation { .. }) {
+        handle_session_creation_key(app, key).await
     } else if matches!(app.mode, AppMode::OpenCommandSelector { .. }) {
         handle_open_command_selector_key(app, key).await
     } else if matches!(app.mode, AppMode::PublishBranchInput { .. }) {
@@ -41,6 +43,9 @@ where
     } else {
         match &app.mode {
             AppMode::List => mode::list::handle(app, key).await,
+            AppMode::SessionCreation { .. } => {
+                unreachable!("session creation mode is handled before dispatch matching")
+            }
             AppMode::SyncBlockedPopup { .. } => Ok(mode::sync_blocked::handle(app, key)),
             AppMode::ViewInfoPopup { .. } => Ok(handle_view_info_popup_key(app, key)),
             AppMode::Confirmation { .. } => {
@@ -90,6 +95,58 @@ fn content_area_for_terminal(terminal_rect: Rect) -> Rect {
         .split(terminal_rect);
 
     outer_chunks[1]
+}
+
+/// Handles key input while the session creation selector is visible.
+async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result<EventResult> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = AppMode::List;
+        }
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
+            app.mode = AppMode::List;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            update_session_creation_selection(app, 0);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            update_session_creation_selection(app, 1);
+        }
+        KeyCode::Enter => {
+            let is_draft = matches!(
+                app.mode,
+                AppMode::SessionCreation {
+                    selected_option_index: 1,
+                }
+            );
+            create_selected_session(app, is_draft).await?;
+        }
+        _ => {}
+    }
+
+    Ok(EventResult::Continue)
+}
+
+/// Updates the highlighted option in the session creation selector.
+fn update_session_creation_selection(app: &mut App, selected_option_index: usize) {
+    if let AppMode::SessionCreation {
+        selected_option_index: current_index,
+    } = &mut app.mode
+    {
+        *current_index = selected_option_index.min(1);
+    }
+}
+
+/// Creates the selected session type and opens its prompt composer.
+async fn create_selected_session(app: &mut App, is_draft: bool) -> io::Result<()> {
+    let session_id = if is_draft {
+        app.create_draft_session().await.map_err(io::Error::other)?
+    } else {
+        app.create_session().await.map_err(io::Error::other)?
+    };
+    mode::list::open_session_prompt(app, session_id);
+
+    Ok(())
 }
 
 /// Handles key input while a session-scoped informational popup is visible.
@@ -697,6 +754,86 @@ mod tests {
 
         // Assert
         assert_eq!(content_area, Rect::new(0, 1, 120, 28));
+    }
+
+    #[tokio::test]
+    async fn test_handle_session_creation_key_creates_regular_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 0,
+        };
+
+        // Act
+        let result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(app.sessions.sessions.len(), 1);
+        assert!(!app.sessions.sessions[0].is_draft_session());
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref session_id,
+                scroll_offset: None,
+                ..
+            } if !session_id.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_session_creation_key_creates_draft_session() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 0,
+        };
+
+        // Act
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .expect("failed to move selection");
+        let result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert_eq!(app.sessions.sessions.len(), 1);
+        assert!(app.sessions.sessions[0].is_draft_session());
+        assert!(matches!(
+            app.mode,
+            AppMode::Prompt {
+                ref session_id,
+                scroll_offset: None,
+                ..
+            } if !session_id.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_session_creation_key_escape_returns_to_list() {
+        // Arrange
+        let (mut app, _base_dir) = new_test_app_with_git().await;
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 0,
+        };
+
+        // Act
+        let result =
+            handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .await;
+
+        // Assert
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(app.sessions.sessions.is_empty());
+        assert!(matches!(app.mode, AppMode::List));
     }
 
     #[tokio::test]

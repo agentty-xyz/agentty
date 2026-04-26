@@ -136,6 +136,21 @@ pub(crate) fn render_confirmation_overlay(
     .render(f, area);
 }
 
+/// Renders the list background and session creation selector overlay.
+pub(crate) fn render_session_creation_overlay(
+    f: &mut Frame,
+    area: Rect,
+    list_background: ListBackgroundRenderContext<'_>,
+    selected_option_index: usize,
+    wall_clock_unix_seconds: i64,
+) {
+    render_list_background(f, area, list_background, wall_clock_unix_seconds);
+    render_overlay_backdrop(f, area);
+
+    component::session_creation_overlay::SessionCreationOverlay::new(selected_option_index)
+        .render(f, area);
+}
+
 /// Renders the list background and sync informational popup overlay.
 pub(crate) fn render_sync_blocked_popup(
     f: &mut Frame,

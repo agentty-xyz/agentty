@@ -225,6 +225,7 @@ impl ZolaFeaturePage {
 ///                 scenario
 ///                     .compose(&common::wait_for_agentty_startup())
 ///                     .press_key("a")
+///                     .press_key("Enter")
 ///                     .capture_labeled("prompt", "Prompt mode")
 ///             },
 ///             |frame, _report| {
@@ -456,9 +457,10 @@ pub(crate) fn open_help_overlay() -> Journey {
 /// Create a session with a prompt, submit it, and return to the Sessions
 /// list.
 ///
-/// Presses `a` to create a non-draft session, types `"test"`, submits with
-/// `Enter` (which starts the agent asynchronously while the session
-/// persists), and presses `q` from the session view to return to the list.
+/// Presses `a` to open the creation selector, accepts the regular-session
+/// default with `Enter`, types `"test"`, submits with `Enter` (which starts
+/// the agent asynchronously while the session persists), and presses `q` from
+/// the session view to return to the list.
 ///
 /// Uses fixed sleeps instead of stable-frame waits because the agent may
 /// produce continuous output after submit.
@@ -478,9 +480,10 @@ pub(crate) fn create_session_and_return_to_list() -> Journey {
 pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Journey {
     Journey::new("create_session")
         .with_description(format!(
-            "Create session via a, type {prompt}, submit, return to list"
+            "Create regular session via a, type {prompt}, submit, return to list"
         ))
         .step(Step::press_key("a"))
+        .step(Step::press_key("Enter"))
         .step(Step::wait_for_stable_frame(300, 5000))
         .step(Step::write_text(prompt))
         .step(Step::wait_for_text(prompt, 3000))

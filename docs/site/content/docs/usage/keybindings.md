@@ -16,8 +16,7 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
-| `a` | Start new session |
-| `Shift+A` | Start draft session |
+| `a` | Open session creation selector |
 | `s` | Sync active project branch |
 | `c` | Cancel the selected running session, review session, or unstarted draft session (confirmation popup) |
 | `Enter` | Open session |
@@ -38,6 +37,11 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 <a id="usage-project-list-active-highlight"></a>
 The currently active project is highlighted in the table with a `* ` prefix and
 accented row text, even while cursor selection moves to other rows.
+
+On the **Sessions** list, `a` opens a popup with `Regular`, `Draft`, and a
+disabled `Stacked` option. `Enter` chooses the highlighted option, `j` / `k`
+or `Up` / `Down` move between enabled options, and `Esc` / `q` closes the
+popup.
 
 On the **Sessions** list, `c` appears only when the selected row is
 cancelable: running sessions, review-ready sessions, and draft sessions that
@@ -118,7 +122,7 @@ Additional notes:
 - **Open command behavior**: `o` opens the session worktree in tmux when a local worktree is available.
   If one `Open Commands` entry is configured for the active project, it runs immediately.
   If multiple entries are configured (one command per line), Agentty opens a selector popup.
-- **Draft sessions**: sessions created with `Shift+A` do not create a worktree until you press `s` to start the staged bundle, so `o` stays hidden before the first live turn.
+- **Draft sessions**: sessions created through the `a` selector do not create a worktree until you press `s` to start the staged bundle, so `o` stays hidden before the first live turn.
 - **Forge review-request publish**: `p` is available in **Review** and
   **AgentReview** and opens a publish popup. Press `Enter` with an empty field
   to keep the default session branch target, or type a custom remote branch
@@ -205,10 +209,10 @@ session models. Codex and Gemini preserve the multimodal ordering at transport
 level, while Claude rewrites the placeholders to local image paths before
 streaming the prompt.
 
-When the current session was created with `Shift+A`, pressing `Enter` stages
+When the current session was created as `Draft`, pressing `Enter` stages
 the current composer contents into the draft bundle and returns to session
 view. Use `s` from session view to launch the staged bundle as the first live
-turn. Sessions created with `a` start immediately on the first `Enter`.
+turn. Sessions created as `Regular` start immediately on the first `Enter`.
 
 ## Question Input — Option Selection
 

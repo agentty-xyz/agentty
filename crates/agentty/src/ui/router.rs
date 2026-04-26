@@ -198,6 +198,15 @@ fn render_list_or_overlay_mode(
             shared.list_background(),
             aux.wall_clock_unix_seconds,
         ),
+        AppMode::SessionCreation {
+            selected_option_index,
+        } => overlay::render_session_creation_overlay(
+            f,
+            area,
+            shared.list_background(),
+            *selected_option_index,
+            aux.wall_clock_unix_seconds,
+        ),
         AppMode::Confirmation { .. } => render_confirmation_mode(f, area, mode, shared, aux),
 
         AppMode::SyncBlockedPopup {
@@ -546,6 +555,7 @@ fn render_session_or_diff_mode(
             aux.review_comment_cache,
         ),
         AppMode::List
+        | AppMode::SessionCreation { .. }
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::ViewInfoPopup { .. }

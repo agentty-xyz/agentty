@@ -220,12 +220,12 @@ top. Threads are fetched by the same background sync that refreshes
 review-request status. The panel is read-only — replies still happen on the
 forge web UI.
 
-From the **Sessions** tab, press `a` to create a regular session or `Shift+A`
-to create a draft session. Regular sessions keep the fast path: type the first
-prompt and press `Enter` to start the agent immediately. Draft sessions stage
-each `Enter` as one ordered draft message, immediately show a
-`Draft Session` guidance block in session view, keep the `o`
-shortcut hidden until a worktree exists, and start only after you press `s`.
+From the **Sessions** tab, press `a` to choose between `Regular` and `Draft`
+session creation. `Regular` sessions keep the fast path: type the first prompt
+and press `Enter` to start the agent immediately. `Draft` sessions stage each
+`Enter` as one ordered draft message, immediately show a `Draft Session`
+guidance block in session view, keep the `o` shortcut hidden until a worktree
+exists, and start only after you press `s`.
 Once drafts are staged, the same panel previews the staged bundle before
 launch. The draft worktree is created at that start step so the branch is
 based on the base branch's tracked upstream ref when one is configured,

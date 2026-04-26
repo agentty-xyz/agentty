@@ -1,6 +1,6 @@
 +++
 title = "Session creation"
-description = "Start a new agent session with a single keypress."
+description = "Choose a regular or draft session from the session creation selector."
 weight = 30
 
 [extra]

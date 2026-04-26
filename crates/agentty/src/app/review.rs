@@ -382,6 +382,7 @@ fn review_mode_target<'a>(mode: &'a mut AppMode, session_id: &str) -> Option<Rev
             confirmation_review_mode_target(restore_view, session_id)
         }
         AppMode::List
+        | AppMode::SessionCreation { .. }
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Prompt { .. }

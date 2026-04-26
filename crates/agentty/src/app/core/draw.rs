@@ -60,7 +60,10 @@ impl App {
     /// should force periodic redraws even when no new events arrive.
     pub(crate) fn has_visible_tick_driven_ui(&self) -> bool {
         match &self.mode {
-            AppMode::List | AppMode::Confirmation { .. } | AppMode::SyncBlockedPopup { .. } => {
+            AppMode::List
+            | AppMode::SessionCreation { .. }
+            | AppMode::Confirmation { .. }
+            | AppMode::SyncBlockedPopup { .. } => {
                 self.list_background_has_tick_driven_ui()
                     || matches!(
                         &self.mode,

@@ -135,6 +135,11 @@ pub enum QuestionFocus {
 /// Represents the active UI mode for the application.
 pub enum AppMode {
     List,
+    /// Displays the session creation selector above the sessions list.
+    SessionCreation {
+        /// Highlighted session creation option.
+        selected_option_index: usize,
+    },
     /// Displays a generic confirmation overlay with `Yes` and `No` options.
     Confirmation {
         /// Semantic action to execute when users choose `Yes`.

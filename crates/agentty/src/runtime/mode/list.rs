@@ -51,12 +51,9 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('a')
             if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::NONE =>
         {
-            open_new_session_prompt(app).await?;
-        }
-        KeyCode::Char('A')
-            if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::SHIFT =>
-        {
-            open_new_draft_session_prompt(app).await?;
+            app.mode = AppMode::SessionCreation {
+                selected_option_index: 0,
+            };
         }
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
@@ -302,24 +299,8 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
     session_list_actions(can_cancel_selected_session, can_open_selected_session)
 }
 
-/// Creates a new session and opens prompt mode.
-async fn open_new_session_prompt(app: &mut App) -> io::Result<()> {
-    let session_id = app.create_session().await.map_err(io::Error::other)?;
-    open_session_prompt(app, session_id);
-
-    Ok(())
-}
-
-/// Creates a new draft session and opens prompt mode.
-async fn open_new_draft_session_prompt(app: &mut App) -> io::Result<()> {
-    let session_id = app.create_draft_session().await.map_err(io::Error::other)?;
-    open_session_prompt(app, session_id);
-
-    Ok(())
-}
-
 /// Opens prompt mode for the provided session identifier.
-fn open_session_prompt(app: &mut App, session_id: String) {
+pub(crate) fn open_session_prompt(app: &mut App, session_id: String) {
     app.mode = AppMode::Prompt {
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),
@@ -515,7 +496,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_add_key_creates_session_and_opens_prompt_mode() {
+    async fn test_handle_add_key_opens_session_creation_overlay() {
         // Arrange
         let (mut app, _base_dir) = new_test_app_with_git().await;
         app.tabs.set(Tab::Sessions);
@@ -530,15 +511,12 @@ mod tests {
 
         // Assert
         assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert!(!app.sessions.sessions[0].is_draft_session());
+        assert!(app.sessions.sessions.is_empty());
         assert!(matches!(
             app.mode,
-            AppMode::Prompt {
-                ref session_id,
-                scroll_offset: None,
-                ..
-            } if !session_id.is_empty()
+            AppMode::SessionCreation {
+                selected_option_index: 0,
+            }
         ));
     }
 
@@ -560,34 +538,6 @@ mod tests {
         assert!(matches!(event_result, EventResult::Continue));
         assert!(app.sessions.sessions.is_empty());
         assert!(matches!(app.mode, AppMode::List));
-    }
-
-    #[tokio::test]
-    async fn test_handle_shift_add_key_creates_draft_session_and_opens_prompt_mode() {
-        // Arrange
-        let (mut app, _base_dir) = new_test_app_with_git().await;
-        app.tabs.set(Tab::Sessions);
-
-        // Act
-        let event_result = handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
-        )
-        .await
-        .expect("failed to handle key");
-
-        // Assert
-        assert!(matches!(event_result, EventResult::Continue));
-        assert_eq!(app.sessions.sessions.len(), 1);
-        assert!(app.sessions.sessions[0].is_draft_session());
-        assert!(matches!(
-            app.mode,
-            AppMode::Prompt {
-                ref session_id,
-                scroll_offset: None,
-                ..
-            } if !session_id.is_empty()
-        ));
     }
 
     #[tokio::test]

@@ -163,6 +163,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
             ..
         } => (review_status_message.as_deref(), review_text.as_deref()),
         AppMode::List
+        | AppMode::SessionCreation { .. }
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Prompt { .. }

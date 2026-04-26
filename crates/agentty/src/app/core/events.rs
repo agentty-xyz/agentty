@@ -872,6 +872,7 @@ impl App {
                 ..
             } => view_id == session_id,
             AppMode::List
+            | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Help { .. } => false,
@@ -908,6 +909,7 @@ impl App {
                 ..
             } if diff_session_id == session_id => self.review_view_state(session_id),
             AppMode::List
+            | AppMode::SessionCreation { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }
             | AppMode::Diff { .. }

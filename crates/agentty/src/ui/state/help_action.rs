@@ -97,16 +97,7 @@ pub(crate) fn session_list_actions(
     can_open_selected_session: bool,
 ) -> Vec<HelpAction> {
     let mut actions = list_base_actions();
-    actions.push(HelpAction::new(
-        "start new session",
-        "a",
-        "Start new session",
-    ));
-    actions.push(HelpAction::new(
-        "start draft session",
-        "Shift+A",
-        "Start draft session",
-    ));
+    actions.push(HelpAction::new("new session", "a", "Choose session type"));
 
     if can_cancel_selected_session {
         actions.push(HelpAction::new("cancel", "c", "Cancel session"));
@@ -153,16 +144,7 @@ pub(crate) fn session_list_footer_actions(
     can_open_selected_session: bool,
 ) -> Vec<HelpAction> {
     let mut actions = list_base_actions();
-    actions.push(HelpAction::new(
-        "start new session",
-        "a",
-        "Start new session",
-    ));
-    actions.push(HelpAction::new(
-        "start draft",
-        "Shift+A",
-        "Start draft session",
-    ));
+    actions.push(HelpAction::new("new session", "a", "Choose session type"));
 
     if can_cancel_selected_session {
         actions.push(HelpAction::new("cancel", "c", "Cancel session"));
@@ -622,7 +604,6 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "a"));
-        assert!(actions.iter().any(|action| action.key == "Shift+A"));
     }
 
     #[test]
@@ -645,7 +626,7 @@ mod tests {
 
         // Assert
         assert!(actions.iter().any(|action| action.key == "Enter"));
-        assert!(actions.iter().any(|action| action.key == "Shift+A"));
+        assert!(actions.iter().any(|action| action.key == "a"));
         assert!(!actions.iter().any(|action| action.key == "d"));
         assert!(!actions.iter().any(|action| action.key == "c"));
         assert!(!actions.iter().any(|action| action.key == "Tab"));
