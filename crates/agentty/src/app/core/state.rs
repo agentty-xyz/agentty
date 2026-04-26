@@ -3564,7 +3564,7 @@ mod tests {
         app.sessions
             .push_session(test_session(PathBuf::from("/tmp/session-question-view")));
         app.mode = AppMode::View {
-            review_status_message: Some("Preparing review...".to_string()),
+            review_status_message: Some(review_loading_message(AgentModel::Gpt54)),
             review_text: Some("Focused review".to_string()),
             session_id: "session-1".into(),
             scroll_offset: None,
@@ -3617,7 +3617,7 @@ mod tests {
                 ..
             } if session_id == "session-1"
                 && questions == &expected_questions
-                && review_status_message == "Preparing review..."
+                && review_status_message == &review_loading_message(AgentModel::Gpt54)
                 && review_text == "Focused review"
                 && responses.is_empty()
                 && input.text().is_empty()
@@ -3909,6 +3909,12 @@ mod tests {
             session_id.to_string().into(),
             SessionHandles::new(String::new(), Status::Review),
         );
+        app.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            session_id: session_id.into(),
+            scroll_offset: None,
+        };
 
         let mut mock_git_client = crate::infra::git::MockGitClient::new();
         mock_git_client
@@ -3934,6 +3940,16 @@ mod tests {
             Some(ReviewCacheEntry::Loading { diff_hash }) if *diff_hash == expected_hash
         ));
         assert_eq!(app.sessions.sessions[0].status, Status::AgentReview);
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref review_status_message,
+                session_id: ref mode_session_id,
+                ..
+            } if review_status_message.as_deref()
+                == Some(review_loading_message(app.settings.default_review_model).as_str())
+                && mode_session_id == session_id
+        ));
     }
 
     #[tokio::test]

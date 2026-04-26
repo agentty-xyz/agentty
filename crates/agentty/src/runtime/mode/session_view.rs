@@ -923,6 +923,7 @@ fn view_total_lines(
                 SessionOutputLineContext {
                     active_prompt_output,
                     active_progress,
+                    review_model: app.settings.default_review_model,
                     review_status_message,
                     review_text,
                     session_update_version: app.session_update_version(session_id),
@@ -1764,6 +1765,37 @@ mod tests {
 
         // Assert
         assert_eq!(review_model, AgentModel::ClaudeOpus47);
+    }
+
+    #[tokio::test]
+    async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.settings.default_review_model = AgentModel::ClaudeHaiku4520251001;
+        app.sessions.sessions[0].model = AgentModel::Gpt54;
+        app.sessions.sessions[0].status = Status::AgentReview;
+        let output_width = 14;
+        let session = &app.sessions.sessions[0];
+        let expected = SessionChatPage::rendered_output_line_count(
+            session,
+            output_width,
+            SessionOutputLineContext {
+                active_prompt_output: None,
+                active_progress: None,
+                review_model: AgentModel::ClaudeHaiku4520251001,
+                review_status_message: None,
+                review_text: None,
+                session_update_version: app.session_update_version(&session_id),
+            },
+            app.markdown_render_cache(),
+            app.session_output_layout_cache(),
+        );
+
+        // Act
+        let total_lines = view_total_lines(&app, &session_id, 0, None, None, output_width);
+
+        // Assert
+        assert_eq!(total_lines, expected);
     }
 
     #[tokio::test]

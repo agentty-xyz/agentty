@@ -4,7 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
 use serde_json;
 
-use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::app;
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::{is_at_mention_boundary, is_at_mention_query_character};
 use crate::domain::review;
 use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
@@ -596,6 +597,7 @@ pub fn session_output_status_line(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
+    review_model: AgentModel,
 ) -> Option<Line<'static>> {
     if !matches!(
         status,
@@ -609,7 +611,7 @@ pub fn session_output_status_line(
     }
 
     let status_message =
-        session_output_status_message(status, active_progress, review_status_message);
+        session_output_status_message(status, active_progress, review_status_message, review_model);
 
     Some(Line::from(vec![Span::styled(
         format!("{} {status_message}", session_output_status_icon(status)),
@@ -1083,6 +1085,7 @@ fn session_output_status_message(
     status: Status,
     active_progress: Option<&str>,
     review_status_message: Option<&str>,
+    review_model: AgentModel,
 ) -> String {
     match status {
         Status::InProgress => active_progress
@@ -1095,7 +1098,10 @@ fn session_output_status_message(
         Status::AgentReview => review_status_message
             .map(str::trim)
             .filter(|status_message| !status_message.is_empty())
-            .map_or_else(|| "Preparing review...".to_string(), ToString::to_string),
+            .map_or_else(
+                || app::review_loading_message(review_model),
+                ToString::to_string,
+            ),
         Status::Queued => "Waiting in merge queue...".to_string(),
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
@@ -2219,9 +2225,13 @@ mod tests {
         // Arrange
 
         // Act
-        let status_line =
-            session_output_status_line(Status::InProgress, Some("Inspecting changed files"), None)
-                .expect("in-progress sessions should render a status line");
+        let status_line = session_output_status_line(
+            Status::InProgress,
+            Some("Inspecting changed files"),
+            None,
+            AgentModel::Gpt54,
+        )
+        .expect("in-progress sessions should render a status line");
 
         // Assert
         assert!(
@@ -2240,6 +2250,7 @@ mod tests {
             Status::AgentReview,
             None,
             Some("Reviewing changes with gpt-5.4"),
+            AgentModel::Gpt54,
         )
         .expect("agent-review sessions should render a status line");
 
@@ -2252,12 +2263,30 @@ mod tests {
     }
 
     #[test]
+    fn test_session_output_status_line_for_agent_review_falls_back_to_model_loader_text() {
+        // Arrange
+
+        // Act
+        let status_line =
+            session_output_status_line(Status::AgentReview, None, None, AgentModel::ClaudeOpus47)
+                .expect("agent-review sessions should render a status line");
+
+        // Assert
+        assert!(
+            status_line
+                .to_string()
+                .contains("Reviewing changes with claude-opus-4-7")
+        );
+    }
+
+    #[test]
     fn test_session_output_status_line_for_merging_uses_status_label() {
         // Arrange
 
         // Act
-        let status_line = session_output_status_line(Status::Merging, None, None)
-            .expect("merging sessions should render a status line");
+        let status_line =
+            session_output_status_line(Status::Merging, None, None, AgentModel::Gpt54)
+                .expect("merging sessions should render a status line");
 
         // Assert
         assert!(status_line.to_string().contains("Merging..."));

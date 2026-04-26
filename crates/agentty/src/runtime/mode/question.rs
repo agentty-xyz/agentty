@@ -190,6 +190,7 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
                 SessionOutputLineContext {
                     active_prompt_output,
                     active_progress,
+                    review_model: app.settings.default_review_model,
                     review_status_message,
                     review_text,
                     session_update_version: app.session_update_version(session_id),
@@ -918,6 +919,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::domain::agent::AgentModel;
+    use crate::domain::session::Status;
     use crate::infra::db::Database;
     use crate::ui::state::app_mode::QuestionFocus;
 
@@ -951,6 +954,57 @@ mod tests {
         )
         .await
         .expect("failed to build app")
+    }
+
+    #[tokio::test]
+    async fn test_question_view_metrics_uses_default_review_model_for_loading_fallback() {
+        // Arrange
+        let mut app = new_test_app().await;
+        let session_id = "session-review-model";
+        app.settings.default_review_model = AgentModel::ClaudeHaiku4520251001;
+        app.sessions.push_session(
+            crate::domain::session::tests::SessionFixtureBuilder::new()
+                .id(session_id)
+                .model(AgentModel::Gpt54)
+                .status(Status::AgentReview)
+                .build(),
+        );
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            questions: vec![QuestionItem::new("Need a target branch?")],
+            responses: Vec::new(),
+            review_status_message: None,
+            review_text: None,
+            scroll_offset: None,
+            selected_option_index: None,
+            session_id: session_id.into(),
+        };
+        let terminal_size = Rect::new(0, 0, 16, 24);
+        let output_width = terminal_size.width.saturating_sub(2);
+        let session = &app.sessions.sessions[0];
+        let expected = SessionChatPage::rendered_output_line_count(
+            session,
+            output_width,
+            SessionOutputLineContext {
+                active_prompt_output: None,
+                active_progress: None,
+                review_model: AgentModel::ClaudeHaiku4520251001,
+                review_status_message: None,
+                review_text: None,
+                session_update_version: app.session_update_version(session_id),
+            },
+            app.markdown_render_cache(),
+            app.session_output_layout_cache(),
+        );
+
+        // Act
+        let metrics = question_view_metrics(&app, terminal_size);
+
+        // Assert
+        assert_eq!(metrics.total_lines, expected);
     }
 
     #[tokio::test]

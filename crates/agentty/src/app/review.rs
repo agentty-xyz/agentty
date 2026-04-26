@@ -201,6 +201,7 @@ pub(crate) async fn auto_start_reviews(
     review_cache: &mut HashMap<SessionId, ReviewCacheEntry>,
     session_ids: &HashSet<SessionId>,
     session_state: &mut SessionState,
+    mode: &mut AppMode,
     git_client: Arc<dyn GitClient>,
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     review_model: AgentModel,
@@ -257,6 +258,13 @@ pub(crate) async fn auto_start_reviews(
             },
         );
         mark_session_agent_review(session_state, session_id);
+        if let Some(mode_target) = review_mode_target(mode, session_id) {
+            apply_review_loading(
+                mode_target.review_status_message,
+                mode_target.review_text,
+                review_model,
+            );
+        }
         start_review_assist(
             app_event_tx.clone(),
             review_model,
@@ -267,6 +275,16 @@ pub(crate) async fn auto_start_reviews(
             session_summary.as_deref(),
         );
     }
+}
+
+/// Sets loading status fields for the active review render mode.
+fn apply_review_loading(
+    review_status_message: &mut Option<String>,
+    review_text: &mut Option<String>,
+    review_model: AgentModel,
+) {
+    *review_status_message = Some(review_loading_message(review_model));
+    *review_text = None;
 }
 
 /// Applies one review assist update to cache and active render state.
