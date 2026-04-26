@@ -324,11 +324,18 @@ Update architecture docs whenever you change:
 ## Git Conventions
 
 - For all commit preparation and commit message work, use `skills/git-commit/SKILL.md`.
-- **Tagging:** Always use the `v` prefix for version tags (e.g., `v0.1.0`).
 - **Never bypass `prek`-managed hooks:** Do not use `--no-verify`, `--no-gpg-sign`, or any other flag that skips or disables git hooks managed by `prek`. If a hook fails, investigate and fix the underlying issue instead of bypassing it.
 
 ## Release Automation
 
+- Release preparation in the repository stops at a normal version-bump commit:
+  update package versions locally, run required checks, and land the commit
+  through the usual push/merge path.
+- Do not create or push release tags from a local checkout. After the version
+  bump commit lands, create the release tag for that exact commit in the GitHub
+  UI using the `v` prefix (for example, `v0.1.0`).
+- GitHub workflows publish the release from the GitHub-created tag. Do not run
+  separate local release, tagging, or artifact-publishing steps.
 - Treat `.github/workflows/release.yml` as generated output from `dist`. Do not edit this workflow file manually.
 - To upgrade `cargo-dist`, update `cargo-dist-version` in `dist-workspace.toml`, then rerun `dist init` from the repository root so `dist` regenerates `.github/workflows/release.yml` and any related release automation changes.
 - When updating `cargo-dist`, review and commit the generated changes in `dist-workspace.toml` and `.github/workflows/release.yml` together.
