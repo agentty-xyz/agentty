@@ -949,6 +949,11 @@ fn last_leading_applied_commit(cherry_output: &str) -> Option<&str> {
 
 /// Stages all changes and commits or amends with retry behavior for hook
 /// rewrites.
+///
+/// If an amend would make `HEAD` empty, the staged tree has reverted the
+/// session commit back to its parent. In that case the helper drops the now
+/// empty session commit and reports the standard no-changes sentinel so the
+/// app can skip model-assisted commit recovery.
 async fn commit_all_with_retry(
     repo_path: PathBuf,
     commit_message: String,
@@ -974,11 +979,14 @@ async fn commit_all_with_retry(
 
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("nothing to commit") || stderr.contains("nothing to commit") {
-                return Err(GitError::CommandFailed {
-                    command: "git commit".to_string(),
-                    stderr: "Nothing to commit: no changes detected".to_string(),
-                });
+            if is_nothing_to_commit_output(&stdout, &stderr) {
+                return Err(nothing_to_commit_error());
+            }
+
+            if amend_existing_commit && is_empty_amend_output(&stdout, &stderr) {
+                reset_empty_amend_sync(&repo_path)?;
+
+                return Err(nothing_to_commit_error());
             }
 
             if is_hook_modified_error(&stdout, &stderr) {
@@ -1004,6 +1012,43 @@ async fn commit_all_with_retry(
         })
     })
     .await?
+}
+
+/// Returns the canonical git no-changes error used by app auto-commit flows.
+fn nothing_to_commit_error() -> GitError {
+    GitError::CommandFailed {
+        command: "git commit".to_string(),
+        stderr: "Nothing to commit: no changes detected".to_string(),
+    }
+}
+
+/// Returns whether commit output reports that there was no staged work to
+/// commit.
+fn is_nothing_to_commit_output(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+
+    combined.contains("nothing to commit")
+}
+
+/// Returns whether commit output reports that amending `HEAD` would remove the
+/// session commit entirely.
+fn is_empty_amend_output(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    let normalized = combined.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    normalized.contains("would make it empty") && normalized.contains("allow-empty")
+}
+
+/// Drops an amended session commit whose resulting tree would match its
+/// parent, leaving the worktree at the reverted state.
+fn reset_empty_amend_sync(repo_path: &Path) -> Result<(), GitError> {
+    run_git_command_sync(
+        repo_path,
+        &["reset", "HEAD^"],
+        "Git reset after empty amend failed",
+    )?;
+
+    Ok(())
 }
 
 /// Stages all changed files in the repository.
@@ -1590,5 +1635,49 @@ main\torigin/main\tbehind 2\nwt/1234abcd\torigin/wt/1234abcd\tahead 3, behind \
             branch_tracking_statuses.get("wt/1234abcd"),
             Some(&Some((1, 0)))
         );
+    }
+
+    #[tokio::test]
+    /// Verifies that amending a session commit whose staged result is identical
+    /// to the base branch (i.e., all changes were reverted) surfaces the
+    /// canonical "Nothing to commit" sentinel rather than triggering the assist
+    /// retry loop with the raw git "allow-empty" error.
+    async fn test_empty_amend_resets_session_commit_and_returns_no_changes() {
+        // Arrange
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        setup_test_git_repo(temp_dir.path());
+        run_git_command(temp_dir.path(), &["checkout", "-b", "session-branch"]);
+        fs::write(temp_dir.path().join("session.txt"), "session work\n")
+            .expect("failed to write session file");
+        run_git_command(temp_dir.path(), &["add", "session.txt"]);
+        run_git_command(temp_dir.path(), &["commit", "-m", "Session commit"]);
+        fs::remove_file(temp_dir.path().join("session.txt"))
+            .expect("failed to remove session file");
+
+        // Act - the worktree is dirty (session.txt removed) but amending HEAD
+        // would produce a tree identical to the base branch, making the amend
+        // result an empty commit.
+        let result = commit_all_preserving_single_commit(
+            temp_dir.path().to_path_buf(),
+            "main".to_string(),
+            "Session commit".to_string(),
+            SingleCommitMessageStrategy::Replace,
+            true,
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("amend-would-be-empty should fail");
+        let commit_count = git_command_stdout(temp_dir.path(), &["rev-list", "--count", "HEAD"]);
+        let head_message = git_command_stdout(temp_dir.path(), &["log", "-1", "--pretty=%B"]);
+        let status = git_command_stdout(temp_dir.path(), &["status", "--porcelain"]);
+
+        assert!(
+            error.to_string().contains("Nothing to commit"),
+            "expected 'Nothing to commit' sentinel but got: {error}"
+        );
+        assert_eq!(commit_count, "1");
+        assert_eq!(head_message, "Initial commit");
+        assert!(status.is_empty());
     }
 }

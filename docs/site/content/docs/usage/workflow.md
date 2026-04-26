@@ -135,11 +135,14 @@ using the active project's `Default Fast Model`, applies the active project's
 `Coauthored by Agentty` setting to the final commit trailer, amends `HEAD`, and
 refreshes the session title from the same commit text before merge begins. Successful
 commit and no-change notices appear as transient session-output status rows rather than
-persisted transcript messages. If the auto-commit needs agent assistance to recover from
-a git failure, that recovery prompt also uses the `Default Fast Model`. Once the session
-reaches **Done**, Agentty rewrites the persisted summary into markdown with a
-`# Summary` section sourced from the final agent `summary.session` value and a
-`# Commit` section sourced from the canonical squash-merge commit message.
+persisted transcript messages. If a later turn reverts every file change from the
+session commit, Agentty drops the now-empty session commit and reports the same
+no-change notice instead of sending Git's empty-amend diagnostic through commit
+assistance. If the auto-commit needs agent assistance to recover from a git failure,
+that recovery prompt also uses the `Default Fast Model`. Once the session reaches
+**Done**, Agentty rewrites the persisted summary into markdown with a `# Summary`
+section sourced from the final agent `summary.session` value and a `# Commit` section
+sourced from the canonical squash-merge commit message.
 
 When a session enters **Merging**, Agentty reuses the session branch `HEAD` commit
 message for the final squash commit on the base branch. Merge still stops and returns
