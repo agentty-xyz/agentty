@@ -140,12 +140,11 @@ impl Component for FooterBar {
             self.working_dir.clone()
         };
 
-        let left_text = Span::styled(
-            format!(" {display_path}"),
-            Style::default()
-                .fg(style::palette::text())
-                .add_modifier(Modifier::DIM),
-        );
+        let path_style = Style::default()
+            .fg(style::palette::text())
+            .add_modifier(Modifier::DIM);
+
+        let left_text = Span::styled(format!(" {display_path}"), path_style);
 
         let left_width = left_text.width();
         let total_width = usize::from(area.width);
@@ -155,10 +154,8 @@ impl Component for FooterBar {
             let trailing_branch_padding = 1;
             let branch_text = self.branch_text(branch);
 
-            let branch_span = Span::styled(
-                format!("{} {branch_text}", Icon::GitBranch),
-                Style::default().fg(style::palette::success()),
-            );
+            let branch_span =
+                Span::styled(format!("{} {branch_text}", Icon::GitBranch), path_style);
             let branch_width = branch_span.width();
 
             if left_width + branch_width + trailing_branch_padding <= total_width {
@@ -177,11 +174,8 @@ impl Component for FooterBar {
             spans.push(Span::raw(" ".repeat(total_width - line_width)));
         }
 
-        let footer = Paragraph::new(Line::from(spans)).style(
-            Style::default()
-                .bg(style::palette::surface())
-                .fg(style::palette::text()),
-        );
+        let footer =
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(style::palette::surface()));
 
         f.render_widget(footer, area);
     }
@@ -256,6 +250,30 @@ mod tests {
             assert!(text.contains("/tmp/project"));
         }
         assert!(text.contains("main"));
+    }
+
+    #[test]
+    fn test_footer_bar_render_uses_path_color_for_branch_text() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(30, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let footer = FooterBar::new("/x".to_string()).git_branch(Some("topic".to_string()));
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let path_cell = &buffer[(1, 0)];
+        let branch_cell = &buffer[(24, 0)];
+        assert_eq!(path_cell.symbol(), "/");
+        assert_eq!(branch_cell.symbol(), "t");
+        assert_eq!(branch_cell.fg, path_cell.fg);
     }
 
     #[test]
