@@ -8,6 +8,14 @@ description = "Rust-native TUI end-to-end testing framework using PTY-driven sem
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
+keywords = ["tui", "testing", "e2e", "pty", "ratatui"]
+categories = ["development-tools::testing", "command-line-interface"]
+include = [
+  "src/**/*",
+  "examples/**/*",
+  "Cargo.toml",
+  "README.md",
+]
 
 [lints]
 workspace = true

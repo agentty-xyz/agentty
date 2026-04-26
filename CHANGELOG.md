@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- testty: curate the stable public surface at `testty::prelude` and lock it
+  down with a `tests/public_api.rs` compile-time tripwire so accidental
+  renames or removals fail before publication. The tripwire also pins the
+  source-compatibility patterns we still want to support (struct-literal
+  construction for `Region` and `CellColor`, and `..` rest-pattern
+  destructuring for every `SnapshotError` variant).
+- testty: document an explicit upgrade path from earlier `0.x` releases in
+  the testty README, including the new prelude import, the removal of the
+  `artifact`/`calibration`/`overlay` modules, the removal of the
+  `testty::snapshot::is_update_mode()` free function, and the configurable
+  `SnapshotConfig::with_update_env_var` baseline trigger.
+- testty: add `SnapshotConfig::with_update_mode` and the
+  `update_mode_override` field as an injected update-mode boundary so tests
+  and programmatic callers can drive baseline-update behavior without
+  mutating process-global environment state through `unsafe`
+  `std::env::set_var` calls.
+
+### Changed (breaking)
+
+- testty: `SnapshotConfig` is now `#[non_exhaustive]` and grew two private
+  fields (`update_env_var`, `update_mode_override`). Downstream callers that
+  used struct-literal construction (`SnapshotConfig { .. }`) must switch to
+  `SnapshotConfig::new(..)` plus the `with_*` builder methods. Future field
+  additions stay non-breaking under the `#[non_exhaustive]` lock-down.
+- testty: `SnapshotError` and each of its struct-shaped variants
+  (`Mismatch`, `MissingBaseline`, `FrameMismatch`) are now
+  `#[non_exhaustive]`. Downstream `match` arms must include a fallback `_`
+  arm and any field destructuring must use the `..` rest-pattern. The
+  `MissingBaseline` variant additionally carries a new `update_env_var`
+  field used to surface the configured trigger in the error message.
+- testty: this release intentionally breaks source compatibility for the
+  items above and requires the next published `testty` version to be a
+  semver-major bump (in pre-1.0 terms, `0.8.x` → `0.9.0`).
+
 ## [v0.8.4] - 2026-04-25
 
 ### Added

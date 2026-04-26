@@ -6,14 +6,14 @@ provides a semantic assertion API for text, style, color, and region checks.
 Scenarios can also be compiled into [VHS](https://github.com/charmbracelet/vhs)
 tapes for visual screenshot capture.
 
-## Quick start
+## Installation
 
 Add `testty` as a dev-dependency in the crate that contains your E2E
 tests:
 
 ```toml
 [dev-dependencies]
-testty = "0.6"
+testty = "0.8"
 tempfile = "3"
 ```
 
@@ -29,13 +29,49 @@ tempfile = { workspace = true }
 > **Note:** `workspace = true` requires matching entries in the root
 > `Cargo.toml` under `[workspace.dependencies]`.
 
-Write a test that launches your binary, interacts with it, and asserts on
-the terminal state:
+## Upgrading
+
+The curated stable surface lives at `testty::prelude` and is locked down
+by the `tests/public_api.rs` tripwire test. Any breaking change to a
+prelude item or to the documented auxiliary items
+(`testty::recipe`, `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`,
+`SnapshotConfig::with_update_env_var`,
+`SnapshotConfig::with_update_mode`,
+`SnapshotConfig::is_update_mode`) requires a deliberate update to
+that test and a `testty` major version bump.
+
+When upgrading from earlier `0.x` releases:
+
+- Replace `use testty::scenario::Scenario;` / `use testty::session::*;`
+  imports with `use testty::prelude::*;`.
+- The `artifact`, `calibration`, and `overlay` modules have been removed.
+  Use the [proof pipeline](#proof-pipeline) backends and the
+  [snapshot testing](#snapshot-testing) helpers instead.
+- `testty::snapshot::is_update_mode()` has been removed. Use
+  `SnapshotConfig::is_update_mode(&self)` instead, which now resolves
+  the per-config env var or the programmatic override set via
+  `SnapshotConfig::with_update_env_var` /
+  `SnapshotConfig::with_update_mode`.
+- Snapshot baseline updates still default to `TUI_TEST_UPDATE=1`. Custom
+  CI integrations can override the trigger via
+  `SnapshotConfig::with_update_env_var` and read the default from
+  `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`.
+- `SnapshotConfig` is now `#[non_exhaustive]`. Replace any struct-literal
+  construction (`SnapshotConfig { .. }`) with `SnapshotConfig::new(..)`
+  plus the `with_*` builder chain.
+- `SnapshotError` and its struct-shaped variants (`Mismatch`,
+  `MissingBaseline`, `FrameMismatch`) are now `#[non_exhaustive]`. `match`
+  arms must include a fallback `_` arm and any field destructuring must
+  use the `..` rest-pattern. The `MissingBaseline` variant also carries a
+  new `update_env_var` field that surfaces the configured trigger in the
+  error message.
+
+## Quick start
+
+Most users only need the curated \[`testty::prelude`\]:
 
 ```rust
-use testty::recipe;
-use testty::scenario::Scenario;
-use testty::session::PtySessionBuilder;
+use testty::prelude::*;
 
 #[test]
 fn startup_shows_welcome() {
@@ -54,7 +90,7 @@ fn startup_shows_welcome() {
     let frame = scenario.run(builder).expect("scenario failed");
 
     // Assert
-    recipe::expect_instruction_visible(&frame, "Welcome");
+    testty::recipe::expect_instruction_visible(&frame, "Welcome");
 }
 ```
 
@@ -292,6 +328,22 @@ Set `TUI_TEST_UPDATE=1` to overwrite baselines with the current output:
 TUI_TEST_UPDATE=1 cargo test -p my-app --test e2e
 ```
 
+The variable name is configurable via
+[`SnapshotConfig::with_update_env_var`](https://docs.rs/testty/latest/testty/snapshot/struct.SnapshotConfig.html);
+the default is exposed as `testty::snapshot::DEFAULT_UPDATE_ENV_VAR`.
+
+For tests and other programmatic callers,
+[`SnapshotConfig::with_update_mode`](https://docs.rs/testty/latest/testty/snapshot/struct.SnapshotConfig.html)
+injects the update-mode decision directly. This bypasses the environment
+variable, which is the recommended way to drive update behavior from a test
+without mutating process-global env state through `unsafe` `std::env::set_var`
+calls:
+
+```rust
+let config = SnapshotConfig::new("tests/baselines", "tests/artifacts")
+    .with_update_mode(true);
+```
+
 ### Snapshot config tuning
 
 For visual snapshots, configure pixel-level comparison thresholds:
@@ -422,24 +474,20 @@ Diffs are automatically computed between consecutive captures in a
 | `recipe` | High-level helpers for tabs, footer, dialogs, status messages |
 | `snapshot` | Baseline management: frame text and visual image comparison |
 | `vhs` | VHS tape compiler for visual screenshot capture |
-| `calibration` | Cell-to-pixel geometry mapping for overlay rendering |
-| `artifact` | Failure artifact directory and capture storage |
-| `overlay` | Pixel-level drawing on screenshots for visual debugging |
 | `proof` | Proof pipeline: report collector, backend trait, and format implementations |
-| `renderer` | Native bitmap font renderer for terminal frames to PNG images |
 | `diff` | Cell-level frame diffing with changed region detection |
 | `journey` | Composable journey building blocks for declarative test authoring |
 | `feature` | `FeatureDemo` builder: scenario execution with hash-cached VHS GIF generation |
+| `prelude` | Curated re-exports for the common testty workflow (`use testty::prelude::*;`) |
 
 ## Full example
 
 A complete E2E test exercising tab navigation:
 
 ```rust
-use testty::recipe;
-use testty::scenario::Scenario;
-use testty::session::PtySessionBuilder;
-use testty::snapshot::{self, SnapshotConfig};
+use testty::prelude::*;
+use testty::{recipe, snapshot};
+use testty::snapshot::SnapshotConfig;
 
 #[test]
 fn tab_key_switches_tabs() {

@@ -22,8 +22,8 @@ also writes a machine-readable workspace summary to
 - `crates/agentty/`: Main TUI application crate with composition root,
   application, domain, infrastructure, runtime, and UI layers.
 - `crates/testty/`: Rust-native TUI end-to-end testing framework with
-  PTY-driven semantic assertions, VHS screenshot capture, calibration, overlay
-  rendering, and snapshot workflows.
+  PTY-driven semantic assertions, VHS screenshot capture, native frame
+  rendering, snapshot workflows, and pluggable proof backends.
 - `crates/ag-xtask/`: Workspace maintenance commands and automation helpers,
   including generated workspace-map output for tooling.
 

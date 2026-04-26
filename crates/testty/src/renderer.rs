@@ -39,7 +39,7 @@ const DEFAULT_BG: CellColor = CellColor {
 /// Produces an [`RgbaImage`] of dimensions `(cols * 8, rows * 16)` pixels
 /// using the embedded bitmap font. Each terminal cell is rendered with its
 /// foreground/background color and style modifiers.
-pub fn render_to_image(frame: &TerminalFrame) -> RgbaImage {
+pub(crate) fn render_to_image(frame: &TerminalFrame) -> RgbaImage {
     let image_width = u32::from(frame.cols()) * CELL_WIDTH;
     let image_height = u32::from(frame.rows()) * CELL_HEIGHT;
     let mut image = RgbaImage::from_pixel(image_width, image_height, color_to_rgba(DEFAULT_BG));
@@ -230,7 +230,7 @@ fn lookup_glyph(character: char) -> &'static [u8; 16] {
 /// Each glyph is 16 bytes — one byte per row, MSB-first (bit 7 = leftmost pixel).
 /// Derived from the standard VGA 8x16 bitmap font.
 #[rustfmt::skip]
-pub static ASCII_GLYPHS: [[u8; 16]; 95] = [
+pub(crate) static ASCII_GLYPHS: [[u8; 16]; 95] = [
     // 0x20 ' ' (space)
     [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],
     // 0x21 '!'

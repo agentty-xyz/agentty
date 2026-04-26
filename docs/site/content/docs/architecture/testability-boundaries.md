@@ -130,7 +130,8 @@ artifact generator.
 | `recipe` | Agent-friendly helpers: `expect_selected_tab`, `expect_keybinding_hint`, `expect_dialog_title`. |
 | `scenario` / `step` | Scenario DSL: compose user journeys from steps, compile to PTY or VHS. |
 | `vhs` | VHS tape compiler: generates `.tape` files from scenarios for visual screenshot capture. |
-| `calibration` | Cell-to-pixel geometry mapping for screenshot overlays. |
-| `overlay` | Bounding box and indicator rendering onto screenshot PNGs. |
 | `snapshot` | Paired baseline workflow: visual PNG + semantic frame sidecar with environment-driven update mode. |
-| `artifact` | Artifact directory management for test captures and failure diagnostics. |
+| `proof` | Proof pipeline: report collection plus pluggable backends (`frame_text`, feature-gated `gif`, `html`, `strip`). |
+| `journey` | Composable journey building blocks for declarative test authoring. |
+| `feature` | `FeatureDemo` builder for scenario execution with hash-cached VHS GIF generation. |
+| `prelude` | Curated `use testty::prelude::*;` re-export set covering the common workflow. |

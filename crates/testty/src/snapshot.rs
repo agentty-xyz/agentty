@@ -10,8 +10,8 @@ use std::{env, fs};
 
 use image::GenericImageView;
 
-/// Environment variable name that enables baseline update mode.
-const UPDATE_ENV_VAR: &str = "TUI_TEST_UPDATE";
+/// Default environment variable name that enables baseline update mode.
+pub const DEFAULT_UPDATE_ENV_VAR: &str = "TUI_TEST_UPDATE";
 
 /// Default pixel color-distance threshold for image comparison.
 const DEFAULT_PIXEL_THRESHOLD: f64 = 30.0;
@@ -20,8 +20,13 @@ const DEFAULT_PIXEL_THRESHOLD: f64 = 30.0;
 const DEFAULT_DIFF_PERCENT_THRESHOLD: f64 = 10.0;
 
 /// Configuration for snapshot comparison behavior.
+///
+/// Marked `#[non_exhaustive]` so future field additions are non-breaking
+/// for downstream callers. Construct instances via [`SnapshotConfig::new`]
+/// and the `with_*` builder methods rather than struct literal syntax.
 #[derive(Debug, Clone)]
 #[must_use]
+#[non_exhaustive]
 pub struct SnapshotConfig {
     /// Directory where reference baselines are stored.
     pub baseline_dir: PathBuf,
@@ -31,17 +36,29 @@ pub struct SnapshotConfig {
     pub pixel_threshold: f64,
     /// Maximum percentage of differing pixels allowed.
     pub diff_percent_threshold: f64,
+    /// Environment variable name that triggers baseline update mode when set.
+    /// Defaults to [`DEFAULT_UPDATE_ENV_VAR`] (`TUI_TEST_UPDATE`). Set via
+    /// [`SnapshotConfig::with_update_env_var`].
+    update_env_var: String,
+    /// Programmatic override for update mode. When `Some`, replaces the
+    /// environment-variable check entirely. Set via
+    /// [`SnapshotConfig::with_update_mode`] so tests and programmatic callers
+    /// drive update mode without mutating process-global environment state.
+    update_mode_override: Option<bool>,
 }
 
 impl SnapshotConfig {
     /// Create a new snapshot config with the given baseline and artifact
-    /// directories, using default tolerance thresholds.
+    /// directories, using default tolerance thresholds and the default
+    /// `TUI_TEST_UPDATE` environment variable name.
     pub fn new(baseline_dir: impl Into<PathBuf>, artifact_dir: impl Into<PathBuf>) -> Self {
         Self {
             baseline_dir: baseline_dir.into(),
             artifact_dir: artifact_dir.into(),
             pixel_threshold: DEFAULT_PIXEL_THRESHOLD,
             diff_percent_threshold: DEFAULT_DIFF_PERCENT_THRESHOLD,
+            update_env_var: DEFAULT_UPDATE_ENV_VAR.to_string(),
+            update_mode_override: None,
         }
     }
 
@@ -52,11 +69,44 @@ impl SnapshotConfig {
 
         self
     }
-}
 
-/// Check whether update mode is active (via environment variable).
-pub fn is_update_mode() -> bool {
-    env::var(UPDATE_ENV_VAR).is_ok()
+    /// Override the environment variable name that triggers update mode.
+    pub fn with_update_env_var(mut self, var_name: impl Into<String>) -> Self {
+        self.update_env_var = var_name.into();
+
+        self
+    }
+
+    /// Force update mode on or off, bypassing the environment variable check.
+    ///
+    /// Provides an injected boundary so tests and programmatic callers can
+    /// drive baseline-update behavior without mutating process-global
+    /// environment state. Calling this with `true` makes [`is_update_mode`]
+    /// return `true`; calling it with `false` forces it to return `false`
+    /// even when the configured env var is set.
+    ///
+    /// [`is_update_mode`]: Self::is_update_mode
+    pub fn with_update_mode(mut self, active: bool) -> Self {
+        self.update_mode_override = Some(active);
+
+        self
+    }
+
+    /// Check whether update mode is active for this config.
+    ///
+    /// The programmatic override (set via [`with_update_mode`]) takes
+    /// precedence; when no override is set, the configured environment
+    /// variable is consulted.
+    ///
+    /// [`with_update_mode`]: Self::with_update_mode
+    #[must_use]
+    pub fn is_update_mode(&self) -> bool {
+        if let Some(forced) = self.update_mode_override {
+            return forced;
+        }
+
+        env::var(&self.update_env_var).is_ok()
+    }
 }
 
 /// Compare an actual screenshot against its stored baseline.
@@ -82,7 +132,7 @@ pub fn assert_snapshot_matches(
 
     let baseline_path = config.baseline_dir.join(format!("{name}.png"));
 
-    if is_update_mode() {
+    if config.is_update_mode() {
         fs::copy(actual_screenshot, &baseline_path)
             .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
@@ -93,6 +143,7 @@ pub fn assert_snapshot_matches(
         return Err(SnapshotError::MissingBaseline {
             name: name.to_string(),
             baseline_path,
+            update_env_var: config.update_env_var.clone(),
         });
     }
 
@@ -100,7 +151,6 @@ pub fn assert_snapshot_matches(
         compare_screenshots(actual_screenshot, &baseline_path, config.pixel_threshold)?;
 
     if diff_percent > config.diff_percent_threshold {
-        // Save the actual screenshot as a failure artifact.
         let actual_artifact = config.artifact_dir.join(format!("{name}_actual.png"));
         fs::copy(actual_screenshot, &actual_artifact)
             .map_err(|err| SnapshotError::IoError(err.to_string()))?;
@@ -140,7 +190,7 @@ pub fn assert_frame_snapshot_matches(
 
     let baseline_path = config.baseline_dir.join(format!("{name}_frame.txt"));
 
-    if is_update_mode() {
+    if config.is_update_mode() {
         fs::write(&baseline_path, actual_text)
             .map_err(|err| SnapshotError::IoError(err.to_string()))?;
 
@@ -151,6 +201,7 @@ pub fn assert_frame_snapshot_matches(
         return Err(SnapshotError::MissingBaseline {
             name: name.to_string(),
             baseline_path,
+            update_env_var: config.update_env_var.clone(),
         });
     }
 
@@ -173,7 +224,13 @@ pub fn assert_frame_snapshot_matches(
 }
 
 /// Errors from snapshot comparison operations.
+///
+/// Both the enum and the struct-shaped variants are marked
+/// `#[non_exhaustive]` so future variant or field additions are non-breaking
+/// for downstream callers. Match arms must include a fallback `_` and any
+/// destructuring of struct-shaped variants must use `..`.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SnapshotError {
     /// Screenshot pixel comparison exceeded threshold.
     #[error(
@@ -182,6 +239,7 @@ pub enum SnapshotError {
         baseline_path.display(),
         actual_path.display()
     )]
+    #[non_exhaustive]
     Mismatch {
         /// Name of the snapshot.
         name: String,
@@ -197,19 +255,23 @@ pub enum SnapshotError {
 
     /// No committed baseline file found (outside update mode).
     #[error(
-        "Missing baseline for '{name}'. Run with {UPDATE_ENV_VAR}=1 to create it.\n\
+        "Missing baseline for '{name}'. Run with {update_env_var}=1 to create it.\n\
          Expected: {}",
         baseline_path.display()
     )]
+    #[non_exhaustive]
     MissingBaseline {
         /// Name of the snapshot.
         name: String,
         /// Expected baseline file path.
         baseline_path: PathBuf,
+        /// Environment variable name that triggers update mode.
+        update_env_var: String,
     },
 
     /// Semantic frame text did not match baseline.
     #[error("Frame snapshot '{name}' mismatch")]
+    #[non_exhaustive]
     FrameMismatch {
         /// Name of the snapshot.
         name: String,
@@ -381,5 +443,111 @@ mod tests {
         // Assert
         assert!((config.pixel_threshold - 50.0).abs() < f64::EPSILON);
         assert!((config.diff_percent_threshold - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn snapshot_config_default_update_env_var_is_tui_test_update() {
+        // Arrange / Act
+        let config = SnapshotConfig::new("/baselines", "/artifacts");
+
+        // Assert
+        assert_eq!(config.update_env_var, "TUI_TEST_UPDATE");
+    }
+
+    #[test]
+    fn snapshot_config_with_update_env_var_overrides_default() {
+        // Arrange / Act
+        let config =
+            SnapshotConfig::new("/baselines", "/artifacts").with_update_env_var("MY_CUSTOM_VAR");
+
+        // Assert
+        assert_eq!(config.update_env_var, "MY_CUSTOM_VAR");
+    }
+
+    #[test]
+    fn snapshot_config_default_has_no_update_mode_override() {
+        // Arrange / Act
+        let config = SnapshotConfig::new("/baselines", "/artifacts");
+
+        // Assert
+        assert!(config.update_mode_override.is_none());
+    }
+
+    #[test]
+    fn snapshot_config_with_update_mode_sets_override() {
+        // Arrange / Act
+        let enabled = SnapshotConfig::new("/baselines", "/artifacts").with_update_mode(true);
+        let disabled = SnapshotConfig::new("/baselines", "/artifacts").with_update_mode(false);
+
+        // Assert
+        assert_eq!(enabled.update_mode_override, Some(true));
+        assert!(enabled.is_update_mode());
+        assert_eq!(disabled.update_mode_override, Some(false));
+        assert!(!disabled.is_update_mode());
+    }
+
+    #[test]
+    fn frame_snapshot_writes_baseline_when_update_mode_override_is_active() {
+        // Arrange — drive update mode through the injected override so the
+        // test never mutates process-global environment state.
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let config =
+            SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"))
+                .with_update_mode(true);
+        let baseline_path = config.baseline_dir.join("custom_frame.txt");
+        assert!(
+            !baseline_path.exists(),
+            "baseline must not exist before the test runs"
+        );
+
+        // Act
+        let result = assert_frame_snapshot_matches(&config, "custom", "Hello custom env var");
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "update mode must succeed when the override is active, got {result:?}"
+        );
+        assert!(
+            baseline_path.exists(),
+            "expected baseline file to be written at {}",
+            baseline_path.display()
+        );
+        let written = fs::read_to_string(&baseline_path).expect("failed to read baseline");
+        assert_eq!(written, "Hello custom env var");
+    }
+
+    #[test]
+    fn assert_snapshot_matches_writes_baseline_when_update_mode_override_is_active() {
+        // Arrange — write a tiny solid-color PNG that stands in for the
+        // actual screenshot a caller would supply.
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let config =
+            SnapshotConfig::new(temp.path().join("baselines"), temp.path().join("artifacts"))
+                .with_update_mode(true);
+        let actual_path = temp.path().join("actual.png");
+        let actual_image = image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
+        actual_image
+            .save(&actual_path)
+            .expect("failed to write actual PNG");
+        let baseline_path = config.baseline_dir.join("custom.png");
+        assert!(
+            !baseline_path.exists(),
+            "baseline must not exist before the test runs"
+        );
+
+        // Act
+        let result = assert_snapshot_matches(&config, "custom", &actual_path);
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "update mode must succeed when the override is active, got {result:?}"
+        );
+        assert!(
+            baseline_path.exists(),
+            "expected baseline PNG to be written at {}",
+            baseline_path.display()
+        );
     }
 }
