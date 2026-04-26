@@ -1,6 +1,6 @@
 +++
 title = "Apply slash command"
-description = "Submit `/apply` in a review-ready session and see guidance to run focused review first."
+description = "Type unavailable `/apply` in a review-ready session and keep the prompt intact."
 weight = 42
 
 [extra]

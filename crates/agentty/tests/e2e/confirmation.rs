@@ -41,6 +41,7 @@ fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
 
 /// Seeds one running session for list-mode cancel confirmation.
 fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
+    let session_id = "running-cancel-0001";
     let canonical_workdir = env.workdir.canonicalize()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -55,18 +56,17 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
 
         database.touch_project_last_opened(project_id).await?;
         database
-            .insert_session(
-                "running-cancel-0001",
-                "gpt-5.4",
-                "main",
-                "InProgress",
-                project_id,
-            )
+            .insert_session(session_id, "gpt-5.4", "main", "InProgress", project_id)
             .await?;
         database
-            .update_session_title("running-cancel-0001", "Cancel running session from list")
+            .update_session_title(session_id, "Cancel running session from list")
             .await
     })?;
+
+    let worktree_name = &session_id[..8];
+    // Match `session_folder()` so the seeded in-progress row remains visible
+    // in the list and can participate in cancel flow assertions.
+    std::fs::create_dir_all(env.agentty_root.join("wt").join(worktree_name))?;
 
     Ok(())
 }

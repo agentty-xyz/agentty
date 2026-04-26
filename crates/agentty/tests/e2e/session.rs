@@ -915,19 +915,17 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
     Ok(())
 }
 
-/// Verify that typing `/apply` in a review-ready session surfaces the
-/// slash-command suggestion and, when submitted without a cached focused
-/// review, shows the `Run a focused review first (f key)` guidance.
+/// Verify that typing `/apply` in a review-ready session keeps the command
+/// text visible when no actionable focused-review cache is available.
 #[test]
-fn apply_slash_command_guides_user_when_no_focused_review_cached() -> E2eResult {
+fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("apply_slash_command_no_review")
         .with_git()
         .setup(seed_review_ready_session)
         .zola(
             "Apply slash command",
-            "Submit `/apply` in a review-ready session and see guidance to run focused review \
-             first.",
+            "Type unavailable `/apply` in a review-ready session and keep the prompt intact.",
             42,
         )
         .run(
@@ -938,30 +936,36 @@ fn apply_slash_command_guides_user_when_no_focused_review_cached() -> E2eResult 
                     .press_key("Enter")
                     .sleep(std::time::Duration::from_secs(1))
                     .press_key("/")
-                    .wait_for_text("/apply", 3000)
+                    .wait_for_text("/model", 3000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "apply_suggestion_visible",
-                        "Slash command suggestion list shows /apply",
+                        "slash_commands_visible",
+                        "Slash command suggestion list omits unavailable /apply",
                     )
                     .write_text("apply")
+                    .wait_for_text("/apply", 3000)
                     .wait_for_stable_frame(300, 3000)
                     .press_key("Enter")
-                    .wait_for_text("Run a focused review first", 5000)
+                    .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
-                        "apply_guidance_shown",
-                        "Session transcript shows focused-review guidance after /apply",
+                        "apply_not_applied_without_review_cache",
+                        "Session stays in prompt mode with `/apply` unchanged",
                     )
             },
             |frame, report| {
                 let suggestion_frame = common::frame_from_capture(&report.captures[0]);
                 let suggestion_full =
                     Region::full(suggestion_frame.cols(), suggestion_frame.rows());
-                assertion::assert_text_in_region(&suggestion_frame, "/apply", &suggestion_full);
+                assertion::assert_text_in_region(&suggestion_frame, "/model", &suggestion_full);
 
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Run a focused review first", &full);
+                assertion::assert_text_in_region(frame, "/apply", &full);
+                let full_text = frame.text_in_region(&full);
+                assert!(
+                    !full_text.contains("Run a focused review first"),
+                    "session without actionable review cache should not show apply guidance"
+                );
             },
         )?;
 
