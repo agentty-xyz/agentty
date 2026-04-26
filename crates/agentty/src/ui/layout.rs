@@ -617,19 +617,13 @@ pub fn session_output_status_line(
 
 /// Builds the published-branch sync status line appended after transcript
 /// content when auto-push state is available.
-pub fn session_output_published_branch_sync_line(
-    session: &Session,
-    spinner_frame: usize,
-) -> Option<Line<'static>> {
+pub fn session_output_published_branch_sync_line(session: &Session) -> Option<Line<'static>> {
     let sync_message = session.published_branch_sync_message()?;
 
     Some(Line::from(vec![Span::styled(
         format!(
             "{} {sync_message}",
-            session_output_published_branch_sync_icon(
-                session.published_branch_sync_status,
-                spinner_frame
-            )
+            session_output_published_branch_sync_icon(session.published_branch_sync_status)
         ),
         Style::default().fg(session_output_published_branch_sync_color(
             session.published_branch_sync_status,
@@ -1144,13 +1138,10 @@ fn session_output_status_icon(status: Status) -> Icon {
 }
 
 /// Returns the icon used for published-branch sync status lines.
-fn session_output_published_branch_sync_icon(
-    sync_status: PublishedBranchSyncStatus,
-    spinner_frame: usize,
-) -> Icon {
+fn session_output_published_branch_sync_icon(sync_status: PublishedBranchSyncStatus) -> Icon {
     match sync_status {
         PublishedBranchSyncStatus::Idle => Icon::Pending,
-        PublishedBranchSyncStatus::InProgress => Icon::Spinner(spinner_frame),
+        PublishedBranchSyncStatus::InProgress => Icon::Spinner,
         PublishedBranchSyncStatus::Succeeded => Icon::Check,
         PublishedBranchSyncStatus::Failed => Icon::Warn,
     }
@@ -2275,7 +2266,7 @@ mod tests {
         session.published_branch_sync_status = PublishedBranchSyncStatus::InProgress;
 
         // Act
-        let sync_line = session_output_published_branch_sync_line(&session, 0)
+        let sync_line = session_output_published_branch_sync_line(&session)
             .expect("published branch sync should render a status line");
 
         // Assert

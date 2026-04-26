@@ -406,6 +406,8 @@ stays readable on narrow screens.
 - Prints: while a turn is running in `InProgress`; the loader glyph is painted
   as stable text and animated by a Tachyonfx buffer effect after paragraph
   rendering.
+- Related loaders: shared spinner call sites render the same `▌▌▌` glyph and
+  apply the reusable Tachyon loader effect where their glyph area is known.
 - Hidden or removed: removed when the turn finishes or the session leaves an
   active status.
 

@@ -1,7 +1,6 @@
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Stable loader glyph painted by the Tachyonfx session-output effect.
 pub(crate) const TACHYON_LOADER_GLYPH: &str = "▌▌▌";
 /// Display width of [`TACHYON_LOADER_GLYPH`] in terminal cells.
@@ -24,20 +23,20 @@ pub enum Icon {
     Pending,
     /// A compact loader symbol animated by Tachyonfx after render.
     TachyonLoader,
-    /// A spinner symbol frame.
-    Spinner(usize),
+    /// A stable loader glyph animated by shared Tachyonfx effects after render.
+    Spinner,
     /// A warning symbol (!).
     Warn,
 }
 
 impl Icon {
-    /// Returns a `Spinner` icon with the frame index calculated based on
-    /// current time.
+    /// Returns the stable `Spinner` loader icon used before Tachyonfx painting.
     pub fn current_spinner() -> Self {
-        Icon::Spinner(Self::current_spinner_frame())
+        Icon::Spinner
     }
 
-    /// Returns the current spinner frame index derived from wall-clock time.
+    /// Returns the current spinner frame index derived from wall-clock time
+    /// for Tachyon loader animation timing.
     pub fn current_spinner_frame() -> usize {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -61,8 +60,7 @@ impl Icon {
             Icon::Cross => "✗",
             Icon::GitBranch => "●",
             Icon::Pending => "·",
-            Icon::TachyonLoader => TACHYON_LOADER_GLYPH,
-            Icon::Spinner(frame) => SPINNER_FRAMES[frame % SPINNER_FRAMES.len()],
+            Icon::TachyonLoader | Icon::Spinner => TACHYON_LOADER_GLYPH,
             Icon::Warn => "!",
         }
     }
@@ -97,7 +95,8 @@ mod tests {
         let icon = Icon::current_spinner();
 
         // Assert
-        assert!(matches!(icon, Icon::Spinner(_)));
+        assert!(matches!(icon, Icon::Spinner));
+        assert_eq!(icon.as_str(), TACHYON_LOADER_GLYPH);
     }
 
     #[test]
@@ -109,18 +108,9 @@ mod tests {
     }
 
     #[test]
-    fn test_spinner_frames() {
+    fn test_spinner_uses_tachyon_loader_glyph() {
         // Arrange & Act & Assert
-        assert_eq!(Icon::Spinner(0).as_str(), "⠋");
-        assert_eq!(Icon::Spinner(1).as_str(), "⠙");
-        assert_eq!(Icon::Spinner(9).as_str(), "⠏");
-    }
-
-    #[test]
-    fn test_spinner_wraps() {
-        // Arrange & Act & Assert
-        assert_eq!(Icon::Spinner(10).as_str(), Icon::Spinner(0).as_str());
-        assert_eq!(Icon::Spinner(15).as_str(), Icon::Spinner(5).as_str());
+        assert_eq!(Icon::Spinner.as_str(), TACHYON_LOADER_GLYPH);
     }
 
     #[test]
@@ -134,7 +124,7 @@ mod tests {
             Icon::GitBranch,
             Icon::Pending,
             Icon::TachyonLoader,
-            Icon::Spinner(3),
+            Icon::Spinner,
             Icon::Warn,
         ];
 

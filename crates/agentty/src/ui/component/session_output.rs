@@ -11,11 +11,11 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use rustc_hash::FxHasher;
-use tachyonfx::{Duration, Effect, Interpolation, fx};
 
 use crate::app;
-use crate::domain::session::{PublishedBranchSyncStatus, Session, SessionId, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::icon::{Icon, TACHYON_LOADER_WIDTH};
+use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::state::app_mode::DoneSessionOutputMode;
 use crate::ui::util::{bottom_pinned_scroll_offset, panel_inner_width};
@@ -33,18 +33,15 @@ const USER_PROMPT_PREFIX: &str = " › ";
 const USER_PROMPT_LINE_PREFIX: &str = "\n › ";
 const USER_PROMPT_CONTINUATION_PREFIX: &str = "   ";
 const SESSION_OUTPUT_LAYOUT_CACHE_ENTRY_LIMIT: usize = 16;
-const TACHYON_LOADER_FRAME_COUNT: usize = 9;
-const TACHYON_LOADER_PERIOD_MS: u32 = 900;
-const TACHYON_LOADER_STEP_MS: u32 = 100;
 
 /// Cache key for one fully assembled session-output layout.
 ///
 /// The key is intentionally tied to the session identifier plus observable
 /// update version and `updated_at` timestamp instead of hashing the full
 /// transcript on every frame. Width, selected done-session mode, active prompt,
-/// review text/status, progress text, spinner frame, and markdown style
-/// version cover the transient inputs that can alter rendered lines without
-/// changing the stored session row.
+/// review text/status, progress text, and markdown style version cover the
+/// transient inputs that can alter rendered lines without changing the stored
+/// session row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionOutputLayoutCacheKey {
     active_progress: TextFingerprint,
@@ -58,7 +55,6 @@ struct SessionOutputLayoutCacheKey {
     session_id: SessionId,
     session_update_version: u64,
     session_updated_at: i64,
-    spinner_frame: Option<usize>,
     status: Status,
 }
 
@@ -100,6 +96,9 @@ pub(crate) struct SessionOutputLayout {
     pub(crate) active_loader_line_index: Option<usize>,
     /// Number of rendered lines, saturated for scroll metric arithmetic.
     pub(crate) line_count: u16,
+    /// Index of the published-branch sync loader row within `lines`, when
+    /// present.
+    pub(crate) published_loader_line_index: Option<usize>,
     /// Rendered lines shared between scroll metrics and frame painting.
     pub(crate) lines: Arc<[Line<'static>]>,
 }
@@ -108,6 +107,7 @@ pub(crate) struct SessionOutputLayout {
 struct SessionOutputLines {
     active_loader_line_index: Option<usize>,
     lines: Vec<Line<'static>>,
+    published_loader_line_index: Option<usize>,
 }
 
 /// Cached session-output layout entry.
@@ -116,111 +116,15 @@ struct SessionOutputLayoutCacheEntry {
     layout: SessionOutputLayout,
 }
 
-/// Stateful Tachyonfx loader effect reused by the session output cache.
-///
-/// The effect is advanced by frame deltas so render-time painting avoids
-/// rebuilding the effect closure on every tick. Palette colors are read inside
-/// the closure at process time so theme changes do not require cache
-/// invalidation.
-struct TachyonLoaderEffect {
-    effect: Effect,
-    spinner_frame: Option<usize>,
-}
-
-impl TachyonLoaderEffect {
-    /// Builds a reusable loader effect ready for the first frame.
-    fn new() -> Self {
-        Self {
-            effect: Self::build_effect(),
-            spinner_frame: None,
-        }
-    }
-
-    /// Applies the loader pulse to `area`, advancing from the previous frame
-    /// offset when available.
-    fn apply(&mut self, buffer: &mut Buffer, area: Rect, spinner_frame: usize) {
-        let elapsed_steps = self.elapsed_steps(spinner_frame);
-        let phase_ms = u32::try_from(elapsed_steps).unwrap_or_default() * TACHYON_LOADER_STEP_MS;
-
-        self.effect
-            .process(Duration::from_millis(phase_ms), buffer, area);
-        self.spinner_frame = Some(spinner_frame);
-    }
-
-    /// Returns elapsed animation steps and resets the finite Tachyonfx effect
-    /// when the spinner frame crosses into a new loader cycle.
-    fn elapsed_steps(&mut self, spinner_frame: usize) -> usize {
-        let frame_offset = spinner_frame % TACHYON_LOADER_FRAME_COUNT;
-        let Some(previous_spinner_frame) = self.spinner_frame else {
-            return frame_offset;
-        };
-        if spinner_frame <= previous_spinner_frame {
-            return 0;
-        }
-
-        let previous_frame_offset = previous_spinner_frame % TACHYON_LOADER_FRAME_COUNT;
-        let elapsed_steps = spinner_frame - previous_spinner_frame;
-        if previous_frame_offset + elapsed_steps >= TACHYON_LOADER_FRAME_COUNT {
-            self.effect = Self::build_effect();
-
-            return frame_offset;
-        }
-
-        elapsed_steps
-    }
-
-    /// Builds the Tachyonfx effect that sweeps emphasis across the loader
-    /// glyph cells.
-    fn build_effect() -> Effect {
-        fx::effect_fn_buf(
-            (),
-            (TACHYON_LOADER_PERIOD_MS, Interpolation::Linear),
-            move |_state, context, buffer| {
-                let active_color = style::palette::warning();
-                let base_color = style::palette::warning_soft();
-                let muted_color = style::palette::text_subtle();
-                let alpha = context.alpha();
-                let active_index = if alpha < (1.0 / 3.0) {
-                    0
-                } else if alpha < (2.0 / 3.0) {
-                    1
-                } else {
-                    2
-                };
-                let trailing_index = (active_index + 2) % 3;
-
-                for (cell_index, position) in context.area.positions().enumerate() {
-                    let cell = &mut buffer[position];
-                    if cell.symbol() == " " {
-                        continue;
-                    }
-
-                    let loader_index = cell_index % usize::from(TACHYON_LOADER_WIDTH);
-                    let color = if loader_index == active_index {
-                        active_color
-                    } else if loader_index == trailing_index {
-                        base_color
-                    } else {
-                        muted_color
-                    };
-
-                    cell.set_fg(color);
-                }
-            },
-        )
-    }
-}
-
 /// Bounded LRU cache for the fully assembled session output panel.
 ///
 /// This sits above [`markdown::MarkdownRenderCache`] so the scroll-metric path
 /// and render path share one derivation for the same session/update version,
-/// width, output mode, active prompt, review text/status, progress text, and
-/// active spinner frame. Entries are invalidated by key changes; the markdown
-/// render-cache version is part of the key so style-bearing lines are not
-/// reused after markdown cache invalidation. Per-session Tachyonfx state is
-/// bounded by the same layout LRU and is removed once no cached layout remains
-/// for that session.
+/// width, output mode, active prompt, review text/status, and progress text.
+/// Entries are invalidated by key changes; the markdown render-cache version is
+/// part of the key so style-bearing lines are not reused after markdown cache
+/// invalidation. Per-session Tachyonfx state is bounded by the same layout LRU
+/// and is removed once no cached layout remains for that session.
 pub struct SessionOutputLayoutCache {
     entries: RefCell<VecDeque<SessionOutputLayoutCacheEntry>>,
     tachyon_loader_effects: RefCell<HashMap<SessionId, TachyonLoaderEffect>>,
@@ -370,8 +274,6 @@ pub(crate) struct SessionOutputLineContext<'a> {
     pub(crate) review_text: Option<&'a str>,
     /// Current observable update version for this session snapshot.
     pub(crate) session_update_version: u64,
-    /// Spinner frame used by active loader rows during this render pass.
-    pub(crate) spinner_frame: usize,
 }
 
 impl<'a> SessionOutput<'a> {
@@ -513,6 +415,7 @@ impl<'a> SessionOutput<'a> {
         SessionOutputLayout {
             active_loader_line_index: output_lines.active_loader_line_index,
             line_count,
+            published_loader_line_index: output_lines.published_loader_line_index,
             lines: Arc::<[Line<'static>]>::from(output_lines.lines),
         }
     }
@@ -538,7 +441,6 @@ impl<'a> SessionOutput<'a> {
             session_id: session.id.clone(),
             session_update_version: context.session_update_version,
             session_updated_at: session.updated_at,
-            spinner_frame: Self::layout_cache_spinner_frame(session, context),
             status: session.status,
         }
     }
@@ -551,20 +453,6 @@ impl<'a> SessionOutput<'a> {
         }
 
         TextFingerprint::from_text(None)
-    }
-
-    /// Returns the spinner frame when this session output includes a dynamic
-    /// glyph inside cached layout text; otherwise returns `None` so stable
-    /// active-loader rows remain cached across Tachyonfx repaint ticks.
-    fn layout_cache_spinner_frame(
-        session: &Session,
-        context: SessionOutputLineContext<'_>,
-    ) -> Option<usize> {
-        if session.published_branch_sync_status == PublishedBranchSyncStatus::InProgress {
-            return Some(context.spinner_frame);
-        }
-
-        None
     }
 
     /// Builds rendered markdown lines, contextual status/help rows, and
@@ -596,10 +484,10 @@ impl<'a> SessionOutput<'a> {
             review_status_message,
             review_text,
             session_update_version: _,
-            spinner_frame,
         } = context;
         let status = session.status;
         let mut active_loader_line_index = None;
+        let mut published_loader_line_index = None;
         let output_text = Self::output_text(session, done_session_output_mode);
         let (completed_turn_text, active_turn_text) =
             Self::transcript_sections(status, output_text.as_ref(), active_prompt_output);
@@ -657,7 +545,9 @@ impl<'a> SessionOutput<'a> {
                 markdown_render_cache,
             );
         }
-        Self::append_published_branch_sync_lines(&mut lines, session, spinner_frame);
+        if Self::append_published_branch_sync_lines(&mut lines, session) {
+            published_loader_line_index = Some(lines.len().saturating_sub(1));
+        }
 
         if let Some(status_line) =
             layout::session_output_status_line(status, active_progress, review_status_message)
@@ -684,6 +574,7 @@ impl<'a> SessionOutput<'a> {
         SessionOutputLines {
             active_loader_line_index,
             lines,
+            published_loader_line_index,
         }
     }
 
@@ -692,12 +583,9 @@ impl<'a> SessionOutput<'a> {
     fn append_published_branch_sync_lines(
         lines: &mut Vec<Line<'static>>,
         session: &Session,
-        spinner_frame: usize,
-    ) {
-        let Some(sync_line) =
-            layout::session_output_published_branch_sync_line(session, spinner_frame)
-        else {
-            return;
+    ) -> bool {
+        let Some(sync_line) = layout::session_output_published_branch_sync_line(session) else {
+            return false;
         };
 
         while lines.last().is_some_and(|line| line.width() == 0) {
@@ -706,6 +594,8 @@ impl<'a> SessionOutput<'a> {
 
         lines.push(Line::from(""));
         lines.push(sync_line);
+
+        true
     }
 
     /// Splits the transcript before the current active-turn prompt block.
@@ -1115,15 +1005,14 @@ impl<'a> SessionOutput<'a> {
         }
     }
 
-    /// Returns the screen area occupied by the active loader glyph when the
-    /// status row is currently visible inside the scrolled output panel.
-    fn active_loader_area(
+    /// Returns the screen area occupied by a loader glyph when its row is
+    /// currently visible inside the scrolled output panel.
+    fn loader_area(
         output_area: Rect,
-        active_loader_line_index: Option<usize>,
+        loader_line_index: Option<usize>,
         final_scroll: u16,
-        status: Status,
     ) -> Option<Rect> {
-        if !Self::status_uses_tachyon_loader(status) || output_area.width < TACHYON_LOADER_WIDTH {
+        if output_area.width < TACHYON_LOADER_WIDTH {
             return None;
         }
 
@@ -1132,7 +1021,7 @@ impl<'a> SessionOutput<'a> {
             return None;
         }
 
-        let status_line_index = active_loader_line_index?;
+        let status_line_index = loader_line_index?;
         let first_visible_line_index = usize::from(final_scroll);
         let last_visible_line_index =
             first_visible_line_index.saturating_add(usize::from(inner_area.height));
@@ -1185,8 +1074,7 @@ impl<'a> SessionOutput<'a> {
 
         // This fallback intentionally does not retain Tachyonfx phase between
         // renders; it exists for isolated component tests and ad hoc renders.
-        let mut loader_effect = TachyonLoaderEffect::new();
-        loader_effect.apply(buffer, area, spinner_frame);
+        TachyonLoaderEffect::apply_stateless(buffer, area, spinner_frame);
     }
 }
 
@@ -1208,7 +1096,6 @@ impl Component for SessionOutput<'_> {
                 review_status_message: self.review_status_message,
                 review_text: self.review_text,
                 session_update_version: self.session_update_version,
-                spinner_frame,
             },
             self.markdown_render_cache,
             self.output_layout_cache,
@@ -1219,11 +1106,15 @@ impl Component for SessionOutput<'_> {
             layout.lines.len(),
             self.scroll_offset,
         );
-        let active_loader_area = Self::active_loader_area(
+        let active_loader_area = if Self::status_uses_tachyon_loader(status) {
+            Self::loader_area(output_area, layout.active_loader_line_index, final_scroll)
+        } else {
+            None
+        };
+        let published_loader_area = Self::loader_area(
             output_area,
-            layout.active_loader_line_index,
+            layout.published_loader_line_index,
             final_scroll,
-            status,
         );
 
         let paint_lines = SessionOutput::borrowed_paint_lines(&layout.lines);
@@ -1239,6 +1130,9 @@ impl Component for SessionOutput<'_> {
 
         if let Some(loader_area) = active_loader_area {
             self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);
+        }
+        if let Some(loader_area) = published_loader_area {
+            TachyonLoaderEffect::apply_stateless(f.buffer_mut(), loader_area, spinner_frame);
         }
     }
 }
@@ -1266,7 +1160,6 @@ mod tests {
             review_status_message,
             review_text,
             session_update_version: 0,
-            spinner_frame: 0,
         }
     }
 
@@ -1424,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn test_output_layout_cache_reuses_active_loader_across_spinner_frames() {
+    fn test_output_layout_cache_reuses_active_loader_layout_across_frames() {
         // Arrange
         let mut session = session_fixture();
         session.output = "active output".to_string();
@@ -1432,10 +1325,6 @@ mod tests {
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
         let output_layout_cache = SessionOutputLayoutCache::default();
         let first_frame_context = line_context(DoneSessionOutputMode::Summary, None, None, None);
-        let second_frame_context = SessionOutputLineContext {
-            spinner_frame: 1,
-            ..first_frame_context
-        };
 
         // Act
         let first_layout = output_layout_cache.layout(
@@ -1450,10 +1339,10 @@ mod tests {
             first_frame_context,
             Some(&markdown_render_cache),
         );
-        let second_layout = output_layout_cache.layout(
+        let repeated_frame_layout = output_layout_cache.layout(
             &session,
             Rect::new(0, 0, 80, 8),
-            second_frame_context,
+            first_frame_context,
             Some(&markdown_render_cache),
         );
 
@@ -1462,7 +1351,10 @@ mod tests {
             &first_layout.lines,
             &repeated_first_layout.lines
         ));
-        assert!(Arc::ptr_eq(&first_layout.lines, &second_layout.lines));
+        assert!(Arc::ptr_eq(
+            &first_layout.lines,
+            &repeated_frame_layout.lines
+        ));
         assert!(
             first_layout
                 .lines
@@ -1575,39 +1467,36 @@ mod tests {
     }
 
     #[test]
-    fn test_active_loader_area_tracks_scrolled_status_row() {
+    fn test_loader_area_tracks_scrolled_row() {
         // Arrange
         let output_area = Rect::new(2, 3, 80, 10);
 
         // Act
-        let loader_area =
-            SessionOutput::active_loader_area(output_area, Some(19), 12, Status::InProgress);
+        let loader_area = SessionOutput::loader_area(output_area, Some(19), 12);
 
         // Assert
         assert_eq!(loader_area, Some(Rect::new(2, 11, TACHYON_LOADER_WIDTH, 1)));
     }
 
     #[test]
-    fn test_active_loader_area_locates_status_row_before_following_hint() {
+    fn test_loader_area_locates_row_before_following_hint() {
         // Arrange
         let output_area = Rect::new(0, 0, 80, 8);
 
         // Act
-        let loader_area =
-            SessionOutput::active_loader_area(output_area, Some(1), 0, Status::InProgress);
+        let loader_area = SessionOutput::loader_area(output_area, Some(1), 0);
 
         // Assert
         assert_eq!(loader_area, Some(Rect::new(0, 2, TACHYON_LOADER_WIDTH, 1)));
     }
 
     #[test]
-    fn test_active_loader_area_skips_non_tachyon_statuses() {
+    fn test_loader_area_skips_missing_line_index() {
         // Arrange
         let output_area = Rect::new(0, 0, 80, 10);
 
         // Act
-        let loader_area =
-            SessionOutput::active_loader_area(output_area, Some(0), 0, Status::Queued);
+        let loader_area = SessionOutput::loader_area(output_area, None, 0);
 
         // Assert
         assert_eq!(loader_area, None);

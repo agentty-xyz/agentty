@@ -5,7 +5,6 @@ use crate::app::session::SessionTaskService;
 use crate::app::{self, App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::session::{SessionId, Status};
-use crate::icon::Icon;
 use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::channel::TurnPrompt;
 use crate::runtime::EventResult;
@@ -196,7 +195,6 @@ fn question_view_metrics(app: &App, terminal_size: Rect) -> QuestionViewMetrics 
                     review_status_message,
                     review_text,
                     session_update_version: app.session_update_version(session_id),
-                    spinner_frame: Icon::current_spinner_frame(),
                 },
                 app.markdown_render_cache(),
                 app.session_output_layout_cache(),

@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::icon::Icon;
 use crate::ui::markdown::render_markdown;
 use crate::ui::style::palette;
@@ -265,6 +266,14 @@ impl Component for InfoOverlay<'_> {
 
         f.render_widget(Clear, popup_area);
         f.render_widget(paragraph, popup_area);
+
+        if self.is_loading {
+            TachyonLoaderEffect::apply_to_last_glyph(
+                f.buffer_mut(),
+                popup_area,
+                Icon::current_spinner_frame(),
+            );
+        }
     }
 }
 

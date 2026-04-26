@@ -286,6 +286,8 @@ While a session is **InProgress**, Agentty keeps an animated loader row in the
 session output panel and may update its transient loader text from provider
 thought or tool-status events until the turn completes. The chat transcript
 itself is updated only after the final turn result is parsed and persisted.
+All active loading indicators use the same animated `▌▌▌` Tachyon loader so
+session rows, popups, and follow-on sync messages read consistently.
 
 While the running turn is still active, pressing `Enter` opens the chat
 composer (the `/` slash-command composer remains gated to **Review** and
