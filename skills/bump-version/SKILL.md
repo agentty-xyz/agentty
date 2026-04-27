@@ -38,7 +38,10 @@ push, or pull workflow steps here.
 1. **Changelog**
 
    - Update `CHANGELOG.md`.
-   - Ensure there is an entry for the new version with the current date:
+   - Resolve the current date in Pacific time before writing the changelog date
+     (`TZ=America/Los_Angeles date +%F`), so late-day release work follows the
+     repository's PST/PDT release calendar.
+   - Ensure there is an entry for the new version with the Pacific date:
      `## [vX.Y.Z] - YYYY-MM-DD`.
    - Ensure content adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
    - Add a `### Contributors` section under the new release entry with a bullet list of
