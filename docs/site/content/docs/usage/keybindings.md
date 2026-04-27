@@ -119,7 +119,8 @@ until the background focused-review generation finishes and the session returns 
   [Forge Authentication](@/docs/usage/forge-authentication.md) for the GitHub and GitLab
   CLI setup steps.
 - **Question**: opening the session enters Question Input mode until all prompts are
-  answered and submitted, or the clarification turn is ended with `Esc`.
+  answered and submitted, the clarification turn is ended with `Ctrl+C`, or the user
+  exits to the sessions list with `q`.
 - **Done**: `c` opens a yes/no confirmation, then creates a new draft composer with the
   continuation text already staged as the first draft message. When Agentty has the
   merged hash, that staged message is
@@ -192,7 +193,8 @@ When predefined options are shown:
 
 | Key | Action | |-----|--------| | `j` / `k` / `Up` / `Down` | Navigate options | |
 `Enter` | Choose highlighted option | | `Tab` | Switch focus to chat output for
-scrolling | | `Esc` | End turn — return to review without answering |
+scrolling | | `q` | Return to the sessions list | | `Ctrl+C` | End turn — return to
+review without answering |
 
 ## Question Input — Free Text
 
@@ -201,14 +203,20 @@ exist:
 
 | Key | Action | |-----|--------| | `Enter` | Submit typed response | | `Alt+Enter` or
 `Shift+Enter` | Insert newline | | `Ctrl+J` / `Ctrl+M` | Insert newline (macOS terminal
-compat) | | `Esc` | End turn — return to review without answering | | `Left` / `Right` |
-Move cursor | | `Up` / `Down` | Move cursor across wrapped lines | | `Backspace` /
-`Delete` | Delete character | | `Home` / `End` | Move cursor to start/end | | `Cmd+Left`
-| Move to start of current line | | `Cmd+Right` | Move to end of current line | |
-`Option+Left` / `Option+Right` | Move to previous / next word | | `Option+Backspace` |
-Delete previous word | | `Cmd+Backspace` | Delete current line | | `Ctrl+K` | Kill to
-end of current line | | `Ctrl+W` | Delete previous word | | `Ctrl+D` | Delete character
-forward | | `Tab` | Switch focus to chat output for scrolling |
+compat) | | `Ctrl+C` | End turn — return to review without answering | | `Left` /
+`Right` | Move cursor | | `Up` / `Down` | Move cursor across wrapped lines | |
+`Backspace` / `Delete` | Delete character | | `Home` / `End` | Move cursor to start/end
+| | `Cmd+Left` | Move to start of current line | | `Cmd+Right` | Move to end of current
+line | | `Option+Left` / `Option+Right` | Move to previous / next word | |
+`Option+Backspace` | Delete previous word | | `Cmd+Backspace` | Delete current line | |
+`Ctrl+K` | Kill to end of current line | | `Ctrl+W` | Delete previous word | | `Ctrl+D`
+| Delete character forward | | `Tab` | Switch focus to chat output for scrolling |
+
+In free-text mode every other printable character — including `q` — is inserted into the
+answer so responses can contain it. To exit the question without answering, press `Tab`
+to focus the chat output (or navigate back into the option list when the question has
+predefined options) and then press `q`, or press `Ctrl+C` from any focus to cancel the
+turn.
 
 ## Question Input — Chat Scroll
 
@@ -217,9 +225,13 @@ When chat output is focused (press `Tab` to switch):
 | Key | Action | |-----|--------| | `j` / `k` / `Up` / `Down` | Scroll chat output | |
 `g` | Scroll to top | | `G` | Scroll to bottom | | `Ctrl+d` | Half page down | |
 `Ctrl+u` | Half page up | | `d` | Open diff preview for the current session | | `Enter`
-/ `Esc` | Return focus to answer input | | `Tab` | Switch focus back to answer input |
+/ `Esc` | Return focus to answer input | | `Tab` | Switch focus back to answer input | |
+`q` | Return to the sessions list | | `Ctrl+C` | End turn — return to review without
+answering |
 
 <a id="usage-question-input-submit-flow"></a> After the last question is answered,
 Agentty sends one follow-up message to the session with each question and its response,
-then returns to session view. Pressing `Esc` at any point ends the turn immediately
-without sending a reply and returns the session to review.
+then returns to session view. Pressing `Ctrl+C` at any point ends the turn immediately
+without sending a reply and returns the session to review. Pressing `q` (outside
+free-text input) returns to the sessions list while leaving the session in **Question**
+state so the clarification can be resumed by reopening it.

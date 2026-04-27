@@ -260,7 +260,15 @@ pub fn prompt_footer_line(session: &Session, attachment_count: usize) -> Line<'s
 }
 
 /// Builds the question-mode help footer line for the current focus target.
-pub fn question_help_footer_line(focus: QuestionFocus) -> Line<'static> {
+///
+/// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
+/// as a navigation key while the user is moving through predefined options. The
+/// `q: Sessions` hint is surfaced whenever that predicate is satisfied so the
+/// shortcut stays discoverable in answer focus too, not only in chat focus.
+pub fn question_help_footer_line(
+    focus: QuestionFocus,
+    is_navigating_options: bool,
+) -> Line<'static> {
     let is_chat_focused = focus == QuestionFocus::Chat;
     let mut help_actions = Vec::new();
 
@@ -279,8 +287,14 @@ pub fn question_help_footer_line(focus: QuestionFocus) -> Line<'static> {
     let focus_label = if is_chat_focused { "Answer" } else { "Chat" };
     help_actions.push(help_action::HelpAction::new("focus", "Tab", focus_label));
 
+    if is_chat_focused || is_navigating_options {
+        help_actions.push(help_action::HelpAction::new("sessions", "q", "Sessions"));
+    }
+
     if !is_chat_focused {
-        help_actions.push(help_action::HelpAction::new("end turn", "Esc", "End turn"));
+        help_actions.push(help_action::HelpAction::new(
+            "end turn", "Ctrl+C", "End turn",
+        ));
     }
 
     help_action::footer_line(&help_actions)
@@ -2195,14 +2209,38 @@ mod tests {
         // Arrange
 
         // Act
-        let chat_focus_line = question_help_footer_line(QuestionFocus::Chat);
-        let answer_focus_line = question_help_footer_line(QuestionFocus::Answer);
+        let chat_focus_line = question_help_footer_line(QuestionFocus::Chat, false);
+        let answer_focus_line = question_help_footer_line(QuestionFocus::Answer, false);
 
         // Assert
         assert!(chat_focus_line.to_string().contains("j/k: scroll"));
         assert!(chat_focus_line.to_string().contains("Esc/Enter: answer"));
+        assert!(chat_focus_line.to_string().contains("q: sessions"));
         assert!(answer_focus_line.to_string().contains("Enter: send"));
-        assert!(answer_focus_line.to_string().contains("Esc: end turn"));
+        assert!(answer_focus_line.to_string().contains("Ctrl+C: end turn"));
+        assert!(!answer_focus_line.to_string().contains("q: sessions"));
+    }
+
+    #[test]
+    fn test_question_help_footer_line_shows_sessions_in_answer_focus_when_navigating_options() {
+        // Arrange — answer focus while navigating predefined options. The
+        // runtime accepts plain `q` as an exit-to-list shortcut here, so the
+        // footer must surface it.
+
+        // Act
+        let answer_focus_with_options = question_help_footer_line(QuestionFocus::Answer, true);
+
+        // Assert
+        assert!(
+            answer_focus_with_options
+                .to_string()
+                .contains("q: sessions")
+        );
+        assert!(
+            answer_focus_with_options
+                .to_string()
+                .contains("Ctrl+C: end turn")
+        );
     }
 
     #[test]

@@ -510,17 +510,31 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         panel_areas.help_area,
         panel_areas.help_area.height,
         focus,
+        !is_free_text_mode,
     );
 }
 
 /// Renders the question-mode help footer with context-aware action hints.
-fn render_question_help_footer(f: &mut Frame, area: Rect, help_height: u16, focus: QuestionFocus) {
+///
+/// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
+/// as a sessions-list shortcut, so the footer can surface it whenever the
+/// shortcut is actually wired up.
+fn render_question_help_footer(
+    f: &mut Frame,
+    area: Rect,
+    help_height: u16,
+    focus: QuestionFocus,
+    is_navigating_options: bool,
+) {
     if help_height == 0 {
         return;
     }
 
-    let help_para = Paragraph::new(layout::question_help_footer_line(focus))
-        .alignment(ratatui::layout::Alignment::Right);
+    let help_para = Paragraph::new(layout::question_help_footer_line(
+        focus,
+        is_navigating_options,
+    ))
+    .alignment(ratatui::layout::Alignment::Right);
     f.render_widget(help_para, area);
 }
 

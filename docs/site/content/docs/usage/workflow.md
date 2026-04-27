@@ -86,14 +86,14 @@ requests continue refreshing in the background. | `Enter` reply, `/` open slash-
 composer, `m` add to merge queue, `o` open worktree, `p` create or refresh forge review
 request, `d` diff, `f` focused review, scroll, help | | **Question** | Agent requested
 clarification before continuing. | question input mode (`Enter` submit, `Tab` toggle
-chat scroll, `Esc` end turn) | | **Queued** | Session is waiting in the merge queue. |
-read-only view (`q`, scroll, help) | | **Rebasing** | Worktree branch is rebasing onto
-the base branch. | read-only view (`q`, scroll, help) | | **Merging** | Changes are
-being merged into the base branch. | read-only view (`q`, scroll, help) | | **Done** |
-Session completed, merged, and its worktree checkout was removed. | `c` confirm
-continuation into a new draft, scroll, help | | **Canceled** | Session was canceled by
-the user and its worktree checkout was removed. | `c` confirm continuation into a new
-draft, read-only view (`q`, scroll, help) |
+chat scroll, `Ctrl+C` end turn, `q` back to sessions list) | | **Queued** | Session is
+waiting in the merge queue. | read-only view (`q`, scroll, help) | | **Rebasing** |
+Worktree branch is rebasing onto the base branch. | read-only view (`q`, scroll, help) |
+| **Merging** | Changes are being merged into the base branch. | read-only view (`q`,
+scroll, help) | | **Done** | Session completed, merged, and its worktree checkout was
+removed. | `c` confirm continuation into a new draft, scroll, help | | **Canceled** |
+Session was canceled by the user and its worktree checkout was removed. | `c` confirm
+continuation into a new draft, read-only view (`q`, scroll, help) |
 
 Settings values for models, reasoning, commit trailers, and open commands are stored per
 active project. Switching projects reloads that project's `Default Reasoning Level`,
@@ -296,7 +296,7 @@ flowchart TB
   in_progress -->|stop current turn| review
   in_progress -->|cancel from session list| canceled
   question -->|submit clarifications| in_progress
-  question -->|Esc end turn| review
+  question -->|Ctrl+C end turn| review
 
   review -->|generate focused review| agent_review
   agent_review -->|review ready| review
@@ -351,9 +351,11 @@ title-generation pass for the full updated bundle.
 questions in the `questions` array, the session moves to **Question** status. You answer
 each question in sequence, and Agentty sends one consolidated follow-up message back to
 the same session before returning it to normal execution. Submitting a blank free-text
-answer stores `no answer` for that question. Pressing `Esc` ends the clarification turn
-immediately, restores the session to **Review**, and does not send the follow-up
-message.
+answer stores `no answer` for that question. Pressing `Ctrl+C` ends the clarification
+turn immediately, restores the session to **Review**, and does not send the follow-up
+message. Pressing `q` while reading the chat transcript or navigating the predefined
+option list returns to the sessions list without ending the turn, so the session keeps
+its **Question** status and the clarification can be resumed by reopening it later.
 
 <a id="usage-question-options"></a> Questions may include predefined answer options.
 Agentty displays them as an optional numbered list under an "Options:" header with the
@@ -361,8 +363,8 @@ first option pre-selected when options exist. Use `j`/`k` or `Up`/`Down` to navi
 options and `Enter` to submit the highlighted choice. Moving above the first option or
 below the last option switches into the free-text answer input shown below the list.
 Questions without predefined options open directly in that free-text input. Submitting a
-blank free-text answer stores `no answer` for that question. Press `Esc` at any point to
-end the clarification turn immediately and return the session to **Review** without
+blank free-text answer stores `no answer` for that question. Press `Ctrl+C` at any point
+to end the clarification turn immediately and return the session to **Review** without
 sending a reply.
 
 ## Session Sizes

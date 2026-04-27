@@ -1,4 +1,4 @@
-use crossterm::event::{self, KeyCode, KeyEvent};
+use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::session::SessionTaskService;
@@ -22,10 +22,24 @@ const NO_ANSWER: &str = "no answer";
 /// `Tab` toggles focus between the question panel and the chat output for
 /// scrolling. When chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
 /// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
-/// typed answer (or `no answer` when blank), and `Esc` ends the entire turn
-/// without sending a reply, reverting the session to `Review`.
+/// typed answer (or `no answer` when blank), `Ctrl+C` ends the entire turn
+/// without sending a reply, and `q` returns to the sessions list (skipped while
+/// the user is actively typing a free-text answer so the character can still
+/// be inserted into the response).
 pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
     if handle_focus_toggle(app, key) {
+        return EventResult::Continue;
+    }
+
+    if is_ctrl_c(key) {
+        end_turn_no_answer(app).await;
+
+        return EventResult::Continue;
+    }
+
+    if is_plain_q(key) && should_exit_to_list_on_q(app) {
+        app.mode = AppMode::List;
+
         return EventResult::Continue;
     }
 
@@ -43,11 +57,40 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
 
     match action {
         QuestionAction::Submit(response) => submit_response(app, response).await,
-        QuestionAction::EndTurn => end_turn_no_answer(app).await,
         QuestionAction::Continue => sync_question_at_mention_state(app),
     }
 
     EventResult::Continue
+}
+
+/// Returns whether `key` is a plain `Ctrl+C` press.
+fn is_ctrl_c(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Returns whether `key` is a plain `q` press without modifiers.
+fn is_plain_q(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('q')) && key.modifiers.is_empty()
+}
+
+/// Returns whether a plain `q` press should exit question mode to the sessions
+/// list.
+///
+/// `q` exits while reading the chat transcript (`QuestionFocus::Chat`) or while
+/// navigating predefined options (`selected_option_index` is `Some`). It is
+/// preserved as a free-text character whenever the answer input is focused and
+/// the user is past the option list, so answers can still contain the letter.
+fn should_exit_to_list_on_q(app: &App) -> bool {
+    let AppMode::Question {
+        focus,
+        selected_option_index,
+        ..
+    } = &app.mode
+    else {
+        return false;
+    };
+
+    *focus == QuestionFocus::Chat || selected_option_index.is_some()
 }
 
 /// Toggles focus between the question panel and chat output on `Tab`.
@@ -365,9 +408,6 @@ pub(crate) fn default_option_index(
 /// Semantic action emitted by one question-mode key event.
 enum QuestionAction {
     Submit(String),
-    /// Ends the entire question turn, filling all remaining questions with
-    /// `no answer`.
-    EndTurn,
     Continue,
 }
 
@@ -397,7 +437,6 @@ fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionActio
         let is_navigating_options = selected_option_index.is_some();
 
         match key.code {
-            KeyCode::Esc => QuestionAction::EndTurn,
             KeyCode::Enter | KeyCode::Char('\r' | '\n')
                 if !is_navigating_options && input_key::should_insert_newline(key) =>
             {
@@ -780,7 +819,7 @@ async fn submit_response(app: &mut App, response: String) {
 
 /// Ends the question turn without sending a reply to the agent.
 ///
-/// Triggered by `Esc`. The session status is reverted to `Review` so the
+/// Triggered by `Ctrl+C`. The session status is reverted to `Review` so the
 /// user can inspect the current diff or start a new follow-up manually.
 /// If the database write fails the mode stays on `Question` so the user
 /// can retry, avoiding a split between persisted and in-memory state.
@@ -1056,12 +1095,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_ends_turn_and_transitions_to_view() {
-        // Arrange — two unanswered questions. Esc should cancel the question
-        // turn and transition to View without sending a reply.
+    async fn test_handle_ctrl_c_ends_turn_and_transitions_to_view() {
+        // Arrange — two unanswered questions. Ctrl+C should cancel the
+        // question turn and transition to View without sending a reply.
         let mut app = new_test_app().await;
         app.review_cache.insert(
-            "session-esc".into(),
+            "session-ctrl-c".into(),
             crate::app::ReviewCacheEntry::Ready {
                 text: "Focused review".to_string(),
                 diff_hash: 42,
@@ -1071,7 +1110,7 @@ mod tests {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-esc".into(),
+            session_id: "session-ctrl-c".into(),
             questions: vec![
                 QuestionItem {
                     options: vec!["Yes".to_string(), "No".to_string()],
@@ -1094,7 +1133,7 @@ mod tests {
         let _ = handle(
             &mut app,
             TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         )
         .await;
 
@@ -1106,14 +1145,153 @@ mod tests {
                 review_status_message: None,
                 review_text: Some(ref review_text),
                 ..
-            } if session_id == "session-esc" && review_text == "Focused review"
+            } if session_id == "session-ctrl-c" && review_text == "Focused review"
         ));
     }
 
     #[tokio::test]
-    async fn test_handle_escape_sets_in_memory_session_status_to_review() {
-        // Arrange — session exists in memory with Question status. Esc should
-        // revert it to Review.
+    async fn test_handle_escape_no_longer_ends_turn() {
+        // Arrange — Esc must not cancel the question turn anymore. The
+        // question state stays put so users can keep editing.
+        let mut app = new_test_app().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-esc-noop".into(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Q?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — still in Question mode.
+        assert!(matches!(app.mode, AppMode::Question { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_handle_q_returns_to_sessions_list_in_chat_focus() {
+        // Arrange — chat focus is read-only, so plain `q` should jump to the
+        // sessions list (matching session-view navigation).
+        let mut app = new_test_app().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-q-chat".into(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Q?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Chat,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — switched to the sessions list.
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_q_returns_to_sessions_list_when_navigating_options() {
+        // Arrange — option-navigation mode treats letters as navigation
+        // keys, so `q` should exit to the sessions list.
+        let mut app = new_test_app().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-q-options".into(),
+            questions: vec![QuestionItem {
+                options: vec!["Yes".to_string(), "No".to_string()],
+                text: "Need a target branch?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: Some(0),
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — switched to the sessions list.
+        assert!(matches!(app.mode, AppMode::List));
+    }
+
+    #[tokio::test]
+    async fn test_handle_q_inserts_character_in_free_text_answer() {
+        // Arrange — free-text mode (no option navigation) must accept `q` as
+        // a regular character so users can type answers containing it.
+        let mut app = new_test_app().await;
+        app.mode = AppMode::Question {
+            at_mention_state: None,
+            review_status_message: None,
+            review_text: None,
+            session_id: "session-q-text".into(),
+            questions: vec![QuestionItem {
+                options: Vec::new(),
+                text: "Free text?".to_string(),
+            }],
+            responses: Vec::new(),
+            current_index: 0,
+            focus: QuestionFocus::Answer,
+            input: InputState::default(),
+            scroll_offset: None,
+            selected_option_index: None,
+        };
+
+        // Act
+        let _ = handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert — character inserted into input, mode unchanged.
+        assert!(matches!(
+            &app.mode,
+            AppMode::Question { input, .. } if input.text() == "q"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_handle_ctrl_c_sets_in_memory_session_status_to_review() {
+        // Arrange — session exists in memory with Question status. Ctrl+C
+        // should revert it to Review.
         use std::path::PathBuf;
 
         use crate::domain::agent::AgentModel;
@@ -1170,7 +1348,7 @@ mod tests {
         let _ = handle(
             &mut app,
             TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         )
         .await;
 
@@ -1185,9 +1363,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_updates_session_handle_status_to_review() {
+    async fn test_handle_ctrl_c_updates_session_handle_status_to_review() {
         // Arrange — session has a runtime handle with Question status.
-        // Esc must update the handle so sync_from_handles does not revert
+        // Ctrl+C must update the handle so sync_from_handles does not revert
         // the snapshot status back to Question.
         use std::path::PathBuf;
 
@@ -1249,7 +1427,7 @@ mod tests {
         let _ = handle(
             &mut app,
             TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         )
         .await;
 
@@ -1264,7 +1442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_closes_open_in_progress_timer_before_review() {
+    async fn test_handle_ctrl_c_closes_open_in_progress_timer_before_review() {
         // Arrange — persisted state still has an open active-work interval
         // when question mode exits.
         let mut app = new_test_app().await;
@@ -1312,7 +1490,7 @@ mod tests {
         let _ = handle(
             &mut app,
             TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         )
         .await;
         let sessions = app
@@ -2701,46 +2879,6 @@ mod tests {
                 ref session_id,
                 ..
             } if session_id == "session-esc-chat"
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_escape_in_answer_focus_still_ends_turn() {
-        // Arrange — question mode with answer focused. Esc should end the
-        // turn as before.
-        let mut app = new_test_app().await;
-        app.mode = AppMode::Question {
-            at_mention_state: None,
-            review_status_message: None,
-            review_text: None,
-            session_id: "session-esc-answer".into(),
-            questions: vec![QuestionItem {
-                options: Vec::new(),
-                text: "Q?".to_string(),
-            }],
-            responses: Vec::new(),
-            current_index: 0,
-            focus: QuestionFocus::Answer,
-            input: InputState::default(),
-            scroll_offset: None,
-            selected_option_index: None,
-        };
-
-        // Act
-        let _ = handle(
-            &mut app,
-            TEST_TERMINAL_SIZE,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        )
-        .await;
-
-        // Assert — transitions to View mode.
-        assert!(matches!(
-            app.mode,
-            AppMode::View {
-                ref session_id,
-                ..
-            } if session_id == "session-esc-answer"
         ));
     }
 
