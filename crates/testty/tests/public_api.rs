@@ -39,6 +39,8 @@ fn accept_backend<B: ProofBackend>(_backend: &B) {}
 /// or renamed in a backwards-incompatible way.
 #[test]
 fn prelude_surface_is_stable() {
+    // Arrange, Act, Assert: compile-time references exercise the curated prelude
+    // API.
     let _: Region = Region::new(0, 0, 1, 1);
     let _: CellColor = CellColor::new(0, 0, 0);
     let _: CellStyle = CellStyle::default();
@@ -72,6 +74,8 @@ fn prelude_surface_is_stable() {
 /// but are documented as part of the public contract.
 #[test]
 fn auxiliary_surface_is_stable() {
+    // Arrange, Act, Assert: compile-time references exercise documented auxiliary
+    // APIs.
     let _: &str = testty::snapshot::DEFAULT_UPDATE_ENV_VAR;
 
     let config = SnapshotConfig::new("/baselines", "/artifacts")
@@ -87,6 +91,7 @@ fn auxiliary_surface_is_stable() {
 /// of these fields will fail this test before publication.
 #[test]
 fn public_struct_literals_are_stable() {
+    // Arrange: construct public structs through their stable field names.
     let region = Region {
         col: 0,
         row: 1,
@@ -103,9 +108,14 @@ fn public_struct_literals_are_stable() {
         green: 20,
         blue: 30,
     };
-    assert_eq!(color.red, 10);
-    assert_eq!(color.green, 20);
-    assert_eq!(color.blue, 30);
+
+    // Act: read each public field so renames or removals break compilation.
+    let region_fields = (region.col, region.row, region.width, region.height);
+    let color_fields = (color.red, color.green, color.blue);
+
+    // Assert: the stable field values are preserved.
+    assert_eq!(region_fields, (0, 1, 2, 3));
+    assert_eq!(color_fields, (10, 20, 30));
 }
 
 /// Lock in the supported pattern for matching `AssertionFailure` and the
@@ -116,7 +126,9 @@ fn public_struct_literals_are_stable() {
 /// with named fields plus a trailing `..` rest-pattern and must include a
 /// fallback `_` arm. This function is compiled (not run) so accidental
 /// renames of variants or destructured field names fail the build before
-/// publication.
+/// publication. The bound values are referenced in each arm so clippy
+/// keeps the compatibility check explicit instead of collapsing the named
+/// fields into the trailing `..`.
 #[allow(dead_code)]
 fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'static str {
     let AssertionFailure {
@@ -127,41 +139,42 @@ fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'st
         frame_excerpt,
         ..
     } = failure;
-    let _ = (message, region, matched_spans, frame_excerpt);
+    let _: (&String, &Option<Region>, &Vec<MatchedSpan>, &String) =
+        (message, region, matched_spans, frame_excerpt);
 
     match expected {
         Expected::TextInRegion { needle, .. } => {
-            let _ = needle;
+            let _: &String = needle;
 
             "text-in-region"
         }
         Expected::NotVisible { needle, .. } => {
-            let _ = needle;
+            let _: &String = needle;
 
             "not-visible"
         }
         Expected::MatchCount { needle, count, .. } => {
-            let _ = (needle, count);
+            let _: (&String, &usize) = (needle, count);
 
             "match-count"
         }
         Expected::ForegroundColor { needle, color, .. } => {
-            let _ = (needle, color);
+            let _: (&String, &CellColor) = (needle, color);
 
             "foreground"
         }
         Expected::BackgroundColor { needle, color, .. } => {
-            let _ = (needle, color);
+            let _: (&String, &CellColor) = (needle, color);
 
             "background"
         }
         Expected::Highlighted { needle, .. } => {
-            let _ = needle;
+            let _: &String = needle;
 
             "highlighted"
         }
         Expected::NotHighlighted { needle, .. } => {
-            let _ = needle;
+            let _: &String = needle;
 
             "not-highlighted"
         }
