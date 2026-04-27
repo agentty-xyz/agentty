@@ -15,6 +15,9 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 install-path = "CARGO_HOME"
 # Publish jobs to run in CI
 publish-jobs = ["npm", "./publish-crates-io"]
+# Preserve the generated release workflow permissions required by
+# `.github/workflows/publish-crates-io.yml` when `dist init` regenerates it.
+github-custom-job-permissions = { "publish-crates-io" = { contents = "read", id-token = "write", packages = "write" } }
 # Repository checks that must pass before generated release build and publish jobs.
 plan-jobs = ["./release-checks"]
 # Whether to install an updater program
