@@ -138,7 +138,7 @@ impl SessionManager {
     /// Creates a blank session with an empty prompt and output.
     ///
     /// Returns the identifier of the newly created session.
-    /// The session is created with `New` status and no agent is started —
+    /// The session is created with `Draft` status and no agent is started —
     /// call [`SessionManager::start_session`] to submit a prompt and launch
     /// the agent.
     ///
@@ -214,7 +214,7 @@ impl SessionManager {
                 &session_id,
                 session_model.as_str(),
                 base_branch,
-                &Status::New.to_string(),
+                &Status::Draft.to_string(),
                 project_id,
             )
             .await
@@ -282,7 +282,7 @@ impl SessionManager {
                 &session_id,
                 session_model.as_str(),
                 base_branch,
-                &Status::New.to_string(),
+                &Status::Draft.to_string(),
                 projects.active_project_id(),
             )
             .await
@@ -575,7 +575,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Appends one staged draft message to a `New` session without launching
+    /// Appends one staged draft message to a `Draft` session without launching
     /// the agent yet.
     ///
     /// This emits a [`AppEvent::SessionUpdated`] signal so memoized session
@@ -590,7 +590,7 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if the session is missing, was not created as a draft
-    /// session, is no longer `New`, or the staged bundle cannot be persisted.
+    /// session, is no longer `Draft`, or the staged bundle cannot be persisted.
     pub async fn stage_draft_message(
         &mut self,
         services: &AppServices,
@@ -616,9 +616,9 @@ impl SessionManager {
                     "Only draft sessions can stage drafts".to_string(),
                 ));
             }
-            if session.status != Status::New {
+            if session.status != Status::Draft {
                 return Err(SessionError::Workflow(
-                    "Only `New` sessions can stage drafts".to_string(),
+                    "Only `Draft` sessions can stage drafts".to_string(),
                 ));
             }
 
@@ -705,7 +705,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Starts a `New` session from its persisted staged draft bundle.
+    /// Starts a `Draft` session from its persisted staged draft bundle.
     ///
     /// This materializes the deferred draft worktree before launching the
     /// first live turn.
@@ -725,9 +725,9 @@ impl SessionManager {
                     "Only draft sessions can be started from staged drafts".to_string(),
                 ));
             }
-            if session.status != Status::New {
+            if session.status != Status::Draft {
                 return Err(SessionError::Workflow(
-                    "Only `New` sessions can be started from staged drafts".to_string(),
+                    "Only `Draft` sessions can be started from staged drafts".to_string(),
                 ));
             }
             if session.prompt.is_empty() {
@@ -1565,7 +1565,7 @@ impl SessionManager {
         let is_first_message = session.prompt.is_empty();
         let allowed = session.status.allows_review_actions()
             || session.status == Status::Question
-            || (is_first_message && session.status == Status::New);
+            || (is_first_message && session.status == Status::Draft);
         if !allowed {
             return Err(SessionError::Workflow(
                 "Session must be in review status".to_string(),
@@ -2993,7 +2993,7 @@ mod tests {
     #[tokio::test]
     async fn test_stage_draft_message_preserves_persisted_prompt_when_attachment_write_fails() {
         // Arrange
-        let mut session = test_session("", Status::New, None, "");
+        let mut session = test_session("", Status::Draft, None, "");
         session.is_draft = true;
         let database = database_with_session(&session).await;
         let mut session_manager = session_manager_with_one_session(session);
@@ -3061,7 +3061,7 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_session_worktree_ready_skips_non_draft_sessions() {
         // Arrange
-        let session = test_session("", Status::New, None, "");
+        let session = test_session("", Status::Draft, None, "");
         let database = database_with_session(&session).await;
         let mut session_manager = session_manager_with_one_session(session);
         let mut mock_fs_client = fs::MockFsClient::new();
@@ -3088,7 +3088,7 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_session_worktree_ready_reuses_existing_draft_worktree() {
         // Arrange
-        let mut session = test_session("", Status::New, None, "");
+        let mut session = test_session("", Status::Draft, None, "");
         session.is_draft = true;
         let database = database_with_session(&session).await;
         let mut session_manager = session_manager_with_one_session(session);
@@ -3136,7 +3136,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_session_worktree_uses_base_branch_upstream_ref() {
         // Arrange
-        let session = test_session("", Status::New, None, "");
+        let session = test_session("", Status::Draft, None, "");
         let database = database_with_session(&session).await;
         let session_manager = session_manager_with_one_session(session);
         let repo_root = PathBuf::from("/tmp/project");
@@ -3193,7 +3193,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_session_worktree_falls_back_to_local_base_branch_without_upstream() {
         // Arrange
-        let session = test_session("", Status::New, None, "");
+        let session = test_session("", Status::Draft, None, "");
         let database = database_with_session(&session).await;
         let session_manager = session_manager_with_one_session(session);
         let repo_root = PathBuf::from("/tmp/project");
@@ -3249,7 +3249,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_session_worktree_returns_error_when_upstream_resolution_fails() {
         // Arrange
-        let session = test_session("", Status::New, None, "");
+        let session = test_session("", Status::Draft, None, "");
         let database = database_with_session(&session).await;
         let session_manager = session_manager_with_one_session(session);
         let repo_root = PathBuf::from("/tmp/project");
@@ -3721,7 +3721,7 @@ mod tests {
         // Arrange
         let prompt = "Implement optimistic retry path";
         let turn_prompt = TurnPrompt::from_text(prompt.to_string());
-        let session = test_session("", Status::New, None, "");
+        let session = test_session("", Status::Draft, None, "");
         let mut session_manager = session_manager_with_one_session(session);
 
         // Act

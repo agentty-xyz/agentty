@@ -328,7 +328,7 @@ pub(crate) fn active_theme_cache_version() -> u64 {
 #[must_use]
 pub fn status_color(status: Status) -> Color {
     match status {
-        Status::New => palette::text_muted(),
+        Status::Draft => palette::text_muted(),
         Status::InProgress => palette::warning(),
         Status::Review | Status::AgentReview => palette::info(),
         Status::Question => palette::question(),
@@ -343,7 +343,7 @@ pub fn status_color(status: Status) -> Color {
 #[must_use]
 pub fn status_icon(status: Status) -> Icon {
     match status {
-        Status::New | Status::Review | Status::Question | Status::Queued => Icon::Pending,
+        Status::Draft | Status::Review | Status::Question | Status::Queued => Icon::Pending,
         Status::InProgress | Status::AgentReview | Status::Rebasing | Status::Merging => {
             Icon::current_spinner()
         }
@@ -416,7 +416,7 @@ mod tests {
         let _theme_scope = scoped_active_theme(ColorTheme::Current);
 
         // Act
-        let color = status_color(Status::New);
+        let color = status_color(Status::Draft);
 
         // Assert
         assert_eq!(color, palette::text_muted());
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn status_icon_returns_pending_for_new() {
         // Arrange / Act
-        let icon = status_icon(Status::New);
+        let icon = status_icon(Status::Draft);
 
         // Assert
         assert!(matches!(icon, Icon::Pending));

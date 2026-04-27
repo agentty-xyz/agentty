@@ -581,7 +581,7 @@ mod tests {
     fn session_fixture() -> Session {
         crate::domain::session::tests::SessionFixtureBuilder::new()
             .folder(std::env::temp_dir())
-            .status(Status::New)
+            .status(Status::Draft)
             .build()
     }
 

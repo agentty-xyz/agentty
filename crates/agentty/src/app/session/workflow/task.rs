@@ -1263,7 +1263,7 @@ mod tests {
             assert!(SessionTaskService::status_requires_full_refresh(status));
         }
         assert!(!SessionTaskService::status_requires_full_refresh(
-            Status::New
+            Status::Draft
         ));
     }
 
@@ -1280,12 +1280,12 @@ mod tests {
                 "session-id",
                 "gpt-5.4",
                 "main",
-                &Status::New.to_string(),
+                &Status::Draft.to_string(),
                 project_id,
             )
             .await
             .expect("failed to insert session");
-        let status = Mutex::new(Status::New);
+        let status = Mutex::new(Status::Draft);
         let clock = StaticClock::new(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let session_update_versions = Arc::default();

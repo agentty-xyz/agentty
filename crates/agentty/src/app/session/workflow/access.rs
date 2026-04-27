@@ -149,7 +149,7 @@ mod tests {
     fn test_session_index_or_err_returns_correct_index_for_second_session() {
         // Arrange
         let session_a = test_session("sess-a", Status::Review);
-        let session_b = test_session("sess-b", Status::New);
+        let session_b = test_session("sess-b", Status::Draft);
         let manager = session_manager_with(vec![session_a, session_b], HashMap::new());
 
         // Act

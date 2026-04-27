@@ -1280,7 +1280,7 @@ WHERE id = ?
             .upsert_project("/tmp/project", Some("main"))
             .await
             .expect("failed to insert project");
-        insert_session_fixture(&database, "session-a", "main", "New", project_id).await;
+        insert_session_fixture(&database, "session-a", "main", "Draft", project_id).await;
         database
             .update_session_prompt("session-a", "First draft")
             .await
@@ -1330,7 +1330,7 @@ WHERE id = ?
             .upsert_project("/tmp/project", Some("main"))
             .await
             .expect("failed to insert project");
-        insert_session_fixture(&database, "session-a", "main", "New", project_id).await;
+        insert_session_fixture(&database, "session-a", "main", "Draft", project_id).await;
 
         // Act
         database

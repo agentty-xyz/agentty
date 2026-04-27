@@ -470,7 +470,7 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         can_continue_terminal_session: session.allows_terminal_continuation(),
         can_open_worktree,
         can_start_staged_session: session.is_draft_session()
-            && session.status == Status::New
+            && session.status == Status::Draft
             && session.has_staged_drafts(),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
         publish_pull_request_action: session.publish_pull_request_action(),
@@ -966,7 +966,7 @@ fn prompt_history_entries(output: &str) -> Vec<String> {
 /// Draft sessions use the staged prompt stored in `prompt` directly because
 /// they have not yet written user prompts into the persisted transcript.
 fn session_prompt_history_entries(session: &crate::domain::session::Session) -> Vec<String> {
-    if session.status == Status::New && session.is_draft_session() {
+    if session.status == Status::Draft && session.is_draft_session() {
         return vec![session.prompt.clone()];
     }
 
@@ -1381,7 +1381,7 @@ mod tests {
     fn test_is_view_diff_allowed_only_for_review_status() {
         // Arrange
         let review_status = Status::Review;
-        let new_status = Status::New;
+        let new_status = Status::Draft;
         let in_progress_status = Status::InProgress;
 
         // Act

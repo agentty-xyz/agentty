@@ -26,7 +26,7 @@ use crate::ui::util::{format_token_count, move_input_cursor_down, move_input_cur
 
 /// Captures prompt-mode routing flags derived from the current session.
 ///
-/// Draft sessions only stage prompts while they remain in `Status::New`.
+/// Draft sessions only stage prompts while they remain in `Status::Draft`.
 /// After the first turn starts, follow-up submissions must route through the
 /// normal reply path even though the session still records draft origin.
 struct PromptContext {
@@ -50,7 +50,7 @@ impl PromptContext {
     }
 
     /// Returns whether the prompt belongs to a draft session that only stages
-    /// messages while still in `Status::New`.
+    /// messages while still in `Status::Draft`.
     fn is_draft_session(&self) -> bool {
         self.session_mode == PromptSessionMode::NewDraft
     }
@@ -87,7 +87,7 @@ enum PromptSessionMode {
     /// New non-draft session that can be deleted when prompt composition is
     /// canceled.
     NewDeletable,
-    /// New draft session that stages prompt text instead of starting a turn.
+    /// Draft-mode session that stages prompt text instead of starting a turn.
     NewDraft,
     /// New non-draft session that should be preserved on cancel because it has
     /// staged drafts.
@@ -280,7 +280,7 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
 
     let session = app.sessions.sessions.get(session_index);
     let session_mode = session.map_or(PromptSessionMode::Existing, |session| {
-        let is_new_session = session.status == crate::domain::session::Status::New;
+        let is_new_session = session.status == crate::domain::session::Status::Draft;
 
         match (
             is_new_session,
@@ -1402,7 +1402,7 @@ fn handle_prompt_char(app: &mut App, character: char) {
 /// Starts asynchronous loading of at-mention file entries for the prompt
 /// session.
 ///
-/// Draft sessions in `New` state defer worktree creation, so their composer
+/// Draft sessions in `Draft` state defer worktree creation, so their composer
 /// indexes the active project working directory until the session folder is
 /// materialized.
 fn activate_at_mention(app: &mut App, prompt_context: &PromptContext) {
@@ -2992,7 +2992,7 @@ mod tests {
         assert_eq!(app.sessions.sessions.len(), 1);
         assert_eq!(
             app.sessions.sessions[0].status,
-            crate::domain::session::Status::New
+            crate::domain::session::Status::Draft
         );
         assert!(app.sessions.sessions[0].prompt.is_empty());
     }
@@ -3028,7 +3028,7 @@ mod tests {
         assert_eq!(app.sessions.sessions[0].prompt, "Review [Image #1]");
         assert_eq!(
             app.sessions.sessions[0].status,
-            crate::domain::session::Status::New
+            crate::domain::session::Status::Draft
         );
         assert_eq!(app.sessions.sessions[0].draft_attachments.len(), 1);
         assert_eq!(
@@ -3112,7 +3112,7 @@ mod tests {
         assert!(
             !app.sessions.sessions[0]
                 .output
-                .contains("Only `New` sessions can stage drafts")
+                .contains("Only `Draft` sessions can stage drafts")
         );
     }
 

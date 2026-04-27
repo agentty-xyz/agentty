@@ -1001,7 +1001,7 @@ fn session_view_footer_actions(
 
 /// Returns the fixed prompt-mode actions rendered in the composer footer.
 fn prompt_footer_actions(session: &Session) -> &'static [help_action::HelpAction] {
-    if session.status == Status::New && session.is_draft_session() {
+    if session.status == Status::Draft && session.is_draft_session() {
         return &NEW_SESSION_PROMPT_FOOTER_ACTIONS;
     }
 
@@ -1130,7 +1130,7 @@ fn session_output_status_message(
         Status::Queued => "Waiting in merge queue...".to_string(),
         Status::Rebasing => "Rebasing...".to_string(),
         Status::Merging => "Merging...".to_string(),
-        Status::New | Status::Review | Status::Question | Status::Done | Status::Canceled => {
+        Status::Draft | Status::Review | Status::Question | Status::Done | Status::Canceled => {
             String::new()
         }
     }
@@ -1143,7 +1143,7 @@ fn session_output_status_icon(status: Status) -> Icon {
             Icon::TachyonLoader
         }
         Status::Queued
-        | Status::New
+        | Status::Draft
         | Status::Review
         | Status::Question
         | Status::Done
@@ -1444,7 +1444,7 @@ mod tests {
 
     fn session_fixture() -> Session {
         crate::domain::session::tests::SessionFixtureBuilder::new()
-            .status(Status::New)
+            .status(Status::Draft)
             .build()
     }
 
@@ -1725,7 +1725,7 @@ mod tests {
     fn test_prompt_footer_line_uses_stage_label_for_new_sessions() {
         // Arrange
         let mut session = session_fixture();
-        session.status = Status::New;
+        session.status = Status::Draft;
         session.is_draft = true;
 
         // Act

@@ -443,7 +443,7 @@ mod tests {
             review_request: None,
             size: SessionSize::Xs,
             stats: SessionStats::default(),
-            status: Status::New,
+            status: Status::Draft,
             summary: None,
             title: None,
             updated_at: 0,

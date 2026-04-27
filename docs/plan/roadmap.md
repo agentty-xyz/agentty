@@ -429,7 +429,7 @@ capture instead of just the first.
 
 Promote when
 `[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
-lands and the matcher core surface is the next ergonomics surface to extend.
+lands and the already-landed `match_*`/`AssertionFailure` surface is stable.
 
 #### Depends on
 
@@ -447,7 +447,7 @@ high-level recipe checks the same way they compose low-level `assertion::match_*
 
 Promote when
 `[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
-lands and the assertion-layer `match_*` pattern is settled.
+lands and the already-landed assertion-layer `match_*` pattern is settled.
 
 #### Depends on
 

@@ -32,8 +32,8 @@ On the **Sessions** list, `a` opens a popup with `Regular`, `Draft`, and a disab
 move between enabled options, and `Esc` / `q` closes the popup.
 
 On the **Sessions** list, `c` appears only when the selected row is cancelable: running
-sessions, review-ready sessions, and draft sessions that are still in `New` before their
-first staged bundle starts.
+sessions, review-ready sessions, and draft sessions that are still in `Draft` before
+their first staged bundle starts.
 
 ## Settings
 
@@ -167,11 +167,12 @@ and are pre-sorted by file path, line, and diff side.
 
 ## Prompt Input
 
-| Key | Action | |-----|--------| | `Enter` | Submit the first prompt in regular `New`,
-stage one draft in draft `New`, or submit reply/question text elsewhere | | `Alt+Enter`
-or `Shift+Enter` | Insert newline | | `Ctrl+V` or `Alt+V` | Paste one clipboard image as
-an inline `[Image #n]` placeholder | | `Cmd+Left` | Move to start of current line | |
-`Cmd+Right` | Move to end of current line | | `Option+Left` | Move to previous word | |
+| Key | Action | |-----|--------| | `Enter` | Submit the first prompt in a regular
+session that is still `Draft`, stage one prompt in a draft session that is still
+`Draft`, or submit reply/question text elsewhere | | `Alt+Enter` or `Shift+Enter` |
+Insert newline | | `Ctrl+V` or `Alt+V` | Paste one clipboard image as an inline
+`[Image #n]` placeholder | | `Cmd+Left` | Move to start of current line | | `Cmd+Right`
+| Move to end of current line | | `Option+Left` | Move to previous word | |
 `Option+Right` | Move to next word | | `Option+Backspace` | Delete previous word | |
 `Cmd+Backspace` | Delete current line | | `Esc` | Cancel | | `@` | Open file picker | |
 `/` | Open slash commands |

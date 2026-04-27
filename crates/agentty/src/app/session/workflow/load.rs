@@ -402,7 +402,7 @@ fn should_skip_missing_folder_session(
         return false;
     }
 
-    if is_draft_session && persisted_status == Status::New {
+    if is_draft_session && persisted_status == Status::Draft {
         return false;
     }
 
@@ -600,7 +600,7 @@ mod tests {
             session_with_worktree_id,
             "gemini-3-flash-preview",
             "main",
-            "New",
+            "Draft",
             project_id,
         )
         .await
@@ -609,7 +609,7 @@ mod tests {
             session_without_worktree_id,
             "gemini-3-flash-preview",
             "main",
-            "New",
+            "Draft",
             project_id,
         )
         .await
@@ -966,7 +966,7 @@ mod tests {
     fn merge_loaded_session_status_prefers_terminal_status_from_db() {
         // Arrange
         let status_from_db = Status::Done;
-        let status_from_handle = Status::New;
+        let status_from_handle = Status::Draft;
 
         // Act
         let merged_status = merge_loaded_session_status(status_from_db, status_from_handle);
@@ -1037,7 +1037,7 @@ mod tests {
     fn should_skip_missing_folder_session_keeps_new_draft_session() {
         // Arrange
         let has_session_folder = false;
-        let persisted_status = Status::New;
+        let persisted_status = Status::Draft;
         let live_handle_status = None;
 
         // Act

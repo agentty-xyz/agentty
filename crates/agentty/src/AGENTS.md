@@ -8,14 +8,14 @@
   `SettingName`; do not introduce ad hoc string keys or legacy aliases.
 - Prefer `module.rs` plus `module/` for nested modules. Avoid `mod.rs` module roots.
 - Session status flow:
-  - Status state machine is: `New` -> (`InProgress` | `Rebasing`), (`Review` |
+  - Status state machine is: `Draft` -> (`InProgress` | `Rebasing`), (`Review` |
     `AgentReview` | `Question`) -> (`InProgress` | `Queued` | `Rebasing` | `Merging` |
     `Canceled`), (`Review` | `AgentReview`) -> `Done`, `Queued` -> (`Merging` |
     `Review`), (`InProgress` | `Rebasing`) -> (`Review` | `AgentReview` | `Question`),
     and `Merging` -> (`Done` | `Review` | `AgentReview`).
-  - `New` is set when `create_session()` creates a blank session before the user types a
-    prompt.
-  - `InProgress` can be entered from `New` (first prompt) or from `Review`/`Question`
+  - `Draft` is set when `create_session()` creates a blank session before the user types
+    a prompt.
+  - `InProgress` can be entered from `Draft` (first prompt) or from `Review`/`Question`
     (reply).
   - `Question` is set when a completed turn returns structured clarification questions.
   - `Done` can be entered from `Merging` after local merge cleanup succeeds, or from

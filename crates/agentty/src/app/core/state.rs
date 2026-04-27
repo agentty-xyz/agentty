@@ -644,7 +644,7 @@ impl App {
             .await?)
     }
 
-    /// Persists one staged draft message for a `New` session without
+    /// Persists one staged draft message for a `Draft` session without
     /// launching the agent.
     ///
     /// # Errors
@@ -660,7 +660,7 @@ impl App {
             .await?)
     }
 
-    /// Starts a `New` session from its persisted staged draft bundle.
+    /// Starts a `Draft` session from its persisted staged draft bundle.
     ///
     /// # Errors
     /// Returns an error if the session is missing, has no staged drafts, or
@@ -4836,7 +4836,7 @@ mod tests {
             .expect("expected created continuation draft");
         assert!(continued_session.is_draft_session());
         assert_eq!(continued_session.base_branch, "release");
-        assert_eq!(continued_session.status, Status::New);
+        assert_eq!(continued_session.status, Status::Draft);
         assert_eq!(
             continued_session.prompt,
             format!(

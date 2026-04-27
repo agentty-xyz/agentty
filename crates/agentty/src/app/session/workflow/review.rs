@@ -153,7 +153,7 @@ mod tests {
     fn test_startup_replay_set_returns_empty_when_no_review_sessions() {
         // Arrange
         let sessions = vec![
-            test_session("new-1", Status::New),
+            test_session("new-1", Status::Draft),
             test_session("done-1", Status::Done),
         ];
 
@@ -227,7 +227,7 @@ mod tests {
         // Arrange
         let sessions = vec![
             test_session("review-sess", Status::Review),
-            test_session("new-sess", Status::New),
+            test_session("new-sess", Status::Draft),
         ];
 
         // Act

@@ -145,7 +145,8 @@ impl<'de> Deserialize<'de> for SessionId {
 /// High-level lifecycle state for one session.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
-    New,
+    /// Session has been created but has not started its first agent turn yet.
+    Draft,
     InProgress,
     Review,
     /// Session is generating focused-review output while keeping the
@@ -164,7 +165,7 @@ pub enum Status {
 impl Status {
     /// Ordered list of all session statuses used for UI sizing and iteration.
     pub const ALL: [Status; 10] = [
-        Status::New,
+        Status::Draft,
         Status::InProgress,
         Status::Review,
         Status::AgentReview,
@@ -189,8 +190,8 @@ impl Status {
     /// Returns whether a transition to `next` is valid.
     ///
     /// Draft-session-only guards still live on [`Session`] methods, so
-    /// callers must separately prevent regular `New` sessions from taking the
-    /// `Canceled` path. Running sessions may also move directly to
+    /// callers must separately prevent regular `Draft` sessions from taking
+    /// the `Canceled` path. Running sessions may also move directly to
     /// `Canceled` after the UI signals the active turn's cancellation token.
     pub fn can_transition_to(self, next: Status) -> bool {
         if self == next {
@@ -199,8 +200,8 @@ impl Status {
 
         matches!(
             (self, next),
-            (Status::New, Status::InProgress | Status::Canceled)
-                | (Status::New | Status::InProgress, Status::Rebasing)
+            (Status::Draft, Status::InProgress | Status::Canceled)
+                | (Status::Draft | Status::InProgress, Status::Rebasing)
                 | (Status::InProgress, Status::Canceled)
                 | (Status::Review, Status::AgentReview)
                 | (Status::AgentReview, Status::Review)
@@ -232,7 +233,7 @@ impl Status {
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Status::New => write!(f, "New"),
+            Status::Draft => write!(f, "Draft"),
             Status::InProgress => write!(f, "InProgress"),
             Status::Review => write!(f, "Review"),
             Status::AgentReview => write!(f, "AgentReview"),
@@ -251,7 +252,7 @@ impl FromStr for Status {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "New" => Ok(Status::New),
+            "Draft" => Ok(Status::Draft),
             "InProgress" | "Committing" => Ok(Status::InProgress),
             "Review" => Ok(Status::Review),
             "AgentReview" => Ok(Status::AgentReview),
@@ -476,7 +477,7 @@ pub struct Session {
     /// Session creation timestamp (Unix seconds).
     pub created_at: i64,
     /// Ordered image attachments staged for the draft-session prompt stored in
-    /// `prompt` while the session remains `New`.
+    /// `prompt` while the session remains `Draft`.
     pub draft_attachments: Vec<TurnPromptAttachment>,
     /// Planned or active worktree folder path for this session.
     pub folder: PathBuf,
@@ -553,7 +554,7 @@ impl Session {
     /// Returns whether the session currently has one or more staged draft
     /// prompts waiting for an explicit start action.
     pub fn has_staged_drafts(&self) -> bool {
-        self.is_draft_session() && self.status == Status::New && !self.prompt.is_empty()
+        self.is_draft_session() && self.status == Status::Draft && !self.prompt.is_empty()
     }
 
     /// Returns whether the session can be canceled by the user.
@@ -565,7 +566,7 @@ impl Session {
     pub fn allows_cancel_action(&self) -> bool {
         self.status == Status::InProgress
             || self.status.allows_review_actions()
-            || (self.status == Status::New && self.is_draft_session())
+            || (self.status == Status::Draft && self.is_draft_session())
     }
 
     /// Returns whether this terminal session can launch a seeded follow-on
@@ -985,6 +986,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_status_from_str_draft() {
+        // Arrange
+        let raw_status = "Draft";
+
+        // Act
+        let status = raw_status
+            .parse::<Status>()
+            .expect("failed to parse status");
+
+        // Assert
+        assert_eq!(status, Status::Draft);
+    }
+
+    #[test]
+    fn test_status_display_draft() {
+        // Arrange
+        let status = Status::Draft;
+
+        // Act
+        let displayed_status = status.to_string();
+
+        // Assert
+        assert_eq!(displayed_status, "Draft");
+    }
+
+    #[test]
     fn test_session_id_hash_map_borrowed_lookup() {
         // Arrange
         let session_id = SessionId::from("session-id");
@@ -1017,7 +1044,7 @@ pub(crate) mod tests {
     fn test_status_all_lists_every_supported_status_in_display_order() {
         // Arrange
         let expected_statuses = [
-            Status::New,
+            Status::Draft,
             Status::InProgress,
             Status::Review,
             Status::AgentReview,
@@ -1091,9 +1118,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_status_transition_new_to_canceled() {
+    fn test_status_transition_draft_to_canceled() {
         // Arrange
-        let current_status = Status::New;
+        let current_status = Status::Draft;
 
         // Act
         let can_transition = current_status.can_transition_to(Status::Canceled);
@@ -1810,7 +1837,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     fn test_session_allows_cancel_action_for_unstarted_draft_session() {
         // Arrange
         let mut session = test_session(None);
-        session.status = Status::New;
+        session.status = Status::Draft;
         session.is_draft = true;
 
         // Act
@@ -1834,10 +1861,10 @@ diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1,2 @@\n-old line\n+new line\n+anot
     }
 
     #[test]
-    fn test_session_allows_cancel_action_rejects_regular_new_session() {
+    fn test_session_allows_cancel_action_rejects_regular_draft_session() {
         // Arrange
         let mut session = test_session(None);
-        session.status = Status::New;
+        session.status = Status::Draft;
 
         // Act
         let allows_cancel_action = session.allows_cancel_action();

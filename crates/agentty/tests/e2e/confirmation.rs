@@ -29,7 +29,7 @@ fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
 
         database.touch_project_last_opened(project_id).await?;
         database
-            .insert_draft_session("draft-cancel-0001", "gpt-5.4", "main", "New", project_id)
+            .insert_draft_session("draft-cancel-0001", "gpt-5.4", "main", "Draft", project_id)
             .await?;
         database
             .update_session_title("draft-cancel-0001", "Cancel staged draft from list")
@@ -218,6 +218,7 @@ fn draft_session_cancel_confirmation() -> E2eResult {
                     "Cancel staged draft from list",
                     &list_full,
                 );
+                assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
                 assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
 
                 let confirmation_frame = common::frame_from_capture(&report.captures[1]);

@@ -628,7 +628,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let sessions = vec![test_session("new-1", Status::New)];
+        let sessions = vec![test_session("new-1", Status::Draft)];
 
         // Act
         terminal
@@ -682,7 +682,7 @@ mod tests {
             test_session("merge-1", Status::Merging),
             test_session("done-1", Status::Done),
             test_session("canceled-1", Status::Canceled),
-            test_session("active-2", Status::New),
+            test_session("active-2", Status::Draft),
         ];
 
         // Act
@@ -715,7 +715,7 @@ mod tests {
             test_session("merge-1", Status::Merging),
             test_session("done-1", Status::Done),
             test_session("canceled-1", Status::Canceled),
-            test_session("active-2", Status::New),
+            test_session("active-2", Status::Draft),
         ];
 
         // Act
@@ -787,7 +787,7 @@ mod tests {
             test_session("active-1", Status::Review),
             test_session("queued-1", Status::Queued),
             test_session("merge-1", Status::Merging),
-            test_session("active-2", Status::New),
+            test_session("active-2", Status::Draft),
         ];
         let rows = grouped_session_rows(&sessions);
         let selected_session_id = selected_session_id(&sessions, Some(3));
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn test_session_list_help_line_hides_cancel_for_regular_new_session() {
         // Arrange
-        let session = test_session("session-1", Status::New);
+        let session = test_session("session-1", Status::Draft);
 
         // Act
         let help_text = session_list_help_line(Some(&session)).to_string();
@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn test_session_list_help_line_includes_cancel_for_draft_session() {
         // Arrange
-        let mut session = test_session("session-1", Status::New);
+        let mut session = test_session("session-1", Status::Draft);
         session.is_draft = true;
 
         // Act
@@ -1057,7 +1057,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let mut session = test_session("draft-1", Status::New);
+        let mut session = test_session("draft-1", Status::Draft);
         session.title = Some("First draft\n\nSecond draft".to_string());
         let sessions = vec![session];
 
@@ -1080,7 +1080,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let sessions = vec![test_session("new-1", Status::New)];
+        let sessions = vec![test_session("new-1", Status::Draft)];
 
         // Act
         terminal
@@ -1093,7 +1093,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let fallback_cell = &buffer.content()[0];
         let title_cell = find_text_start_cell(buffer, "new-1").unwrap_or(fallback_cell);
-        let new_cell = find_text_start_cell(buffer, "New").unwrap_or(fallback_cell);
+        let new_cell = find_text_start_cell(buffer, "Draft").unwrap_or(fallback_cell);
         assert_eq!(title_cell.fg, style::palette::text());
         assert_eq!(new_cell.fg, style::palette::text_muted());
         assert_eq!(new_cell.bg, style::palette::surface());

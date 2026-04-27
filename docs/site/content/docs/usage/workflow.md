@@ -66,7 +66,7 @@ commits that already exist on the remote.
 <a id="usage-session-lifecycle"></a> Session statuses and what you can do in each state:
 
 | Status | Description | Available actions |
-|--------|-------------|-------------------| | **New** | Session created but not yet
+|--------|-------------|-------------------| | **Draft** | Session created but not yet
 started. Regular sessions submit their first prompt immediately; draft sessions can
 stage multiple prompts locally first and only create their worktree when the staged
 bundle starts. | `Enter` compose first prompt or add draft, `/` open slash-command
@@ -266,8 +266,8 @@ flowchart TB
 
   subgraph start["Session Setup"]
     direction LR
-    new_regular["New"]
-    new_draft["New<br/>draft staging"]
+    new_regular["Draft"]
+    new_draft["Draft<br/>staging"]
   end
 
   subgraph active["Active Turn"]

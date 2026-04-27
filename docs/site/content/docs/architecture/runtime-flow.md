@@ -224,7 +224,7 @@ flowchart TD
 
   base["Choose base body text"]
   lines --> base
-  base --> draft["Draft preview<br/>(draft New session)"]
+  base --> draft["Draft preview<br/>(draft-status session)"]
   base --> transcript["session.output<br/>(all other statuses)"]
 
   split["Split transcript with active_prompt_output"]
@@ -272,7 +272,7 @@ The exact session-chat render path is:
 1. `SessionChatPage::render_session_header()` prints the single-line session header
    above the bordered output region.
 1. `SessionOutput::output_text()` in `crates/agentty/src/ui/component/session_output.rs`
-   selects the base text: staged draft preview for draft `New` sessions, otherwise
+   selects the base text: staged draft preview for draft-status sessions, otherwise
    `session.output`.
 1. `SessionOutput::output_lines()` converts that source text into final panel lines: it
    optionally splits the transcript using `active_prompt_output`, normalizes prompt
@@ -478,8 +478,8 @@ restart-safe:
 <a id="architecture-runtime-flow-status"></a> Runtime status transitions enforced by
 `Status::can_transition_to()` or explicit cancellation paths:
 
-- `New -> InProgress` (first prompt)
-- `New draft -> Canceled` (list-mode cancel before first turn)
+- `Draft -> InProgress` (first prompt)
+- Draft session in `Draft` status -> `Canceled` (list-mode cancel before first turn)
 - `Review/Question -> InProgress` (reply)
 - `Review -> Queued -> Merging -> Done` (merge queue path)
 - `Review -> Rebasing -> Review/Question` (rebase path)

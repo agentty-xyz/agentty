@@ -478,7 +478,7 @@ impl<'a> SessionOutput<'a> {
     /// Returns the staged-draft prompt identity when the draft preview reads
     /// from `session.prompt`.
     fn draft_prompt_fingerprint(session: &Session) -> TextFingerprint {
-        if session.status == Status::New && session.is_draft_session() {
+        if session.status == Status::Draft && session.is_draft_session() {
             return TextFingerprint::from_text(Some(session.prompt.as_str()));
         }
 
@@ -703,14 +703,14 @@ impl<'a> SessionOutput<'a> {
     /// Returns the source text shown in the output panel for the current
     /// status.
     ///
-    /// New draft sessions render staged-draft guidance before their first
+    /// Draft sessions render staged-draft guidance before their first
     /// live turn starts. Active and canceled sessions otherwise render the
     /// captured transcript output. Done sessions keep transcript and summary
     /// rendered together so both completed output and persisted summary remain
     /// visible.
     fn output_text(session: &Session) -> Cow<'_, str> {
         match session.status {
-            Status::New if session.is_draft_session() => {
+            Status::Draft if session.is_draft_session() => {
                 return Cow::Owned(Self::render_draft_session_preview(session));
             }
             Status::Canceled => {
@@ -719,7 +719,7 @@ impl<'a> SessionOutput<'a> {
             Status::Review
             | Status::AgentReview
             | Status::Question
-            | Status::New
+            | Status::Draft
             | Status::Done
             | Status::InProgress
             | Status::Queued
@@ -731,7 +731,7 @@ impl<'a> SessionOutput<'a> {
     }
 
     /// Renders the staged-draft guidance shown while a draft session remains
-    /// in `New`.
+    /// in `Draft`.
     fn render_draft_session_preview(session: &Session) -> String {
         let mut output = String::from(DRAFT_PREVIEW_HEADER);
 
@@ -1211,7 +1211,7 @@ mod tests {
 
     fn session_fixture() -> Session {
         crate::domain::session::tests::SessionFixtureBuilder::new()
-            .status(Status::New)
+            .status(Status::Draft)
             .build()
     }
 

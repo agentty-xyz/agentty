@@ -1979,7 +1979,7 @@ mod tests {
             Status::Canceled,
         );
         add_manual_session_with_status(&mut app, dir.path(), "merge-1", "Merge 1", Status::Merging);
-        add_manual_session_with_status(&mut app, dir.path(), "active-2", "Active 2", Status::New);
+        add_manual_session_with_status(&mut app, dir.path(), "active-2", "Active 2", Status::Draft);
         app.sessions.table_state.select(Some(3));
 
         // Act & Assert
@@ -2077,7 +2077,7 @@ mod tests {
         assert_eq!(app.sessions.sessions[0].title, None);
         assert_eq!(app.sessions.sessions[0].display_title(), "No title");
         assert!(!app.sessions.sessions[0].is_draft_session());
-        assert_eq!(app.sessions.sessions[0].status, Status::New);
+        assert_eq!(app.sessions.sessions[0].status, Status::Draft);
         assert_eq!(app.sessions.table_state.selected(), Some(0));
         assert_eq!(
             app.sessions.sessions[0].model,
@@ -2110,7 +2110,7 @@ mod tests {
             AgentKind::Gemini.default_model().as_str()
         );
         assert!(!db_sessions[0].is_draft);
-        assert_eq!(db_sessions[0].status, "New");
+        assert_eq!(db_sessions[0].status, "Draft");
         assert_eq!(activity_timestamps.len(), 1);
     }
 
@@ -2130,7 +2130,7 @@ mod tests {
         assert_eq!(app.sessions.sessions.len(), 1);
         assert_eq!(app.sessions.sessions[0].id, session_id);
         assert!(app.sessions.sessions[0].is_draft_session());
-        assert_eq!(app.sessions.sessions[0].status, Status::New);
+        assert_eq!(app.sessions.sessions[0].status, Status::Draft);
         assert!(!app.sessions.sessions[0].folder.exists());
 
         let db_sessions = app
@@ -2349,7 +2349,7 @@ mod tests {
         };
 
         // Assert
-        assert_eq!(app.sessions.sessions[0].status, Status::New);
+        assert_eq!(app.sessions.sessions[0].status, Status::Draft);
         assert_eq!(
             app.sessions.sessions[0].prompt,
             "First draft\n\nSecond draft"
