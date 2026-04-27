@@ -43,7 +43,11 @@ the first bootstrap, but Claude sessions still resend the full wrapper because s
 identity is not yet explicit. | Partial | | Turn activity summaries | Session output
 stores the assistant answer, questions, and summary, but it does not append a normalized
 per-turn digest of used skills, executed commands, or changed-file CRUD after each turn.
-| Missing |
+| Missing | | testty published surface | The in-tree source already exposes the
+Result-returning `match_*` matcher core, `AssertionFailure`, and `MatchResult`, but
+`Frame::all_text()` still flattens empty grid cells into single-space gaps that hide
+user-rendered text and `PtySessionBuilder` cannot forward CLI args, so `--help` and
+`--version` flows of the target binary are untestable. | Partial |
 
 ## Active Streams
 
@@ -57,9 +61,11 @@ per-turn digest of used skills, executed commands, or changed-file CRUD after ea
   interrupted-run recovery.
 - `Session Output`: per-turn execution digests that summarize the commands, changed
   files, and skill activity users need to review directly in the chat transcript.
-- `Testing`: testty's published assertion surface for downstream test authors, covering
-  composable `match_*` cores, predicate-driven waiters, soft accumulators, and richer
-  structured-failure rendering in the proof report.
+- `Testty`: published `testty` crate surface for downstream test authors and external
+  Rust TUI adopters, covering frame text utilities, PTY session ergonomics,
+  predicate-driven waiters, soft accumulators, recipe `match_*` siblings, richer
+  structured-failure rendering in the proof report, and the agentty E2E adoption that
+  retires fixed `Step::sleep` waits.
 
 ## Planning Model
 
@@ -134,7 +140,7 @@ choice persists across app restarts.
   `docs/site/content/docs/getting-started/overview.md` to explain the new per-project
   delivery strategy setting without claiming session actions consume it yet.
 
-### [3f7c4a9b-2e1d-4c5a-b8f6-9d2e7a1c4b6f] Workflow: Render queued chat messages without UI delay
+### [7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args
 
 #### Assignee
 
@@ -142,116 +148,53 @@ choice persists across app restarts.
 
 #### Why now
 
-Submitting a chat message while a session is `InProgress` should make the inline
-`queued ›` row appear immediately, but today there is a visible delay — most pronounced
-when the message includes a pasted image attachment. The cause is that `enqueue_message`
-emits the heavyweight `AppEvent::RefreshSessions`, which triggers a full DB-backed
-`refresh_sessions_now` that reconstructs every `Session` snapshot with
-`queued_messages: Vec::new()`, while `sync_session_with_handles` only re-syncs `output`
-and `status` from the handles. The just-pushed queue entry is silently wiped on the next
-reducer pass and only reappears on a later mutation. Fixing this makes queued rows
-render on the very next frame and removes a snapshot-wipe correctness bug at the same
-time.
+Two highest-friction issues for external testty adopters surface together:
+`Frame::all_text()` silently inserts a space for every empty cell so
+`text.contains("Counter: 3")` fails on the rendered grid, and `PtySessionBuilder` has no
+way to forward CLI args so non-interactive `--help` and `--version` flows of the target
+binary cannot be tested. Fixing both lets first-time adopters search rendered frame text
+and drive subcommand-style binaries against the in-tree Result-returning `match_*`
+matcher core that already landed on `main`.
 
 #### Usable outcome
 
-When a user submits a chat message during an `InProgress` turn, the corresponding
-`queued ›` row appears in the transcript on the next render frame with no perceptible
-delay, including when the message carries an image attachment.
+testty consumers can search `Frame::all_text()` output without phantom whitespace gaps
+and configure subcommand arguments through `PtySessionBuilder::args` against the in-tree
+matcher surface.
 
 #### Substeps
 
-- [ ] **Make `SessionHandles::queued_messages` the single source of truth for the
-  rendered queue.** Extend `sync_session_with_handles` in
-  `crates/agentty/src/app/session_state.rs` to derive `Session::queued_messages` from
-  `SessionHandles::queued_message_transcripts()` alongside the existing `output` and
-  `status` syncs so any handle-driven mutation re-projects deterministically into the
-  snapshot.
-- [ ] **Route queue mutations through targeted `SessionUpdated` events instead of
-  `RefreshSessions`.** In `crates/agentty/src/app/session/workflow/lifecycle.rs`
-  (`enqueue_message`), `crates/agentty/src/app/session/workflow/worker.rs` (post-cancel
-  queue clear and `drain_queued_messages`), and
-  `crates/agentty/src/runtime/mode/session_view.rs`
-  (`pop_last_queued_chat_message_if_any`), drop the direct `Session::queued_messages`
-  writes, immediately re-sync the touched session from handles when running on the
-  foreground manager, and emit `AppEvent::SessionUpdated` instead of
-  `AppEvent::RefreshSessions` so the reducer skips the full DB reload.
+- [ ] **Stop flattening empty grid cells in `Frame::row_text`.** Update
+  `crates/testty/src/frame.rs` so `row_text` and `row_text_with_column_map` skip empty
+  cells without inserting placeholder spaces, keep the existing trailing-whitespace
+  trim, and ensure `Frame::all_text()` returns text that matches what the user sees
+  rendered in the terminal grid.
+- [ ] **Forward CLI arguments through `PtySessionBuilder::args`.** Add an `args` builder
+  method on `PtySessionBuilder` in `crates/testty/src/session.rs` that accepts any
+  `IntoIterator<Item: Into<String>>` and forwards the values to
+  `portable_pty::CommandBuilder::args` so callers can spawn non-interactive subcommands
+  such as `--help` or `--version`, and re-export the new method shape through
+  `crates/testty/src/prelude.rs`.
 
 #### Tests
 
-- [ ] Add a regression test in `crates/agentty/src/app/session/core.rs` that enqueues a
-  chat message on an `InProgress` session, drives a `RefreshSessions` reducer pass, and
-  asserts `Session::queued_messages` still mirrors
-  `SessionHandles::queued_message_transcripts()` (this currently fails because the
-  post-reload sync wipes the field). Keep
-  `test_enqueue_message_pushes_prompt_onto_in_memory_queue` covering the snapshot
-  mirroring through the new sync path. Add an E2E `FeatureTest` in
-  `crates/agentty/tests/e2e/session.rs` that submits a queued chat message while a turn
-  runs and asserts the `queued ›` row is visible on the next frame.
+- [ ] Add a `frame::tests` regression case in `crates/testty/src/frame.rs` that builds a
+  grid with intentionally empty interior cells and asserts `all_text()` does not insert
+  extra space characters between non-empty runs while still trimming trailing
+  whitespace. Add a `session::tests` case in `crates/testty/src/session.rs` that builds
+  a `PtySessionBuilder` via `.args([...])` and asserts the configured arguments are
+  forwarded to the spawned `CommandBuilder`. Extend `crates/testty/tests/public_api.rs`
+  with a tripwire that locks the new `PtySessionBuilder::args` shape so the published
+  surface breaks the build before publication if the builder signature changes. Run
+  `prek run cargo-check --files crates/testty/src/frame.rs crates/testty/src/session.rs crates/testty/tests/public_api.rs`
+  plus the testty source-test hook before handoff.
 
 #### Docs
 
-- [ ] Update `docs/site/content/docs/architecture/runtime-flow.md` to note that
-  `SessionHandles::queued_messages` is the canonical source for the queue snapshot and
-  that queue mutations emit `AppEvent::SessionUpdated` rather than
-  `AppEvent::RefreshSessions`.
-
-### [def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions
-
-#### Assignee
-
-`@andagaev`
-
-#### Why now
-
-The published `testty::assertion` API panics on first miss with no Result-returning
-siblings, so consumers cannot compose, retry, soft-batch, or surface structured failures
-into the proof report without wrapping calls in `catch_unwind`. Returning failures as
-data is the foundation that unblocks the queued `eventually` waiter, `SoftAssertions`
-accumulator, richer HTML diff rendering, and the agentty E2E adoption that finally
-retires fixed `Step::sleep` waits.
-
-#### Usable outcome
-
-testty consumers can call new `match_*` siblings of every existing `assertion::assert_*`
-that return `Result<(), Box<AssertionFailure>>` (aliased as `MatchResult`) carrying the
-same structured context the current panic strings carry, while existing `assert_*` calls
-keep panicking with byte-compatible messages so the published surface stays additive and
-does not require a major version bump.
-
-#### Substeps
-
-- [ ] **Add `AssertionFailure` data type and Result-returning `match_*` core to
-  `crates/testty/src/assertion.rs`.** Introduce a public `AssertionFailure` struct
-  carrying the same context the current panic strings carry (needle, region,
-  pre-formatted region/frame excerpt, matched spans, expected color/style/count) and a
-  `MatchResult = Result<(), Box<AssertionFailure>>` alias. Add `match_*` siblings for
-  every existing `assert_*` (`match_text_in_region`, `match_not_visible`,
-  `match_match_count`, `match_text_has_fg_color`, `match_text_has_bg_color`,
-  `match_span_is_highlighted`, `match_span_is_not_highlighted`) and re-implement each
-  `assert_*` as a thin panic wrapper that delegates to its `match_*` sibling so the
-  existing panic-only surface stays byte-compatible.
-- [ ] **Re-export `AssertionFailure` and `MatchResult` from
-  `crates/testty/src/prelude.rs` and lock the new surface in
-  `crates/testty/tests/public_api.rs`.** Match the existing `MatchedSpan`/`Region`
-  re-export pattern, add a public_api tripwire that constructs/destructures
-  `AssertionFailure` and references one `match_*` symbol so future renames break the
-  build before publication.
-
-#### Tests
-
-- [ ] Extend the existing `mod tests` block at the bottom of
-  `crates/testty/src/assertion.rs` with unit tests for each `match_*` covering the `Ok`
-  path and the structured `Err` path (asserting the populated `AssertionFailure`
-  fields), and keep the existing `#[should_panic]` tests so the panic-wrapper
-  equivalence stays under coverage.
-
-#### Docs
-
-- [ ] Update `crates/testty/README.md` and `crates/testty/CLAUDE.md` with a
-  "Result-returning matchers" section that documents the layered `match_*`/`assert_*`
-  pairing, when to pick each, and the additive-vs-breaking change rule that keeps the
-  new surface from forcing a major version bump.
+- [ ] Update `crates/testty/README.md` so the `Frame::all_text` description matches the
+  fixed behavior and the PTY session example demonstrates `.args([...])`. Update
+  `CHANGELOG.md` with a Keep-a-Changelog entry that names the whitespace fix and the new
+  `args` builder.
 
 ## Ready Now Execution Order
 
@@ -263,23 +206,20 @@ flowchart TD
         D1 -. queued follow-up .-> D2
     end
 
-    subgraph WorkflowLane["Workflow - @andagaev"]
-        W2["[b8c92f4d] Persist queued messages"]
-        W4["[3f7c4a9b] Render queued messages without delay"]
-    end
-
-    subgraph TestingLane["Testing - @andagaev"]
-        T1["[def193a2] Matcher Result core"]
-        T2["[a9ef45e2] SoftAssertions accumulator"]
-        T3["[6523822e] eventually waiter"]
+    subgraph TesttyLane["Testty - @andagaev"]
+        T1["[7c4e8a91] Frame whitespace + PTY args"]
+        T2["[6523822e] eventually waiter"]
+        T3["[a9ef45e2] SoftAssertions accumulator"]
         T4["[ca40b36d] Recipe match_* siblings"]
         T5["[07cce0e7] HTML structured failure diff"]
         T6["[c821816d] agentty fixed-sleep removal"]
+        T7["[8d5f9b02] Startup wait timeout presets"]
         T1 -. queued follow-up .-> T2
         T1 -. queued follow-up .-> T3
         T1 -. queued follow-up .-> T4
-        T2 -. queued follow-up .-> T5
-        T3 -. queued follow-up .-> T6
+        T1 -. queued follow-up .-> T7
+        T3 -. queued follow-up .-> T5
+        T2 -. queued follow-up .-> T6
     end
 
     subgraph LaterLanes["Queued independent streams"]
@@ -475,7 +415,7 @@ is in place and Codex is the next provider chosen for activity-summary rollout.
 
 `[29d3d82d-d1e5-452b-a93c-e873f89a8bba] Session Output: Render git-derived changed-file summaries`
 
-### [a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testing: SoftAssertions accumulator for batched test failures
+### [a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures
 
 #### Outcome
 
@@ -488,34 +428,14 @@ capture instead of just the first.
 #### Promote when
 
 Promote when
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
-lands and the `match_*`/`AssertionFailure` surface is stable.
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
+lands and the matcher core surface is the next ergonomics surface to extend.
 
 #### Depends on
 
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
 
-### [6523822e-376a-4531-b78a-1c7e13d6787a] Testing: Eventually predicate-driven frame waiter
-
-#### Outcome
-
-Test authors can express "wait until this frame predicate is true" through a new
-`eventually(timeout, poll, predicate)` combinator and matching `Step` variant in
-`crates/testty/src/scenario.rs` that re-reads the live PTY frame on each tick, returns
-the last `AssertionFailure` on timeout, and replaces fixed `Step::sleep` durations with
-deterministic condition-based waits.
-
-#### Promote when
-
-Promote when
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
-lands so predicates can compose `MatchResult`.
-
-#### Depends on
-
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
-
-### [ca40b36d-2bb9-4f1a-a931-2ce93e285fab] Testing: Result-returning recipe matchers
+### [ca40b36d-2bb9-4f1a-a931-2ce93e285fab] Testty: Result-returning recipe matchers
 
 #### Outcome
 
@@ -526,14 +446,14 @@ high-level recipe checks the same way they compose low-level `assertion::match_*
 #### Promote when
 
 Promote when
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
-lands and the assertion-layer pattern is settled.
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
+lands and the assertion-layer `match_*` pattern is settled.
 
 #### Depends on
 
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
 
-### [07cce0e7-ab8e-4f36-8fd0-251de665eb01] Testing: Render structured assertion failures in HTML proof report
+### [07cce0e7-ab8e-4f36-8fd0-251de665eb01] Testty: Render structured assertion failures in HTML proof report
 
 #### Outcome
 
@@ -545,16 +465,36 @@ panic the report cannot see.
 #### Promote when
 
 Promote when
-`[def193a2-7c51-419c-87f8-e3f739a1439a] Testing: Result-returning matcher core in testty assertions`
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
 lands and
-`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testing: SoftAssertions accumulator for batched test failures`
+`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures`
 has wired structured failures into `ProofCapture::assertions`.
 
 #### Depends on
 
-`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testing: SoftAssertions accumulator for batched test failures`
+`[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures`
 
-### [c821816d-2f45-40a3-bc85-d4504577ba30] Testing: Replace fixed E2E sleeps with eventually waits in agentty
+### [6523822e-376a-4531-b78a-1c7e13d6787a] Testty: Eventually predicate-driven frame waiter
+
+#### Outcome
+
+Test authors can express "wait until this frame predicate is true" through a new
+`eventually(timeout, poll, predicate)` combinator and matching `Step` variant in
+`crates/testty/src/scenario.rs` that re-reads the live PTY frame on each tick, returns
+`Ok(())` once the predicate passes, and surfaces the last `AssertionFailure` on timeout.
+
+#### Promote when
+
+Promote when
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
+lands so the matcher core foundation is in place for predicate composition before
+`eventually` work begins.
+
+#### Depends on
+
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
+
+### [c821816d-2f45-40a3-bc85-d4504577ba30] Testty: Replace fixed E2E sleeps with eventually waits in agentty
 
 #### Outcome
 
@@ -566,16 +506,83 @@ durations, lowering E2E flake rate and total wall time.
 #### Promote when
 
 Promote when
-`[6523822e-376a-4531-b78a-1c7e13d6787a] Testing: Eventually predicate-driven frame waiter`
+`[6523822e-376a-4531-b78a-1c7e13d6787a] Testty: Eventually predicate-driven frame waiter`
 lands.
 
 #### Depends on
 
-`[6523822e-376a-4531-b78a-1c7e13d6787a] Testing: Eventually predicate-driven frame waiter`
+`[6523822e-376a-4531-b78a-1c7e13d6787a] Testty: Eventually predicate-driven frame waiter`
+
+### [8d5f9b02-4c3e-4f6a-ab9c-2d3e4f5a6b7c] Testty: Add startup wait timeout presets
+
+#### Outcome
+
+testty users can opt into named startup-wait presets on `Journey::wait_for_startup` (for
+example, slow Node TUIs vs. fast native Rust binaries) and a documented default, instead
+of hand-tuning `stable_ms` and `timeout_ms` numbers per project.
+
+#### Promote when
+
+Promote when
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
+lands and the Testty stream is ready for the next ergonomics slice.
+
+#### Depends on
+
+`[7c4e8a91-3b2d-4e5f-9a8b-1c2d3e4f5a6b] Testty: Fix frame text whitespace and forward PTY args`
 
 ## Parked
 
-No parked user-facing cards right now.
+### [af7b1d24-6e5a-4b8c-8dbe-4f5a6b7c8d9e] Testty: Frame normalizer hook for snapshot tests
+
+#### Outcome
+
+`SnapshotConfig` accepts a normalizer closure that scrubs timestamps, UUIDs, PIDs, or
+other volatile substrings from frame text before comparison, so testty snapshot testing
+becomes viable against real apps with non-deterministic output.
+
+#### Promote when
+
+Promote when external adopters request snapshot support for non-deterministic UIs and a
+named user-facing testty release commits to snapshot-mode stability.
+
+#### Depends on
+
+`None`
+
+### [b08c2e35-7f6b-4c9d-9eaf-5a6b7c8d9e0f] Testty: Split recipe module by framework
+
+#### Outcome
+
+`crates/testty/src/recipe.rs` is split into a generic `recipe` core and a
+`recipe::ratatui` module for ratatui-shaped header/footer affordances, so non-ratatui
+TUIs can adopt testty recipes without inheriting tabbed-header assumptions.
+
+#### Promote when
+
+Promote when a second non-ratatui TUI integration validates testty externally and the
+recipe surface needs framework segmentation to avoid misleading new adopters.
+
+#### Depends on
+
+`None`
+
+### [c19d3f46-8a7c-4dae-afb0-6b7c8d9e0f1a] Testty: Async session API
+
+#### Outcome
+
+testty exposes `tokio::test`-friendly async session and journey APIs alongside the
+existing blocking surface, so external adopters can drive PTY scenarios from async test
+harnesses.
+
+#### Promote when
+
+Promote when testty's external user base requests async-first ergonomics and the project
+explicitly commits to becoming the standard Rust TUI test framework.
+
+#### Depends on
+
+`None`
 
 ## Context Notes
 
