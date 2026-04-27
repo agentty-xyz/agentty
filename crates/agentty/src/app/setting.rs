@@ -1573,7 +1573,7 @@ mod tests {
         let rows = manager.settings_rows();
 
         // Assert
-        assert_eq!(rows[0].1, "Hacker");
+        assert_eq!(rows[0].1, "Agentty Green");
     }
 
     #[tokio::test]

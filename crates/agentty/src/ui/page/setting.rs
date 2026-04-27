@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn test_render_uses_palette_text_for_setting_rows() {
         // Arrange
-        let rows = settings_table_rows(vec![("Theme", "Current".to_string())]);
+        let rows = settings_table_rows(vec![("Theme", "Agentty Default".to_string())]);
         let table = Table::new(
             rows,
             [Constraint::Percentage(50), Constraint::Percentage(50)],

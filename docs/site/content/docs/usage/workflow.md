@@ -99,10 +99,11 @@ Settings values for models, reasoning, commit trailers, and open commands are st
 active project. Switching projects reloads that project's `Default Reasoning Level`,
 `Default Smart Model` mode (explicit model or `Last used model as default`),
 `Default Fast Model`, `Default Review Model`, `Coauthored by Agentty` toggle, and
-`Open Commands`. The global `Theme` setting switches between `Current`, `Hacker`, and
-`Dark Horizon`, with `Current` used by default. The Settings tab renders these scopes
-separately as `Global settings` and `'<project>' settings`. New projects default the
-coauthor toggle to disabled until you enable it.
+`Open Commands`. The global `Theme` setting switches between `Agentty Default`,
+`Agentty Green`, and `Dark Horizon`, with `Agentty Default` used by default. The
+Settings tab renders these scopes separately as `Global settings` and
+`'<project>' settings`. New projects default the coauthor toggle to disabled until you
+enable it.
 
 When a session enters **Review**, Agentty starts generating the focused review in the
 background. While that review-assist job is running, the session temporarily shows

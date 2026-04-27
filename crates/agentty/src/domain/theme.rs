@@ -2,13 +2,13 @@
 
 use std::fmt;
 
-/// User-facing terminal color themes available in settings.
+/// Terminal color themes available in settings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum ColorTheme {
-    /// The existing Agentty terminal palette.
+    /// The default Agentty terminal palette shown as `Agentty Default`.
     #[default]
     Current,
-    /// A green-on-dark palette inspired by the Agentty docs site.
+    /// A green-on-dark palette shown as `Agentty Green`.
     Hacker,
     /// A warm dark palette inspired by the Horizon editor theme.
     DarkHorizon,
@@ -28,12 +28,12 @@ impl ColorTheme {
         }
     }
 
-    /// Returns the human-readable label shown in the settings page.
+    /// Returns the human-readable theme name shown in the settings page.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Current => "Current",
-            Self::Hacker => "Hacker",
+            Self::Current => "Agentty Default",
+            Self::Hacker => "Agentty Green",
             Self::DarkHorizon => "Dark Horizon",
         }
     }

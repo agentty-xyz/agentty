@@ -86,7 +86,7 @@ fn settings_tab_shows_content() {
                 assertion::assert_text_in_region(frame, "Disabled", &full);
                 assertion::assert_text_in_region(frame, "Open Commands", &full);
                 assertion::assert_text_in_region(frame, "Theme", &full);
-                assertion::assert_text_in_region(frame, "Current", &full);
+                assertion::assert_text_in_region(frame, "Agentty Default", &full);
             },
         )
         .expect("feature test failed");
@@ -219,15 +219,15 @@ fn settings_enter_cycles_value() {
         .expect("feature test failed");
 }
 
-/// Verify that the `Theme` settings row cycles through `Current`, `Hacker`,
-/// and `Dark Horizon` and wraps back to `Current`.
+/// Verify that the `Theme` settings row cycles through `Agentty Default`,
+/// `Agentty Green`, and `Dark Horizon` and wraps back to `Agentty Default`.
 #[test]
 fn settings_theme_switch() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_theme_switch")
         .zola(
             "Settings theme switch",
-            "Cycle Agentty through the Current, Hacker, and Dark Horizon themes.",
+            "Cycle Agentty through the Agentty Default, Agentty Green, and Dark Horizon themes.",
             155,
         )
         .run(
@@ -242,7 +242,10 @@ fn settings_theme_switch() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
-                    .capture_labeled("after_theme_switch_hacker", "Hacker theme selected")
+                    .capture_labeled(
+                        "after_theme_switch_agentty_green",
+                        "Agentty Green theme selected",
+                    )
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
@@ -254,28 +257,34 @@ fn settings_theme_switch() {
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2500)
                     .capture_labeled(
-                        "after_theme_switch_wrap_current",
-                        "Theme wraps back to Current",
+                        "after_theme_switch_wrap_agentty_default",
+                        "Theme wraps back to Agentty Default",
                     )
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Theme", &full);
-                assertion::assert_text_in_region(frame, "Current", &full);
+                assertion::assert_text_in_region(frame, "Agentty Default", &full);
 
                 assert_eq!(
                     report.captures.len(),
                     4,
-                    "Expected 4 captures (initial Current, Hacker, Dark Horizon, wrapped Current)"
+                    "Expected 4 captures (initial Agentty Default, Agentty Green, Dark Horizon, \
+                     wrapped Agentty Default)"
                 );
 
                 let before_frame = common::frame_from_capture(&report.captures[0]);
                 let before_full = Region::full(before_frame.cols(), before_frame.rows());
-                assertion::assert_text_in_region(&before_frame, "Current", &before_full);
+                assertion::assert_text_in_region(&before_frame, "Agentty Default", &before_full);
 
-                let hacker_frame = common::frame_from_capture(&report.captures[1]);
-                let hacker_full = Region::full(hacker_frame.cols(), hacker_frame.rows());
-                assertion::assert_text_in_region(&hacker_frame, "Hacker", &hacker_full);
+                let agentty_green_frame = common::frame_from_capture(&report.captures[1]);
+                let agentty_green_full =
+                    Region::full(agentty_green_frame.cols(), agentty_green_frame.rows());
+                assertion::assert_text_in_region(
+                    &agentty_green_frame,
+                    "Agentty Green",
+                    &agentty_green_full,
+                );
 
                 let dark_horizon_frame = common::frame_from_capture(&report.captures[2]);
                 let dark_horizon_full =
@@ -288,7 +297,7 @@ fn settings_theme_switch() {
 
                 let wrapped_frame = common::frame_from_capture(&report.captures[3]);
                 let wrapped_full = Region::full(wrapped_frame.cols(), wrapped_frame.rows());
-                assertion::assert_text_in_region(&wrapped_frame, "Current", &wrapped_full);
+                assertion::assert_text_in_region(&wrapped_frame, "Agentty Default", &wrapped_full);
             },
         )
         .expect("feature test failed");
