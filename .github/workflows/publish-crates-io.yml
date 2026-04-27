@@ -1,19 +1,23 @@
 name: Publish Crates.io
 
 on:
-  pull_request:
-  push:
-    tags:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   publish:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
+      PLAN: ${{ inputs.plan }}
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - name: Checkout
