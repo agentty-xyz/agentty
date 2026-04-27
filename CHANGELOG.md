@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v0.8.6] - 2026-04-27
+
+### Changed
+
+- Rename the pre-start session status from `New` to `Draft` across runtime state,
+  persistence, UI labels, and user documentation.
+- Rename theme settings from `Current` and `Hacker` to `Agentty Default` and
+  `Agentty Green`.
+- Publish workspace crates through the release workflow and wait for crates.io
+  publication before release announcement.
+- Run strict lint checks in postsubmit, install clippy in the shared Rust/`prek` setup,
+  and align CI hook usage with release checks.
+- Clarify testty public API tripwire tests and session isolation documentation.
+
+### Contributors
+
+- @minev-dev
 
 ## [v0.8.5] - 2026-04-27
 
