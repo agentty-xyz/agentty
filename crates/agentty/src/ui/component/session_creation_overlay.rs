@@ -7,18 +7,19 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use crate::ui::style::palette;
 use crate::ui::{Component, overlay};
 
-/// Minimum popup height that leaves room for title, options, and hints.
-const MIN_OVERLAY_HEIGHT: u16 = 12;
-/// Minimum popup width matching selector-style overlays.
-const MIN_OVERLAY_WIDTH: u16 = 50;
+/// Minimum popup height that leaves room for title, options, and hints
+/// without adding unused vertical space.
+const MIN_OVERLAY_HEIGHT: u16 = 11;
+/// Minimum popup width sized for the longest hint plus shared overlay chrome.
+const MIN_OVERLAY_WIDTH: u16 = 44;
 /// Fixed description width so option labels share one left edge.
 const OPTION_DETAIL_WIDTH: usize = 20;
 /// Fixed label width for `Regular`, `Draft`, and `Stacked`.
 const OPTION_LABEL_WIDTH: usize = 7;
-/// Popup height as a percentage of the available render area.
-const OVERLAY_HEIGHT_PERCENT: u16 = 34;
-/// Popup width as a percentage of the available render area.
-const OVERLAY_WIDTH_PERCENT: u16 = 50;
+/// Popup height as a percentage of the available render area on tall terminals.
+const OVERLAY_HEIGHT_PERCENT: u16 = 22;
+/// Popup width as a percentage of the available render area on wide terminals.
+const OVERLAY_WIDTH_PERCENT: u16 = 30;
 
 /// Centered popup used to choose the type of session to create.
 pub struct SessionCreationOverlay {
@@ -31,6 +32,17 @@ impl SessionCreationOverlay {
         Self {
             selected_option_index,
         }
+    }
+
+    /// Returns the centered popup rectangle for the compact session selector.
+    fn popup_area(area: Rect) -> Rect {
+        overlay::centered_popup_area(
+            area,
+            OVERLAY_WIDTH_PERCENT,
+            OVERLAY_HEIGHT_PERCENT,
+            MIN_OVERLAY_WIDTH,
+            MIN_OVERLAY_HEIGHT,
+        )
     }
 
     /// Returns all render lines for this popup.
@@ -109,13 +121,7 @@ impl SessionCreationOverlay {
 
 impl Component for SessionCreationOverlay {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let popup_area = overlay::centered_popup_area(
-            area,
-            OVERLAY_WIDTH_PERCENT,
-            OVERLAY_HEIGHT_PERCENT,
-            MIN_OVERLAY_WIDTH,
-            MIN_OVERLAY_HEIGHT,
-        );
+        let popup_area = Self::popup_area(area);
         let paragraph = Paragraph::new(self.lines())
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true })
@@ -140,6 +146,36 @@ mod tests {
 
         // Assert
         assert_eq!(overlay.selected_option_index, selected_option_index);
+    }
+
+    #[test]
+    fn test_session_creation_overlay_popup_area_uses_compact_minimum() {
+        // Arrange
+        let area = Rect::new(0, 0, 80, 20);
+
+        // Act
+        let popup_area = SessionCreationOverlay::popup_area(area);
+
+        // Assert
+        assert_eq!(popup_area.width, 44);
+        assert_eq!(popup_area.height, 11);
+        assert_eq!(popup_area.x, 18);
+        assert_eq!(popup_area.y, 4);
+    }
+
+    #[test]
+    fn test_session_creation_overlay_popup_area_scales_modestly_on_wide_terminals() {
+        // Arrange
+        let area = Rect::new(0, 0, 240, 60);
+
+        // Act
+        let popup_area = SessionCreationOverlay::popup_area(area);
+
+        // Assert
+        assert_eq!(popup_area.width, 72);
+        assert_eq!(popup_area.height, 13);
+        assert_eq!(popup_area.x, 84);
+        assert_eq!(popup_area.y, 23);
     }
 
     #[test]
