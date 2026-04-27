@@ -311,13 +311,12 @@ content | Run markdown/docs checks and
 affected dependents. | | Workspace crate source tests | Use the narrowest matching hook
 when one exists: `test-ag-forge-src`, `test-agentty-src`, `test-ag-xtask-src`, or
 `test-testty-src`. | | Cargo manifests and lockfile | Run
-`prek run cargo-check --files <paths>`,
-`prek run clippy --files <paths> --hook-stage manual`, and tests for affected workspace
-crates plus dependents. Use `prek run test-workspace --all-files --hook-stage manual`
-when dependency impact is broad or uncertain. | | SQL migrations | Run
-`prek run check-migrations --files <paths>` plus Rust checks and tests for crates that
-embed or query those migrations. | | Planning docs | Run
-`prek run check-roadmap --all-files`. | | Hook catalog | Run
+`prek run cargo-check --files <paths>`, `prek run clippy --files <paths>`, and tests for
+affected workspace crates plus dependents. Use
+`prek run test-workspace --all-files --hook-stage manual` when dependency impact is
+broad or uncertain. | | SQL migrations | Run `prek run check-migrations --files <paths>`
+plus Rust checks and tests for crates that embed or query those migrations. | | Planning
+docs | Run `prek run check-roadmap --all-files`. | | Hook catalog | Run
 `prek run validate-prek-config --files .pre-commit-config.yaml`. | | User-visible UI
 behavior | Add or update required `FeatureTest` coverage. Do not run the E2E feature
 suite locally; `.github/workflows/postsubmit.yml` runs `test-agentty-e2e` on GitHub
@@ -338,7 +337,6 @@ Run the full suite when a change is cross-cutting, when dependency impact is unc
 before release work, or when targeted validation fails to give high confidence:
 
 1. **Validate:** `prek run --all-files`
-1. **Lint:** `prek run clippy --all-files --hook-stage manual`
 1. **Test:** `prek run test-workspace --all-files --hook-stage manual`
 
 ### Periodic / CI

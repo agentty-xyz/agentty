@@ -25,8 +25,5 @@ jobs:
       - name: Default validation hooks
         run: uv tool run prek run --all-files
 
-      - name: Strict lint
-        run: uv tool run prek run clippy --all-files
-
       - name: Full test suite
         run: uv tool run prek run test-workspace --all-files --hook-stage manual

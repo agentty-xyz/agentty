@@ -44,7 +44,7 @@ jobs:
       - name: Run source tests
         run: uv tool run prek run ${{ matrix.hook }} --all-files --hook-stage manual
 
-  lint:
+  validate:
     runs-on: ubuntu-latest
 
     steps:
@@ -54,8 +54,8 @@ jobs:
       - name: Setup Rust and `prek`
         uses: ./.github/actions/setup-rust-prek
 
-      - name: Strict lint
-        run: uv tool run prek run clippy --all-files
+      - name: Default validation hooks
+        run: uv tool run prek run --all-files
 
   coverage:
     runs-on: ubuntu-latest
