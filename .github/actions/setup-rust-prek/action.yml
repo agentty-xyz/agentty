@@ -26,14 +26,14 @@ runs:
       uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
       with:
         toolchain: nightly
-        components: clippy
+        components: clippy, rustfmt
 
     - name: Install Rust nightly toolchain with LLVM tools
       if: ${{ inputs.llvm-tools-preview == 'true' }}
       uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
       with:
         toolchain: nightly
-        components: clippy, llvm-tools-preview
+        components: clippy, rustfmt, llvm-tools-preview
 
     - name: Install `cargo-llvm-cov`
       if: ${{ inputs.cargo-llvm-cov == 'true' }}
