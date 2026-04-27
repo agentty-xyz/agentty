@@ -7,38 +7,71 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.8.5] - 2026-04-27
+
 ### Added
 
-- testty: curate the stable public surface at `testty::prelude` and lock it down with a
-  `tests/public_api.rs` compile-time tripwire so accidental renames or removals fail
-  before publication. The tripwire also pins the source-compatibility patterns we still
-  want to support (struct-literal construction for `Region` and `CellColor`, and `..`
-  rest-pattern destructuring for every `SnapshotError` variant).
-- testty: document an explicit upgrade path from earlier `0.x` releases in the testty
-  README, including the new prelude import, the removal of the
-  `artifact`/`calibration`/`overlay` modules, the removal of the
-  `testty::snapshot::is_update_mode()` free function, and the configurable
-  `SnapshotConfig::with_update_env_var` baseline trigger.
-- testty: add `SnapshotConfig::with_update_mode` and the `update_mode_override` field as
-  an injected update-mode boundary so tests and programmatic callers can drive
-  baseline-update behavior without mutating process-global environment state through
-  `unsafe` `std::env::set_var` calls.
+- Add a regular/draft session creation selector, plus feature-test coverage for
+  draft-session cancellation and terminal-session continuation.
+- Allow running sessions to be canceled from the sessions list, and allow unstarted
+  draft sessions to be canceled before their worktree is created.
+- Queue follow-up chat messages while a turn is running, render queued messages inline,
+  and retract them one at a time with `Ctrl+C` before canceling the active turn.
+- Add GitHub and GitLab review-comment previews in diff mode, background review-request
+  refresh, and persisted focused-review output across restarts.
+- Add `gpt-5.4-mini` as a selectable Codex model and show model-specific focused-review
+  loading text.
+- Add the `Dark Horizon` theme and refine theme tokens, status colors, and footer
+  branch/path styling.
+- Add session worktree isolation checks, main-checkout dirtiness detection, and scoped
+  app-server provider approval handling.
+- Add transient workflow notices and committing progress rows for auto-commit, rebase,
+  and merge flows.
+- Add the `bump-version` workflow skill and shared release-check setup for
+  `prek`-managed CI validation.
+- testty: add the curated `testty::prelude` surface, public API tripwire coverage,
+  `SnapshotConfig::with_update_mode`, and Result-returning `match_*` assertion APIs.
 
-### Changed (breaking)
+### Changed
 
-- testty: `SnapshotConfig` is now `#[non_exhaustive]` and grew two private fields
-  (`update_env_var`, `update_mode_override`). Downstream callers that used
-  struct-literal construction (`SnapshotConfig { .. }`) must switch to
-  `SnapshotConfig::new(..)` plus the `with_*` builder methods. Future field additions
-  stay non-breaking under the `#[non_exhaustive]` lock-down.
-- testty: `SnapshotError` and each of its struct-shaped variants (`Mismatch`,
-  `MissingBaseline`, `FrameMismatch`) are now `#[non_exhaustive]`. Downstream `match`
-  arms must include a fallback `_` arm and any field destructuring must use the `..`
-  rest-pattern. The `MissingBaseline` variant additionally carries a new
-  `update_env_var` field used to surface the configured trigger in the error message.
-- testty: this release intentionally breaks source compatibility for the items above and
-  requires the next published `testty` version to be a semver-major bump (in pre-1.0
-  terms, `0.8.x` → `0.9.0`).
+- Question input now uses `Ctrl+C` to end the turn without answering and `q` to return
+  to the sessions list from non-text focus, while `Esc` no longer discards in-progress
+  question text.
+- Session worktrees and publishes now start from upstream-tracked refs so unpublished
+  local base-branch commits stay out of session pull requests and merge requests.
+- Auto-commit handling now treats empty amend results as no-change notices and keeps
+  commit/rebase workflow notices outside the final transcript body.
+- `/apply` now requires actionable focused-review suggestions before it can send an
+  apply prompt.
+- Open-worktree actions stay hidden while sessions are active, queued, rebasing, or
+  merging.
+- Documentation and release automation now use `mdformat` wrapping, a shared Rust/`prek`
+  CI setup action, and release guidance in `AGENTS.md` plus `bump-version`.
+- testty: prepare the crate for independent crates.io publication, document the upgrade
+  path from earlier `0.x` releases, and make the public snapshot error/config surfaces
+  non-exhaustive.
+
+### Removed
+
+- testty: remove the public `artifact`, `calibration`, and `overlay` modules, and remove
+  `testty::snapshot::is_update_mode()` in favor of per-config update-mode methods.
+- Remove the old `release` skill in favor of the repository release guidance and
+  `bump-version` workflow.
+
+### Fixed
+
+- Wrap agent prompt diffs before rendering so long diff lines do not overflow the
+  session output view.
+- Render queued chat messages without a UI delay.
+- Preserve focused-review cache and visibility across restarts, diff mode, and
+  clarification flows.
+- Refresh session tests and end-to-end assertions for cancellation, `/apply` guidance,
+  question input, and the new feature demos.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.8.4] - 2026-04-25
 

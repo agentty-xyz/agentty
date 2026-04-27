@@ -32,7 +32,7 @@ pub(super) async fn validate_session_worktree(
     session_id: &str,
 ) -> Result<SessionWorktreeValidation, SessionError> {
     if !fs_client.is_dir(folder.to_path_buf()) {
-        return Err(isolation_error(format!(
+        return Err(isolation_error(&format!(
             "session worktree folder is missing: {}",
             folder.display()
         )));
@@ -43,13 +43,13 @@ pub(super) async fn validate_session_worktree(
         .detect_git_info(folder.to_path_buf())
         .await
         .ok_or_else(|| {
-            isolation_error(format!(
+            isolation_error(&format!(
                 "failed to detect branch for session worktree `{}`",
                 folder.display()
             ))
         })?;
     if detected_branch != expected_branch {
-        return Err(isolation_error(format!(
+        return Err(isolation_error(&format!(
             "session worktree `{}` is on branch `{detected_branch}` instead of `{expected_branch}`",
             folder.display()
         )));
@@ -58,12 +58,12 @@ pub(super) async fn validate_session_worktree(
     let main_repo_root = git_client
         .main_repo_root(folder.to_path_buf())
         .await
-        .map_err(main_repo_root_error)?;
+        .map_err(|error| main_repo_root_error(&error))?;
     ensure_main_repo_root_exists(fs_client, &main_repo_root)?;
     let session_folder = canonicalize_for_isolation(fs_client, folder).await?;
     let main_repo_root = canonicalize_for_isolation(fs_client, &main_repo_root).await?;
     if session_folder == main_repo_root {
-        return Err(isolation_error(format!(
+        return Err(isolation_error(&format!(
             "session worktree `{}` resolves to the main repository checkout",
             folder.display()
         )));
@@ -81,7 +81,7 @@ fn ensure_main_repo_root_exists(
         return Ok(());
     }
 
-    Err(isolation_error(format!(
+    Err(isolation_error(&format!(
         "main repository checkout is missing: {}",
         main_repo_root.display()
     )))
@@ -96,7 +96,7 @@ async fn canonicalize_for_isolation(
         .canonicalize(path.to_path_buf())
         .await
         .map_err(|error| {
-            isolation_error(format!(
+            isolation_error(&format!(
                 "failed to canonicalize isolation path `{}`: {error}",
                 path.display()
             ))
@@ -104,14 +104,14 @@ async fn canonicalize_for_isolation(
 }
 
 /// Converts main-repository resolution failures into workflow errors.
-fn main_repo_root_error(error: GitError) -> SessionError {
-    isolation_error(format!(
+fn main_repo_root_error(error: &GitError) -> SessionError {
+    isolation_error(&format!(
         "failed to resolve main repository checkout: {error}"
     ))
 }
 
 /// Formats one session-isolation workflow error.
-fn isolation_error(message: String) -> SessionError {
+fn isolation_error(message: &str) -> SessionError {
     SessionError::Workflow(format!("Session isolation violation: {message}"))
 }
 

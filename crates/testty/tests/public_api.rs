@@ -159,29 +159,44 @@ fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'st
 /// must match with named fields plus a trailing `..` rest-pattern and
 /// must include a fallback `_` arm. This function is compiled (not run)
 /// so accidental renames of variants or destructured field names fail
-/// the build before publication.
+/// the build before publication. The bound values are referenced in each
+/// arm so clippy keeps the compatibility check explicit instead of
+/// collapsing the named fields into the trailing `..`.
 #[allow(dead_code)]
 fn snapshot_error_destructuring_is_stable(error: &SnapshotError) -> &'static str {
     match error {
         SnapshotError::MissingBaseline {
-            name: _,
-            baseline_path: _,
+            name,
+            baseline_path,
             ..
-        } => "missing-baseline",
+        } => {
+            let _: (&String, &PathBuf) = (name, baseline_path);
+
+            "missing-baseline"
+        }
         SnapshotError::Mismatch {
-            name: _,
-            diff_percent: _,
-            threshold: _,
-            baseline_path: _,
-            actual_path: _,
+            name,
+            diff_percent,
+            threshold,
+            baseline_path,
+            actual_path,
             ..
-        } => "mismatch",
+        } => {
+            let _: (&String, &f64, &f64, &PathBuf, &PathBuf) =
+                (name, diff_percent, threshold, baseline_path, actual_path);
+
+            "mismatch"
+        }
         SnapshotError::FrameMismatch {
-            name: _,
-            expected: _,
-            actual: _,
+            name,
+            expected,
+            actual,
             ..
-        } => "frame-mismatch",
+        } => {
+            let _: (&String, &String, &String) = (name, expected, actual);
+
+            "frame-mismatch"
+        }
         SnapshotError::IoError(_message) => "io-error",
         SnapshotError::ImageError(_message) => "image-error",
         _ => "unknown",

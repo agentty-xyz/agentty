@@ -332,9 +332,7 @@ fn apply_review_update(
     review_update: ReviewUpdate,
 ) -> Option<FocusedReviewPersistence> {
     let ReviewUpdate { diff_hash, result } = review_update;
-    let Some(cache_entry) = review_cache.get(session_id) else {
-        return None;
-    };
+    let cache_entry = review_cache.get(session_id)?;
 
     if !matches!(cache_entry, ReviewCacheEntry::Loading { .. })
         || cache_entry.diff_hash() != diff_hash

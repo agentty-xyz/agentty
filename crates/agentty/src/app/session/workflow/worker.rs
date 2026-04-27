@@ -191,7 +191,7 @@ impl MainCheckoutSnapshot {
             .git_client
             .tracked_worktree_status(validation.main_repo_root.clone())
             .await
-            .map_err(Self::status_error)?;
+            .map_err(|error| Self::status_error(&error))?;
 
         Ok(Self {
             main_repo_root: validation.main_repo_root,
@@ -209,7 +209,7 @@ impl MainCheckoutSnapshot {
             .git_client
             .tracked_worktree_status(self.main_repo_root.clone())
             .await
-            .map_err(Self::status_error)?;
+            .map_err(|error| Self::status_error(&error))?;
         if current_status != self.tracked_status_output {
             return Err(SessionError::Workflow(format!(
                 "Session isolation violation: main checkout `{}` changed during the session turn",
@@ -221,7 +221,7 @@ impl MainCheckoutSnapshot {
     }
 
     /// Converts main-checkout tracked status failures into workflow errors.
-    fn status_error(error: crate::infra::git::GitError) -> SessionError {
+    fn status_error(error: &crate::infra::git::GitError) -> SessionError {
         SessionError::Workflow(format!(
             "Session isolation violation: failed to inspect main checkout tracked status: {error}"
         ))
@@ -1558,6 +1558,25 @@ mod tests {
         fs_client
     }
 
+    /// Inserts one in-progress Gemini session for worker-flow tests.
+    async fn insert_in_progress_test_session(db: &AppRepositories) -> i64 {
+        let project_id = db
+            .upsert_project("/tmp/project", Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session(
+            "sess1",
+            "gemini-3-flash-preview",
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("failed to insert session");
+
+        project_id
+    }
+
     #[test]
     fn test_status_update_after_turn_result_skips_stopped_by_user() {
         // Arrange
@@ -1787,19 +1806,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        insert_in_progress_test_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
@@ -2020,19 +2027,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
-        let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
-            .await
-            .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        insert_in_progress_test_session(&db).await;
 
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
@@ -3200,13 +3195,9 @@ mod tests {
         mock_git_client
             .expect_main_repo_root()
             .times(0..)
-            .returning({
+            .returning(move |_| {
                 let main_repo_root = main_repo_root.clone();
-
-                move |_| {
-                    let main_repo_root = main_repo_root.clone();
-                    Box::pin(async move { Ok(main_repo_root) })
-                }
+                Box::pin(async move { Ok(main_repo_root) })
             });
         mock_git_client
             .expect_tracked_worktree_status()
