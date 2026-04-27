@@ -16,6 +16,10 @@ runs:
   steps:
     - name: Setup `uv`
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        # This Rust workspace uses `uv` only to install `prek`, so there is no
+        # Python dependency manifest that can safely invalidate the `uv` cache.
+        enable-cache: "false"
 
     - name: Install `prek`
       shell: bash
