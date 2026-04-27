@@ -120,34 +120,51 @@ fn public_struct_literals_are_stable() {
 #[allow(dead_code)]
 fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'static str {
     let AssertionFailure {
-        message: _,
+        message,
         expected,
-        region: _,
-        matched_spans: _,
-        frame_excerpt: _,
+        region,
+        matched_spans,
+        frame_excerpt,
         ..
     } = failure;
+    let _ = (message, region, matched_spans, frame_excerpt);
 
     match expected {
-        Expected::TextInRegion { needle: _, .. } => "text-in-region",
-        Expected::NotVisible { needle: _, .. } => "not-visible",
-        Expected::MatchCount {
-            needle: _,
-            count: _,
-            ..
-        } => "match-count",
-        Expected::ForegroundColor {
-            needle: _,
-            color: _,
-            ..
-        } => "foreground",
-        Expected::BackgroundColor {
-            needle: _,
-            color: _,
-            ..
-        } => "background",
-        Expected::Highlighted { needle: _, .. } => "highlighted",
-        Expected::NotHighlighted { needle: _, .. } => "not-highlighted",
+        Expected::TextInRegion { needle, .. } => {
+            let _ = needle;
+
+            "text-in-region"
+        }
+        Expected::NotVisible { needle, .. } => {
+            let _ = needle;
+
+            "not-visible"
+        }
+        Expected::MatchCount { needle, count, .. } => {
+            let _ = (needle, count);
+
+            "match-count"
+        }
+        Expected::ForegroundColor { needle, color, .. } => {
+            let _ = (needle, color);
+
+            "foreground"
+        }
+        Expected::BackgroundColor { needle, color, .. } => {
+            let _ = (needle, color);
+
+            "background"
+        }
+        Expected::Highlighted { needle, .. } => {
+            let _ = needle;
+
+            "highlighted"
+        }
+        Expected::NotHighlighted { needle, .. } => {
+            let _ = needle;
+
+            "not-highlighted"
+        }
         _ => "unknown",
     }
 }

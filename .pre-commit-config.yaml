@@ -69,7 +69,6 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
-        stages: [manual]
       - id: test-workspace
         name: cargo nextest workspace
         description: Run the full workspace unit and integration test suite with `cargo-nextest`.

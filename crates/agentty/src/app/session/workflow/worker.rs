@@ -1876,10 +1876,7 @@ mod tests {
         // Act
         let result = SessionWorkerService::run_channel_turn(
             &context,
-            TurnMetadata {
-                published_upstream_ref: None,
-                session_model: AgentModel::Gemini3FlashPreview,
-            },
+            default_turn_metadata(),
             AgentRequestKind::SessionStart,
             "test prompt".into(),
         )
@@ -2004,10 +2001,7 @@ mod tests {
         // `run_channel_turn` swaps in a fresh token.
         let result = SessionWorkerService::run_channel_turn(
             &context,
-            TurnMetadata {
-                published_upstream_ref: None,
-                session_model: AgentModel::Gemini3FlashPreview,
-            },
+            default_turn_metadata(),
             AgentRequestKind::SessionStart,
             "test prompt".into(),
         )
@@ -2108,10 +2102,7 @@ mod tests {
         // Act
         let result = SessionWorkerService::run_channel_turn(
             &context,
-            TurnMetadata {
-                published_upstream_ref: None,
-                session_model: AgentModel::Gemini3FlashPreview,
-            },
+            default_turn_metadata(),
             AgentRequestKind::SessionStart,
             "test prompt".into(),
         )
@@ -2123,6 +2114,15 @@ mod tests {
         let output_text = output.lock().expect("output lock poisoned");
         assert!(output_text.contains("Session isolation violation"));
         assert!(!output_text.contains("done"));
+    }
+
+    /// Builds the default turn metadata used by session worker tests that
+    /// exercise the `Gemini3FlashPreview` path without branch publication.
+    fn default_turn_metadata() -> TurnMetadata {
+        TurnMetadata {
+            published_upstream_ref: None,
+            session_model: AgentModel::Gemini3FlashPreview,
+        }
     }
 
     #[tokio::test]

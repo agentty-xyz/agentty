@@ -3099,7 +3099,7 @@ mod tests {
             .times(2)
             .returning(|path| {
                 Box::pin(async move {
-                    if path == std::path::Path::new("/tmp/project") {
+                    if path == Path::new("/tmp/project") {
                         Ok(PathBuf::from("/tmp/project"))
                     } else {
                         Ok(PathBuf::from("/tmp/session"))
