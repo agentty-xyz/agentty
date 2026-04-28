@@ -45,10 +45,10 @@ expect a stable curated API surface.
 - `assertion::assert_*` functions are thin panic adapters that delegate to the matching
   `match_*`. Keep them so historical tests that expected panic-on-failure stay
   byte-compatible without a major version bump.
-- `AssertionFailure` and `Expected` are both `#[non_exhaustive]`. New fields and
-  variants stay non-breaking as long as `tests/public_api.rs` still uses `..`
-  rest-patterns and a fallback `_` arm when destructuring them, so update those tripwire
-  patterns whenever the structured surface evolves.
+- `AssertionFailure`, `Expected`, and `feature::GifStatus` are all `#[non_exhaustive]`.
+  New fields and variants stay non-breaking as long as `tests/public_api.rs` still uses
+  `..` rest-patterns and a fallback `_` arm when destructuring them, so update those
+  tripwire patterns whenever the structured surface evolves.
 
 ## Snapshot Update Mode
 

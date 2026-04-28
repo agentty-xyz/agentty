@@ -137,6 +137,12 @@ prek run zola-check --all-files --hook-stage manual
 
 The GIF is generated only when VHS is installed. On machines without VHS the test still runs and asserts correctly — GIF generation is gracefully skipped.
 
+The `TESTTY_GIF_MODE` env var selects the freshness mode used by `FeatureTest`:
+
+- unset / `generate` / `generate-if-stale` (default) — regenerate when the on-disk hash sidecar is missing or stale, otherwise reuse the committed GIF.
+- `check` / `check-only` — compute the would-be hash and compare it to the on-disk sidecar without invoking VHS or touching the GIF output directory. The harness fails the test on `GifStatus::Stale` and surfaces the current/committed hashes in the error so CI catches drift.
+- `force` / `always` / `always-generate` — bypass the hash cache and re-run VHS unconditionally. VHS must be installed: a missing VHS binary fails the test instead of being silently skipped, because regeneration was explicitly requested.
+
 Run `prek run zola-check --all-files --hook-stage manual` after the test to catch broken frontmatter or template integration before the page reaches CI. This requires Zola to be installed locally — if unavailable, CI catches it via the `pages.yml` workflow.
 
 ## Legacy Pattern

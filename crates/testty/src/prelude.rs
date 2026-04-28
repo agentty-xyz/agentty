@@ -10,6 +10,7 @@
 
 pub use crate::assertion;
 pub use crate::assertion::{AssertionFailure, Expected, MatchResult};
+pub use crate::feature::{FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus};
 pub use crate::frame::{CellColor, CellStyle, TerminalFrame};
 pub use crate::journey::Journey;
 pub use crate::locator::MatchedSpan;

@@ -5,6 +5,22 @@
 //! decides what to do with the [`FeatureResult`] artifacts — testty itself
 //! has no opinion on static-site generators, README formats, or artifact
 //! directories beyond GIF output.
+//!
+//! # Freshness mode
+//!
+//! [`FeatureDemo::gif_mode`] selects between three behaviors:
+//!
+//! - [`GifMode::GenerateIfStale`] (default) — preserves the historical
+//!   behavior: skip VHS when the on-disk hash sidecar matches, otherwise
+//!   regenerate.
+//! - [`GifMode::CheckOnly`] — runs the scenario, computes the would-be hash,
+//!   and reports whether the on-disk GIF is [`GifStatus::Fresh`] or
+//!   [`GifStatus::Stale`] without invoking VHS. This path never mutates the
+//!   filesystem, so it is safe on read-only CI mounts and when the GIF output
+//!   directory does not exist yet. Useful for an agent or CI tool that wants to
+//!   detect drift without paying VHS cost.
+//! - [`GifMode::AlwaysGenerate`] — bypasses the hash cache and always re-runs
+//!   VHS.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -31,12 +47,41 @@ pub struct FeatureMeta {
     pub description: String,
 }
 
+/// Selects how [`FeatureDemo::run`] handles GIF artifacts.
+///
+/// The variants correspond directly to the freshness behaviors documented
+/// on the module docs: cache-respecting regeneration (default), hash-only
+/// drift detection, and forced regeneration. Defaults to
+/// [`GifMode::GenerateIfStale`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GifMode {
+    /// Skip VHS when the on-disk hash sidecar matches; regenerate
+    /// otherwise. Historical default behavior.
+    #[default]
+    GenerateIfStale,
+    /// Compute the would-be hash and compare it to the on-disk sidecar
+    /// without invoking VHS. Returns [`GifStatus::Fresh`] or
+    /// [`GifStatus::Stale`].
+    CheckOnly,
+    /// Bypass the hash cache and regenerate the GIF unconditionally.
+    ///
+    /// VHS must be installed: this mode treats a missing VHS binary as a
+    /// hard failure ([`GifStatus::TapeExecutionFailed`]) rather than the
+    /// benign [`GifStatus::VhsNotInstalled`] skip used by other modes,
+    /// because regeneration was explicitly requested.
+    AlwaysGenerate,
+}
+
 /// Outcome of GIF generation during a [`FeatureDemo`] run.
 ///
 /// Distinguishes intentional skips (VHS missing, cache hit, no output dir)
 /// from unexpected failures (directory creation, tape execution) so callers
 /// can log or fail appropriately.
+///
+/// `#[non_exhaustive]` so future variants stay non-breaking. Match arms must
+/// include a fallback `_` arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum GifStatus {
     /// GIF was generated successfully at the given path.
     Generated(PathBuf),
@@ -51,26 +96,54 @@ pub enum GifStatus {
     DirCreateFailed(std::io::Error),
     /// VHS tape execution failed.
     TapeExecutionFailed(VhsError),
+    /// [`GifMode::CheckOnly`]: the on-disk GIF matches the current capture
+    /// hash. No VHS execution was attempted.
+    Fresh {
+        /// Expected GIF path (may or may not exist on disk).
+        gif_path: PathBuf,
+        /// Hash computed from the current scenario captures.
+        hash: u64,
+    },
+    /// [`GifMode::CheckOnly`]: the on-disk GIF is missing or its hash
+    /// sidecar does not match the current capture hash. No VHS execution
+    /// was attempted.
+    Stale {
+        /// Expected GIF path (may or may not exist on disk).
+        gif_path: PathBuf,
+        /// Hash computed from the current scenario captures.
+        current: u64,
+        /// Hash recorded in the on-disk sidecar, if any.
+        committed: Option<u64>,
+    },
 }
 
 impl GifStatus {
-    /// Return the GIF path if generation succeeded or the cache matched.
+    /// Return the GIF path if generation succeeded, the cache matched, or a
+    /// freshness check identified an expected output location.
     pub fn gif_path(&self) -> Option<&Path> {
         match self {
             Self::Generated(path) | Self::CacheHit(path) => Some(path),
+            Self::Fresh { gif_path, .. } | Self::Stale { gif_path, .. } => Some(gif_path),
             _ => None,
         }
     }
 
     /// Return `true` when GIF generation failed unexpectedly.
     ///
-    /// Intentional skips (`VhsNotInstalled`, `CacheHit`, `NoOutputDir`)
-    /// return `false`.
+    /// Intentional skips (`VhsNotInstalled`, `CacheHit`, `NoOutputDir`,
+    /// `Fresh`, `Stale`) return `false`.
     pub fn is_failure(&self) -> bool {
         matches!(
             self,
             Self::DirCreateFailed(_) | Self::TapeExecutionFailed(_)
         )
+    }
+
+    /// Return `true` when the on-disk GIF is known to be out of date with
+    /// the current scenario captures. Only [`GifStatus::Stale`] returns
+    /// `true`; every other variant returns `false`.
+    pub fn is_stale(&self) -> bool {
+        matches!(self, Self::Stale { .. })
     }
 }
 
@@ -85,7 +158,8 @@ pub struct FeatureResult {
     pub report: ProofReport,
     /// Feature metadata passed through from the builder.
     pub meta: FeatureMeta,
-    /// Outcome of GIF generation (success, cache hit, skip, or failure).
+    /// Outcome of GIF generation (success, cache hit, skip, failure, or
+    /// freshness verdict in [`GifMode::CheckOnly`]).
     pub gif_status: GifStatus,
 }
 
@@ -115,6 +189,7 @@ pub struct FeatureDemo {
     meta: FeatureMeta,
     gif_output_dir: Option<PathBuf>,
     gif_settings: VhsTapeSettings,
+    gif_mode: GifMode,
 }
 
 impl FeatureDemo {
@@ -132,6 +207,7 @@ impl FeatureDemo {
             },
             gif_output_dir: None,
             gif_settings: VhsTapeSettings::feature_demo(),
+            gif_mode: GifMode::default(),
         }
     }
 
@@ -165,6 +241,13 @@ impl FeatureDemo {
         self
     }
 
+    /// Select the GIF freshness mode. See [`GifMode`] for semantics.
+    pub fn gif_mode(mut self, mode: GifMode) -> Self {
+        self.gif_mode = mode;
+
+        self
+    }
+
     /// Run the feature demo: execute the scenario, collect proof, and
     /// optionally generate a hash-cached GIF.
     ///
@@ -190,9 +273,12 @@ impl FeatureDemo {
                 &report,
                 &self.meta.name,
                 output_dir,
-                &self.gif_settings,
-                binary_path,
-                env_pairs,
+                self.gif_mode,
+                VhsContext {
+                    settings: &self.gif_settings,
+                    binary_path,
+                    env_pairs,
+                },
             ),
             None => GifStatus::NoOutputDir,
         };
@@ -206,6 +292,49 @@ impl FeatureDemo {
     }
 }
 
+/// Compute a content hash from all proof capture frame bytes.
+///
+/// Uses [`DefaultHasher`] to produce a deterministic `u64` hash from the
+/// concatenated frame bytes of every capture in the report. Exposed as
+/// public API so external tooling (xtasks, CI freshness reports) can
+/// reproduce the same hash that [`FeatureDemo::run`] writes to the on-disk
+/// sidecar.
+///
+/// Note: `DefaultHasher` is not stable across Rust releases. Hashes
+/// computed by one toolchain version should not be compared with hashes
+/// produced by another. Within a single workspace toolchain pin this is
+/// fine — and that is the contract testty assumes.
+pub fn compute_frame_hash(report: &ProofReport) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    for capture in &report.captures {
+        capture.frame_bytes.hash(&mut hasher);
+    }
+
+    hasher.finish()
+}
+
+/// Return the on-disk sidecar path that [`FeatureDemo`] uses to cache the
+/// content hash for a feature with the given `name`.
+///
+/// Sidecars are stored as `.{name}.hash` next to the GIF (`{name}.gif`) so
+/// the dot-prefix keeps them out of plain `ls` listings while staying in
+/// the same directory as the artifact they describe.
+pub fn hash_sidecar_path(output_dir: &Path, name: &str) -> PathBuf {
+    output_dir.join(format!(".{name}.hash"))
+}
+
+/// Bundle of VHS-execution inputs threaded through [`generate_gif`].
+///
+/// Grouped so the function signature stays small while still exposing the
+/// individual pieces (settings, binary, environment) that VHS needs.
+#[derive(Clone, Copy)]
+struct VhsContext<'a> {
+    settings: &'a VhsTapeSettings,
+    binary_path: &'a Path,
+    env_pairs: &'a [(&'a str, &'a str)],
+}
+
 /// Generate a GIF with content-hash caching, returning a typed status.
 ///
 /// Checks VHS availability, computes a content hash from all proof capture
@@ -217,51 +346,76 @@ fn generate_gif(
     report: &ProofReport,
     name: &str,
     output_dir: &Path,
-    settings: &VhsTapeSettings,
-    binary_path: &Path,
-    env_pairs: &[(&str, &str)],
+    mode: GifMode,
+    vhs: VhsContext<'_>,
 ) -> GifStatus {
-    if check_vhs_installed().is_err() {
-        return GifStatus::VhsNotInstalled;
+    let hash_path = hash_sidecar_path(output_dir, name);
+    let gif_path = output_dir.join(format!("{name}.gif"));
+
+    let current_hash = compute_frame_hash(report);
+    let committed_hash = read_committed_hash(&hash_path);
+
+    // CheckOnly is a read-only verification path: never mutate the
+    // filesystem. It must work on read-only CI mounts and when the
+    // output directory does not exist yet — a missing directory simply
+    // means the GIF is missing, which is `Stale`.
+    if matches!(mode, GifMode::CheckOnly) {
+        let gif_present = gif_path.exists();
+        let hash_matches = committed_hash == Some(current_hash);
+
+        return if gif_present && hash_matches {
+            GifStatus::Fresh {
+                gif_path,
+                hash: current_hash,
+            }
+        } else {
+            GifStatus::Stale {
+                gif_path,
+                current: current_hash,
+                committed: committed_hash,
+            }
+        };
+    }
+
+    // Probe VHS availability before mutating the filesystem so machines
+    // without VHS skip cleanly even when the output directory is on a
+    // read-only or permission-restricted mount.
+    //
+    // `AlwaysGenerate` is an explicit user request to regenerate, so a
+    // missing VHS binary must surface as a hard failure rather than a
+    // silent skip. Other modes treat a missing VHS as a benign skip and
+    // return `VhsNotInstalled`.
+    if let Err(err) = check_vhs_installed() {
+        return vhs_missing_status(mode, err);
     }
 
     if let Err(err) = std::fs::create_dir_all(output_dir) {
         return GifStatus::DirCreateFailed(err);
     }
 
-    let hash_path = output_dir.join(format!(".{name}.hash"));
-    let gif_path = output_dir.join(format!("{name}.gif"));
-
-    let current_hash = compute_frame_hash(report);
-    let hash_string = current_hash.to_string();
-
-    // Check sidecar cache — skip VHS when the GIF already matches.
-    if gif_path.exists()
-        && let Ok(cached) = std::fs::read_to_string(&hash_path)
-        && cached.trim() == hash_string
+    if matches!(mode, GifMode::GenerateIfStale)
+        && gif_path.exists()
+        && committed_hash == Some(current_hash)
     {
         return GifStatus::CacheHit(gif_path);
     }
 
-    // Build and execute VHS tape.
+    let hash_string = current_hash.to_string();
     let screenshot_path = output_dir.join(format!("{name}.png"));
 
     let tape = VhsTape::from_scenario_with_settings(
         scenario,
-        binary_path,
+        vhs.binary_path,
         &screenshot_path,
-        env_pairs,
-        settings,
+        vhs.env_pairs,
+        vhs.settings,
     );
 
     let tape_path = output_dir.join(format!("{name}.tape"));
 
     match tape.execute(&tape_path) {
         Ok(_) => {
-            // Best-effort hash sidecar write — skip on failure.
             let _ = std::fs::write(&hash_path, &hash_string);
-
-            // Clean up temporary files.
             let _ = std::fs::remove_file(&tape_path);
             let _ = std::fs::remove_file(&screenshot_path);
 
@@ -275,18 +429,26 @@ fn generate_gif(
     }
 }
 
-/// Compute a content hash from all proof capture frame bytes.
+/// Map a [`check_vhs_installed`] failure into a [`GifStatus`] based on the
+/// active [`GifMode`].
 ///
-/// Uses [`DefaultHasher`] to produce a deterministic `u64` hash from the
-/// concatenated frame bytes of every capture in the report.
-fn compute_frame_hash(report: &ProofReport) -> u64 {
-    let mut hasher = DefaultHasher::new();
-
-    for capture in &report.captures {
-        capture.frame_bytes.hash(&mut hasher);
+/// `AlwaysGenerate` is an explicit user request to regenerate, so a
+/// missing VHS binary surfaces as [`GifStatus::TapeExecutionFailed`].
+/// Every other mode treats a missing VHS as the benign
+/// [`GifStatus::VhsNotInstalled`] skip.
+fn vhs_missing_status(mode: GifMode, err: VhsError) -> GifStatus {
+    match mode {
+        GifMode::AlwaysGenerate => GifStatus::TapeExecutionFailed(err),
+        _ => GifStatus::VhsNotInstalled,
     }
+}
 
-    hasher.finish()
+/// Read the cached hash from an on-disk sidecar, returning `None` when the
+/// file is missing or the contents do not parse as a `u64`.
+fn read_committed_hash(hash_path: &Path) -> Option<u64> {
+    let raw = std::fs::read_to_string(hash_path).ok()?;
+
+    raw.trim().parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -348,6 +510,69 @@ mod tests {
     }
 
     #[test]
+    fn feature_demo_default_mode_is_generate_if_stale() {
+        // Arrange / Act
+        let demo = FeatureDemo::new("mode_check");
+
+        // Assert
+        assert_eq!(demo.gif_mode, GifMode::GenerateIfStale);
+    }
+
+    #[test]
+    fn feature_demo_gif_mode_configurable() {
+        // Arrange / Act
+        let demo = FeatureDemo::new("mode_check").gif_mode(GifMode::CheckOnly);
+
+        // Assert
+        assert_eq!(demo.gif_mode, GifMode::CheckOnly);
+    }
+
+    #[test]
+    fn vhs_missing_status_always_generate_is_hard_failure() {
+        // Arrange
+        let err = VhsError::NotInstalled("missing".to_string());
+
+        // Act
+        let status = vhs_missing_status(GifMode::AlwaysGenerate, err);
+
+        // Assert
+        assert!(
+            matches!(status, GifStatus::TapeExecutionFailed(_)),
+            "AlwaysGenerate must surface missing VHS as a hard failure, got {status:?}",
+        );
+        assert!(status.is_failure());
+    }
+
+    #[test]
+    fn vhs_missing_status_generate_if_stale_is_benign_skip() {
+        // Arrange
+        let err = VhsError::NotInstalled("missing".to_string());
+
+        // Act
+        let status = vhs_missing_status(GifMode::GenerateIfStale, err);
+
+        // Assert
+        assert!(matches!(status, GifStatus::VhsNotInstalled));
+        assert!(!status.is_failure());
+    }
+
+    #[test]
+    fn vhs_missing_status_check_only_is_benign_skip() {
+        // Arrange — `CheckOnly` short-circuits before the VHS probe in
+        // `generate_gif`, but the helper must still treat it as benign so
+        // future refactors that route through it do not regress to a hard
+        // failure.
+        let err = VhsError::NotInstalled("missing".to_string());
+
+        // Act
+        let status = vhs_missing_status(GifMode::CheckOnly, err);
+
+        // Assert
+        assert!(matches!(status, GifStatus::VhsNotInstalled));
+        assert!(!status.is_failure());
+    }
+
+    #[test]
     fn compute_frame_hash_deterministic() {
         // Arrange
         let frame = TerminalFrame::new(80, 24, b"Hello");
@@ -395,6 +620,147 @@ mod tests {
     }
 
     #[test]
+    fn hash_sidecar_path_uses_dot_prefix_next_to_gif() {
+        // Arrange
+        let dir = Path::new("/tmp/features");
+
+        // Act
+        let sidecar = hash_sidecar_path(dir, "session_creation");
+
+        // Assert
+        assert_eq!(sidecar, Path::new("/tmp/features/.session_creation.hash"));
+    }
+
+    #[test]
+    fn read_committed_hash_returns_none_for_missing_file() {
+        // Arrange
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let missing = dir.path().join(".missing.hash");
+
+        // Act
+        let parsed = read_committed_hash(&missing);
+
+        // Assert
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn read_committed_hash_parses_trimmed_decimal() {
+        // Arrange
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join(".valid.hash");
+        std::fs::write(&path, "  12345\n").expect("write hash");
+
+        // Act
+        let parsed = read_committed_hash(&path);
+
+        // Assert
+        assert_eq!(parsed, Some(12345));
+    }
+
+    #[test]
+    fn generate_gif_check_only_does_not_create_output_dir() {
+        // Arrange
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let missing_dir = temp.path().join("never_created");
+        let report = ProofReport::new("check_only_readonly");
+        let scenario = Scenario::new("check_only_readonly");
+        let settings = VhsTapeSettings::feature_demo();
+        let binary = Path::new("/usr/bin/true");
+        let env_pairs: &[(&str, &str)] = &[];
+        let vhs = VhsContext {
+            settings: &settings,
+            binary_path: binary,
+            env_pairs,
+        };
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            "check_only_readonly",
+            &missing_dir,
+            GifMode::CheckOnly,
+            vhs,
+        );
+
+        // Assert — verdict is Stale and the output directory is untouched.
+        assert!(status.is_stale(), "expected stale verdict, got {status:?}");
+        assert!(
+            !missing_dir.exists(),
+            "CheckOnly must not create the output directory",
+        );
+    }
+
+    #[test]
+    fn generate_gif_check_only_returns_fresh_when_gif_and_sidecar_match() {
+        // Arrange — pre-stage a GIF file and a sidecar whose contents equal
+        // the hash that `compute_frame_hash` would produce for the report.
+        let temp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let output_dir = temp.path();
+        let name = "check_only_fresh";
+
+        let frame = TerminalFrame::new(80, 24, b"Hello");
+        let mut report = ProofReport::new(name);
+        report.add_capture("snap", "Snapshot", &frame);
+
+        let expected_hash = compute_frame_hash(&report);
+
+        let gif_path = output_dir.join(format!("{name}.gif"));
+        std::fs::write(&gif_path, b"fake-gif-bytes").expect("write fake gif");
+
+        let sidecar = hash_sidecar_path(output_dir, name);
+        std::fs::write(&sidecar, expected_hash.to_string()).expect("write sidecar");
+
+        let scenario = Scenario::new(name);
+        let settings = VhsTapeSettings::feature_demo();
+        let binary = Path::new("/usr/bin/true");
+        let env_pairs: &[(&str, &str)] = &[];
+        let vhs = VhsContext {
+            settings: &settings,
+            binary_path: binary,
+            env_pairs,
+        };
+
+        // Act
+        let status = generate_gif(
+            &scenario,
+            &report,
+            name,
+            output_dir,
+            GifMode::CheckOnly,
+            vhs,
+        );
+
+        // Assert — verdict is Fresh and exposes the GIF path plus the
+        // computed hash.
+        let GifStatus::Fresh {
+            gif_path: returned_path,
+            hash,
+        } = status
+        else {
+            unreachable!("expected Fresh verdict, got {status:?}");
+        };
+
+        assert_eq!(returned_path, gif_path);
+        assert_eq!(hash, expected_hash);
+    }
+
+    #[test]
+    fn read_committed_hash_returns_none_for_garbage() {
+        // Arrange
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join(".garbage.hash");
+        std::fs::write(&path, "not-a-number").expect("write hash");
+
+        // Act
+        let parsed = read_committed_hash(&path);
+
+        // Assert
+        assert!(parsed.is_none());
+    }
+
+    #[test]
     fn gif_status_generated_returns_path() {
         // Arrange
         let status = GifStatus::Generated(PathBuf::from("/tmp/test.gif"));
@@ -402,6 +768,7 @@ mod tests {
         // Act / Assert
         assert_eq!(status.gif_path(), Some(Path::new("/tmp/test.gif")));
         assert!(!status.is_failure());
+        assert!(!status.is_stale());
     }
 
     #[test]
@@ -412,6 +779,7 @@ mod tests {
         // Act / Assert
         assert_eq!(status.gif_path(), Some(Path::new("/tmp/cached.gif")));
         assert!(!status.is_failure());
+        assert!(!status.is_stale());
     }
 
     #[test]
@@ -422,6 +790,7 @@ mod tests {
         // Act / Assert
         assert!(status.gif_path().is_none());
         assert!(!status.is_failure());
+        assert!(!status.is_stale());
     }
 
     #[test]
@@ -432,6 +801,7 @@ mod tests {
         // Act / Assert
         assert!(status.gif_path().is_none());
         assert!(!status.is_failure());
+        assert!(!status.is_stale());
     }
 
     #[test]
@@ -443,6 +813,7 @@ mod tests {
         // Act / Assert
         assert!(status.gif_path().is_none());
         assert!(status.is_failure());
+        assert!(!status.is_stale());
     }
 
     #[test]
@@ -454,5 +825,35 @@ mod tests {
         // Act / Assert
         assert!(status.gif_path().is_none());
         assert!(status.is_failure());
+        assert!(!status.is_stale());
+    }
+
+    #[test]
+    fn gif_status_fresh_exposes_path_and_is_not_stale() {
+        // Arrange
+        let status = GifStatus::Fresh {
+            gif_path: PathBuf::from("/tmp/feature.gif"),
+            hash: 42,
+        };
+
+        // Act / Assert
+        assert_eq!(status.gif_path(), Some(Path::new("/tmp/feature.gif")));
+        assert!(!status.is_failure());
+        assert!(!status.is_stale());
+    }
+
+    #[test]
+    fn gif_status_stale_exposes_path_and_is_stale() {
+        // Arrange
+        let status = GifStatus::Stale {
+            gif_path: PathBuf::from("/tmp/feature.gif"),
+            current: 42,
+            committed: Some(7),
+        };
+
+        // Act / Assert
+        assert_eq!(status.gif_path(), Some(Path::new("/tmp/feature.gif")));
+        assert!(!status.is_failure());
+        assert!(status.is_stale());
     }
 }

@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin;
-use testty::feature::{FeatureDemo, GifStatus};
+use testty::feature::{FeatureDemo, GifMode, GifStatus};
 use testty::frame::TerminalFrame;
 use testty::journey::Journey;
 use testty::proof::report::{ProofCapture, ProofReport};
@@ -125,17 +125,56 @@ pub(crate) fn acquire_e2e_test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Return the feature GIF output directory, creating it if needed.
+/// Return the feature GIF output directory as a pure path.
 ///
 /// Derives the path from `CARGO_MANIFEST_DIR` →
-/// `../../docs/site/static/features/`.
+/// `../../docs/site/static/features/`. This resolver intentionally does
+/// not create the directory: `GifMode::CheckOnly` is a read-only path
+/// that must work on read-only mounts and against a missing output
+/// directory. Generation modes create the directory themselves inside
+/// `testty::feature::generate_gif` only when they actually need to write.
 fn feature_output_dir() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let output_dir = Path::new(manifest_dir).join("../../docs/site/static/features");
 
-    let _ = std::fs::create_dir_all(&output_dir);
+    Path::new(manifest_dir).join("../../docs/site/static/features")
+}
 
-    output_dir
+/// Environment variable that selects the GIF freshness mode for
+/// [`FeatureTest`] runs.
+///
+/// Recognized values:
+///
+/// - unset / `generate` / `generate-if-stale` → [`GifMode::GenerateIfStale`]
+/// - `check` / `check-only` → [`GifMode::CheckOnly`]
+/// - `force` / `always` / `always-generate` → [`GifMode::AlwaysGenerate`]
+///
+/// Unknown values fall back to the default. The variable is parsed once
+/// per test run.
+pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
+
+/// Resolve the GIF freshness mode from [`TESTTY_GIF_MODE_ENV_VAR`].
+///
+/// Returns [`GifMode::GenerateIfStale`] when the variable is unset.
+/// Otherwise delegates to [`parse_gif_mode`] for value parsing.
+fn resolve_gif_mode() -> GifMode {
+    let Ok(raw) = std::env::var(TESTTY_GIF_MODE_ENV_VAR) else {
+        return GifMode::GenerateIfStale;
+    };
+
+    parse_gif_mode(&raw)
+}
+
+/// Pure parser that maps a raw `TESTTY_GIF_MODE` value to a [`GifMode`].
+///
+/// Returns [`GifMode::GenerateIfStale`] for empty input or unrecognized
+/// values via the catch-all arm. Comparison is case-insensitive and ignores
+/// surrounding whitespace.
+fn parse_gif_mode(raw: &str) -> GifMode {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "check" | "check-only" => GifMode::CheckOnly,
+        "force" | "always" | "always-generate" => GifMode::AlwaysGenerate,
+        _ => GifMode::GenerateIfStale,
+    }
 }
 
 /// Reconstruct a [`TerminalFrame`] from a [`ProofCapture`] so full cell-level
@@ -329,15 +368,22 @@ impl FeatureTest {
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
 
+        let gif_mode = resolve_gif_mode();
         let result = FeatureDemo::new(&self.name)
             .gif_output_dir(feature_output_dir())
+            .gif_mode(gif_mode)
             .run(&scenario, env.builder(), &cargo_bin("agentty"), &env_pairs)
             .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
 
-        // Surface GIF generation diagnostics — fail on unexpected errors.
+        // Surface GIF generation diagnostics — explicitly whitelist
+        // benign variants and fail on every error-like variant, including
+        // future ones added behind `#[non_exhaustive]`. The wildcard arm
+        // is intentionally a hard failure so a new error variant cannot
+        // be silently ignored by the harness.
         match &result.gif_status {
             GifStatus::Generated(_)
             | GifStatus::CacheHit(_)
+            | GifStatus::Fresh { .. }
             | GifStatus::VhsNotInstalled
             | GifStatus::NoOutputDir => {}
             GifStatus::DirCreateFailed(err) => {
@@ -351,6 +397,28 @@ impl FeatureTest {
                 return Err(std::io::Error::other(format!(
                     "VHS tape execution failed for {}: {err}",
                     self.name
+                ))
+                .into());
+            }
+            GifStatus::Stale {
+                gif_path,
+                current,
+                committed,
+            } => {
+                return Err(std::io::Error::other(format!(
+                    "Feature GIF is stale for {} (gif: {}, current hash: {current}, committed \
+                     hash: {committed:?}). Re-run with `{TESTTY_GIF_MODE_ENV_VAR}=force` (or \
+                     unset to default) to regenerate.",
+                    self.name,
+                    gif_path.display(),
+                ))
+                .into());
+            }
+            other => {
+                return Err(std::io::Error::other(format!(
+                    "Feature GIF generation returned an unrecognized status for {}: {other:?}. \
+                     Update the FeatureTest harness to handle the new GifStatus variant.",
+                    self.name,
                 ))
                 .into());
             }
@@ -491,4 +559,50 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
         .step(Step::sleep(Duration::from_secs(2)))
         .step(Step::press_key("q"))
         .step(Step::sleep(Duration::from_secs(1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_gif_mode_empty_falls_back_to_default() {
+        // Arrange / Act / Assert
+        assert_eq!(parse_gif_mode(""), GifMode::GenerateIfStale);
+    }
+
+    #[test]
+    fn parse_gif_mode_recognizes_check_only_aliases() {
+        // Arrange / Act / Assert
+        assert_eq!(parse_gif_mode("check"), GifMode::CheckOnly);
+        assert_eq!(parse_gif_mode("check-only"), GifMode::CheckOnly);
+        assert_eq!(parse_gif_mode("CHECK"), GifMode::CheckOnly);
+        assert_eq!(parse_gif_mode("  check  "), GifMode::CheckOnly);
+    }
+
+    #[test]
+    fn parse_gif_mode_recognizes_always_generate_aliases() {
+        // Arrange / Act / Assert
+        assert_eq!(parse_gif_mode("force"), GifMode::AlwaysGenerate);
+        assert_eq!(parse_gif_mode("always"), GifMode::AlwaysGenerate);
+        assert_eq!(parse_gif_mode("always-generate"), GifMode::AlwaysGenerate);
+        assert_eq!(parse_gif_mode("Force"), GifMode::AlwaysGenerate);
+    }
+
+    #[test]
+    fn parse_gif_mode_recognizes_generate_if_stale_aliases() {
+        // Arrange / Act / Assert
+        assert_eq!(parse_gif_mode("generate"), GifMode::GenerateIfStale);
+        assert_eq!(
+            parse_gif_mode("generate-if-stale"),
+            GifMode::GenerateIfStale,
+        );
+    }
+
+    #[test]
+    fn parse_gif_mode_unknown_value_falls_back_to_default() {
+        // Arrange / Act / Assert
+        assert_eq!(parse_gif_mode("nonsense"), GifMode::GenerateIfStale);
+        assert_eq!(parse_gif_mode("checkk"), GifMode::GenerateIfStale);
+    }
 }

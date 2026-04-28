@@ -59,6 +59,19 @@ When upgrading from earlier `0.x` releases:
   arm and any field destructuring must use the `..` rest-pattern. The `MissingBaseline`
   variant also carries a new `update_env_var` field that surfaces the configured trigger
   in the error message.
+- `feature::GifStatus` is now `#[non_exhaustive]` and gained `Fresh { gif_path, hash }`
+  and `Stale { gif_path, current, committed }` variants used by the new
+  `FeatureDemo::gif_mode(GifMode::CheckOnly)` freshness mode. `CheckOnly` is a read-only
+  verification path: it never invokes VHS and never mutates the filesystem, so it works
+  on read-only CI mounts and against missing output directories. Existing match arms
+  must add a fallback `_` arm and any field destructuring must use the `..`
+  rest-pattern. The companion helpers `feature::compute_frame_hash` and
+  `feature::hash_sidecar_path` are now public so external tooling can reproduce the same
+  hash that `FeatureDemo` writes to the on-disk sidecar.
+- The feature-demo surface (`FeatureDemo`, `FeatureMeta`, `FeatureResult`, `GifMode`,
+  `GifStatus`) is now re-exported from `testty::prelude`, so `use testty::prelude::*;`
+  consumers can call `FeatureDemo::new(..).gif_mode(..)` without an explicit
+  `use testty::feature::..;` import.
 
 ## Quick start
 

@@ -20,6 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
+use testty::feature::{self, compute_frame_hash, hash_sidecar_path};
 use testty::prelude::*;
 use testty::snapshot::{SnapshotConfig, SnapshotError};
 
@@ -93,6 +94,60 @@ fn auxiliary_surface_is_stable() {
     let _: bool = config.is_update_mode();
 
     let _: fn(&TerminalFrame, &str) = testty::recipe::expect_instruction_visible;
+
+    // Feature freshness primitives — exposed so external tooling can build
+    // freshness reports without re-running VHS.
+    let _: fn(&ProofReport) -> u64 = compute_frame_hash;
+    let _: fn(&Path, &str) -> PathBuf = hash_sidecar_path;
+    let _: GifMode = GifMode::default();
+    let _: GifMode = GifMode::CheckOnly;
+    let _: GifMode = GifMode::AlwaysGenerate;
+    let _: GifMode = GifMode::GenerateIfStale;
+    let _ = FeatureDemo::new("public-api").gif_mode(GifMode::CheckOnly);
+    let _: Option<FeatureMeta> = None;
+    let _: Option<FeatureResult> = None;
+}
+
+/// Lock in the supported pattern for matching `GifStatus` variants.
+///
+/// `GifStatus` is `#[non_exhaustive]` so future variants stay non-breaking.
+/// Downstream callers must include a fallback `_` arm and any field
+/// destructuring must use the `..` rest-pattern. Compiled (not run) so
+/// accidental renames break the build before publication.
+#[allow(dead_code)]
+fn gif_status_destructuring_is_stable(status: &GifStatus) -> &'static str {
+    match status {
+        GifStatus::Generated(path) => {
+            let _: &PathBuf = path;
+
+            "generated"
+        }
+        GifStatus::CacheHit(path) => {
+            let _: &PathBuf = path;
+
+            "cache-hit"
+        }
+        GifStatus::VhsNotInstalled => "vhs-not-installed",
+        GifStatus::NoOutputDir => "no-output-dir",
+        GifStatus::DirCreateFailed(_err) => "dir-create-failed",
+        GifStatus::TapeExecutionFailed(_err) => "tape-execution-failed",
+        GifStatus::Fresh { gif_path, hash, .. } => {
+            let _: (&PathBuf, &u64) = (gif_path, hash);
+
+            "fresh"
+        }
+        GifStatus::Stale {
+            gif_path,
+            current,
+            committed,
+            ..
+        } => {
+            let _: (&PathBuf, &u64, &Option<u64>) = (gif_path, current, committed);
+
+            "stale"
+        }
+        _ => "unknown",
+    }
 }
 
 /// Lock in struct-literal construction for prelude types whose public
