@@ -105,11 +105,37 @@ static CROSSTERM_TERMINAL_OPERATION: CrosstermTerminalOperation = CrosstermTermi
 /// Returns the keyboard enhancement flag set used to disambiguate modified key
 /// presses in terminals that support the kitty keyboard protocol without
 /// requesting key release/repeat event streams.
-fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+///
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` is intentionally omitted: it forces every
+/// key (including plain `Enter`) to be reported as a `CSI u` sequence, which
+/// has been observed to fail under some `tmux` builds on Linux when the outer
+/// terminal is `ghostty`. The resulting Shift+Enter sequence is dropped before
+/// reaching the prompt input, while peer TUIs that stay on the legacy mode
+/// keep working. `DISAMBIGUATE_ESCAPE_CODES` is sufficient to encode the
+/// `Shift` modifier on `Enter` while leaving plain `Enter` on the universally
+/// reliable legacy `\r` byte path.
+const fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS)
 }
+
+/// Compile-time regression check that locks in the omission of
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` from the kitty keyboard enhancement flag
+/// set. Re-adding it would break plain `Enter` under some `tmux` builds on
+/// Linux when the outer terminal is `ghostty`, dropping `Shift+Enter`
+/// sequences before they reach the prompt input. A `const` assertion is used
+/// instead of a `#[test]` so the check runs without enlarging the
+/// `agentty` libtest descriptor table.
+const _: () = {
+    assert!(
+        keyboard_enhancement_flags().contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
+    );
+    assert!(keyboard_enhancement_flags().contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS),);
+    assert!(
+        !keyboard_enhancement_flags()
+            .contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
+    );
+};
 
 /// Restores terminal state on all exit paths after raw mode is enabled.
 ///
