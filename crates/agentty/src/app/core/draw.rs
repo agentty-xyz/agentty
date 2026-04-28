@@ -157,6 +157,7 @@ impl App {
                 project_table_state,
                 projects: &projects,
                 review_comment_cache: &review_comment_cache,
+                requested_reviews: &self.requested_reviews,
                 task_roadmap: task_roadmap.as_deref(),
                 task_roadmap_error: task_roadmap_error.as_deref(),
                 task_roadmap_scroll_offset: self.task_roadmap_scroll_offset,

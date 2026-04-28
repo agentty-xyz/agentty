@@ -70,10 +70,10 @@ fn tab_key_switches_tabs() -> E2eResult {
     Ok(())
 }
 
-/// Verify that pressing Tab cycles through all four tabs in order.
+/// Verify that pressing Tab cycles through all primary tabs in order.
 ///
-/// Starts on Projects, presses Tab three times, and asserts each
-/// successive tab becomes selected: Sessions → Stats → Settings.
+/// Starts on Projects and asserts each successive tab becomes selected:
+/// Sessions, Review, Stats, Settings.
 #[test]
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
@@ -91,6 +91,9 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("sessions", "Sessions tab selected")
+                    .compose(&common::switch_to_tab("Review"))
+                    .viewing_pause_ms(2000)
+                    .capture_labeled("review", "Review tab selected")
                     .compose(&common::switch_to_tab("Stats"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("stats", "Stats tab selected")
@@ -104,19 +107,44 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 
                 assert_eq!(
                     report.captures.len(),
-                    3,
-                    "Expected 3 captures (sessions, stats, settings)"
+                    4,
+                    "Expected 4 captures (sessions, review, stats, settings)"
                 );
 
                 let sessions_frame = common::frame_from_capture(&report.captures[0]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let stats_frame = common::frame_from_capture(&report.captures[1]);
+                let review_frame = common::frame_from_capture(&report.captures[1]);
+                let review_full = Region::full(review_frame.cols(), review_frame.rows());
+                assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
+
+                let stats_frame = common::frame_from_capture(&report.captures[2]);
                 let stats_full = Region::full(stats_frame.cols(), stats_frame.rows());
                 assertion::assert_text_in_region(&stats_frame, "Token Stats", &stats_full);
             },
         )?;
+
+    Ok(())
+}
+
+/// Verify that the Review tab renders requested PR/MR review state.
+#[test]
+fn review_tab_shows_requested_reviews_page() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_tab").run(
+        |scenario| {
+            scenario
+                .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab("Review"))
+                .viewing_pause_ms(1500)
+                .capture_labeled("review", "Review tab selected")
+        },
+        |frame, _report| {
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::assert_text_in_region(frame, "Review Requests", &full);
+        },
+    )?;
 
     Ok(())
 }

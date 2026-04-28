@@ -170,6 +170,8 @@ impl App {
             sessions,
             active_project_has_tasks_tab,
             active_project_roadmap,
+            requested_review_generation: 0,
+            requested_reviews: crate::app::RequestedReviewState::default(),
             task_roadmap_scroll_offset: 0,
             event_rx,
             review_cache,

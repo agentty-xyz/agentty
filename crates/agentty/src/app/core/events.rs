@@ -73,6 +73,15 @@ pub(crate) enum AppEvent {
     /// Requests an immediate git-status refresh outside the periodic poll
     /// cadence.
     RefreshGitStatus,
+    /// Indicates completion of one requested-review list refresh.
+    RequestedReviewsLoaded {
+        /// Refresh generation assigned when the task was spawned.
+        generation: u64,
+        /// Project id whose requested reviews were loaded.
+        project_id: i64,
+        /// Forge result from the background requested-review task.
+        result: Result<Vec<ag_forge::RequestedReview>, String>,
+    },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -173,6 +182,10 @@ pub(super) struct AppEventBatch {
     pub(super) should_force_reload: bool,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_comment_session_ids: HashSet<SessionId>,
+    /// Latest requested-review task result collected for this reducer batch,
+    /// including its generation for stale-result rejection.
+    pub(super) requested_reviews:
+        Option<(u64, i64, Result<Vec<ag_forge::RequestedReview>, String>)>,
     pub(super) sync_main_result: Option<Result<SyncMainOutcome, SyncSessionStartError>>,
     pub(super) update_status: Option<UpdateStatus>,
 }
@@ -243,6 +256,21 @@ impl AppEventBatch {
             }
             AppEvent::RefreshSessions => self.collect_refresh_sessions(),
             AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
+            AppEvent::RequestedReviewsLoaded {
+                generation,
+                project_id,
+                result,
+            } => {
+                // Keep the freshest requested-review result even when a stale
+                // completion arrives later in the same drained event batch.
+                if self
+                    .requested_reviews
+                    .as_ref()
+                    .is_none_or(|(batched_generation, _, _)| generation >= *batched_generation)
+                {
+                    self.requested_reviews = Some((generation, project_id, result));
+                }
+            }
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -655,6 +683,21 @@ impl App {
                 .replace_session_git_statuses(event_batch.session_git_status_updates.clone());
         }
 
+        if let Some((generation, project_id, result)) = event_batch.requested_reviews.take()
+            && project_id == self.projects.active_project_id()
+            && self
+                .requested_reviews
+                .matches_loading_request(project_id, generation)
+        {
+            self.requested_reviews = match result {
+                Ok(items) => app::RequestedReviewState::Loaded { items, project_id },
+                Err(message) => app::RequestedReviewState::Failed {
+                    message,
+                    project_id,
+                },
+            };
+        }
+
         self.apply_status_bar_updates(
             event_batch.latest_available_version_update.as_ref(),
             event_batch.update_status.take(),
@@ -718,6 +761,7 @@ impl App {
             || !event_batch.published_branch_sync_updates.is_empty()
             || !event_batch.review_request_status_updates.is_empty()
             || !event_batch.review_comment_session_ids.is_empty()
+            || event_batch.requested_reviews.is_some()
             || !event_batch.review_updates.is_empty()
             || !event_batch.session_model_updates.is_empty()
             || !event_batch.session_progress_updates.is_empty()
@@ -1435,5 +1479,38 @@ impl App {
         }
 
         format!("conflicts fixed: {}", resolved_conflict_files.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_requested_review_batch_keeps_newer_generation_when_stale_event_arrives_later() {
+        // Arrange
+        let mut event_batch = AppEventBatch::default();
+        let newer_event = AppEvent::RequestedReviewsLoaded {
+            generation: 2,
+            project_id: 42,
+            result: Ok(Vec::new()),
+        };
+        let stale_event = AppEvent::RequestedReviewsLoaded {
+            generation: 1,
+            project_id: 42,
+            result: Err("stale failure".to_string()),
+        };
+
+        // Act
+        event_batch.collect_event(newer_event);
+        event_batch.collect_event(stale_event);
+
+        // Assert
+        let (generation, project_id, result) = event_batch
+            .requested_reviews
+            .expect("newer requested-review event should be retained");
+        assert_eq!(generation, 2);
+        assert_eq!(project_id, 42);
+        assert_eq!(result.expect("newer result should be successful").len(), 0);
     }
 }

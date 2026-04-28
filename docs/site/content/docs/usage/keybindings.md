@@ -60,6 +60,15 @@ The page is split into `Global settings` for the app-wide `Theme` row and
 - `Open Commands` for launching session worktrees in the active project (one command per
   line).
 
+## Review
+
+| Key | Action | |-----|--------| | `q` | Quit | | `s` | Refresh PRs/MRs requesting your
+review for the active project | | `Tab` | Switch tab | | `?` | Help |
+
+The **Review** tab is read-only: it lists matching GitHub pull requests and GitLab merge
+requests, including drafts marked with `Draft`, but does not select rows or open browser
+links. Open a listed review from the forge UI or CLI.
+
 ## Tasks
 
 | Key | Action | |-----|--------| | `q` | Quit | | `j` / `k` | Scroll roadmap | | `g` |

@@ -10,6 +10,7 @@ mod error;
 mod merge_queue;
 mod project;
 mod reducer;
+mod requested_review;
 mod review;
 mod review_request;
 mod service;
@@ -27,6 +28,7 @@ pub(crate) use core::{AppEvent, SessionStatsUsage};
 
 pub use error::AppError;
 pub use project::ProjectManager;
+pub(crate) use requested_review::RequestedReviewState;
 pub(crate) use review::{
     ReviewCacheEntry, diff_content_hash, is_review_loading_status_message, review_loading_message,
 };

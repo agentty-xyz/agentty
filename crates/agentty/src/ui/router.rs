@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::TableState;
 
-use crate::app::{SettingsManager, Tab};
+use crate::app::{RequestedReviewState, SettingsManager, Tab};
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::project::ProjectListItem;
@@ -26,6 +26,7 @@ pub(crate) struct ListBackgroundRenderContext<'a> {
     pub(crate) has_tasks_tab: bool,
     pub(crate) project_table_state: &'a mut TableState,
     pub(crate) projects: &'a [ProjectListItem],
+    pub(crate) requested_reviews: &'a RequestedReviewState,
     pub(crate) sessions: &'a [Session],
     pub(crate) settings: &'a mut SettingsManager,
     pub(crate) stats_activity: &'a [DailyActivity],
@@ -43,6 +44,7 @@ struct RouteSharedContext<'a> {
     has_tasks_tab: bool,
     project_table_state: &'a mut TableState,
     projects: &'a [ProjectListItem],
+    requested_reviews: &'a RequestedReviewState,
     sessions: &'a [Session],
     settings: &'a mut SettingsManager,
     stats_activity: &'a [DailyActivity],
@@ -62,6 +64,7 @@ impl RouteSharedContext<'_> {
             has_tasks_tab: self.has_tasks_tab,
             project_table_state: self.project_table_state,
             projects: self.projects,
+            requested_reviews: self.requested_reviews,
             sessions: self.sessions,
             settings: self.settings,
             stats_activity: self.stats_activity,
@@ -134,6 +137,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         output_layout_cache,
         project_table_state,
         projects,
+        requested_reviews,
         review_comment_cache,
         session_progress_messages,
         session_update_versions,
@@ -155,6 +159,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         has_tasks_tab,
         project_table_state,
         projects,
+        requested_reviews,
         sessions,
         settings,
         stats_activity,
@@ -763,6 +768,7 @@ pub(crate) fn render_list_background(
         has_tasks_tab,
         project_table_state,
         projects,
+        requested_reviews,
         sessions,
         settings,
         stats_activity,
@@ -795,6 +801,9 @@ pub(crate) fn render_list_background(
                 wall_clock_unix_seconds,
             )
             .render(f, chunks[1]);
+        }
+        Tab::Review => {
+            page::review_list::ReviewListPage::new(requested_reviews).render(f, chunks[1]);
         }
         Tab::Tasks => {
             let mut page = page::task::TasksPage::new(

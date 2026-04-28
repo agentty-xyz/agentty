@@ -5,7 +5,8 @@ use std::sync::Arc;
 use super::{
     CreateReviewRequestInput, ForgeCommandRunner, ForgeFuture, ForgeRemote,
     GitHubReviewRequestAdapter, GitLabReviewRequestAdapter, RealForgeCommandRunner,
-    ReviewCommentSnapshot, ReviewRequestError, ReviewRequestSummary, detect_remote,
+    RequestedReview, ReviewCommentSnapshot, ReviewRequestError, ReviewRequestSummary,
+    detect_remote,
 };
 
 /// Async boundary used by app orchestration for forge review requests.
@@ -76,6 +77,17 @@ pub trait ReviewRequestClient: Send + Sync {
         remote: ForgeRemote,
         display_id: String,
     ) -> ForgeFuture<Result<ReviewCommentSnapshot, ReviewRequestError>>;
+
+    /// Lists open review requests asking the current authenticated user to
+    /// review the selected repository.
+    ///
+    /// # Errors
+    /// Returns a provider-specific review-request error when the list fetch
+    /// cannot be completed.
+    fn list_requested_reviews(
+        &self,
+        remote: ForgeRemote,
+    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>>;
 }
 
 /// Production [`ReviewRequestClient`] that routes to forge-specific adapters.
@@ -195,6 +207,24 @@ impl ReviewRequestClient for RealReviewRequestClient {
                         .fetch_review_comment_snapshot(remote, display_id)
                         .await
                 })
+            }
+        }
+    }
+
+    fn list_requested_reviews(
+        &self,
+        remote: ForgeRemote,
+    ) -> ForgeFuture<Result<Vec<RequestedReview>, ReviewRequestError>> {
+        match remote.forge_kind {
+            super::ForgeKind::GitHub => {
+                let adapter = GitHubReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move { adapter.list_requested_reviews(remote).await })
+            }
+            super::ForgeKind::GitLab => {
+                let adapter = GitLabReviewRequestAdapter::new(Arc::clone(&self.command_runner));
+
+                Box::pin(async move { adapter.list_requested_reviews(remote).await })
             }
         }
     }

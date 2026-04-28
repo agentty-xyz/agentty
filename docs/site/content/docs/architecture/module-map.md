@@ -56,6 +56,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   app-event draining and batch coalescing during one runtime tick.
 - `crates/agentty/src/app/review.rs`: Focused review cache updates plus background
   review-assist orchestration helpers.
+- `crates/agentty/src/app/requested_review.rs`: Project-scoped requested-review cache
+  state for the top-level `Review` tab.
 - `crates/agentty/src/app/review_request.rs`: Shared review-request commit message
   parsing used by branch-publish and session lifecycle workflows.
 - `crates/agentty/src/app/branch_publish.rs`: Branch-publish task payloads, git-push
@@ -274,6 +276,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/ui/util.rs`: General UI utilities.
 - `crates/agentty/src/ui/page/diff.rs`: Diff view page.
 - `crates/agentty/src/ui/page/project_list.rs`: Project list page.
+- `crates/agentty/src/ui/page/review_list.rs`: Requested PR/MR review list page.
 - `crates/agentty/src/ui/page/session_chat.rs`: Session chat page for new sessions and
   replies.
 - `crates/agentty/src/ui/page/session_list.rs`: Session list page.

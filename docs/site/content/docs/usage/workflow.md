@@ -13,7 +13,7 @@ For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
 
 ## Interface Layout
 
-<a id="usage-interface-layout"></a> Agentty organizes its interface into four primary
+<a id="usage-interface-layout"></a> Agentty organizes its interface into five primary
 tabs, with one conditional `Tasks` tab also accessible with `Tab` when the active
 project has a roadmap:
 
@@ -21,12 +21,17 @@ project has a roadmap:
 repositories) in a split view: Agentty info (ASCII art, version, short description) on
 top, project table below. Agentty skips stale entries whose project directories no
 longer exist. | | **Sessions** | List, create, and manage agent sessions. When a project
-is active, this tab appears as `Sessions (<project-name>)`. | | **Tasks** | Shown only
-when the active project contains `docs/plan/roadmap.md`, summarizing the roadmap's
-`Ready Now`, `Queued Next`, and `Parked` task queues. | | **Stats** | View usage
-statistics. | | **Settings** | Configure the color theme, default reasoning level,
-smart/fast/review model defaults, the optional `Last used model as default` smart-model
-mode, the session commit coauthor trailer, and `Open Commands` for the active project. |
+is active, this tab appears as `Sessions (<project-name>)`. | | **Review** | List open
+GitHub pull requests or GitLab merge requests in the active project that request the
+current forge user's review, including drafts marked with a `Draft` status. The tab is a
+read-only forge list; press `s` to refresh and open reviews from the forge UI or CLI. If
+the list reaches the provider cap, the footer shows that Agentty is displaying the first
+matching requests. | | **Tasks** | Shown only when the active project contains
+`docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`, `Queued Next`, and
+`Parked` task queues. | | **Stats** | View usage statistics. | | **Settings** |
+Configure the color theme, default reasoning level, smart/fast/review model defaults,
+the optional `Last used model as default` smart-model mode, the session commit coauthor
+trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status-colored session title renders in a dedicated header row
 above the output panel. A second metadata row shows the persisted size bucket, current

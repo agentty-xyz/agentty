@@ -6,11 +6,14 @@ use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
+    ForgeRemote, RequestedReview, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
     ReviewCommentThread, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
     command_output_detail, looks_like_authentication_failure, looks_like_host_resolution_failure,
     map_spawn_error, normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
 };
+
+/// Maximum requested-review rows loaded from `gh` for one refresh.
+const REQUESTED_REVIEW_LIMIT: usize = 100;
 
 /// GitHub pull-request adapter that normalizes `gh` command output.
 pub(crate) struct GitHubReviewRequestAdapter {
@@ -91,6 +94,30 @@ impl GitHubReviewRequestAdapter {
             .await?;
 
         parse_review_comment_snapshot_response(&output.stdout).map_err(|message| {
+            ReviewRequestError::OperationFailed {
+                forge_kind: ForgeKind::GitHub,
+                message,
+            }
+        })
+    }
+
+    /// Lists open pull requests in `remote` that request review from the
+    /// current authenticated GitHub user.
+    pub(crate) async fn list_requested_reviews(
+        &self,
+        remote: ForgeRemote,
+    ) -> Result<Vec<RequestedReview>, ReviewRequestError> {
+        self.ensure_authenticated(&remote).await?;
+
+        let output = self
+            .run_review_command(
+                &remote,
+                requested_reviews_command(&remote),
+                "list requested pull-request reviews",
+            )
+            .await?;
+
+        parse_requested_reviews_response(&output.stdout, &remote).map_err(|message| {
             ReviewRequestError::OperationFailed {
                 forge_kind: ForgeKind::GitHub,
                 message,
@@ -322,6 +349,28 @@ fn review_threads_command(remote: &ForgeRemote, pull_request_number: &str) -> Fo
     )
 }
 
+/// Builds the `gh search prs` command for PRs requesting the current user's
+/// review in the selected repository.
+fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "search".to_string(),
+            "prs".to_string(),
+            "--review-requested".to_string(),
+            "@me".to_string(),
+            "--state".to_string(),
+            "open".to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--limit".to_string(),
+            REQUESTED_REVIEW_LIMIT.to_string(),
+            "--json".to_string(),
+            "number,title,url,isDraft,updatedAt".to_string(),
+        ],
+    )
+}
+
 /// Builds the `gh pr view` command for one pull-request number.
 fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
     github_command(
@@ -376,6 +425,36 @@ fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
         title: pull_request.title,
         web_url: pull_request.url,
     })
+}
+
+/// Parses GitHub search rows into normalized requested-review rows.
+fn parse_requested_reviews_response(
+    stdout: &str,
+    remote: &ForgeRemote,
+) -> Result<Vec<RequestedReview>, String> {
+    let pull_requests: Vec<GitHubRequestedReviewResponse> = serde_json::from_str(stdout)
+        .map_err(|error| format!("invalid GitHub requested-review response: {error}"))?;
+
+    Ok(pull_requests
+        .into_iter()
+        .map(|pull_request| {
+            let status_summary = if pull_request.is_draft {
+                Some("Draft".to_string())
+            } else {
+                None
+            };
+
+            RequestedReview {
+                display_id: format!("#{}", pull_request.number),
+                forge_kind: ForgeKind::GitHub,
+                repository: remote.project_path(),
+                status_summary,
+                title: pull_request.title,
+                updated_at: pull_request.updated_at,
+                web_url: pull_request.url,
+            }
+        })
+        .collect())
 }
 
 /// Parses one GitHub pull-request display id into the numeric argument for
@@ -517,6 +596,18 @@ fn github_anchor_side(node: &GitHubReviewThreadNode) -> ReviewCommentAnchorSide 
 #[derive(Deserialize)]
 struct GitHubLookupResponse {
     number: u64,
+}
+
+/// GitHub search row returned by `gh search prs --json`.
+#[derive(Deserialize)]
+struct GitHubRequestedReviewResponse {
+    #[serde(rename = "isDraft")]
+    is_draft: bool,
+    number: u64,
+    title: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    url: String,
 }
 
 /// GraphQL response envelope for review-threads queries.
@@ -791,6 +882,55 @@ mod tests {
         assert_eq!(
             review_request.status_summary.as_deref(),
             Some("Approved, Mergeable")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_requested_reviews_builds_search_command_and_returns_rows() {
+        // Arrange
+        let remote = github_remote();
+        let mut sequence = Sequence::new();
+        let mut command_runner = MockForgeCommandRunner::new();
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &auth_status_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(String::new())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &requested_reviews_command(&remote)
+            })
+            .returning(|_| Box::pin(async { Ok(success_output(github_requested_reviews_json())) }));
+        let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
+
+        // Act
+        let requested_reviews = adapter
+            .list_requested_reviews(remote)
+            .await
+            .expect("GitHub requested reviews should load");
+
+        // Assert
+        assert_eq!(
+            requested_reviews,
+            vec![RequestedReview {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                repository: "agentty-xyz/agentty".to_string(),
+                status_summary: Some("Draft".to_string()),
+                title: "Add forge review support".to_string(),
+                updated_at: Some("2026-04-27T21:30:00Z".to_string()),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            }]
         );
     }
 
@@ -1112,6 +1252,20 @@ mod tests {
             "reviewDecision": "APPROVED",
             "mergedAt": null
         }"#
+        .to_string()
+    }
+
+    /// Returns one `gh search prs --json` fixture for requested reviews.
+    fn github_requested_reviews_json() -> String {
+        r#"[
+            {
+                "isDraft": true,
+                "number": 42,
+                "title": "Add forge review support",
+                "updatedAt": "2026-04-27T21:30:00Z",
+                "url": "https://github.com/agentty-xyz/agentty/pull/42"
+            }
+        ]"#
         .to_string()
     }
 

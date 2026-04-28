@@ -7,7 +7,7 @@ use ratatui::widgets::TableState;
 
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
-use crate::app::{SettingsManager, Tab, UpdateStatus};
+use crate::app::{RequestedReviewState, SettingsManager, Tab, UpdateStatus};
 use crate::domain::project::ProjectListItem;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::infra::review_comment_cache::ReviewCommentCache;
@@ -56,6 +56,8 @@ pub struct RenderContext<'a> {
     pub projects: &'a [ProjectListItem],
     /// Shared cache of inline review-request comments keyed by session id.
     pub review_comment_cache: &'a ReviewCommentCache,
+    /// Project-scoped requested PR/MR review list state.
+    pub requested_reviews: &'a RequestedReviewState,
     /// Detected session worktree branch names keyed by session id.
     pub session_branch_names: &'a HashMap<SessionId, String>,
     /// Latest session-branch ahead/behind snapshots keyed by session id,

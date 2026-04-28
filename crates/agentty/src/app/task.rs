@@ -95,6 +95,35 @@ impl TaskService {
             .unwrap_or_else(|_| AgentKind::ALL.to_vec())
     }
 
+    /// Spawns one requested-review refresh for the active project.
+    ///
+    /// The task resolves the project remote through the injected git boundary,
+    /// asks the forge client for open PRs/MRs requesting the authenticated
+    /// user's review, and reports the result through [`AppEvent`] with the
+    /// generation that lets the reducer discard stale completions.
+    pub(super) fn spawn_requested_reviews_task(
+        generation: u64,
+        project_id: i64,
+        working_dir: PathBuf,
+        app_event_tx: mpsc::UnboundedSender<AppEvent>,
+        git_client: Arc<dyn GitClient>,
+        review_request_client: Arc<dyn ReviewRequestClient>,
+    ) {
+        tokio::spawn(async move {
+            let result = load_requested_reviews(
+                working_dir,
+                git_client.as_ref(),
+                review_request_client.as_ref(),
+            )
+            .await;
+            let _ = app_event_tx.send(AppEvent::RequestedReviewsLoaded {
+                generation,
+                project_id,
+                result,
+            });
+        });
+    }
+
     /// Spawns a background loop that periodically refreshes ahead/behind info.
     ///
     /// The task emits one combined [`AppEvent::GitStatusUpdated`] payload for
@@ -665,6 +694,28 @@ async fn fetch_review_comment_snapshot(
 
     review_request_client
         .fetch_review_comment_snapshot(remote, display_id)
+        .await
+        .map_err(|error| error.detail_message())
+}
+
+/// Resolves the active project remote and loads PRs/MRs requesting the current
+/// authenticated user's review.
+async fn load_requested_reviews(
+    working_dir: PathBuf,
+    git_client: &dyn GitClient,
+    review_request_client: &dyn ReviewRequestClient,
+) -> Result<Vec<ag_forge::RequestedReview>, String> {
+    let repo_url = git_client
+        .repo_url(working_dir.clone())
+        .await
+        .map_err(|error| format!("Failed to resolve repository remote: {error}"))?;
+    let remote = review_request_client
+        .detect_remote(repo_url)
+        .map(|remote| remote.with_command_working_directory(working_dir))
+        .map_err(|error| error.detail_message())?;
+
+    review_request_client
+        .list_requested_reviews(remote)
         .await
         .map_err(|error| error.detail_message())
 }

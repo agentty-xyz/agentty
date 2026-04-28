@@ -178,6 +178,25 @@ pub struct ReviewRequestSummary {
     pub web_url: String,
 }
 
+/// Normalized row for one open PR or MR requesting the current user's review.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestedReview {
+    /// Provider display id such as GitHub `#123` or GitLab `!123`.
+    pub display_id: String,
+    /// Forge family that owns the review request.
+    pub forge_kind: ForgeKind,
+    /// Repository path shown for the requested review, such as `owner/repo`.
+    pub repository: String,
+    /// Provider-specific condensed status text for UI display.
+    pub status_summary: Option<String>,
+    /// Remote review-request title.
+    pub title: String,
+    /// Provider update timestamp, when the CLI returns one.
+    pub updated_at: Option<String>,
+    /// Browser-openable review-request URL.
+    pub web_url: String,
+}
+
 /// Boxed async result used by review-request trait methods.
 pub type ForgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 

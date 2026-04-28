@@ -58,6 +58,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
+            Tab::Review => {}
             Tab::Tasks => app.scroll_task_roadmap_down(),
             Tab::Stats => {}
             Tab::Settings => app.settings.next(),
@@ -65,6 +66,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
+            Tab::Review => {}
             Tab::Tasks => app.scroll_task_roadmap_up(),
             Tab::Stats => {}
             Tab::Settings => app.settings.previous(),
@@ -90,9 +92,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
                 };
             }
         }
-        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'s') => {
-            sync_main_branch(app);
-        }
+        KeyCode::Char(character) if character.eq_ignore_ascii_case(&'s') => sync_list_context(app),
         KeyCode::Char('?') => {
             open_list_help_overlay(app);
         }
@@ -160,7 +160,7 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
         Tab::Settings => {
             app.settings.handle_enter(&app.services).await;
         }
-        Tab::Tasks | Tab::Stats => {}
+        Tab::Review | Tab::Tasks | Tab::Stats => {}
     }
 
     Ok(EventResult::Continue)
@@ -252,8 +252,14 @@ fn is_settings_text_key(key: KeyEvent) -> bool {
     key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
 }
 
-/// Starts selected-project branch sync and immediately opens a loading popup.
-fn sync_main_branch(app: &mut App) {
+/// Starts the sync action that applies to the visible list tab.
+fn sync_list_context(app: &mut App) {
+    if app.tabs.current() == Tab::Review {
+        app.refresh_requested_reviews_for_current_project();
+
+        return;
+    }
+
     app.start_sync_main();
 }
 
@@ -279,6 +285,10 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
 
     if app.tabs.current() == Tab::Stats {
         return stats_actions();
+    }
+
+    if app.tabs.current() == Tab::Review {
+        return crate::ui::state::help_action::review_actions();
     }
 
     if app.tabs.current() == Tab::Tasks {

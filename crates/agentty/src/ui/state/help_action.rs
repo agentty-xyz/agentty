@@ -202,6 +202,18 @@ pub(crate) fn stats_footer_actions() -> Vec<HelpAction> {
     ]
 }
 
+/// Returns help actions for the requested-review page.
+pub(crate) fn review_actions() -> Vec<HelpAction> {
+    let mut actions = vec![
+        HelpAction::new("quit", "q", "Quit"),
+        HelpAction::new("refresh", "s", "Refresh requested reviews"),
+    ];
+    actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
+    actions.push(HelpAction::new("help", "?", "Help"));
+
+    actions
+}
+
 /// Returns help actions for the tasks page.
 /// These entries are used by the help overlay and include all available
 /// actions.

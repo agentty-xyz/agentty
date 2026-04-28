@@ -22,7 +22,7 @@ use app::review::{
 use app::service::AppServices;
 use app::session::SessionManager;
 use app::setting::SettingsManager;
-use app::tab::TabManager;
+use app::tab::{Tab, TabManager};
 use app::task;
 use session::SessionTaskService;
 #[cfg(test)]
@@ -36,7 +36,7 @@ use super::roadmap::ActiveProjectRoadmap;
 #[cfg(test)]
 use super::roadmap::TASKS_ROADMAP_PATH;
 use crate::app;
-use crate::app::{AppError, session};
+use crate::app::{AppError, RequestedReviewState, session};
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
@@ -283,6 +283,11 @@ pub struct App {
     /// Caches the active project's roadmap content or load failure for the
     /// `Tasks` page.
     pub(super) active_project_roadmap: Option<ActiveProjectRoadmap>,
+    /// Monotonic requested-review refresh generation for rejecting stale task
+    /// results.
+    pub(super) requested_review_generation: u64,
+    /// Caches requested PR/MR reviews for the active project's `Review` tab.
+    pub(super) requested_reviews: RequestedReviewState,
     /// Stores the current vertical scroll offset for the active project's
     /// `Tasks` page.
     pub(super) task_roadmap_scroll_offset: u16,
@@ -334,12 +339,19 @@ impl App {
     /// tab set.
     pub fn next_tab(&mut self) {
         self.tabs.next(self.active_project_has_tasks_tab());
+        self.refresh_requested_reviews_if_review_tab(false);
     }
 
     /// Cycles the active list tab backward using the active project's
     /// available tab set.
     pub fn previous_tab(&mut self) {
         self.tabs.previous(self.active_project_has_tasks_tab());
+        self.refresh_requested_reviews_if_review_tab(false);
+    }
+
+    /// Refreshes requested reviews when the `Review` tab is visible.
+    pub fn refresh_requested_reviews_for_current_project(&mut self) {
+        self.refresh_requested_reviews_if_review_tab(true);
     }
 
     /// Moves selection to the next session in the list.
@@ -426,6 +438,7 @@ impl App {
         );
         self.refresh_active_project_roadmap().await;
         self.tabs.normalize(self.active_project_has_tasks_tab());
+        self.refresh_requested_reviews_if_review_tab(true);
         self.settings = SettingsManager::new(&self.services, project.id).await;
         let default_session_model = SessionManager::load_default_session_model(
             &self.services,
@@ -439,6 +452,34 @@ impl App {
         self.refresh_sessions_now().await;
 
         Ok(())
+    }
+
+    /// Starts a requested-review list fetch when the visible tab needs one.
+    fn refresh_requested_reviews_if_review_tab(&mut self, force: bool) {
+        if self.tabs.current() != Tab::Review {
+            return;
+        }
+
+        let project_id = self.projects.active_project_id();
+        if !force && self.requested_reviews.is_current_for_project(project_id) {
+            return;
+        }
+
+        self.requested_review_generation = self.requested_review_generation.saturating_add(1);
+        let generation = self.requested_review_generation;
+        self.requested_reviews = RequestedReviewState::Loading {
+            generation,
+            project_id,
+        };
+        task::TaskService::spawn_requested_reviews_task(
+            generation,
+            project_id,
+            self.projects.working_dir().to_path_buf(),
+            self.services.event_sender(),
+            self.services.git_client(),
+            self.services.review_request_client(),
+        );
+        self.mark_dirty();
     }
 
     /// Creates a blank session and schedules list refresh through events.
