@@ -553,9 +553,11 @@ by `infra/channel.rs`):
 - Codex app-server approvals are scoped in `app_server/codex/policy.rs`: file-change
   approvals are accepted only for paths inside the session folder, while command
   approvals are rejected because they do not expose a reliable path-scoped write set.
-- Gemini ACP permission requests are cancelled in `app_server/gemini/policy.rs` for the
-  same reason. Claude subprocess turns keep `Bash` available while relying on the
-  session worktree process directory and main-checkout tracked-file guard for isolation.
+- Gemini ACP permission requests prefer explicit one-shot allow options in
+  `app_server/gemini/policy.rs` when Gemini offers them, allowing file-changing tools to
+  proceed inside the session worktree without granting durable session-wide approval.
+  Claude subprocess turns keep `Bash` available while relying on the session worktree
+  process directory and main-checkout tracked-file guard for isolation.
 
 ## Agent Interaction Protocol Flow
 

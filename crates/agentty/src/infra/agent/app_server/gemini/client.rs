@@ -141,7 +141,9 @@ impl GeminiSessionRuntime {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use agent_client_protocol::schema::{InitializeResponse, ProtocolVersion};
+    use agent_client_protocol::schema::{
+        InitializeResponse, PermissionOptionKind, ProtocolVersion,
+    };
     use mockall::Sequence;
     use serde_json::Value;
     use tempfile::tempdir;
@@ -387,7 +389,7 @@ mod tests {
             });
     }
 
-    /// Expects permission request output and the matching approval response.
+    /// Expects permission request output and the matching allow response.
     fn expect_permission_request_and_response(
         transport: &mut MockGeminiRuntimeTransport,
         sequence: &mut Sequence,
@@ -426,7 +428,13 @@ mod tests {
                         .and_then(|result| result.get("outcome"))
                         .and_then(|outcome| outcome.get("outcome"))
                         .and_then(Value::as_str)
-                        == Some("cancelled")
+                        == Some("selected")
+                    && payload
+                        .get("result")
+                        .and_then(|result| result.get("outcome"))
+                        .and_then(|outcome| outcome.get("optionId"))
+                        .and_then(Value::as_str)
+                        == Some("allow-once")
             })
             .returning(|_| Box::pin(async { Ok(()) }));
     }
@@ -559,9 +567,14 @@ mod tests {
         assert_eq!(prompt_completion.output_tokens, 3);
     }
 
+    /// Verifies Gemini permission responses prefer one-shot allow options.
     #[test]
-    fn build_permission_response_cancels_unscoped_allow_options() {
+    fn build_permission_response_selects_allow_once_before_allow_always() {
         // Arrange
+        let allow_once_kind = serde_json::to_value(PermissionOptionKind::AllowOnce)
+            .expect("allow-once kind should serialize");
+        let allow_always_kind = serde_json::to_value(PermissionOptionKind::AllowAlways)
+            .expect("allow-always kind should serialize");
         let response_value = serde_json::json!({
             "jsonrpc": "2.0",
             "id": "permission-1",
@@ -570,10 +583,131 @@ mod tests {
                 "sessionId": "session-1",
                 "options": [{
                     "optionId": "allow-once",
-                    "kind": "allow_once"
+                    "kind": allow_once_kind
                 }, {
                     "optionId": "allow-always",
-                    "kind": "allow_always"
+                    "kind": allow_always_kind
+                }]
+            }
+        });
+
+        // Act
+        let permission_response = policy::build_permission_response(&response_value, "session-1")
+            .expect("permission response should be built");
+
+        // Assert
+        assert_eq!(
+            permission_response
+                .get("result")
+                .and_then(|result| result.get("outcome"))
+                .and_then(|outcome| outcome.get("outcome"))
+                .and_then(Value::as_str),
+            Some("selected")
+        );
+        assert_eq!(
+            permission_response
+                .get("result")
+                .and_then(|result| result.get("outcome"))
+                .and_then(|outcome| outcome.get("optionId"))
+                .and_then(Value::as_str),
+            Some("allow-once")
+        );
+    }
+
+    /// Verifies Gemini permission responses select one-shot allow options
+    /// when no durable allow option is present.
+    #[test]
+    fn build_permission_response_selects_allow_once_only_option() {
+        // Arrange
+        let allow_once_kind = serde_json::to_value(PermissionOptionKind::AllowOnce)
+            .expect("allow-once kind should serialize");
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": [{
+                    "optionId": "allow-once",
+                    "kind": allow_once_kind
+                }]
+            }
+        });
+
+        // Act
+        let permission_response = policy::build_permission_response(&response_value, "session-1")
+            .expect("permission response should be built");
+
+        // Assert
+        assert_eq!(
+            permission_response
+                .get("result")
+                .and_then(|result| result.get("outcome"))
+                .and_then(|outcome| outcome.get("outcome"))
+                .and_then(Value::as_str),
+            Some("selected")
+        );
+        assert_eq!(
+            permission_response
+                .get("result")
+                .and_then(|result| result.get("outcome"))
+                .and_then(|outcome| outcome.get("optionId"))
+                .and_then(Value::as_str),
+            Some("allow-once")
+        );
+    }
+
+    /// Verifies Gemini raw permission responses follow typed ACP enum
+    /// serialization.
+    #[test]
+    fn build_permission_response_uses_typed_kind_serialization_for_raw_options() {
+        // Arrange
+        let allow_once_kind = serde_json::to_value(PermissionOptionKind::AllowOnce)
+            .expect("allow-once kind should serialize");
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": [{
+                    "optionId": "allow-once",
+                    "kind": allow_once_kind
+                }]
+            }
+        });
+
+        // Act
+        let permission_response = policy::build_permission_response(&response_value, "session-1")
+            .expect("permission response should be built");
+
+        // Assert
+        assert_eq!(
+            permission_response
+                .get("result")
+                .and_then(|result| result.get("outcome"))
+                .and_then(|outcome| outcome.get("optionId"))
+                .and_then(Value::as_str),
+            Some("allow-once")
+        );
+    }
+
+    /// Verifies Gemini permission responses cancel requests without an allow
+    /// choice.
+    #[test]
+    fn build_permission_response_cancels_without_allow_options() {
+        // Arrange
+        let reject_once_kind = serde_json::to_value(PermissionOptionKind::RejectOnce)
+            .expect("reject-once kind should serialize");
+        let response_value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "permission-1",
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "session-1",
+                "options": [{
+                    "optionId": "reject-once",
+                    "kind": reject_once_kind
                 }]
             }
         });
