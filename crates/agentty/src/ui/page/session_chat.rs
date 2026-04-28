@@ -504,6 +504,8 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         chat_input.render(f, panel_areas.input_area);
     }
 
+    let is_at_mention_open =
+        is_free_text_mode && at_mention_state.is_some() && input.at_mention_query().is_some();
     render_question_at_mention_overlay(f, bottom_area, panel_areas.input_area, at_mention_menu);
     render_question_help_footer(
         f,
@@ -511,6 +513,7 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
         panel_areas.help_area.height,
         focus,
         !is_free_text_mode,
+        is_at_mention_open,
     );
 }
 
@@ -518,13 +521,16 @@ fn render_question_panel(f: &mut Frame, bottom_area: Rect, state: &QuestionPanel
 ///
 /// `is_navigating_options` mirrors the runtime predicate that treats plain `q`
 /// as a sessions-list shortcut, so the footer can surface it whenever the
-/// shortcut is actually wired up.
+/// shortcut is actually wired up. `is_at_mention_open` mirrors the runtime
+/// predicate that routes `Esc` to the at-mention dropdown so the end-turn
+/// hint can swap out while the overlay is visible.
 fn render_question_help_footer(
     f: &mut Frame,
     area: Rect,
     help_height: u16,
     focus: QuestionFocus,
     is_navigating_options: bool,
+    is_at_mention_open: bool,
 ) {
     if help_height == 0 {
         return;
@@ -533,6 +539,7 @@ fn render_question_help_footer(
     let help_para = Paragraph::new(layout::question_help_footer_line(
         focus,
         is_navigating_options,
+        is_at_mention_open,
     ))
     .alignment(ratatui::layout::Alignment::Right);
     f.render_widget(help_para, area);

@@ -265,9 +265,13 @@ pub fn prompt_footer_line(session: &Session, attachment_count: usize) -> Line<'s
 /// as a navigation key while the user is moving through predefined options. The
 /// `q: Sessions` hint is surfaced whenever that predicate is satisfied so the
 /// shortcut stays discoverable in answer focus too, not only in chat focus.
+/// `is_at_mention_open` mirrors the runtime predicate that routes `Esc` to the
+/// at-mention dropdown dismissal, so the end-turn hint drops the `Esc` prefix
+/// and a `Esc: cancel @` hint is surfaced while the dropdown is visible.
 pub fn question_help_footer_line(
     focus: QuestionFocus,
     is_navigating_options: bool,
+    is_at_mention_open: bool,
 ) -> Line<'static> {
     let is_chat_focused = focus == QuestionFocus::Chat;
     let mut help_actions = Vec::new();
@@ -292,9 +296,18 @@ pub fn question_help_footer_line(
     }
 
     if !is_chat_focused {
-        help_actions.push(help_action::HelpAction::new(
-            "end turn", "Ctrl+C", "End turn",
-        ));
+        if is_at_mention_open {
+            help_actions.push(help_action::HelpAction::new("cancel @", "Esc", "Cancel @"));
+            help_actions.push(help_action::HelpAction::new(
+                "end turn", "Ctrl+C", "End turn",
+            ));
+        } else {
+            help_actions.push(help_action::HelpAction::new(
+                "end turn",
+                "Esc/Ctrl+C",
+                "End turn",
+            ));
+        }
     }
 
     help_action::footer_line(&help_actions)
@@ -2209,15 +2222,19 @@ mod tests {
         // Arrange
 
         // Act
-        let chat_focus_line = question_help_footer_line(QuestionFocus::Chat, false);
-        let answer_focus_line = question_help_footer_line(QuestionFocus::Answer, false);
+        let chat_focus_line = question_help_footer_line(QuestionFocus::Chat, false, false);
+        let answer_focus_line = question_help_footer_line(QuestionFocus::Answer, false, false);
 
         // Assert
         assert!(chat_focus_line.to_string().contains("j/k: scroll"));
         assert!(chat_focus_line.to_string().contains("Esc/Enter: answer"));
         assert!(chat_focus_line.to_string().contains("q: sessions"));
         assert!(answer_focus_line.to_string().contains("Enter: send"));
-        assert!(answer_focus_line.to_string().contains("Ctrl+C: end turn"));
+        assert!(
+            answer_focus_line
+                .to_string()
+                .contains("Esc/Ctrl+C: end turn")
+        );
         assert!(!answer_focus_line.to_string().contains("q: sessions"));
     }
 
@@ -2225,22 +2242,23 @@ mod tests {
     fn test_question_help_footer_line_shows_sessions_in_answer_focus_when_navigating_options() {
         // Arrange — answer focus while navigating predefined options. The
         // runtime accepts plain `q` as an exit-to-list shortcut here, so the
-        // footer must surface it.
+        // footer must surface it. The at-mention overlay variant is also
+        // covered here so the footer swaps `Esc` to a dedicated cancel hint
+        // and drops it from the end-turn label whenever the dropdown owns the
+        // key, matching runtime behavior.
 
         // Act
-        let answer_focus_with_options = question_help_footer_line(QuestionFocus::Answer, true);
+        let answer_focus_with_options =
+            question_help_footer_line(QuestionFocus::Answer, true, false).to_string();
+        let answer_focus_with_overlay =
+            question_help_footer_line(QuestionFocus::Answer, false, true).to_string();
 
         // Assert
-        assert!(
-            answer_focus_with_options
-                .to_string()
-                .contains("q: sessions")
-        );
-        assert!(
-            answer_focus_with_options
-                .to_string()
-                .contains("Ctrl+C: end turn")
-        );
+        assert!(answer_focus_with_options.contains("q: sessions"));
+        assert!(answer_focus_with_options.contains("Esc/Ctrl+C: end turn"));
+        assert!(answer_focus_with_overlay.contains("Esc: cancel @"));
+        assert!(answer_focus_with_overlay.contains("Ctrl+C: end turn"));
+        assert!(!answer_focus_with_overlay.contains("Esc/Ctrl+C: end turn"));
     }
 
     #[test]

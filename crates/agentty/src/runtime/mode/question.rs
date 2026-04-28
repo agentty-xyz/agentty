@@ -22,10 +22,12 @@ const NO_ANSWER: &str = "no answer";
 /// `Tab` toggles focus between the question panel and the chat output for
 /// scrolling. When chat is focused, scroll keys (`j`/`k`/`Up`/`Down`/`g`/`G`/
 /// `Ctrl+d`/`Ctrl+u`) navigate the session transcript. `Enter` submits the
-/// typed answer (or `no answer` when blank), `Ctrl+C` ends the entire turn
-/// without sending a reply, and `q` returns to the sessions list (skipped while
-/// the user is actively typing a free-text answer so the character can still
-/// be inserted into the response).
+/// typed answer (or `no answer` when blank), `Ctrl+C` and `Esc` end the entire
+/// turn without sending a reply (with `Esc` only doing so when the answer
+/// input is focused and no at-mention dropdown is open, so it stays available
+/// to dismiss those overlays), and `q` returns to the sessions list (skipped
+/// while the user is actively typing a free-text answer so the character can
+/// still be inserted into the response).
 pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) -> EventResult {
     if handle_focus_toggle(app, key) {
         return EventResult::Continue;
@@ -51,6 +53,12 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
         return EventResult::Continue;
     }
 
+    if is_plain_esc(key) {
+        end_turn_no_answer(app).await;
+
+        return EventResult::Continue;
+    }
+
     let Some(action) = resolve_question_action(app, key) else {
         return EventResult::Continue;
     };
@@ -66,6 +74,11 @@ pub(crate) async fn handle(app: &mut App, terminal_size: Rect, key: KeyEvent) ->
 /// Returns whether `key` is a plain `Ctrl+C` press.
 fn is_ctrl_c(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Returns whether `key` is an unmodified `Esc` press.
+fn is_plain_esc(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty()
 }
 
 /// Returns whether `key` is a plain `q` press without modifiers.
@@ -1150,15 +1163,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_escape_no_longer_ends_turn() {
-        // Arrange — Esc must not cancel the question turn anymore. The
-        // question state stays put so users can keep editing.
+    async fn test_handle_escape_ends_turn_and_transitions_to_view() {
+        // Arrange — answer focus with no at-mention overlay. Esc must mirror
+        // Ctrl+C and cancel the question turn without sending a reply.
         let mut app = new_test_app().await;
+        app.review_cache.insert(
+            "session-esc".into(),
+            crate::app::ReviewCacheEntry::Ready {
+                text: "Focused review".to_string(),
+                diff_hash: 42,
+            },
+        );
         app.mode = AppMode::Question {
             at_mention_state: None,
             review_status_message: None,
             review_text: None,
-            session_id: "session-esc-noop".into(),
+            session_id: "session-esc".into(),
             questions: vec![QuestionItem {
                 options: Vec::new(),
                 text: "Q?".to_string(),
@@ -1166,7 +1186,7 @@ mod tests {
             responses: Vec::new(),
             current_index: 0,
             focus: QuestionFocus::Answer,
-            input: InputState::default(),
+            input: InputState::with_text("partial answer".to_string()),
             scroll_offset: None,
             selected_option_index: None,
         };
@@ -1179,8 +1199,16 @@ mod tests {
         )
         .await;
 
-        // Assert — still in Question mode.
-        assert!(matches!(app.mode, AppMode::Question { .. }));
+        // Assert — transitions to View mode with no reply sent.
+        assert!(matches!(
+            app.mode,
+            AppMode::View {
+                ref session_id,
+                review_status_message: None,
+                review_text: Some(ref review_text),
+                ..
+            } if session_id == "session-esc" && review_text == "Focused review"
+        ));
     }
 
     #[tokio::test]
