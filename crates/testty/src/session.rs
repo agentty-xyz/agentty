@@ -54,12 +54,14 @@ impl PtySession {
     /// Returns an error if the PTY cannot be created or the binary cannot
     /// be spawned.
     pub fn spawn(binary_path: &Path) -> Result<Self, PtySessionError> {
-        Self::spawn_with_size(binary_path, DEFAULT_COLS, DEFAULT_ROWS, &[], None)
+        Self::spawn_with_size(binary_path, DEFAULT_COLS, DEFAULT_ROWS, &[], &[], None)
     }
 
-    /// Spawn a binary in a new PTY session with custom dimensions,
-    /// environment variables, and an optional working directory.
+    /// Spawn a binary in a new PTY session with custom dimensions, CLI
+    /// arguments, environment variables, and an optional working directory.
     ///
+    /// `args` is forwarded to the spawned process so callers can drive
+    /// non-interactive subcommand flows such as `--help` or `--version`.
     /// Each entry in `env_vars` is a `(key, value)` pair that will be set
     /// in the child process environment. When `workdir` is `Some`, the
     /// child process starts in that directory.
@@ -72,6 +74,7 @@ impl PtySession {
         binary_path: &Path,
         cols: u16,
         rows: u16,
+        args: &[&str],
         env_vars: &[(&str, &str)],
         workdir: Option<&Path>,
     ) -> Result<Self, PtySessionError> {
@@ -89,6 +92,9 @@ impl PtySession {
         let mut command = CommandBuilder::new(binary_path);
         if let Some(directory) = workdir {
             command.cwd(directory);
+        }
+        for arg in args {
+            command.arg(arg);
         }
         for (key, value) in env_vars {
             command.env(key, value);
@@ -447,6 +453,8 @@ pub struct PtySessionBuilder {
     cols: u16,
     /// Terminal rows.
     rows: u16,
+    /// CLI arguments forwarded to the spawned binary.
+    args: Vec<String>,
     /// Environment variables for the child process.
     env_vars: Vec<(String, String)>,
     /// Optional working directory for the child process.
@@ -460,6 +468,7 @@ impl PtySessionBuilder {
             binary_path: binary_path.into(),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
+            args: Vec::new(),
             env_vars: Vec::new(),
             workdir: None,
         }
@@ -469,6 +478,22 @@ impl PtySessionBuilder {
     pub fn size(mut self, cols: u16, rows: u16) -> Self {
         self.cols = cols;
         self.rows = rows;
+
+        self
+    }
+
+    /// Forward CLI arguments to the spawned binary.
+    ///
+    /// Each call appends to the existing argument list so callers can chain
+    /// multiple `args` invocations or mix individual values into a single
+    /// builder pipeline. Useful for driving non-interactive subcommands such
+    /// as `--help`, `--version`, or `subcommand --flag value`.
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
 
         self
     }
@@ -494,6 +519,7 @@ impl PtySessionBuilder {
     /// Returns an error if the PTY cannot be created or the binary cannot
     /// be spawned.
     pub fn spawn(self) -> Result<PtySession, PtySessionError> {
+        let arg_refs: Vec<&str> = self.args.iter().map(String::as_str).collect();
         let env_refs: Vec<(&str, &str)> = self
             .env_vars
             .iter()
@@ -504,6 +530,7 @@ impl PtySessionBuilder {
             &self.binary_path,
             self.cols,
             self.rows,
+            &arg_refs,
             &env_refs,
             self.workdir.as_deref(),
         )
@@ -513,6 +540,32 @@ impl PtySessionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pty_session_builder_forwards_args() {
+        // Arrange / Act — collect args from a string slice iterator.
+        let builder = PtySessionBuilder::new("/bin/echo").args(["--help", "--version"]);
+
+        // Assert — args land in insertion order so the spawned command
+        // receives `--help --version`.
+        assert_eq!(
+            builder.args,
+            vec!["--help".to_string(), "--version".to_string()]
+        );
+    }
+
+    #[test]
+    fn pty_session_builder_args_appends_across_calls() {
+        // Arrange / Act — multiple args calls accumulate, mirroring how env
+        // calls accumulate, so callers can compose argument lists from
+        // multiple sources.
+        let builder = PtySessionBuilder::new("/bin/echo")
+            .args(["one"])
+            .args(vec![String::from("two"), String::from("three")]);
+
+        // Assert
+        assert_eq!(builder.args, vec!["one", "two", "three"]);
+    }
 
     #[test]
     fn key_to_bytes_returns_ctrl_a() {

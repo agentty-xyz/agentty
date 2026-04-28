@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- testty: `PtySessionBuilder::args` forwards CLI arguments to the spawned binary so
+  non-interactive subcommand flows such as `--help` and `--version` are testable through
+  the existing builder pipeline.
+
+### Fixed
+
+- testty: `Frame::row_text`, `Frame::all_text`, and `Frame::text_in_region` skip
+  wide-character continuation cells so wide glyphs stay contiguous with their neighbors,
+  while real blank columns are preserved as spaces so substring searches cannot collapse
+  text across distant columns.
+
 ## [v0.8.9] - 2026-04-27
 
 ### Changed

@@ -139,6 +139,7 @@ use testty::session::PtySessionBuilder;
 
 let builder = PtySessionBuilder::new("/path/to/binary")
     .size(120, 40)                          // Terminal dimensions (default: 80x24)
+    .args(["--help"])                       // Forward CLI args to the binary
     .env("DATABASE_URL", "sqlite::memory:") // Environment variables
     .env("LOG_LEVEL", "debug")
     .workdir("/tmp/test-workspace");        // Working directory
@@ -164,7 +165,9 @@ use testty::frame::TerminalFrame;
 // Create from raw ANSI bytes (done automatically by PtySession)
 let frame = TerminalFrame::new(80, 24, b"\x1b[1mBold Title\x1b[0m\r\nBody text");
 
-// Read text
+// Read text — wide-character continuation cells are skipped (the leading
+// cell already supplies the full glyph), while real blank columns stay as
+// spaces so column positions in the rendered terminal are preserved.
 let all_text = frame.all_text();          // All visible text
 let row_text = frame.row_text(0);         // Text from row 0
 let region_text = frame.text_in_region(&region); // Text in a region

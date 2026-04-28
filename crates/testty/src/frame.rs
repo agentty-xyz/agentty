@@ -146,17 +146,33 @@ impl TerminalFrame {
     }
 
     /// Extract the visible text from a single row, trimming trailing spaces.
+    ///
+    /// Wide-character continuation cells (the trailing half of a wide
+    /// glyph) contribute nothing because the leading cell already supplies
+    /// the full character. All other cells — including blank cells that
+    /// were never written — are represented as a single space so column
+    /// positions in the rendered terminal are preserved and substring
+    /// searches do not collapse text across distant columns.
     pub fn row_text(&self, row: u16) -> String {
         let screen = self.parser.screen();
         let cols = self.cols();
         let mut text = String::with_capacity(usize::from(cols));
 
         for col in 0..cols {
-            let cell = screen.cell(row, col);
-            if let Some(cell) = cell {
-                text.push_str(cell.contents());
-            } else {
+            let Some(cell) = screen.cell(row, col) else {
                 text.push(' ');
+                continue;
+            };
+
+            if cell.is_wide_continuation() {
+                continue;
+            }
+
+            let contents = cell.contents();
+            if contents.is_empty() {
+                text.push(' ');
+            } else {
+                text.push_str(contents);
             }
         }
 
@@ -164,6 +180,10 @@ impl TerminalFrame {
     }
 
     /// Extract text from all visible rows, joined by newlines.
+    ///
+    /// Each row is produced by [`Self::row_text`], so wide-character
+    /// continuation cells are skipped while real blank columns are
+    /// preserved as spaces.
     pub fn all_text(&self) -> String {
         let rows = self.rows();
         let mut lines = Vec::with_capacity(usize::from(rows));
@@ -203,6 +223,11 @@ impl TerminalFrame {
     }
 
     /// Extract text only from cells within the given region.
+    ///
+    /// Wide-character continuation cells inside the region contribute
+    /// nothing, matching the behavior of [`Self::row_text`]. Real blank
+    /// columns are preserved as spaces so column positions inside the
+    /// region remain accurate.
     pub fn text_in_region(&self, region: &Region) -> String {
         let mut lines = Vec::new();
 
@@ -211,11 +236,20 @@ impl TerminalFrame {
             let mut line = String::new();
 
             for col in region.col..region.right().min(self.cols()) {
-                let cell = screen.cell(row, col);
-                if let Some(cell) = cell {
-                    line.push_str(cell.contents());
-                } else {
+                let Some(cell) = screen.cell(row, col) else {
                     line.push(' ');
+                    continue;
+                };
+
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+
+                let contents = cell.contents();
+                if contents.is_empty() {
+                    line.push(' ');
+                } else {
+                    line.push_str(contents);
                 }
             }
 
@@ -543,6 +577,61 @@ mod tests {
         assert!(text.contains("Line 1"));
         assert!(text.contains("Line 2"));
         assert!(text.contains("Line 3"));
+    }
+
+    #[test]
+    fn row_text_preserves_blank_columns_between_runs() {
+        // Arrange — write "Hello", jump cursor to column 11, then write
+        // "World". Cells 5..10 stay blank between the two non-empty runs.
+        let data = b"Hello\x1b[1;11HWorld";
+
+        // Act
+        let frame = TerminalFrame::new(80, 24, data);
+        let row = frame.row_text(0);
+        let all = frame.all_text();
+
+        // Assert — blank columns are preserved as spaces so callers can
+        // tell that `Hello` and `World` are not adjacent on the screen.
+        assert_eq!(row, "Hello     World");
+        assert!(
+            all.contains("Hello     World"),
+            "all_text should preserve blank columns between runs, got: {all:?}"
+        );
+        assert!(
+            !all.contains("HelloWorld"),
+            "blank columns must not collapse distinct runs together, got: {all:?}"
+        );
+    }
+
+    #[test]
+    fn row_text_skips_wide_character_continuation_cells() {
+        // Arrange — `あ` is a wide CJK glyph that occupies two grid columns.
+        // The continuation cell reports empty contents but must not be
+        // padded with a phantom space; the leading cell already covers it.
+        let data = "あ_".as_bytes();
+
+        // Act
+        let frame = TerminalFrame::new(80, 24, data);
+        let row = frame.row_text(0);
+
+        // Assert — the wide glyph and the trailing underscore stay
+        // contiguous, with no phantom space inserted by the continuation
+        // cell.
+        assert_eq!(row, "あ_");
+    }
+
+    #[test]
+    fn row_text_trims_trailing_empty_cells() {
+        // Arrange — short content followed by many empty cells.
+        let data = b"abc";
+
+        // Act
+        let frame = TerminalFrame::new(80, 24, data);
+
+        // Assert — trailing whitespace trim still works after the
+        // continuation-cell skip change.
+        assert_eq!(frame.row_text(0), "abc");
+        assert_eq!(frame.row_text(0).len(), 3);
     }
 
     #[test]

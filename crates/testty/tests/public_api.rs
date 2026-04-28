@@ -54,6 +54,15 @@ fn prelude_surface_is_stable() {
     let _: Option<PtySession> = None;
     let _: Option<PtySessionError> = None;
 
+    // `PtySessionBuilder::args` accepts any `IntoIterator<Item: Into<String>>`
+    // and returns the builder by value. Pinning the shape here breaks the
+    // build before publication if the signature drifts (for example, if it
+    // ever required `&[&str]` or stopped accepting owned `String`s).
+    let _ = PtySessionBuilder::new("/bin/echo").args(["--help", "--version"]);
+    let _ = PtySessionBuilder::new("/bin/echo")
+        .args([String::from("--help"), String::from("--version")]);
+    let _ = PtySessionBuilder::new("/bin/echo").args(std::iter::empty::<&str>());
+
     let _: Option<MatchedSpan> = None;
 
     let _: Option<ProofCapture> = None;
