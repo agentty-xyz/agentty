@@ -19,6 +19,9 @@ pub enum AgentModel {
     Gpt55,
     /// Fast Gemini preview model backed by `gemini-3-flash-preview`.
     Gemini3FlashPreview,
+    /// Lightweight Gemini preview model backed by
+    /// `gemini-3.1-flash-lite-preview`.
+    Gemini31FlashLitePreview,
     /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
     Gemini31ProPreview,
     /// Codex model backed by `gpt-5.4`.
@@ -65,6 +68,7 @@ impl AgentModel {
         match self {
             Self::Gpt55 => "gpt-5.5",
             Self::Gemini3FlashPreview => "gemini-3-flash-preview",
+            Self::Gemini31FlashLitePreview => "gemini-3.1-flash-lite-preview",
             Self::Gemini31ProPreview => "gemini-3.1-pro-preview",
             Self::Gpt54 => "gpt-5.4",
             Self::Gpt54Mini => "gpt-5.4-mini",
@@ -90,7 +94,9 @@ impl AgentModel {
     /// Returns the owning provider family for this model.
     pub fn kind(self) -> AgentKind {
         match self {
-            Self::Gemini3FlashPreview | Self::Gemini31ProPreview => AgentKind::Gemini,
+            Self::Gemini3FlashPreview
+            | Self::Gemini31FlashLitePreview
+            | Self::Gemini31ProPreview => AgentKind::Gemini,
             Self::Gpt55 | Self::Gpt54 | Self::Gpt54Mini | Self::Gpt53CodexSpark => AgentKind::Codex,
             Self::ClaudeOpus47 | Self::ClaudeSonnet46 | Self::ClaudeHaiku4520251001 => {
                 AgentKind::Claude
@@ -225,6 +231,7 @@ impl FromStr for AgentModel {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "gemini-3-flash-preview" => Ok(Self::Gemini3FlashPreview),
+            "gemini-3.1-flash-lite-preview" => Ok(Self::Gemini31FlashLitePreview),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31ProPreview),
             "gpt-5.5" => Ok(Self::Gpt55),
             "gpt-5.4" => Ok(Self::Gpt54),
@@ -247,6 +254,9 @@ impl AgentSelectionMetadata for AgentModel {
         match self {
             Self::Gpt55 => "Newer Codex model with stronger coding performance when available.",
             Self::Gemini3FlashPreview => "Fast Gemini model for quick iterations.",
+            Self::Gemini31FlashLitePreview => {
+                "Lightweight Gemini model for fast, cost-conscious iterations."
+            }
             Self::Gemini31ProPreview => "Higher-quality Gemini model for deeper reasoning.",
             Self::Gpt54 => "Broadly available Codex model for coding quality.",
             Self::Gpt54Mini => "Small, fast Codex model for simpler coding tasks.",
@@ -284,6 +294,7 @@ impl AgentKind {
     pub fn models(self) -> &'static [AgentModel] {
         const GEMINI_MODELS: &[AgentModel] = &[
             AgentModel::Gemini31ProPreview,
+            AgentModel::Gemini31FlashLitePreview,
             AgentModel::Gemini3FlashPreview,
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
@@ -421,6 +432,19 @@ mod tests {
     }
 
     #[test]
+    /// Ensures `gemini-3.1-flash-lite-preview` parses as a Gemini model.
+    fn test_parse_model_parses_gemini_31_flash_lite_preview() {
+        // Arrange
+        let gemini_kind = AgentKind::Gemini;
+
+        // Act
+        let parsed_model = gemini_kind.parse_model("gemini-3.1-flash-lite-preview");
+
+        // Assert
+        assert_eq!(parsed_model, Some(AgentModel::Gemini31FlashLitePreview));
+    }
+
+    #[test]
     /// Ensures retired Claude models no longer parse as selectable models.
     fn test_parse_model_rejects_retired_claude_opus_46() {
         // Arrange
@@ -508,6 +532,23 @@ mod tests {
     }
 
     #[test]
+    /// Ensures Gemini models still resolve their owning provider correctly.
+    fn test_gemini_model_kind_is_gemini() {
+        // Arrange
+        let models = [
+            AgentModel::Gemini31ProPreview,
+            AgentModel::Gemini31FlashLitePreview,
+            AgentModel::Gemini3FlashPreview,
+        ];
+
+        // Act
+        let kinds = models.map(AgentModel::kind);
+
+        // Assert
+        assert_eq!(kinds, [AgentKind::Gemini; 3]);
+    }
+
+    #[test]
     /// Ensures `ReasoningLevel::claude()` maps all levels to the correct
     /// Claude `--effort` values, including `XHigh` → `"max"`.
     fn test_reasoning_level_claude_maps_all_levels() {
@@ -547,6 +588,7 @@ mod tests {
                 AgentModel::Gpt55,
                 AgentModel::Gpt53CodexSpark,
                 AgentModel::Gemini31ProPreview,
+                AgentModel::Gemini31FlashLitePreview,
                 AgentModel::Gemini3FlashPreview,
             ]
         );

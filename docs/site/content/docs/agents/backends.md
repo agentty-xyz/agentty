@@ -261,27 +261,26 @@ different trade-offs between speed, quality, and cost.
 
 ### Gemini Models
 
-| Model ID | Description | Default | |----------|-------------|---------| |
-`gemini-3.1-pro-preview` | Higher-quality Gemini model for deeper reasoning. | Yes | |
-`gemini-3-flash-preview` | Fast Gemini model for quick iterations. | |
+- `gemini-3.1-pro-preview` (default): Higher-quality Gemini model for deeper reasoning.
+- `gemini-3.1-flash-lite-preview`: Lightweight Gemini model for fast, cost-conscious
+  iterations.
+- `gemini-3-flash-preview`: Fast Gemini model for quick iterations.
 
 ### Claude Models
 
-| Model ID | Description | Default | |----------|-------------|---------| |
-`claude-opus-4-7` | Latest Claude Opus model for complex tasks. | Yes | |
-`claude-sonnet-4-6` | Balanced Claude model for quality and latency. | | |
-`claude-haiku-4-5-20251001` | Fast Claude model for lighter tasks. | |
+- `claude-opus-4-7` (default): Latest Claude Opus model for complex tasks.
+- `claude-sonnet-4-6`: Balanced Claude model for quality and latency.
+- `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 
 Stored project defaults or session rows that still reference `claude-opus-4-6` are
 upgraded to `claude-opus-4-7` when Agentty loads them.
 
 ### Codex Models
 
-| Model ID | Description | Default | |----------|-------------|---------| | `gpt-5.4` |
-Broadly available Codex model for coding quality. | Yes | | `gpt-5.4-mini` | Small, fast
-Codex model for simpler coding tasks. | | | `gpt-5.5` | Newer Codex model with stronger
-coding performance when available. | | | `gpt-5.3-codex-spark` | Codex spark model for
-quick coding iterations. | |
+- `gpt-5.4` (default): Broadly available Codex model for coding quality.
+- `gpt-5.4-mini`: Small, fast Codex model for simpler coding tasks.
+- `gpt-5.5`: Newer Codex model with stronger coding performance when available.
+- `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
 OpenAI announced GPT‑5.5 rollout to Codex on April 23, 2026, but described the
 availability as gradual, so Agentty keeps `gpt-5.4` as the default until `gpt-5.5`

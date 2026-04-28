@@ -64,6 +64,20 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Adds a Gemini CLI stub that intentionally exits with failure.
+///
+/// Picker tests only need the executable to exist on `PATH`; using a failing
+/// stub keeps accidental provider execution from looking successful.
+fn seed_failing_gemini_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let stub_agent_path = env.stub_bin.join("gemini");
+    std::fs::write(&stub_agent_path, "#!/bin/sh\nexit 1\n")?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&stub_agent_path, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
+
 /// Seeds one review-ready session with a focused review already persisted as
 /// if Agentty had been restarted after review generation completed.
 fn seed_review_ready_session_with_persisted_focused_review(
@@ -550,6 +564,42 @@ fn session_creation_opens_prompt_mode() -> E2eResult {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Enter: submit", &full);
                 assertion::assert_text_in_region(frame, "Esc: cancel", &full);
+            },
+        )?;
+
+    Ok(())
+}
+
+/// Verify that the prompt `/model` picker exposes the Gemini Flash Lite
+/// preview model when the Gemini CLI is locally available.
+#[test]
+fn gemini_model_picker_includes_flash_lite_preview() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("gemini_model_picker_includes_flash_lite_preview")
+        .with_git()
+        .setup(seed_failing_gemini_cli_stub)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("model")
+                    .wait_for_text("gemini", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("gemini-3.1-flash-lite-preview", 3000)
+                    .capture_labeled(
+                        "gemini_model_picker",
+                        "Gemini model picker includes Flash Lite preview",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "gemini-3.1-flash-lite-preview", &full);
             },
         )?;
 
