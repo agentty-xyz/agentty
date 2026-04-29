@@ -7,11 +7,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.8.10] - 2026-04-28
+
 ### Added
 
+- agentty: add `gemini-3.1-flash-lite-preview` as a selectable Gemini model with parser,
+  provider metadata, docs, and E2E model-picker coverage.
+- agentty: add a project-scoped `Review` tab that lists open GitHub pull requests and
+  GitLab merge requests requesting the current user's review, with refresh handling,
+  navigation, help text, docs, and E2E coverage.
 - testty: `PtySessionBuilder::args` forwards CLI arguments to the spawned binary so
   non-interactive subcommand flows such as `--help` and `--version` are testable through
   the existing builder pipeline.
+- testty: add GIF freshness modes, hash sidecars, read-only check mode, forced
+  regeneration, public API re-exports, and `TESTTY_GIF_MODE` support in the agentty
+  feature-test harness.
+
+### Changed
+
+- agentty: start new session worktrees from the active local branch, keep published
+  session rebases on the remote base ref, remove unused upstream lookup plumbing, and
+  keep git command execution non-interactive.
+- agentty: reuse existing open same-branch GitHub pull requests or GitLab merge requests
+  for review requests, and keep requested-review cache refreshes fresher.
+- agentty: route `Esc` in question mode as an end-turn shortcut when no `@`-mention
+  overlay is open, while keeping overlay dismissal on `Esc`.
+- agentty: preserve legacy plain-`Enter` encoding under tmux on ghostty by keeping kitty
+  keyboard enhancement flags to disambiguation and alternate-key reporting.
+- Bump workspace crate metadata and lockfile package versions to `0.8.10`.
 
 ### Fixed
 
@@ -19,6 +42,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   wide-character continuation cells so wide glyphs stay contiguous with their neighbors,
   while real blank columns are preserved as spaces so substring searches cannot collapse
   text across distant columns.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.8.9] - 2026-04-27
 
