@@ -589,7 +589,9 @@ fn gemini_model_picker_includes_flash_lite_preview() -> E2eResult {
                     .wait_for_stable_frame(300, 5000)
                     .press_key("/")
                     .write_text("model")
-                    .wait_for_text("gemini", 3000)
+                    .wait_for_text("Slash Command", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
                     .wait_for_text("gemini-3.1-flash-lite-preview", 3000)
                     .capture_labeled(

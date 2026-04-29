@@ -215,9 +215,10 @@ pub(super) fn run_git_command_output_with_env_sync(
 /// Applies non-interactive defaults so git failures return immediately instead
 /// of waiting for terminal credential prompts.
 fn apply_non_interactive_environment(command: &mut Command) {
-    let git_ssh_command = std::env::var("GIT_SSH_COMMAND")
-        .map(|configured_command| format!("{configured_command} -o BatchMode=yes"))
-        .unwrap_or_else(|_| "ssh -o BatchMode=yes".to_string());
+    let git_ssh_command = std::env::var("GIT_SSH_COMMAND").map_or_else(
+        |_| "ssh -o BatchMode=yes".to_string(),
+        |configured_command| format!("{configured_command} -o BatchMode=yes"),
+    );
 
     command
         .env("GIT_TERMINAL_PROMPT", "0")

@@ -136,6 +136,7 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
         |scenario| {
             scenario
                 .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab("Sessions"))
                 .compose(&common::switch_to_tab("Review"))
                 .viewing_pause_ms(1500)
                 .capture_labeled("review", "Review tab selected")
@@ -214,9 +215,9 @@ fn startup_shows_footer_hints() -> E2eResult {
 
 /// Verify that `BackTab` (Shift+Tab) cycles tabs in reverse order.
 ///
-/// Starts on Projects (first tab), navigates forward to Settings (last tab)
-/// via three Tab presses, then presses `BackTab` three times to cycle back
-/// through Stats → Sessions → Projects.
+/// Starts on Projects (first tab), navigates forward to Settings (last tab),
+/// then presses `BackTab` to cycle back through Stats, Review, Sessions, and
+/// Projects.
 #[test]
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
@@ -231,6 +232,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
@@ -238,12 +240,15 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                     .compose(&common::switch_to_tab_reverse("Stats"))
                     .viewing_pause_ms(1500)
                     .capture_labeled("back_to_stats", "Stats tab after first BackTab")
+                    .compose(&common::switch_to_tab_reverse("Review"))
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("back_to_review", "Review tab after second BackTab")
                     .compose(&common::switch_to_tab_reverse("Sessions"))
                     .viewing_pause_ms(1500)
-                    .capture_labeled("back_to_sessions", "Sessions tab after second BackTab")
+                    .capture_labeled("back_to_sessions", "Sessions tab after third BackTab")
                     .compose(&common::switch_to_tab_reverse("Projects"))
                     .viewing_pause_ms(2000)
-                    .capture_labeled("back_to_projects", "Projects tab after third BackTab")
+                    .capture_labeled("back_to_projects", "Projects tab after fourth BackTab")
             },
             |frame, report| {
                 let full = Region::full(frame.cols(), frame.rows());
@@ -253,11 +258,15 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
                 let stats_full = Region::full(stats_frame.cols(), stats_frame.rows());
                 assertion::assert_text_in_region(&stats_frame, "Token Stats", &stats_full);
 
-                let sessions_frame = common::frame_from_capture(&report.captures[2]);
+                let review_frame = common::frame_from_capture(&report.captures[2]);
+                let review_full = Region::full(review_frame.cols(), review_frame.rows());
+                assertion::assert_text_in_region(&review_frame, "Review Requests", &review_full);
+
+                let sessions_frame = common::frame_from_capture(&report.captures[3]);
                 let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                 assertion::assert_text_in_region(&sessions_frame, "No sessions", &sessions_full);
 
-                let projects_frame = common::frame_from_capture(&report.captures[3]);
+                let projects_frame = common::frame_from_capture(&report.captures[4]);
                 let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
                 assertion::assert_text_in_region(&projects_frame, "test-project", &projects_full);
             },

@@ -72,6 +72,7 @@ fn settings_tab_shows_content() {
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(1500)
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(3000)
@@ -113,6 +114,7 @@ fn settings_jk_navigation() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
@@ -186,6 +188,7 @@ fn settings_enter_cycles_value() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
@@ -235,6 +238,7 @@ fn settings_theme_switch() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)
@@ -319,6 +323,7 @@ fn settings_help_shows_edit_hint() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .compose(&common::switch_to_tab("Settings"))
                     .viewing_pause_ms(2000)

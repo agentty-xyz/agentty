@@ -26,6 +26,7 @@ fn stats_tab_shows_heatmap_and_tokens() {
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(1500)
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .viewing_pause_ms(3000)
                     .capture_labeled("stats_tab", "Stats tab with heatmap and token table")
@@ -55,6 +56,7 @@ fn stats_footer_shows_summary() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .viewing_pause_ms(3000)
                     .capture_labeled("stats_footer", "Stats tab footer with counts")
@@ -86,6 +88,7 @@ fn stats_help_shows_keybindings() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .viewing_pause_ms(2000)
                     .compose(&common::open_help_overlay())
