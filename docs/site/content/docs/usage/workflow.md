@@ -59,12 +59,10 @@ footer also shows a second ahead/behind segment using the compact form
 `[stats] main | [stats] local -> remote`. Before first publish, the same second segment
 still renders for the local branch as `[stats] local`.
 
-When the active base branch tracks an upstream, new session worktrees start from the
-locally cached upstream ref while still targeting the local base branch name for diffs,
-merges, and review requests. This keeps unpublished local commits on branches such as
-`main` out of pull requests created from session branches. Run list-mode sync first if
-the local upstream ref may be stale; otherwise the session worktree can be missing
-commits that already exist on the remote.
+New session worktrees start from the local active base branch. If local `main` is behind
+`origin/main`, the session branch still starts from local `main`; run list-mode sync
+first when you want a new session to include commits that exist only in the remote
+tracking branch.
 
 ## Session Lifecycle
 
@@ -156,6 +154,10 @@ the session to **Review** if rebase or squash-merge git steps fail, but it no lo
 runs a separate merge-only commit-message prompt. Successful merge notices use the same
 transient session-output status row as commit notices, so the persisted transcript
 remains focused on agent output.
+
+When a published session enters **Rebasing**, Agentty fetches before rebasing and uses
+the remote base ref from the same remote as the published session branch. Unpublished
+sessions still rebase against the stored local base branch.
 
 When `Open Commands` in Settings contains multiple entries (one command per line),
 pressing `o` opens a selector popup (`j`/`k` to move, `Enter` to open, `Esc` to cancel).
@@ -254,12 +256,12 @@ to start the agent immediately. `Draft` sessions stage each `Enter` as one order
 message, immediately show a `Draft Session` guidance block in session view, keep the `o`
 shortcut hidden until a worktree exists, and start only after you press `s`. Once drafts
 are staged, the same panel previews the staged bundle before launch. The draft worktree
-is created at that start step so the branch is based on the base branch's tracked
-upstream ref when one is configured, instead of the moment the draft session was first
-created. Until that deferred worktree exists, prompt `@` lookup suggestions index the
-active project root so file search still works while you stage the draft bundle. If you
-decide not to start that staged bundle, return to the **Sessions** list and press `c` to
-cancel the still-unstarted draft session directly.
+is created at that start step so the branch is based on the local base branch at launch
+time, instead of the moment the draft session was first created. Until that deferred
+worktree exists, prompt `@` lookup suggestions index the active project root so file
+search still works while you stage the draft bundle. If you decide not to start that
+staged bundle, return to the **Sessions** list and press `c` to cancel the
+still-unstarted draft session directly.
 
 ### Typical Transitions
 

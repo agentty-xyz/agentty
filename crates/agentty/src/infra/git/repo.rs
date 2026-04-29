@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tokio::task::spawn_blocking;
 
@@ -175,9 +175,10 @@ pub(super) fn run_git_command_output_sync(
 /// raw process output.
 ///
 /// Applies non-interactive defaults (`GIT_TERMINAL_PROMPT=0`,
-/// `GCM_INTERACTIVE=never`) so credential failures do not block waiting for
-/// terminal input. Caller-provided `environment` pairs are then applied and
-/// can override these defaults.
+/// `GCM_INTERACTIVE=never`, and SSH batch mode) and closes stdin so
+/// credential failures do not block waiting for terminal input.
+/// Caller-provided `environment` pairs are then applied and can override
+/// these defaults.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
@@ -195,7 +196,10 @@ pub(super) fn run_git_command_output_with_env_sync(
     environment: &[(&str, &str)],
 ) -> Result<Output, GitError> {
     let mut command = Command::new("git");
-    command.args(args).current_dir(repo_path);
+    command
+        .args(args)
+        .current_dir(repo_path)
+        .stdin(Stdio::null());
     apply_non_interactive_environment(&mut command);
 
     for (key, value) in environment {
@@ -211,9 +215,14 @@ pub(super) fn run_git_command_output_with_env_sync(
 /// Applies non-interactive defaults so git failures return immediately instead
 /// of waiting for terminal credential prompts.
 fn apply_non_interactive_environment(command: &mut Command) {
+    let git_ssh_command = std::env::var("GIT_SSH_COMMAND")
+        .map(|configured_command| format!("{configured_command} -o BatchMode=yes"))
+        .unwrap_or_else(|_| "ssh -o BatchMode=yes".to_string());
+
     command
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never");
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_SSH_COMMAND", git_ssh_command);
 }
 
 /// Extracts the best human-readable error detail from command output.
@@ -346,6 +355,11 @@ mod tests {
             env_pairs
                 .iter()
                 .any(|(key, value)| key == "GCM_INTERACTIVE" && value == "never")
+        );
+        assert!(
+            env_pairs
+                .iter()
+                .any(|(key, value)| key == "GIT_SSH_COMMAND" && value.contains("BatchMode=yes"))
         );
     }
 

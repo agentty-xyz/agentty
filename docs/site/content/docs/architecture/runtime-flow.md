@@ -805,7 +805,8 @@ paths and their trigger conditions:
 - Spawn site: `SessionMergeService::rebase_session`
 - Emits or writes: Output append and status updates
 - What it does: Runs the assisted rebase flow and returns the session to `Review` or
-  `Question`.
+  `Question`. Published sessions fetch first and rebase onto the remote base ref from
+  the published upstream's remote; unpublished sessions use the local base branch.
 
 ## Sync, Merge, and Rebase Flows
 
@@ -818,8 +819,9 @@ orchestration paths:
 - session merge: queue-aware workflow, assisted rebase first, reuse the single evolving
   session-branch `HEAD` commit message for the squash commit into the base branch, then
   clean up the worktree and set status `Done`.
-- session rebase: assisted rebase of session branch onto base branch, returns to
-  `Review` after completion/failure reporting.
+- session rebase: assisted rebase of session branch onto the local base branch for
+  unpublished sessions or onto the published upstream's remote base ref for published
+  sessions, returns to `Review` after completion/failure reporting.
 - session review-request publish: review-ready sessions push the session branch through
   `GitClient` with `--force-with-lease`, then create or refresh the forge review request
   through `ReviewRequestClient`. Unlinked sessions only reuse an open same-branch review

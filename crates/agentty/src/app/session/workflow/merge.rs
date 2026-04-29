@@ -83,7 +83,6 @@ struct MergeTaskInput {
 #[derive(Clone)]
 struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
     db: AppRepositories,
     folder: PathBuf,
@@ -91,6 +90,7 @@ struct RebaseAssistInput {
     git_client: Arc<dyn GitClient>,
     id: SessionId,
     output: Arc<Mutex<String>>,
+    rebase_target: String,
     session_model: AgentModel,
     session_update_versions: SessionUpdateVersionMap,
 }
@@ -883,7 +883,6 @@ impl SessionManager {
     fn merge_rebase_input(input: &MergeTaskInput) -> RebaseAssistInput {
         RebaseAssistInput {
             app_event_tx: input.app_event_tx.clone(),
-            base_branch: input.base_branch.clone(),
             child_pid: Arc::clone(&input.child_pid),
             db: input.db.clone(),
             folder: input.folder.clone(),
@@ -891,6 +890,7 @@ impl SessionManager {
             git_client: Arc::clone(&input.git_client),
             id: input.id.clone(),
             output: Arc::clone(&input.output),
+            rebase_target: input.base_branch.clone(),
             session_model: input.session_model,
             session_update_versions: input.session_update_versions.clone(),
         }
@@ -1295,9 +1295,16 @@ impl SessionManager {
         } = input;
 
         let rebase_result: Result<String, SessionError> = async {
+            let rebase_target = Self::resolve_session_rebase_target(
+                &db,
+                git_client.as_ref(),
+                &folder,
+                &id,
+                &base_branch,
+            )
+            .await?;
             let rebase_input = RebaseAssistInput {
                 app_event_tx: app_event_tx.clone(),
-                base_branch: base_branch.clone(),
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
                 folder: folder.clone(),
@@ -1305,6 +1312,7 @@ impl SessionManager {
                 git_client: Arc::clone(&git_client),
                 id: id.clone(),
                 output: Arc::clone(&output),
+                rebase_target,
                 session_model,
                 session_update_versions: session_update_versions.clone(),
             };
@@ -1326,6 +1334,47 @@ impl SessionManager {
             status: &status,
         })
         .await;
+    }
+
+    /// Resolves the git ref used for rebasing one session branch.
+    ///
+    /// Unpublished sessions rebase against the stored local base branch. Once
+    /// a session branch is published, the rebase first fetches and targets the
+    /// remote base ref from the same remote as the published upstream so the
+    /// pull request comparison is updated against the forge-visible base.
+    ///
+    /// # Errors
+    /// Returns an error when the published-session fetch fails.
+    async fn resolve_session_rebase_target(
+        db: &AppRepositories,
+        git_client: &dyn GitClient,
+        folder: &Path,
+        session_id: &str,
+        base_branch: &str,
+    ) -> Result<String, SessionError> {
+        let Some(published_upstream_ref) = db
+            .load_session_published_upstream_ref(session_id)
+            .await
+            .map_err(SessionError::Db)?
+        else {
+            return Ok(base_branch.to_string());
+        };
+
+        let Some((remote_name, _branch_name)) = published_upstream_ref.split_once('/') else {
+            return Ok(base_branch.to_string());
+        };
+
+        git_client
+            .fetch_remote(folder.to_path_buf())
+            .await
+            .map_err(|error| {
+                SessionError::Workflow(format!(
+                    "Failed to fetch `{remote_name}` before rebasing published session branch: \
+                     {error}"
+                ))
+            })?;
+
+        Ok(format!("{remote_name}/{base_branch}"))
     }
 
     /// Executes one assisted rebase workflow for a session worktree.
@@ -1357,7 +1406,7 @@ impl SessionManager {
         match SessionTaskService::commit_session_changes(
             input.git_client.as_ref(),
             &input.folder,
-            &input.base_branch,
+            &input.rebase_target,
             auto_commit_model,
             true,
             include_coauthored_by_agentty,
@@ -1404,10 +1453,10 @@ impl SessionManager {
         }
 
         let source_branch = session_branch(&input.id);
-        let base_branch = &input.base_branch;
+        let rebase_target = &input.rebase_target;
 
         Ok(format!(
-            "Successfully rebased {source_branch} onto {base_branch}"
+            "Successfully rebased {source_branch} onto {rebase_target}"
         ))
     }
 
@@ -1803,10 +1852,10 @@ impl SessionManager {
         input: &RebaseAssistInput,
     ) -> Result<git::RebaseStepResult, SessionError> {
         let folder = input.folder.clone();
-        let base_branch = input.base_branch.clone();
+        let rebase_target = input.rebase_target.clone();
         match input
             .git_client
-            .rebase_start(folder.clone(), base_branch.clone())
+            .rebase_start(folder.clone(), rebase_target.clone())
             .await
         {
             Ok(result) => Ok(result),
@@ -1820,7 +1869,7 @@ impl SessionManager {
 
                 input
                     .git_client
-                    .rebase_start(folder, base_branch)
+                    .rebase_start(folder, rebase_target)
                     .await
                     .map_err(SessionError::Git)
             }
@@ -1924,7 +1973,7 @@ impl SessionManager {
         input: &RebaseAssistInput,
         conflicted_files: &[String],
     ) -> Result<(), SessionError> {
-        let prompt = Self::rebase_assist_prompt(&input.base_branch, conflicted_files)?;
+        let prompt = Self::rebase_assist_prompt(&input.rebase_target, conflicted_files)?;
         let assist_context = Self::assist_context(input);
 
         run_agent_assist(&assist_context, &prompt)
@@ -2164,7 +2213,6 @@ mod tests {
             temp_dir,
             RebaseAssistInput {
                 app_event_tx,
-                base_branch: "main".to_string(),
                 child_pid: Arc::new(Mutex::new(None)),
                 db,
                 folder,
@@ -2172,6 +2220,7 @@ mod tests {
                 git_client,
                 id: "session-123".into(),
                 output: Arc::new(Mutex::new(String::new())),
+                rebase_target: "main".to_string(),
                 session_model: AgentModel::Gemini3FlashPreview,
                 session_update_versions: Arc::default(),
             },
@@ -2668,7 +2717,6 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let input = RebaseAssistInput {
             app_event_tx: tx,
-            base_branch: "main".to_string(),
             child_pid: Arc::new(Mutex::new(None)),
             db,
             folder: temp_dir.path().to_path_buf(),
@@ -2676,6 +2724,7 @@ mod tests {
             git_client: Arc::new(git::RealGitClient),
             id: "session-123".into(),
             output: Arc::new(Mutex::new(String::new())),
+            rebase_target: "origin/main".to_string(),
             session_model: AgentModel::Gemini3FlashPreview,
             session_update_versions: Arc::default(),
         };
@@ -2684,10 +2733,124 @@ mod tests {
         let cloned_input = input.clone();
 
         // Assert
-        assert_eq!(input.base_branch, cloned_input.base_branch);
         assert_eq!(input.id, cloned_input.id);
         assert_eq!(input.folder, cloned_input.folder);
+        assert_eq!(input.rebase_target, cloned_input.rebase_target);
         assert_eq!(input.session_model, cloned_input.session_model);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_session_rebase_target_keeps_local_base_for_unpublished_session() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let project_id = db
+            .upsert_project(&project_path, Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("sess-local", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client.expect_fetch_remote().times(0);
+        let folder = temp_dir.path().join("sess-local");
+
+        // Act
+        let rebase_target = SessionManager::resolve_session_rebase_target(
+            &db,
+            &mock_git_client,
+            &folder,
+            "sess-local",
+            "main",
+        )
+        .await
+        .expect("failed to resolve local rebase target");
+
+        // Assert
+        assert_eq!(rebase_target, "main");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_session_rebase_target_fetches_remote_base_for_published_session() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let project_id = db
+            .upsert_project(&project_path, Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("sess-remote", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        db.update_session_published_upstream_ref("sess-remote", Some("origin/wt/sess-remote"))
+            .await
+            .expect("failed to set published upstream");
+        let folder = temp_dir.path().join("sess-remote");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_fetch_remote()
+            .once()
+            .withf(|repo_path| repo_path.ends_with("sess-remote"))
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        // Act
+        let rebase_target = SessionManager::resolve_session_rebase_target(
+            &db,
+            &mock_git_client,
+            &folder,
+            "sess-remote",
+            "main",
+        )
+        .await
+        .expect("failed to resolve remote rebase target");
+
+        // Assert
+        assert_eq!(rebase_target, "origin/main");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_session_rebase_target_reports_published_fetch_failure() {
+        // Arrange
+        let db = AppRepositories::in_memory().await;
+        let temp_dir = tempdir().expect("failed to create temporary test directory");
+        let project_path = temp_dir.path().to_string_lossy().to_string();
+        let project_id = db
+            .upsert_project(&project_path, Some("main"))
+            .await
+            .expect("failed to upsert project");
+        db.insert_session("sess-fetch", "gpt-5.4", "main", "Review", project_id)
+            .await
+            .expect("failed to insert session");
+        db.update_session_published_upstream_ref("sess-fetch", Some("origin/wt/sess-fetch"))
+            .await
+            .expect("failed to set published upstream");
+        let folder = temp_dir.path().join("sess-fetch");
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_fetch_remote()
+            .once()
+            .returning(|_| Box::pin(async { Err(GitError::OutputParse("fetch failed".into())) }));
+
+        // Act
+        let result = SessionManager::resolve_session_rebase_target(
+            &db,
+            &mock_git_client,
+            &folder,
+            "sess-fetch",
+            "main",
+        )
+        .await;
+
+        // Assert
+        let error = result.expect_err("fetch failure should stop published rebase");
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to fetch `origin` before rebasing published session branch"),
+            "error should name the published upstream remote"
+        );
     }
 
     #[tokio::test]
@@ -2704,6 +2867,7 @@ mod tests {
             .expect_has_commits_since()
             .times(1)
             .in_sequence(&mut sequence)
+            .withf(|_, base_branch| base_branch == "origin/main")
             .returning(|_, _| Box::pin(async { Ok(true) }));
         mock_git_client
             .expect_head_commit_message()
@@ -2714,6 +2878,7 @@ mod tests {
             .expect_commit_all_preserving_single_commit()
             .times(1)
             .in_sequence(&mut sequence)
+            .withf(|_, base_branch, _, _, _| base_branch == "origin/main")
             .returning(|_, _, _, _, _| Box::pin(async { Ok(()) }));
         mock_git_client
             .expect_head_short_hash()
@@ -2732,8 +2897,9 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_| Box::pin(async { Ok(()) }));
-        let (_temp_dir, input) =
+        let (_temp_dir, mut input) =
             build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        input.rebase_target = "origin/main".to_string();
 
         // Act
         let result = SessionManager::execute_rebase_workflow(input).await;
@@ -2929,6 +3095,27 @@ mod tests {
             .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
         let (_temp_dir, input) =
             build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+
+        // Act
+        let result = SessionManager::run_rebase_start(&input).await;
+
+        // Assert
+        let step_result = result.expect("rebase start should succeed");
+        assert_eq!(step_result, git::RebaseStepResult::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_run_rebase_start_uses_resolved_rebase_target() {
+        // Arrange
+        let mut mock_git_client = git::MockGitClient::new();
+        mock_git_client
+            .expect_rebase_start()
+            .once()
+            .withf(|_, rebase_target| rebase_target == "origin/main")
+            .returning(|_, _| Box::pin(async { Ok(git::RebaseStepResult::Completed) }));
+        let (_temp_dir, mut input) =
+            build_rebase_assist_input_for_test(Arc::new(mock_git_client)).await;
+        input.rebase_target = "origin/main".to_string();
 
         // Act
         let result = SessionManager::run_rebase_start(&input).await;

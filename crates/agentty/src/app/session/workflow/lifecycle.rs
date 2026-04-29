@@ -327,9 +327,9 @@ impl SessionManager {
     /// Creates the git worktree and session-local metadata directory for one
     /// session branch.
     ///
-    /// When the base branch tracks an upstream, the worktree starts from that
-    /// upstream ref instead of the local branch tip so unpublished local base
-    /// commits are not included in later review requests.
+    /// The worktree always starts from the local base branch so new sessions
+    /// reflect the user's current checkout instead of any tracked upstream
+    /// ref.
     ///
     /// # Errors
     /// Returns an error if git worktree creation fails or the `.agentty`
@@ -343,17 +343,13 @@ impl SessionManager {
         worktree_branch: &str,
         base_branch: &str,
     ) -> Result<(), SessionError> {
-        let git_client = services.git_client();
-        let start_ref = self
-            .session_worktree_start_ref(services, repo_root, base_branch)
-            .await?;
-
-        git_client
+        services
+            .git_client()
             .create_worktree(
                 repo_root.to_path_buf(),
                 folder.to_path_buf(),
                 worktree_branch.to_string(),
-                start_ref,
+                base_branch.to_string(),
             )
             .await
             .map_err(|error| {
@@ -378,39 +374,6 @@ impl SessionManager {
         }
 
         Ok(())
-    }
-
-    /// Resolves the git ref used to initialize one session worktree.
-    ///
-    /// The persisted `base_branch` remains the target branch for local merge
-    /// and review-request operations, but the worktree itself starts at the
-    /// tracked upstream when available to avoid inheriting unpublished local
-    /// commits from the base branch.
-    async fn session_worktree_start_ref(
-        &self,
-        services: &AppServices,
-        repo_root: &Path,
-        base_branch: &str,
-    ) -> Result<String, SessionError> {
-        match services
-            .git_client()
-            .branch_upstream_reference(repo_root.to_path_buf(), base_branch.to_string())
-            .await
-        {
-            Ok(upstream_ref) => Ok(upstream_ref),
-            Err(git::GitError::NoUpstream { .. }) => Ok(base_branch.to_string()),
-            Err(error) => {
-                warn!(
-                    base_branch,
-                    error = %error,
-                    "failed to resolve session base branch upstream"
-                );
-
-                Err(SessionError::Workflow(format!(
-                    "Failed to resolve upstream for base branch `{base_branch}`: {error}"
-                )))
-            }
-        }
     }
 
     /// Ensures a draft session has a usable worktree and backend setup before
@@ -3134,7 +3097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_session_worktree_uses_base_branch_upstream_ref() {
+    async fn test_create_session_worktree_uses_local_base_branch_ref() {
         // Arrange
         let session = test_session("", Status::Draft, None, "");
         let database = database_with_session(&session).await;
@@ -3144,73 +3107,6 @@ mod tests {
         let expected_repo_root = repo_root.clone();
         let expected_folder = folder.clone();
         let mut mock_git_client = git::MockGitClient::new();
-        mock_git_client
-            .expect_branch_upstream_reference()
-            .once()
-            .withf({
-                let repo_root = repo_root.clone();
-
-                move |candidate_repo_root, candidate_base_branch| {
-                    candidate_repo_root == &repo_root && candidate_base_branch == "main"
-                }
-            })
-            .returning(|_, _| Box::pin(async { Ok("origin/main".to_string()) }));
-        mock_git_client
-            .expect_create_worktree()
-            .once()
-            .withf(
-                move |candidate_repo_root, candidate_folder, worktree_branch, start_ref| {
-                    candidate_repo_root == &expected_repo_root
-                        && candidate_folder == &expected_folder
-                        && worktree_branch == "wt/session-id"
-                        && start_ref == "origin/main"
-                },
-            )
-            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
-        let services = test_services_with_fs_client(
-            &database,
-            Arc::new(create_passthrough_mock_fs_client()),
-            Arc::new(mock_git_client),
-            Arc::new(forge::MockReviewRequestClient::new()),
-        );
-
-        // Act
-        let result = session_manager
-            .create_session_worktree(
-                &services,
-                "session-id",
-                folder.as_path(),
-                repo_root.as_path(),
-                "wt/session-id",
-                "main",
-            )
-            .await;
-
-        // Assert
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_create_session_worktree_falls_back_to_local_base_branch_without_upstream() {
-        // Arrange
-        let session = test_session("", Status::Draft, None, "");
-        let database = database_with_session(&session).await;
-        let session_manager = session_manager_with_one_session(session);
-        let repo_root = PathBuf::from("/tmp/project");
-        let folder = PathBuf::from("/tmp/session-worktree");
-        let expected_repo_root = repo_root.clone();
-        let expected_folder = folder.clone();
-        let mut mock_git_client = git::MockGitClient::new();
-        mock_git_client
-            .expect_branch_upstream_reference()
-            .once()
-            .returning(|_, _| {
-                Box::pin(async {
-                    Err(git::GitError::NoUpstream {
-                        branch_name: "main".to_string(),
-                    })
-                })
-            });
         mock_git_client
             .expect_create_worktree()
             .once()
@@ -3244,52 +3140,6 @@ mod tests {
 
         // Assert
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_create_session_worktree_returns_error_when_upstream_resolution_fails() {
-        // Arrange
-        let session = test_session("", Status::Draft, None, "");
-        let database = database_with_session(&session).await;
-        let session_manager = session_manager_with_one_session(session);
-        let repo_root = PathBuf::from("/tmp/project");
-        let folder = PathBuf::from("/tmp/session-worktree");
-        let mut mock_git_client = git::MockGitClient::new();
-        mock_git_client
-            .expect_branch_upstream_reference()
-            .once()
-            .returning(|_, _| {
-                Box::pin(async {
-                    Err(git::GitError::CommandFailed {
-                        command: "git rev-parse --abbrev-ref main@{upstream}".to_string(),
-                        stderr: "fatal: bad revision".to_string(),
-                    })
-                })
-            });
-        mock_git_client.expect_create_worktree().times(0);
-        let services = test_services_with_fs_client(
-            &database,
-            Arc::new(create_passthrough_mock_fs_client()),
-            Arc::new(mock_git_client),
-            Arc::new(forge::MockReviewRequestClient::new()),
-        );
-
-        // Act
-        let result = session_manager
-            .create_session_worktree(
-                &services,
-                "session-id",
-                folder.as_path(),
-                repo_root.as_path(),
-                "wt/session-id",
-                "main",
-            )
-            .await;
-
-        // Assert
-        assert!(
-            matches!(result, Err(SessionError::Workflow(ref message)) if message.contains("Failed to resolve upstream for base branch `main`"))
-        );
     }
 
     #[tokio::test]

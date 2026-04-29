@@ -40,10 +40,8 @@ live session starts:
 
 - The worktree branch is named `wt/<hash>`, where `<hash>` is derived from the session
   ID.
-- The branch targets whichever branch was active when you launched `agentty`. When that
-  branch tracks an upstream, Agentty starts the worktree from the locally cached
-  upstream ref so unpublished local base-branch commits do not appear in session pull
-  requests.
+- The branch starts from whichever local branch was active when you launched `agentty`.
+  If local `main` is behind `origin/main`, the session still starts from local `main`.
 - Regular sessions create the worktree as soon as you start the first prompt. Draft
   sessions delay worktree creation until you press `s` to start the staged bundle.
 - All agent edits happen inside the worktree, keeping your base branch untouched until
