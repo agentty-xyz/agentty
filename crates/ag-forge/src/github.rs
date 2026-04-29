@@ -275,7 +275,8 @@ fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
     )
 }
 
-/// Builds the `gh api` lookup command for `source_branch`.
+/// Builds the `gh api` lookup command for open pull requests matching
+/// `source_branch`.
 fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
     github_command(
         remote,
@@ -289,7 +290,7 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
             "-f".to_string(),
             format!("head={}:{}", remote.namespace, source_branch),
             "-f".to_string(),
-            "state=all".to_string(),
+            "state=open".to_string(),
             "-f".to_string(),
             "sort=created".to_string(),
             "-f".to_string(),
@@ -806,6 +807,19 @@ mod tests {
                 web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn lookup_command_limits_lookup_to_open_pull_requests() {
+        // Arrange
+        let remote = github_remote();
+
+        // Act
+        let command = lookup_command(&remote, "feature/forge");
+
+        // Assert
+        assert!(command.arguments.contains(&"state=open".to_string()));
+        assert!(!command.arguments.contains(&"state=all".to_string()));
     }
 
     #[tokio::test]

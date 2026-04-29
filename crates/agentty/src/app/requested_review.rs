@@ -37,7 +37,6 @@ impl RequestedReviewState {
     /// forced refresh.
     pub(crate) fn is_current_for_project(&self, project_id: i64) -> bool {
         match self {
-            Self::Idle => false,
             Self::Loading {
                 project_id: cached_project_id,
                 ..
@@ -46,7 +45,7 @@ impl RequestedReviewState {
                 project_id: cached_project_id,
                 ..
             } => *cached_project_id == project_id,
-            Self::Failed { .. } => false,
+            Self::Idle | Self::Failed { .. } => false,
         }
     }
 

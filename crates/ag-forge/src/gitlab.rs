@@ -278,7 +278,8 @@ fn auth_status_command(remote: &ForgeRemote) -> ForgeCommand {
     )
 }
 
-/// Builds the `glab mr list` command for `source_branch`.
+/// Builds the `glab mr list` command for open merge requests matching
+/// `source_branch`.
 fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
     gitlab_command(
         remote,
@@ -288,7 +289,6 @@ fn lookup_command(remote: &ForgeRemote, source_branch: &str) -> ForgeCommand {
             "list".to_string(),
             "--repo".to_string(),
             remote.web_url.clone(),
-            "--all".to_string(),
             "--source-branch".to_string(),
             source_branch.to_string(),
             "--order".to_string(),
@@ -852,6 +852,21 @@ mod tests {
 
         // Assert
         assert_eq!(review_request, None);
+    }
+
+    #[test]
+    fn lookup_command_uses_default_open_merge_request_filter() {
+        // Arrange
+        let remote = gitlab_remote();
+
+        // Act
+        let command = lookup_command(&remote, "feature/forge");
+
+        // Assert
+        assert!(!command.arguments.contains(&"--all".to_string()));
+        assert!(!command.arguments.contains(&"--closed".to_string()));
+        assert!(!command.arguments.contains(&"--merged".to_string()));
+        assert!(command.arguments.contains(&"--source-branch".to_string()));
     }
 
     #[tokio::test]

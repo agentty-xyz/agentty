@@ -325,7 +325,7 @@ mod tests {
         buffer
             .content()
             .iter()
-            .map(|cell| cell.symbol())
+            .map(ratatui::buffer::Cell::symbol)
             .collect::<Vec<_>>()
             .join("")
     }

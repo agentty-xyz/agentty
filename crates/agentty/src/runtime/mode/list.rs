@@ -58,17 +58,15 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         KeyCode::Char('j') | KeyCode::Down => match app.tabs.current() {
             Tab::Projects => app.next_project(),
             Tab::Sessions => app.next(),
-            Tab::Review => {}
             Tab::Tasks => app.scroll_task_roadmap_down(),
-            Tab::Stats => {}
+            Tab::Review | Tab::Stats => {}
             Tab::Settings => app.settings.next(),
         },
         KeyCode::Char('k') | KeyCode::Up => match app.tabs.current() {
             Tab::Projects => app.previous_project(),
             Tab::Sessions => app.previous(),
-            Tab::Review => {}
             Tab::Tasks => app.scroll_task_roadmap_up(),
-            Tab::Stats => {}
+            Tab::Review | Tab::Stats => {}
             Tab::Settings => app.settings.previous(),
         },
         KeyCode::Char('g') if app.tabs.current() == Tab::Tasks => {

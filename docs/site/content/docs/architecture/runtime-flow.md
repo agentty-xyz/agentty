@@ -822,7 +822,9 @@ orchestration paths:
   `Review` after completion/failure reporting.
 - session review-request publish: review-ready sessions push the session branch through
   `GitClient` with `--force-with-lease`, then create or refresh the forge review request
-  through `ReviewRequestClient`.
+  through `ReviewRequestClient`. Unlinked sessions only reuse an open same-branch review
+  request; terminal same-branch requests are ignored so branch names can be reused after
+  merge or close.
 - background review-request sync: review-ready sessions with a published branch or
   linked review request are polled through `ReviewRequestClient`; merged requests move
   the session to `Done`, and closed requests move it to `Canceled`.

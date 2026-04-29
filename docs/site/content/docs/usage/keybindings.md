@@ -114,8 +114,8 @@ until the background focused-review generation finishes and the session returns 
   and opens a publish popup. Press `Enter` with an empty field to keep the default
   session branch target, or type a custom remote branch name first. Agentty pushes the
   branch, then creates or refreshes the linked forge review request after the push
-  succeeds. GitHub projects publish pull requests, while GitLab projects publish merge
-  requests.
+  succeeds. When no request is linked yet, only an open same-branch request is reused.
+  GitHub projects publish pull requests, while GitLab projects publish merge requests.
 - **Focused review persistence**: when a focused review has already been generated, it
   stays visible after opening `d` diff mode, returning to the session view, or entering
   **Question** mode for clarifications.

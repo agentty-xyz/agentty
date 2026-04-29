@@ -192,6 +192,9 @@ model.
 - GitHub projects publish pull requests, while GitLab projects publish merge requests.
 - When the session already tracks a review request, Agentty refreshes that same review
   request instead of creating a duplicate.
+- When no review request is linked yet, Agentty only reuses an open pull request or
+  merge request for the published branch. Merged or closed requests with a reused branch
+  name are left alone so the publish flow can create a new review request.
 - After a session branch has been published once, later completed turns automatically
   push that same remote branch in the background so linked review requests stay current
   without reopening the publish popup. The session output shows when that post-turn

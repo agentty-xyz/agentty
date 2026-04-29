@@ -244,33 +244,18 @@ impl AppEventBatch {
             AppEvent::SessionModelUpdated {
                 session_id,
                 session_model,
-            } => {
-                self.session_model_updates.insert(session_id, session_model);
-            }
+            } => self.collect_session_model_updated(session_id, session_model),
             AppEvent::SessionReasoningLevelUpdated {
                 reasoning_level_override,
                 session_id,
-            } => {
-                self.session_reasoning_level_updates
-                    .insert(session_id, reasoning_level_override);
-            }
+            } => self.collect_session_reasoning_level_updated(session_id, reasoning_level_override),
             AppEvent::RefreshSessions => self.collect_refresh_sessions(),
             AppEvent::RefreshGitStatus => self.collect_refresh_git_status(),
             AppEvent::RequestedReviewsLoaded {
                 generation,
                 project_id,
                 result,
-            } => {
-                // Keep the freshest requested-review result even when a stale
-                // completion arrives later in the same drained event batch.
-                if self
-                    .requested_reviews
-                    .as_ref()
-                    .is_none_or(|(batched_generation, _, _)| generation >= *batched_generation)
-                {
-                    self.requested_reviews = Some((generation, project_id, result));
-                }
-            }
+            } => self.collect_requested_reviews_loaded(generation, project_id, result),
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -319,11 +304,7 @@ impl AppEventBatch {
                 turn_applied_state,
             } => self.collect_agent_response_received(session_id, turn_applied_state),
             AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
-                self.session_ids.insert(session_id.clone());
-                self.session_workflow_notice_updates
-                    .entry(session_id)
-                    .or_default()
-                    .push(notice);
+                self.collect_session_workflow_notice_updated(session_id, notice);
             }
             AppEvent::PublishedBranchSyncUpdated {
                 session_id,
@@ -356,6 +337,51 @@ impl AppEventBatch {
         entries: Vec<FileEntry>,
     ) {
         self.at_mention_entries_updates.insert(session_id, entries);
+    }
+
+    /// Stores the latest model selection for one session.
+    fn collect_session_model_updated(
+        &mut self,
+        session_id: SessionId,
+        session_model: crate::domain::agent::AgentModel,
+    ) {
+        self.session_model_updates.insert(session_id, session_model);
+    }
+
+    /// Stores the latest reasoning-level override for one session.
+    fn collect_session_reasoning_level_updated(
+        &mut self,
+        session_id: SessionId,
+        reasoning_level_override: Option<crate::domain::agent::ReasoningLevel>,
+    ) {
+        self.session_reasoning_level_updates
+            .insert(session_id, reasoning_level_override);
+    }
+
+    /// Stores the freshest requested-review result observed in this reducer
+    /// batch.
+    fn collect_requested_reviews_loaded(
+        &mut self,
+        generation: u64,
+        project_id: i64,
+        result: Result<Vec<ag_forge::RequestedReview>, String>,
+    ) {
+        if self
+            .requested_reviews
+            .as_ref()
+            .is_none_or(|(batched_generation, _, _)| generation >= *batched_generation)
+        {
+            self.requested_reviews = Some((generation, project_id, result));
+        }
+    }
+
+    /// Queues one transient workflow notice for a touched session.
+    fn collect_session_workflow_notice_updated(&mut self, session_id: SessionId, notice: String) {
+        self.session_ids.insert(session_id.clone());
+        self.session_workflow_notice_updates
+            .entry(session_id)
+            .or_default()
+            .push(notice);
     }
 
     /// Stores one pending status-bar update.
