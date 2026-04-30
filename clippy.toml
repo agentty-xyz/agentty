@@ -1,2 +1,7 @@
 allow-panic-in-tests = false
 allow-expect-in-tests = true
+# Raise `large_stack_arrays` above the conservative 16,384-byte default so the
+# generated unit-test harness pointer array does not flag the lint as the crate
+# accumulates more `#[test]` cases. User-authored stack arrays at 64 KiB or
+# above still warn.
+array-size-threshold = 65536

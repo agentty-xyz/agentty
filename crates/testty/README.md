@@ -134,9 +134,51 @@ text into the terminal | `.write_text("hello world")` | | `PressKey` | Send a na
 press | `.press_key("Enter")` | | `Sleep` | Pause for a fixed duration |
 `.sleep_ms(200)` | | `WaitForText` | Poll until text appears |
 `.wait_for_text("Ready", 5000)` | | `WaitForStableFrame` | Wait for rendering to
-stabilize | `.wait_for_stable_frame(500, 5000)` | | `Capture` | Snapshot the current
-terminal state | `.capture()` | | `CaptureLabeled` | Labeled snapshot for proof reports
-| `.capture_labeled("init", "App launched")` |
+stabilize | `.wait_for_stable_frame(500, 5000)` | | `Eventually` | Poll a frame
+predicate until it succeeds | `.eventually(timeout, poll, predicate)` | | `Capture` |
+Snapshot the current terminal state | `.capture()` | | `CaptureLabeled` | Labeled
+snapshot for proof reports | `.capture_labeled("init", "App launched")` |
+
+### Predicate-driven waits with `eventually`
+
+`Step::eventually` polls a closure against the live PTY frame on every tick and returns
+the moment the predicate returns `Ok(())`. On timeout, the executor surfaces the last
+[`AssertionFailure`](https://docs.rs/testty/latest/testty/assertion/struct.AssertionFailure.html)
+the predicate produced through `PtySessionError::Assertion`, so the structured failure
+context flows into the proof report instead of a generic timeout panic.
+
+Use it whenever you would otherwise fight to pick a `stable_ms`/`timeout_ms` that is
+neither too long (wasted wall time) nor too short (flaky CI). It composes any
+`MatchResult`-returning predicate, so you can wait on `assertion::match_*` matchers,
+recipe checks, or your own frame inspection logic:
+
+```rust
+use std::time::Duration;
+use testty::prelude::*;
+
+let scenario = Scenario::new("counter_eventually")
+    .write_text("+++")
+    // Step::Sleep guesses how long the UI takes to repaint and risks
+    // returning before the counter increments.
+    .sleep_ms(200)
+    // Step::WaitForText only checks for a literal substring and cannot
+    // express richer predicates such as "selected tab is highlighted".
+    .wait_for_text("Counter:", 5_000)
+    // Step::eventually polls the predicate every 50ms and returns the
+    // instant `Counter: 3` appears anywhere in the frame.
+    .eventually(
+        Duration::from_secs(5),
+        Duration::from_millis(50),
+        |frame| {
+            assertion::match_text_in_region(
+                frame,
+                "Counter: 3",
+                &Region::full(80, 24),
+            )
+        },
+    )
+    .capture();
+```
 
 **Supported key names:** `Enter`, `Tab`, `Escape` / `Esc`, `Backspace`, `Up`, `Down`,
 `Left`, `Right`, `Home`, `End`, `Delete`, `PageUp`, `PageDown`, `Space`, `Ctrl+<letter>`
@@ -499,19 +541,19 @@ displayed in the HTML proof backend.
 
 | Module | Purpose | |--------|---------| | `scenario` | Fluent builder for composing
 test scenarios from steps | | `step` | Step enum: `WriteText`, `PressKey`, `Sleep`,
-`WaitForText`, `WaitForStableFrame`, `Capture`, `CaptureLabeled` | | `session` | PTY
-executor: `PtySession` + `PtySessionBuilder` | | `frame` | Terminal state parser:
-`TerminalFrame`, `CellColor`, `CellStyle` | | `region` | Rectangular region definitions
-with named anchors | | `locator` | `MatchedSpan` with text, position, color, and style
-metadata | | `assertion` | Structured assertion functions with detailed failure messages
-| | `recipe` | High-level helpers for tabs, footer, dialogs, status messages | |
-`snapshot` | Baseline management: frame text and visual image comparison | | `vhs` | VHS
-tape compiler for visual screenshot capture | | `proof` | Proof pipeline: report
-collector, backend trait, and format implementations | | `diff` | Cell-level frame
-diffing with changed region detection | | `journey` | Composable journey building blocks
-for declarative test authoring | | `feature` | `FeatureDemo` builder: scenario execution
-with hash-cached VHS GIF generation | | `prelude` | Curated re-exports for the common
-testty workflow (`use testty::prelude::*;`) |
+`WaitForText`, `WaitForStableFrame`, `Eventually`, `Capture`, `CaptureLabeled` | |
+`session` | PTY executor: `PtySession` + `PtySessionBuilder` | | `frame` | Terminal
+state parser: `TerminalFrame`, `CellColor`, `CellStyle` | | `region` | Rectangular
+region definitions with named anchors | | `locator` | `MatchedSpan` with text, position,
+color, and style metadata | | `assertion` | Structured assertion functions with detailed
+failure messages | | `recipe` | High-level helpers for tabs, footer, dialogs, status
+messages | | `snapshot` | Baseline management: frame text and visual image comparison |
+| `vhs` | VHS tape compiler for visual screenshot capture | | `proof` | Proof pipeline:
+report collector, backend trait, and format implementations | | `diff` | Cell-level
+frame diffing with changed region detection | | `journey` | Composable journey building
+blocks for declarative test authoring | | `feature` | `FeatureDemo` builder: scenario
+execution with hash-cached VHS GIF generation | | `prelude` | Curated re-exports for the
+common testty workflow (`use testty::prelude::*;`) |
 
 ## Full example
 

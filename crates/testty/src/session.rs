@@ -9,11 +9,13 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
+use crate::assertion::AssertionFailure;
 use crate::frame::TerminalFrame;
+use crate::scenario;
 use crate::step::Step;
 
 /// Default number of terminal columns.
@@ -262,6 +264,46 @@ impl PtySession {
         }
     }
 
+    /// Poll a frame predicate against the live PTY frame until it returns
+    /// `Ok(())` or `timeout` elapses.
+    ///
+    /// On every tick the session non-blockingly drains any output that
+    /// already arrived from the PTY reader thread, parses the latest
+    /// frame, and runs `predicate` against it. The first `Ok(())`
+    /// returns the captured frame. The wait between ticks is owned by
+    /// `eventually_loop`: it sleeps for `poll`, clamped to the remaining
+    /// time before the deadline, so the predicate cadence matches the
+    /// configured `poll` value rather than `poll` plus a blocking drain.
+    /// When the deadline is reached without success, the last
+    /// [`AssertionFailure`] produced by the predicate is wrapped in
+    /// [`PtySessionError::Assertion`] so callers and the proof report
+    /// can render the structured failure context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PtySessionError::Assertion`] when `timeout` elapses
+    /// before the predicate succeeds.
+    pub fn run_eventually(
+        &mut self,
+        timeout: Duration,
+        poll: Duration,
+        predicate: &(dyn Fn(&TerminalFrame) -> crate::assertion::MatchResult + Send + Sync),
+    ) -> Result<TerminalFrame, PtySessionError> {
+        scenario::eventually_loop(
+            timeout,
+            poll,
+            || {
+                self.drain_output(Duration::ZERO);
+
+                TerminalFrame::new(self.cols, self.rows, &self.output_buffer)
+            },
+            predicate,
+            thread::sleep,
+            Instant::now,
+        )
+        .map_err(PtySessionError::Assertion)
+    }
+
     /// Execute a sequence of [`Step`] actions against this session.
     ///
     /// Returns the final [`TerminalFrame`] after all steps have been
@@ -296,6 +338,13 @@ impl PtySession {
                     let stable = Duration::from_millis(u64::from(*stable_ms));
                     let timeout = Duration::from_millis(u64::from(*timeout_ms));
                     last_frame = Some(self.wait_for_stable_frame(stable, timeout)?);
+                }
+                Step::Eventually {
+                    timeout,
+                    poll,
+                    predicate,
+                } => {
+                    last_frame = Some(self.run_eventually(*timeout, *poll, predicate.as_ref())?);
                 }
                 Step::Capture | Step::CaptureLabeled { .. } => {
                     last_frame = Some(self.capture_frame());
@@ -371,7 +420,12 @@ impl Drop for PtySession {
 }
 
 /// Errors that can occur during PTY session operations.
+///
+/// Marked `#[non_exhaustive]` so future variants such as
+/// [`PtySessionError::Assertion`] stay non-breaking. Downstream `match`
+/// arms must include a fallback `_` arm.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PtySessionError {
     /// Failed to create the PTY.
     #[error("PTY creation failed: {0}")]
@@ -388,6 +442,13 @@ pub enum PtySessionError {
     /// A wait operation timed out.
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    /// A `Step::Eventually` predicate never returned `Ok(())` before its
+    /// timeout elapsed. Carries the last [`AssertionFailure`] the
+    /// predicate produced so the proof report can render the structured
+    /// failure context.
+    #[error("Assertion failed: {0}")]
+    Assertion(Box<AssertionFailure>),
 }
 
 /// Background thread function that reads PTY output and sends chunks

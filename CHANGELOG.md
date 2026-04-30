@@ -7,6 +7,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- testty: add `Step::Eventually` plus the `Step::eventually` and `Scenario::eventually`
+  constructors so test authors can poll any `MatchResult`-returning frame predicate
+  against the live PTY frame and surface the last `AssertionFailure` on timeout instead
+  of a generic timeout panic. The `FramePredicate` alias is re-exported from
+  `testty::prelude`. VHS recordings approximate the new step with a fallback `Sleep` for
+  the full timeout because VHS has no predicate-driven wait primitive, keeping GIF
+  playback bounded by the same worst-case window the PTY executor would have observed.
+
+### Changed
+
+- testty: mark `PtySessionError` as `#[non_exhaustive]` and add the new
+  `PtySessionError::Assertion(Box<AssertionFailure>)` variant so structured predicate
+  failures from `Step::Eventually` flow through the existing executor return type.
+  Downstream `match` arms must include a fallback `_` arm.
+
 ## [v0.8.10] - 2026-04-28
 
 ### Added

@@ -19,6 +19,8 @@
 #![allow(unused_imports)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use testty::feature::{self, compute_frame_hash, hash_sidecar_path};
 use testty::prelude::*;
@@ -78,6 +80,18 @@ fn prelude_surface_is_stable() {
     let _: fn(&TerminalFrame, &str) -> MatchResult = assertion::match_not_visible;
     let _: Option<AssertionFailure> = None;
     let _: Option<Expected> = None;
+
+    // `Step::eventually` constructs an Eventually step from any predicate
+    // closure with the documented signature. Pinning the call shape here
+    // breaks the build before publication if the constructor signature
+    // drifts. The bound predicate can also be referenced through the
+    // `FramePredicate` alias re-exported from the prelude.
+    let _ = Step::eventually(
+        Duration::from_secs(1),
+        Duration::from_millis(50),
+        |_frame: &TerminalFrame| Ok(()),
+    );
+    let _: FramePredicate = Arc::new(|_frame: &TerminalFrame| Ok(()));
 }
 
 /// Reference always-available stable items that live outside the prelude
@@ -147,6 +161,31 @@ fn gif_status_destructuring_is_stable(status: &GifStatus) -> &'static str {
             "stale"
         }
         _ => "unknown",
+    }
+}
+
+/// Lock in the supported pattern for matching `Step::Eventually`.
+///
+/// `Step::Eventually` is destructured with named fields plus a trailing
+/// `..` rest-pattern so adding new fields stays non-breaking, and the
+/// match includes a fallback `_` arm so adding new variants stays
+/// non-breaking. The function is compiled (not run) so accidental
+/// renames of the field names or the variant fail the build before
+/// publication.
+#[allow(dead_code)]
+fn step_eventually_destructuring_is_stable(step: &Step) -> &'static str {
+    match step {
+        Step::Eventually {
+            timeout,
+            poll,
+            predicate,
+            ..
+        } => {
+            let _: (&Duration, &Duration, &FramePredicate) = (timeout, poll, predicate);
+
+            "eventually"
+        }
+        _ => "other",
     }
 }
 

@@ -19,4 +19,4 @@ pub use crate::proof::report::{ProofCapture, ProofError, ProofReport};
 pub use crate::region::Region;
 pub use crate::scenario::Scenario;
 pub use crate::session::{PtySession, PtySessionBuilder, PtySessionError};
-pub use crate::step::Step;
+pub use crate::step::{FramePredicate, Step};

@@ -5,14 +5,26 @@
 //! Steps are designed to be compiled into both PTY executor actions and
 //! VHS tape commands from a single authored scenario.
 
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
+
+use crate::assertion::MatchResult;
+use crate::frame::TerminalFrame;
+
+/// Shared boxed predicate evaluated against a [`TerminalFrame`].
+///
+/// Used as the payload of [`Step::Eventually`] so the same predicate value
+/// can be cloned with the enclosing [`Step`] without re-allocating the
+/// underlying closure.
+pub type FramePredicate = Arc<dyn Fn(&TerminalFrame) -> MatchResult + Send + Sync>;
 
 /// A single action in a test scenario.
 ///
 /// Steps describe user interactions and wait conditions in a
 /// platform-neutral way. The PTY executor runs them directly against
 /// the terminal, while the VHS compiler translates them into tape syntax.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Step {
     /// Type text into the terminal.
     WriteText(String),
@@ -37,6 +49,23 @@ pub enum Step {
         stable_ms: u32,
         /// Maximum time to wait in milliseconds.
         timeout_ms: u32,
+    },
+
+    /// Poll a frame predicate until it returns `Ok(())` or the timeout elapses.
+    ///
+    /// The PTY executor re-reads the live terminal frame on every `poll`
+    /// tick and runs `predicate` against it. The first `Ok(())` result
+    /// returns immediately, while a timeout surfaces the last
+    /// [`crate::assertion::AssertionFailure`] the predicate produced so the
+    /// proof report keeps its structured failure context. VHS recordings
+    /// have no equivalent semantics and skip this step.
+    Eventually {
+        /// Maximum time to spend polling before surfacing the last failure.
+        timeout: Duration,
+        /// Interval between predicate evaluations.
+        poll: Duration,
+        /// Frame predicate evaluated on every tick.
+        predicate: FramePredicate,
     },
 
     /// Capture the current terminal state for assertions.
@@ -99,6 +128,25 @@ impl Step {
         }
     }
 
+    /// Create a step that polls `predicate` against the live frame until it
+    /// returns `Ok(())` or `timeout` elapses.
+    ///
+    /// The predicate is wrapped in an [`Arc`] so the resulting [`Step`] can
+    /// be cloned across scenario reuse without re-allocating the closure.
+    /// On timeout the executor surfaces the last
+    /// [`crate::assertion::AssertionFailure`] the predicate produced so the
+    /// proof report can render the structured context.
+    pub fn eventually<F>(timeout: Duration, poll: Duration, predicate: F) -> Self
+    where
+        F: Fn(&TerminalFrame) -> MatchResult + Send + Sync + 'static,
+    {
+        Self::Eventually {
+            timeout,
+            poll,
+            predicate: Arc::new(predicate),
+        }
+    }
+
     /// Create a capture step.
     pub fn capture() -> Self {
         Self::Capture
@@ -127,6 +175,45 @@ impl Step {
     /// The pause only affects VHS tape output. PTY execution skips it.
     pub fn viewing_pause_ms(ms: u64) -> Self {
         Self::ViewingPause(Duration::from_millis(ms))
+    }
+}
+
+/// Manual `Debug` implementation that hides the [`Step::Eventually`]
+/// predicate body so the enclosing `#[derive(Clone)]` keeps compiling
+/// even though `dyn Fn` does not implement [`fmt::Debug`].
+impl fmt::Debug for Step {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WriteText(text) => f.debug_tuple("WriteText").field(text).finish(),
+            Self::PressKey(key) => f.debug_tuple("PressKey").field(key).finish(),
+            Self::Sleep(duration) => f.debug_tuple("Sleep").field(duration).finish(),
+            Self::WaitForText { needle, timeout_ms } => f
+                .debug_struct("WaitForText")
+                .field("needle", needle)
+                .field("timeout_ms", timeout_ms)
+                .finish(),
+            Self::WaitForStableFrame {
+                stable_ms,
+                timeout_ms,
+            } => f
+                .debug_struct("WaitForStableFrame")
+                .field("stable_ms", stable_ms)
+                .field("timeout_ms", timeout_ms)
+                .finish(),
+            Self::Eventually { timeout, poll, .. } => f
+                .debug_struct("Eventually")
+                .field("timeout", timeout)
+                .field("poll", poll)
+                .field("predicate", &"<frame predicate>")
+                .finish(),
+            Self::Capture => f.debug_tuple("Capture").finish(),
+            Self::CaptureLabeled { label, description } => f
+                .debug_struct("CaptureLabeled")
+                .field("label", label)
+                .field("description", description)
+                .finish(),
+            Self::ViewingPause(duration) => f.debug_tuple("ViewingPause").field(duration).finish(),
+        }
     }
 }
 
@@ -206,5 +293,69 @@ mod tests {
             unreachable!("Expected ViewingPause variant");
         };
         assert_eq!(duration, Duration::from_millis(1500));
+    }
+
+    /// Verifies `Step::eventually` stores the timeout, poll, and a callable
+    /// predicate, and that destructuring through the documented field shape
+    /// keeps compiling against the public variant layout.
+    #[test]
+    fn eventually_stores_timeout_poll_and_callable_predicate() {
+        // Arrange / Act
+        let step = Step::eventually(
+            Duration::from_secs(5),
+            Duration::from_millis(100),
+            |frame: &TerminalFrame| {
+                if frame.all_text().contains("Ready") {
+                    Ok(())
+                } else {
+                    Err(Box::new(crate::assertion::AssertionFailure {
+                        message: "missing Ready".to_string(),
+                        expected: crate::assertion::Expected::TextInRegion {
+                            needle: "Ready".to_string(),
+                        },
+                        region: None,
+                        matched_spans: Vec::new(),
+                        frame_excerpt: String::new(),
+                    }))
+                }
+            },
+        );
+
+        // Assert
+        let Step::Eventually {
+            timeout,
+            poll,
+            predicate,
+        } = step
+        else {
+            unreachable!("Expected Eventually variant");
+        };
+        assert_eq!(timeout, Duration::from_secs(5));
+        assert_eq!(poll, Duration::from_millis(100));
+
+        let ready_frame = TerminalFrame::new(80, 24, b"Ready");
+        let blank_frame = TerminalFrame::new(80, 24, b"");
+        assert!(predicate(&ready_frame).is_ok());
+        assert!(predicate(&blank_frame).is_err());
+    }
+
+    /// Verifies the manual `Debug` impl for [`Step::Eventually`] redacts the
+    /// predicate body so the derived `Clone` keeps compiling and consumers
+    /// see a stable placeholder rather than a closure pointer.
+    #[test]
+    fn eventually_debug_redacts_predicate_body() {
+        // Arrange
+        let step = Step::eventually(
+            Duration::from_millis(250),
+            Duration::from_millis(25),
+            |_| Ok(()),
+        );
+
+        // Act
+        let rendered = format!("{step:?}");
+
+        // Assert
+        assert!(rendered.contains("Eventually"));
+        assert!(rendered.contains("frame predicate"));
     }
 }

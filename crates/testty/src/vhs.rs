@@ -344,6 +344,23 @@ fn compile_step(tape: &mut String, step: &Step, screenshot_path: &Path) {
                 escape_vhs_double_quote(&screenshot_path.display().to_string())
             );
         }
+        Step::Eventually { timeout, .. } => {
+            // VHS recordings have no predicate-driven wait primitive, so
+            // approximate `Eventually` with a fixed `Sleep` for the full
+            // timeout. Skipping the step would let the next `Screenshot`
+            // fire before the predicate condition is satisfied and
+            // capture a misleading frame; sleeping the full window
+            // preserves the upper bound the PTY executor would have
+            // observed in the worst case while still bounding total
+            // recording time.
+            let ms = timeout.as_millis();
+
+            if ms >= 1000 && ms % 1000 == 0 {
+                let _ = writeln!(tape, "Sleep {}s", ms / 1000);
+            } else {
+                let _ = writeln!(tape, "Sleep {ms}ms");
+            }
+        }
     }
 }
 
@@ -580,6 +597,53 @@ mod tests {
 
         // Assert
         assert!(tape.contains("Sleep 1500ms"));
+    }
+
+    /// Verifies `Step::Eventually` emits a fallback `Sleep` for the full
+    /// timeout in seconds when the timeout is an even multiple of one
+    /// second, so VHS playback waits at least the upper bound the PTY
+    /// executor would have observed before the next step fires.
+    #[test]
+    fn compile_step_eventually_emits_sleep_seconds_for_even_timeout() {
+        // Arrange
+        let step = Step::eventually(
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(50),
+            |_frame| Ok(()),
+        );
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert
+        assert!(
+            tape.contains("Sleep 5s"),
+            "expected Sleep 5s fallback, got: {tape}"
+        );
+    }
+
+    /// Verifies `Step::Eventually` falls back to a millisecond `Sleep` for
+    /// fractional timeouts so the upper bound stays accurate for short
+    /// predicate windows.
+    #[test]
+    fn compile_step_eventually_emits_sleep_milliseconds_for_fractional_timeout() {
+        // Arrange
+        let step = Step::eventually(
+            std::time::Duration::from_millis(750),
+            std::time::Duration::from_millis(25),
+            |_frame| Ok(()),
+        );
+        let mut tape = String::new();
+
+        // Act
+        compile_step(&mut tape, &step, Path::new("/tmp/shot.png"));
+
+        // Assert
+        assert!(
+            tape.contains("Sleep 750ms"),
+            "expected Sleep 750ms fallback, got: {tape}"
+        );
     }
 
     #[test]

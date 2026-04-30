@@ -6,8 +6,10 @@
 //! assertions) and VHS tape files (for visual screenshot capture).
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::assertion::{AssertionFailure, MatchResult};
+use crate::frame::TerminalFrame;
 use crate::journey::Journey;
 use crate::proof::report::ProofReport;
 use crate::session::{PtySession, PtySessionBuilder, PtySessionError};
@@ -70,6 +72,20 @@ impl Scenario {
     /// Wait for the terminal frame to stabilize.
     pub fn wait_for_stable_frame(self, stable_ms: u32, timeout_ms: u32) -> Self {
         self.step(Step::wait_for_stable_frame(stable_ms, timeout_ms))
+    }
+
+    /// Poll a frame predicate until it returns `Ok(())` or `timeout` elapses.
+    ///
+    /// Wraps [`Step::eventually`] for fluent chaining inside scenario
+    /// builders. The predicate runs against the live PTY frame on every
+    /// `poll` tick and the scenario fails with the last
+    /// [`AssertionFailure`] the predicate produced if `timeout` elapses
+    /// without success.
+    pub fn eventually<F>(self, timeout: Duration, poll: Duration, predicate: F) -> Self
+    where
+        F: Fn(&TerminalFrame) -> MatchResult + Send + Sync + 'static,
+    {
+        self.step(Step::eventually(timeout, poll, predicate))
     }
 
     /// Insert a viewing pause that only affects VHS GIF output.
@@ -219,9 +235,67 @@ impl Scenario {
     }
 }
 
+/// Runtime helper that drives [`Step::Eventually`] semantics against an
+/// injectable frame source.
+///
+/// The helper re-reads a frame on every tick by calling `frame_source`,
+/// runs the predicate against it, and returns the captured frame the
+/// instant the predicate returns `Ok(())`. When `now()` reaches the
+/// computed deadline before the predicate succeeds, the helper returns
+/// the last [`AssertionFailure`] the predicate produced so the executor
+/// can route it through [`PtySessionError::Assertion`] without losing
+/// the structured failure context the proof report renders.
+///
+/// The wait between predicate evaluations is owned exclusively by this
+/// helper: it sleeps for `poll`, clamped to the remaining time before
+/// `deadline`, so the predicate cadence matches the configured `poll`
+/// value and the loop never sleeps past the deadline. Callers must keep
+/// their `frame_source` non-blocking so a 50ms `poll` does not turn into
+/// a 100ms tick from a redundant blocking drain.
+///
+/// `sleep` and `now` are injected so unit tests can drive the loop with
+/// deterministic timing instead of waiting on the wall clock. Production
+/// callers pass [`std::thread::sleep`] and [`Instant::now`].
+pub(crate) fn eventually_loop<F, S, N>(
+    timeout: Duration,
+    poll: Duration,
+    mut frame_source: F,
+    predicate: &(dyn Fn(&TerminalFrame) -> MatchResult + Send + Sync),
+    mut sleep: S,
+    mut now: N,
+) -> Result<TerminalFrame, Box<AssertionFailure>>
+where
+    F: FnMut() -> TerminalFrame,
+    S: FnMut(Duration),
+    N: FnMut() -> Instant,
+{
+    let deadline = now() + timeout;
+
+    loop {
+        let frame = frame_source();
+        let failure = match predicate(&frame) {
+            Ok(()) => return Ok(frame),
+            Err(failure) => failure,
+        };
+
+        let remaining = deadline
+            .checked_duration_since(now())
+            .unwrap_or(Duration::ZERO);
+        if remaining.is_zero() {
+            return Err(failure);
+        }
+
+        sleep(poll.min(remaining));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+    use crate::assertion::{AssertionFailure, Expected};
 
     #[test]
     fn scenario_builder_chains_steps() {
@@ -280,6 +354,218 @@ mod tests {
 
         // Assert — 1 from startup + 2 from navigate + 1 capture = 4.
         assert_eq!(scenario.steps.len(), 4);
+    }
+
+    /// Verifies that `eventually_loop` returns the captured frame the first
+    /// tick after the predicate succeeds, and that the predicate is polled
+    /// at least twice when it initially fails before recovering.
+    #[test]
+    fn eventually_loop_returns_ok_after_predicate_succeeds() {
+        // Arrange — frame source produces three identical frames; predicate
+        // tracks the call count and only succeeds on the third tick.
+        let frame_calls = AtomicUsize::new(0);
+        let predicate_calls = AtomicUsize::new(0);
+        let now_calls = AtomicUsize::new(0);
+        let sleep_calls = Mutex::new(Vec::<Duration>::new());
+
+        let predicate: Box<dyn Fn(&TerminalFrame) -> MatchResult + Send + Sync> =
+            Box::new(|_frame: &TerminalFrame| {
+                let count = predicate_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if count >= 3 {
+                    Ok(())
+                } else {
+                    Err(Box::new(AssertionFailure {
+                        message: format!("not yet (call {count})"),
+                        expected: Expected::TextInRegion {
+                            needle: "Ready".to_string(),
+                        },
+                        region: None,
+                        matched_spans: Vec::new(),
+                        frame_excerpt: String::new(),
+                    }))
+                }
+            });
+        let start = Instant::now();
+
+        // Act
+        let result = eventually_loop(
+            Duration::from_secs(60),
+            Duration::from_millis(10),
+            || {
+                frame_calls.fetch_add(1, Ordering::SeqCst);
+                TerminalFrame::new(80, 24, b"")
+            },
+            predicate.as_ref(),
+            |duration| {
+                sleep_calls
+                    .lock()
+                    .expect("sleep mutex must not be poisoned")
+                    .push(duration);
+            },
+            || {
+                now_calls.fetch_add(1, Ordering::SeqCst);
+                start
+            },
+        );
+
+        // Assert
+        assert!(result.is_ok(), "expected Ok once the predicate succeeds");
+        assert!(
+            predicate_calls.load(Ordering::SeqCst) >= 2,
+            "predicate must run at least twice before succeeding, got {}",
+            predicate_calls.load(Ordering::SeqCst)
+        );
+        assert_eq!(
+            frame_calls.load(Ordering::SeqCst),
+            predicate_calls.load(Ordering::SeqCst),
+            "every tick must re-read the frame"
+        );
+        let recorded_sleeps = sleep_calls
+            .lock()
+            .expect("sleep mutex must not be poisoned")
+            .clone();
+        assert!(
+            recorded_sleeps
+                .iter()
+                .all(|duration| *duration == Duration::from_millis(10)),
+            "every sleep tick must use the configured poll interval"
+        );
+    }
+
+    /// Verifies that `eventually_loop` surfaces the last `AssertionFailure`
+    /// produced by the predicate when the deadline elapses, instead of
+    /// throwing away the structured failure context.
+    #[test]
+    fn eventually_loop_returns_last_failure_on_timeout() {
+        // Arrange — predicate always fails with a counter-tagged message;
+        // the injected `now` advances past the deadline after the second
+        // call so the loop times out deterministically.
+        let predicate_calls = AtomicUsize::new(0);
+        let now_calls = AtomicUsize::new(0);
+        let start = Instant::now();
+        let timeout = Duration::from_millis(50);
+
+        let predicate: Box<dyn Fn(&TerminalFrame) -> MatchResult + Send + Sync> =
+            Box::new(|_frame: &TerminalFrame| {
+                let count = predicate_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                Err(Box::new(AssertionFailure {
+                    message: format!("attempt {count} failed"),
+                    expected: Expected::TextInRegion {
+                        needle: "Ready".to_string(),
+                    },
+                    region: None,
+                    matched_spans: Vec::new(),
+                    frame_excerpt: String::new(),
+                }))
+            });
+
+        // Act
+        let result = eventually_loop(
+            timeout,
+            Duration::from_millis(5),
+            || TerminalFrame::new(80, 24, b""),
+            predicate.as_ref(),
+            |_duration| {},
+            || {
+                let count = now_calls.fetch_add(1, Ordering::SeqCst);
+                // First call seeds the deadline at `start + timeout`.
+                // Second call (after the first predicate evaluation) returns
+                // a value past the deadline so the loop exits with the
+                // freshly produced failure.
+                if count == 0 {
+                    start
+                } else {
+                    start + timeout + Duration::from_millis(1)
+                }
+            },
+        );
+
+        // Assert
+        let Err(failure) = result else {
+            unreachable!("loop must time out when predicate never succeeds");
+        };
+        assert_eq!(
+            predicate_calls.load(Ordering::SeqCst),
+            1,
+            "the surfaced failure must be the most recent predicate result"
+        );
+        assert_eq!(failure.message, "attempt 1 failed");
+        assert!(matches!(
+            failure.expected,
+            Expected::TextInRegion { ref needle, .. } if needle == "Ready"
+        ));
+    }
+
+    /// Verifies the cadence wait is owned by `eventually_loop`: the sleep
+    /// is clamped to the time remaining before the deadline, so a final
+    /// tick whose nominal `poll` would overshoot the deadline only sleeps
+    /// for the remaining slice.
+    #[test]
+    fn eventually_loop_clamps_final_sleep_to_remaining_budget() {
+        // Arrange — predicate always fails. `now` advances 30ms per call
+        // so the second wait would normally exceed the 50ms budget, but
+        // the loop must clamp it to the remaining 20ms before timing out.
+        let predicate_calls = AtomicUsize::new(0);
+        let now_calls = AtomicUsize::new(0);
+        let sleep_calls = Mutex::new(Vec::<Duration>::new());
+        let start = Instant::now();
+        let timeout = Duration::from_millis(50);
+        let poll = Duration::from_millis(40);
+
+        let predicate: Box<dyn Fn(&TerminalFrame) -> MatchResult + Send + Sync> =
+            Box::new(|_frame: &TerminalFrame| {
+                predicate_calls.fetch_add(1, Ordering::SeqCst);
+                Err(Box::new(AssertionFailure {
+                    message: "still failing".to_string(),
+                    expected: Expected::TextInRegion {
+                        needle: "Ready".to_string(),
+                    },
+                    region: None,
+                    matched_spans: Vec::new(),
+                    frame_excerpt: String::new(),
+                }))
+            });
+
+        // Act
+        let result = eventually_loop(
+            timeout,
+            poll,
+            || TerminalFrame::new(80, 24, b""),
+            predicate.as_ref(),
+            |duration| {
+                sleep_calls
+                    .lock()
+                    .expect("sleep mutex must not be poisoned")
+                    .push(duration);
+            },
+            || {
+                let count = now_calls.fetch_add(1, Ordering::SeqCst);
+                // 1st call seeds deadline = start + 50ms.
+                // 2nd call (post first predicate) returns start + 30ms,
+                // leaving 20ms before the deadline.
+                // 3rd call (post second predicate) returns start + 60ms,
+                // already past the deadline so the loop returns the
+                // structured failure instead of sleeping again.
+                start + Duration::from_millis(30 * count as u64)
+            },
+        );
+
+        // Assert
+        assert!(result.is_err(), "predicate never succeeds");
+        assert_eq!(
+            predicate_calls.load(Ordering::SeqCst),
+            2,
+            "the loop must give the predicate one final tick after the clamped sleep"
+        );
+        let recorded_sleeps = sleep_calls
+            .lock()
+            .expect("sleep mutex must not be poisoned")
+            .clone();
+        assert_eq!(
+            recorded_sleeps,
+            vec![Duration::from_millis(20)],
+            "final sleep must be clamped to the remaining time before the deadline"
+        );
     }
 
     #[test]
