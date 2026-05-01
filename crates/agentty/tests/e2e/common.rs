@@ -9,10 +9,12 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin;
+use testty::assertion;
 use testty::feature::{FeatureDemo, GifMode, GifStatus};
 use testty::frame::TerminalFrame;
 use testty::journey::Journey;
 use testty::proof::report::{ProofCapture, ProofReport};
+use testty::region::Region;
 use testty::scenario::Scenario;
 use testty::session::PtySessionBuilder;
 use testty::step::Step;
@@ -522,6 +524,56 @@ pub(crate) fn open_help_overlay() -> Journey {
         .step(Step::wait_for_stable_frame(300, 3000))
 }
 
+/// Footer marker that only renders inside the in-session chat view.
+///
+/// `q: back` is the back-to-list help action exposed by the session view
+/// footer. The sessions list view never renders this label, so it is a
+/// reliable predicate target for the eventually waiter that detects when
+/// the prompt-submit transition has completed.
+const SESSION_VIEW_FOOTER_MARKER: &str = "q: back";
+
+/// Footer marker that only renders on the sessions list view.
+///
+/// `new session` is the `a` shortcut label exposed by the sessions list
+/// footer. The session chat view never renders this label, so it is a
+/// reliable predicate target for the eventually waiter that detects when
+/// the back-to-list transition has completed.
+const SESSION_LIST_FOOTER_MARKER: &str = "new session";
+
+/// Wait budget for predicate-driven session-view transitions.
+///
+/// Five seconds covers slow CI workers without masking real regressions: a
+/// faster settle short-circuits the waiter on the first matching poll, and
+/// a true regression still surfaces a structured `AssertionFailure` instead
+/// of an opaque over-sleep.
+const SESSION_TRANSITION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Polling cadence for the predicate-driven waiters above.
+///
+/// Fifty milliseconds keeps idle-CPU cost low while still finishing within
+/// a single render frame on healthy hosts.
+const SESSION_TRANSITION_POLL: Duration = Duration::from_millis(50);
+
+/// Build an `eventually` step that succeeds once `marker` appears in the
+/// live frame's footer row.
+///
+/// Wraps `assertion::match_text_in_region` against `Region::footer` so the
+/// waiter cannot be tricked by prompt input or agent output that happens to
+/// contain the marker text, and a timeout still surfaces a structured
+/// `AssertionFailure` carrying the missing needle and current frame excerpt
+/// instead of a generic timeout panic.
+fn eventually_footer_text_visible(marker: &'static str) -> Step {
+    Step::eventually(
+        SESSION_TRANSITION_TIMEOUT,
+        SESSION_TRANSITION_POLL,
+        move |frame| {
+            let region = Region::footer(frame.cols(), frame.rows());
+
+            assertion::match_text_in_region(frame, marker, &region)
+        },
+    )
+}
+
 /// Create a session with a prompt, submit it, and return to the Sessions
 /// list.
 ///
@@ -530,8 +582,9 @@ pub(crate) fn open_help_overlay() -> Journey {
 /// the agent asynchronously while the session persists), and presses `q` from
 /// the session view to return to the list.
 ///
-/// Uses fixed sleeps instead of stable-frame waits because the agent may
-/// produce continuous output after submit.
+/// Uses predicate-driven `eventually` waits keyed off footer markers because
+/// the agent may produce continuous output after submit, so a stable-frame
+/// wait can never settle.
 ///
 /// Requires the Sessions tab to be active and a git-initialized workdir.
 pub(crate) fn create_session_and_return_to_list() -> Journey {
@@ -541,8 +594,9 @@ pub(crate) fn create_session_and_return_to_list() -> Journey {
 /// Create a session with a caller-provided prompt, submit it, and return to
 /// the Sessions list.
 ///
-/// Uses fixed sleeps instead of stable-frame waits because the agent may
-/// produce continuous output after submit.
+/// Uses predicate-driven `eventually` waits keyed off footer markers because
+/// the agent may produce continuous output after submit, so a stable-frame
+/// wait can never settle.
 ///
 /// Requires the Sessions tab to be active and a git-initialized workdir.
 pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Journey {
@@ -556,9 +610,9 @@ pub(crate) fn create_session_with_prompt_and_return_to_list(prompt: &str) -> Jou
         .step(Step::write_text(prompt))
         .step(Step::wait_for_text(prompt, 3000))
         .step(Step::press_key("Enter"))
-        .step(Step::sleep(Duration::from_secs(2)))
+        .step(eventually_footer_text_visible(SESSION_VIEW_FOOTER_MARKER))
         .step(Step::press_key("q"))
-        .step(Step::sleep(Duration::from_secs(1)))
+        .step(eventually_footer_text_visible(SESSION_LIST_FOOTER_MARKER))
 }
 
 #[cfg(test)]

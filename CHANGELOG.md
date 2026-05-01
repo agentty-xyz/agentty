@@ -23,6 +23,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `PtySessionError::Assertion(Box<AssertionFailure>)` variant so structured predicate
   failures from `Step::Eventually` flow through the existing executor return type.
   Downstream `match` arms must include a fallback `_` arm.
+- agentty: replace the fixed `Step::sleep` waits in the shared E2E session-creation
+  journeys (`create_session_and_return_to_list` and
+  `create_session_with_prompt_and_return_to_list`) with predicate-driven
+  `Step::eventually` waiters keyed off the in-session and sessions-list footer markers
+  so the journeys settle as soon as the UI transitions and surface a structured
+  `AssertionFailure` on timeout instead of an opaque over-sleep.
 
 ## [v0.8.10] - 2026-04-28
 

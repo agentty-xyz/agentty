@@ -48,9 +48,9 @@ per-turn digest of used skills, executed commands, or changed-file CRUD after ea
 `Frame::all_text()` with wide-character continuation cells skipped,
 `PtySessionBuilder::args` for non-interactive subcommand flows, and the predicate-driven
 `Step::Eventually` waiter that surfaces structured failures through
-`PtySessionError::Assertion`; soft accumulators, recipe `match_*` siblings, structured
-failure rendering in HTML proof reports, agentty E2E sleep removal, and startup-wait
-presets remain queued. | Partial |
+`PtySessionError::Assertion`. The agentty E2E session-creation journeys are next up to
+adopt that waiter; soft accumulators, recipe `match_*` siblings, structured failure
+rendering in HTML proof reports, and startup-wait presets remain queued. | Partial |
 
 ## Active Streams
 
@@ -143,7 +143,7 @@ choice persists across app restarts.
   `docs/site/content/docs/getting-started/overview.md` to explain the new per-project
   delivery strategy setting without claiming session actions consume it yet.
 
-### [6523822e-376a-4531-b78a-1c7e13d6787a] Testty: Eventually predicate-driven frame waiter
+### [c821816d-2f45-40a3-bc85-d4504577ba30] Testty: Replace fixed E2E sleeps with eventually waits in agentty
 
 #### Assignee
 
@@ -151,58 +151,49 @@ choice persists across app restarts.
 
 #### Why now
 
-The Result-returning `match_*` matcher core, blank-column-preserving
-`Frame::all_text()`, and `PtySessionBuilder::args` have all landed, so testty has a
-stable predicate foundation. The next bottleneck for external adopters and the agentty
-E2E suite is fixed `Step::sleep` waits: tests either over-sleep and burn wall time or
-under-sleep and flake. A predicate-driven `eventually` combinator lets test authors wait
-on any `MatchResult`-returning frame check and unblocks the queued
-`[c821816d] Testty: Replace fixed E2E sleeps with eventually waits in agentty` rollout.
+The `Step::Eventually` waiter just landed in commit `c1871f4d`, so its first internal
+adopter — the agentty session-creation journeys — is now unblocked. The compound
+journeys in `crates/agentty/tests/e2e/common.rs` still use fixed `Step::sleep(2s)` and
+`Step::sleep(1s)` waits after submitting a prompt and after returning to the list; those
+sleeps either over-sleep and burn wall time or under-sleep and flake. Replacing them
+with predicate-driven waits demonstrates the new API on a real test suite and lowers E2E
+wall time and flake rate before queued downstream cards (soft accumulators, recipe
+`match_*` siblings) layer on top.
 
 #### Usable outcome
 
-Test authors can express "wait until this frame predicate is true" through a new
-`eventually(timeout, poll, predicate)` combinator that re-reads the live PTY frame on
-each tick, returns `Ok(())` once the predicate passes, and surfaces the last
-`AssertionFailure` produced by the predicate on timeout.
+`create_session_and_return_to_list` and `create_session_with_prompt_and_return_to_list`
+in `crates/agentty/tests/e2e/common.rs` wait on `eventually` predicates that match
+visible footer markers from the in-session view and the sessions list view instead of
+fixed `Step::sleep` durations, so existing call sites get the same behavior with lower
+flake risk and shorter wall time when the UI settles fast.
 
 #### Substeps
 
-- [x] **Add the `eventually` combinator and a matching `Step::Eventually` variant.** In
-  `crates/testty/src/step.rs`, add an `Eventually` variant carrying `timeout: Duration`,
-  `poll: Duration`, and a shared predicate boxed as
-  `Arc<dyn Fn(&TerminalFrame) -> MatchResult + Send + Sync>` plus an `eventually`
-  constructor; provide a manual `Debug` impl that keeps `#[derive(Clone)]` compiling
-  without exposing the predicate body, and re-export the constructor from
-  `crates/testty/src/prelude.rs` so `use testty::prelude::*;` covers it.
-- [x] **Drive `Eventually` in the scenario runtime.** Update the PTY scenario executor
-  in `crates/testty/src/scenario.rs` so `Step::Eventually` re-reads the live frame on
-  each `poll` tick, returns immediately once the predicate returns `Ok(())`, and on
-  timeout fails the scenario with the last `AssertionFailure` produced by the predicate
-  rather than a generic timeout panic, preserving the existing structured-failure path
-  that the proof report already understands.
+- [x] **Replace fixed sleeps in the shared session-creation journey.** In
+  `crates/agentty/tests/e2e/common.rs`, swap the `Step::sleep(Duration::from_secs(2))`
+  after the prompt-submit `Enter` for an `eventually` waiter that polls
+  `assertion::match_text_in_region` against a stable in-session footer marker (for
+  example `"q: back"`), and swap the `Step::sleep(Duration::from_secs(1))` after `q` for
+  an `eventually` waiter against a stable sessions-list footer marker (for example
+  `"new session"`); pick conservative timeouts (≤ 5 s) and a 50–100 ms poll cadence so
+  fast settles short-circuit immediately and pathological cases still fail with a
+  structured `AssertionFailure` instead of a silent over-sleep.
 
 #### Tests
 
-- [x] Add a `step::tests` constructor case in `crates/testty/src/step.rs` that builds an
-  `eventually` step and asserts the stored timeout, poll, and predicate-shape compile.
-  Add a `scenario::tests` integration case in `crates/testty/src/scenario.rs` that
-  drives a fake frame source where the predicate fails twice and then succeeds, asserts
-  the executor returns `Ok(())` after at least two polls, and adds a sibling case where
-  the predicate never passes and asserts the executor returns the last
-  `AssertionFailure` produced by the predicate on timeout. Extend
-  `crates/testty/tests/public_api.rs` with a tripwire that pins the `Step::Eventually`
-  variant shape and the `eventually` constructor signature, including a `..` rest
-  pattern guard so future fields stay non-breaking. Run
-  `prek run cargo-check --files crates/testty/src/step.rs crates/testty/src/scenario.rs crates/testty/src/prelude.rs crates/testty/tests/public_api.rs`
-  plus the testty source-test hook before handoff.
+- [x] Run the affected source-test hooks and the targeted check hooks for the touched
+  file: `prek run cargo-check --files crates/agentty/tests/e2e/common.rs` and
+  `prek run rustfmt-fix --files crates/agentty/tests/e2e/common.rs --hook-stage manual`.
+  Do not run the E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
+  `test-agentty-e2e` on GitHub after merge to `main` and that hook owns the
+  `crates/agentty/tests` targets.
 
 #### Docs
 
-- [x] Update `crates/testty/README.md` to document the `eventually` combinator with a
-  short worked example that contrasts it with `Step::Sleep` and `Step::WaitForText`, and
-  update `CHANGELOG.md` with a Keep-a-Changelog entry naming the new `Step::Eventually`
-  variant and `eventually` constructor.
+- [x] Update `CHANGELOG.md` with a Keep-a-Changelog entry noting that the agentty E2E
+  session-creation journeys now use `Step::Eventually` predicates instead of fixed
+  `Step::sleep` waits.
 
 ## Ready Now Execution Order
 
@@ -215,13 +206,11 @@ flowchart TD
     end
 
     subgraph TesttyLane["Testty - @andagaev"]
-        T2["[6523822e] eventually waiter"]
+        T6["[c821816d] agentty fixed-sleep removal"]
         T3["[a9ef45e2] SoftAssertions accumulator"]
         T4["[ca40b36d] Recipe match_* siblings"]
         T5["[07cce0e7] HTML structured failure diff"]
-        T6["[c821816d] agentty fixed-sleep removal"]
         T7["[8d5f9b02] Startup wait timeout presets"]
-        T2 -. queued follow-up .-> T6
         T3 -. queued follow-up .-> T5
     end
 
@@ -472,25 +461,6 @@ has wired structured failures into `ProofCapture::assertions`.
 #### Depends on
 
 `[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures`
-
-### [c821816d-2f45-40a3-bc85-d4504577ba30] Testty: Replace fixed E2E sleeps with eventually waits in agentty
-
-#### Outcome
-
-Compound journeys in `crates/agentty/tests/e2e/common.rs` (such as
-`create_session_and_return_to_list` and `create_session_with_prompt_and_return_to_list`)
-wait deterministically on `eventually` predicates instead of fixed `Step::sleep`
-durations, lowering E2E flake rate and total wall time.
-
-#### Promote when
-
-Promote when
-`[6523822e-376a-4531-b78a-1c7e13d6787a] Testty: Eventually predicate-driven frame waiter`
-lands.
-
-#### Depends on
-
-`[6523822e-376a-4531-b78a-1c7e13d6787a] Testty: Eventually predicate-driven frame waiter`
 
 ### [8d5f9b02-4c3e-4f6a-ab9c-2d3e4f5a6b7c] Testty: Add startup wait timeout presets
 
