@@ -389,7 +389,7 @@ mod tests {
 
         // Act
         let result = eventually_loop(
-            Duration::from_secs(60),
+            Duration::from_mins(1),
             Duration::from_millis(10),
             || {
                 frame_calls.fetch_add(1, Ordering::SeqCst);

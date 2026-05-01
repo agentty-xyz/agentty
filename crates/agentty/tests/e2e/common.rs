@@ -554,20 +554,34 @@ const SESSION_TRANSITION_TIMEOUT: Duration = Duration::from_secs(5);
 /// a single render frame on healthy hosts.
 const SESSION_TRANSITION_POLL: Duration = Duration::from_millis(50);
 
-/// Build an `eventually` step that succeeds once `marker` appears in the
-/// live frame's footer row.
+/// Number of bottom rows scanned for footer help-action markers.
 ///
-/// Wraps `assertion::match_text_in_region` against `Region::footer` so the
-/// waiter cannot be tricked by prompt input or agent output that happens to
-/// contain the marker text, and a timeout still surfaces a structured
-/// `AssertionFailure` carrying the missing needle and current frame excerpt
-/// instead of a generic timeout panic.
+/// Both the sessions list page and the session view page render their
+/// page-level help-action line two rows above the global worktree-status
+/// footer bar (a one-cell page margin sits between them). Scanning the
+/// bottom three rows therefore covers the page help row, the blank margin
+/// row, and the global footer bar without reaching up into the chat
+/// transcript or prompt input where agent output or user-typed text could
+/// contain a matching substring.
+const SESSION_TRANSITION_FOOTER_ROWS: u16 = 3;
+
+/// Build an `eventually` step that succeeds once `marker` appears in the
+/// live frame's bottom footer rows.
+///
+/// Wraps `assertion::match_text_in_region` against the bottom
+/// `SESSION_TRANSITION_FOOTER_ROWS` rows so the waiter cannot be tricked by
+/// prompt input or agent output that happens to contain the marker text, and
+/// a timeout still surfaces a structured `AssertionFailure` carrying the
+/// missing needle and current frame excerpt instead of a generic timeout
+/// panic.
 fn eventually_footer_text_visible(marker: &'static str) -> Step {
     Step::eventually(
         SESSION_TRANSITION_TIMEOUT,
         SESSION_TRANSITION_POLL,
         move |frame| {
-            let region = Region::footer(frame.cols(), frame.rows());
+            let rows = frame.rows();
+            let height = SESSION_TRANSITION_FOOTER_ROWS.min(rows);
+            let region = Region::new(0, rows.saturating_sub(height), frame.cols(), height);
 
             assertion::match_text_in_region(frame, marker, &region)
         },
