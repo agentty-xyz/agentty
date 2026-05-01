@@ -69,6 +69,11 @@ rendering in HTML proof reports, and startup-wait presets remain queued. | Parti
   predicate-driven waiters, soft accumulators, recipe `match_*` siblings, richer
   structured-failure rendering in the proof report, and the agentty E2E adoption that
   retires fixed `Step::sleep` waits.
+- `Auto-Review`: agentic orchestrator-driven loop that iteratively refines session
+  changes through author, reviewer, and orchestrator agents, where the orchestrator
+  decides each round whether to continue, switch the reviewer backend, escalate to the
+  user, or finish and squash the result; loop termination is driven by orchestrator
+  judgment plus user interrupt, not a static iteration cap.
 
 ## Planning Model
 
@@ -219,6 +224,16 @@ flowchart TD
         P2["[a1b75e5c] Route provider restarts through compact memory"]
         S1["[eff3638c] Turn activity storage"]
         P1 -. queued follow-up .-> P2
+    end
+
+    subgraph AutoReviewLane["Auto-Review queue"]
+        AR1["[8e3ba5c4] One-shot orchestrator verdict"]
+        AR2["[999fa2d1] Auto-loop with squash on Done"]
+        AR3["[2fd4754b] Escalation pause and resume"]
+        AR4["[e59c83f7] Switch reviewer backend mid-loop"]
+        AR1 -. queued follow-up .-> AR2
+        AR2 -. queued follow-up .-> AR3
+        AR3 -. queued follow-up .-> AR4
     end
 ```
 
@@ -478,6 +493,82 @@ Promote when the Testty stream is ready for the next ergonomics slice.
 
 `None`
 
+### [8e3ba5c4-9442-4248-a6bf-dd78c1951659] Auto-Review: Surface orchestrator verdict on /auto-review one-shot
+
+#### Outcome
+
+Users can invoke `/auto-review` in a session to run one extra reviewer pass plus a
+separate orchestrator agent invocation that inspects the current diff and reviewer
+suggestions and renders a structured verdict (continue or done, with one-line reasoning)
+inline in the session transcript without yet auto-looping.
+
+#### Promote when
+
+Promote when the Auto-Review stream becomes the next session-workflow priority and a
+named assignee is ready to validate the orchestrator prompt and decision schema against
+real session diffs before committing to the loop.
+
+#### Depends on
+
+`None`
+
+### [999fa2d1-e6bc-4526-a1f9-a2e151d593d3] Auto-Review: Drive iterative loop until orchestrator declares done
+
+#### Outcome
+
+`/auto-review` runs author, reviewer, and orchestrator rounds in a loop until the
+orchestrator emits a `Done` decision; the session shows an in-loop indicator with the
+current round, all in-loop edits squash into one commit on `Done`, and `Ctrl+C` aborts
+the loop without disturbing the existing per-turn cancel semantics.
+
+#### Promote when
+
+Promote when
+`[8e3ba5c4-9442-4248-a6bf-dd78c1951659] Auto-Review: Surface orchestrator verdict on /auto-review one-shot`
+lands and the orchestrator prompt has been validated against real diffs.
+
+#### Depends on
+
+`[8e3ba5c4-9442-4248-a6bf-dd78c1951659] Auto-Review: Surface orchestrator verdict on /auto-review one-shot`
+
+### [2fd4754b-21fc-4a65-a046-1922c2d01968] Auto-Review: Pause loop on orchestrator escalation and resume on user input
+
+#### Outcome
+
+When the orchestrator emits an `Escalate` decision the loop pauses, the question renders
+inline in session chat, and the user's reply resumes the loop with the new framing,
+including allowing the user to authorize the orchestrator to redirect the implementation
+approach for subsequent rounds.
+
+#### Promote when
+
+Promote when
+`[999fa2d1-e6bc-4526-a1f9-a2e151d593d3] Auto-Review: Drive iterative loop until orchestrator declares done`
+lands and the loop has a stable `Continue`/`Done` flow against real diffs.
+
+#### Depends on
+
+`[999fa2d1-e6bc-4526-a1f9-a2e151d593d3] Auto-Review: Drive iterative loop until orchestrator declares done`
+
+### [e59c83f7-f46f-4af4-8dc0-d6cac70816b1] Auto-Review: Switch reviewer backend mid-loop on orchestrator request
+
+#### Outcome
+
+The orchestrator can emit a `SwitchReviewer` decision that selects a different installed
+backend as the reviewer for subsequent rounds when echo-chamber agreement is detected,
+and the auto-review session indicator shows which backend reviewed each round.
+
+#### Promote when
+
+Promote when
+`[2fd4754b-21fc-4a65-a046-1922c2d01968] Auto-Review: Pause loop on orchestrator escalation and resume on user input`
+lands and convergence behavior is stable enough that orchestrator switch decisions are
+observable without competing with escalation.
+
+#### Depends on
+
+`[2fd4754b-21fc-4a65-a046-1922c2d01968] Auto-Review: Pause loop on orchestrator escalation and resume on user input`
+
 ## Parked
 
 ### [af7b1d24-6e5a-4b8c-8dbe-4f5a6b7c8d9e] Testty: Frame normalizer hook for snapshot tests
@@ -565,6 +656,20 @@ explicitly commits to becoming the standard Rust TUI test framework.
   as follow-up slices that target the same stored summary contract.
 - Internal `FeatureTest` migration work should be folded into future user-facing E2E
   changes that touch the same files instead of occupying a standalone roadmap card.
+- `Auto-Review` is an opt-in per-session workflow triggered by `/auto-review`, not the
+  default behavior of any session. The orchestrator runs as a separate `AgentChannel`
+  invocation per round (clean role separation, extra cost per round) rather than being
+  multiplexed into the reviewer's response, and it must be a *different* backend from
+  the author to avoid echo-chamber convergence. All loop termination is
+  orchestrator-driven (`Done` or `Escalate`) plus the existing user interrupt path; no
+  static iteration cap exists, so the orchestrator's decision schema and prompt are the
+  highest-leverage design artifact in the stream and should be validated in slice 1
+  before the loop driver is built. The orchestrator is a coordinator by default
+  (`Continue`, `SwitchReviewer`, `Escalate`, `Done`) and can only request approach
+  redirection after escalating to the user first; this constraint must be preserved as
+  the slices land. Cost transparency is a known risk without a hard cap — slice 2 should
+  surface a per-round indicator in the auto-review session UI rather than retrofitting
+  telemetry later.
 - Roadmap entries stay user-facing; implementation validation and documentation belong
   in each step's `#### Tests` and `#### Docs` sections instead of as standalone backlog
   cards.
