@@ -48,9 +48,10 @@ per-turn digest of used skills, executed commands, or changed-file CRUD after ea
 `Frame::all_text()` with wide-character continuation cells skipped,
 `PtySessionBuilder::args` for non-interactive subcommand flows, and the predicate-driven
 `Step::Eventually` waiter that surfaces structured failures through
-`PtySessionError::Assertion`. The agentty E2E session-creation journeys are next up to
-adopt that waiter; soft accumulators, recipe `match_*` siblings, structured failure
-rendering in HTML proof reports, and startup-wait presets remain queued. | Partial |
+`PtySessionError::Assertion`; the agentty E2E session-creation journeys now wait on
+those predicates instead of fixed `Step::sleep` durations. Soft accumulators, recipe
+`match_*` siblings, structured failure rendering in HTML proof reports, and startup-wait
+presets remain queued. | Partial |
 
 ## Active Streams
 
@@ -148,7 +149,7 @@ choice persists across app restarts.
   `docs/site/content/docs/getting-started/overview.md` to explain the new per-project
   delivery strategy setting without claiming session actions consume it yet.
 
-### [c821816d-2f45-40a3-bc85-d4504577ba30] Testty: Replace fixed E2E sleeps with eventually waits in agentty
+### [a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures
 
 #### Assignee
 
@@ -156,49 +157,62 @@ choice persists across app restarts.
 
 #### Why now
 
-The `Step::Eventually` waiter just landed in commit `c1871f4d`, so its first internal
-adopter — the agentty session-creation journeys — is now unblocked. The compound
-journeys in `crates/agentty/tests/e2e/common.rs` still use fixed `Step::sleep(2s)` and
-`Step::sleep(1s)` waits after submitting a prompt and after returning to the list; those
-sleeps either over-sleep and burn wall time or under-sleep and flake. Replacing them
-with predicate-driven waits demonstrates the new API on a real test suite and lowers E2E
-wall time and flake rate before queued downstream cards (soft accumulators, recipe
-`match_*` siblings) layer on top.
+The agentty E2E sleep-removal slice landed in commit `1fa0be06`, freeing the Testty
+lane. The Result-returning `match_*` matcher core, `AssertionFailure`, and `MatchResult`
+are already public, but every `match_*` call still fails fast on the first miss, so
+multi-check scenarios cannot show the full set of frame-level assertion failures in one
+run. Adding a soft accumulator now is the smallest next testty slice that turns batched
+checks into a single end-of-scope panic with all messages, and routing the accumulated
+failures into `ProofCapture::assertions` pre-wires the queued
+`[07cce0e7] Testty: Render structured assertion failures in HTML proof report` slice
+without touching the HTML report yet.
 
 #### Usable outcome
 
-`create_session_and_return_to_list` and `create_session_with_prompt_and_return_to_list`
-in `crates/agentty/tests/e2e/common.rs` wait on `eventually` predicates that match
-visible footer markers from the in-session view and the sessions list view instead of
-fixed `Step::sleep` durations, so existing call sites get the same behavior with lower
-flake risk and shorter wall time when the UI settles fast.
+Test authors can wrap a block of `match_*` checks against a captured frame in a
+`SoftAssertions` accumulator that records every `AssertionFailure`, panics once at scope
+end with all collected messages, and attaches each failure to the active
+`ProofCapture::assertions` so a single capture can carry every failure instead of just
+the first. Existing fail-fast `match_*` call sites stay unchanged when the accumulator
+is not used.
 
 #### Substeps
 
-- [x] **Replace fixed sleeps in the shared session-creation journey.** In
-  `crates/agentty/tests/e2e/common.rs`, swap the `Step::sleep(Duration::from_secs(2))`
-  after the prompt-submit `Enter` for an `eventually` waiter that polls
-  `assertion::match_text_in_region` against a stable in-session footer marker (for
-  example `"q: back"`), and swap the `Step::sleep(Duration::from_secs(1))` after `q` for
-  an `eventually` waiter against a stable sessions-list footer marker (for example
-  `"new session"`); pick conservative timeouts (≤ 5 s) and a 50–100 ms poll cadence so
-  fast settles short-circuit immediately and pathological cases still fail with a
-  structured `AssertionFailure` instead of a silent over-sleep.
+- [x] **Add the `SoftAssertions` accumulator with end-of-scope panic.** Introduce a
+  `SoftAssertions` type in `crates/testty/src/assertion.rs` that exposes a
+  `check(MatchResult)`-style entry point, stores every `AssertionFailure`, panics on
+  `Drop` with all collected messages when at least one failure was recorded, and offers
+  an explicit consume method that takes ownership before drop without double-panicking;
+  export it through `crates/testty/src/prelude.rs` and `crates/testty/src/lib.rs`.
+- [x] **Route accumulated failures into the active `ProofCapture::assertions`.** Update
+  `crates/testty/src/proof/report.rs` so each soft-recorded `AssertionFailure` lands as
+  an `AssertionResult` on the most recent `ProofCapture::assertions` entry through the
+  existing `ProofReport` plumbing, keeping fail-fast `match_*` behavior unchanged when
+  the accumulator is not used.
 
 #### Tests
 
-- [x] Run the affected source-test hooks and the targeted check hooks for the touched
-  file: `prek run cargo-check --files crates/agentty/tests/e2e/common.rs` and
-  `prek run rustfmt-fix --files crates/agentty/tests/e2e/common.rs --hook-stage manual`.
-  Do not run the E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
-  `test-agentty-e2e` on GitHub after merge to `main` and that hook owns the
-  `crates/agentty/tests` targets.
+- [x] Add unit tests in `crates/testty/src/assertion.rs` covering an empty accumulator
+  (no panic on drop), a single recorded `AssertionFailure` (panic message includes the
+  failure), multiple recorded failures (panic message lists all of them in record
+  order), and explicit pre-drop consumption (no double-panic on drop).
+- [x] Add coverage in `crates/testty/src/proof/report.rs` (or a sibling integration
+  test) that running several soft `match_*` checks while a `ProofCapture` is active
+  attaches each failure as an `AssertionResult` on the latest
+  `ProofCapture::assertions`.
+- [x] Run
+  `prek run cargo-check --files crates/testty/src/assertion.rs crates/testty/src/proof/report.rs crates/testty/src/prelude.rs crates/testty/src/lib.rs`
+  and `prek run test-testty-src --all-files --hook-stage manual`.
 
 #### Docs
 
-- [x] Update `CHANGELOG.md` with a Keep-a-Changelog entry noting that the agentty E2E
-  session-creation journeys now use `Step::Eventually` predicates instead of fixed
-  `Step::sleep` waits.
+- [x] Refresh `///` doc comments on the touched public surface in
+  `crates/testty/src/assertion.rs`, `crates/testty/src/prelude.rs`, and
+  `crates/testty/src/proof/report.rs` so the accumulator behavior, drop-time panic, and
+  `ProofCapture::assertions` wiring are clearly described.
+- [x] Add a Keep-a-Changelog entry in `CHANGELOG.md` noting that `testty` now exposes a
+  `SoftAssertions` accumulator that batches `match_*` failures and routes them into the
+  active `ProofCapture::assertions`.
 
 ## Ready Now Execution Order
 
@@ -211,7 +225,6 @@ flowchart TD
     end
 
     subgraph TesttyLane["Testty - @andagaev"]
-        T6["[c821816d] agentty fixed-sleep removal"]
         T3["[a9ef45e2] SoftAssertions accumulator"]
         T4["[ca40b36d] Recipe match_* siblings"]
         T5["[07cce0e7] HTML structured failure diff"]
@@ -421,25 +434,6 @@ is in place and Codex is the next provider chosen for activity-summary rollout.
 #### Depends on
 
 `[29d3d82d-d1e5-452b-a93c-e873f89a8bba] Session Output: Render git-derived changed-file summaries`
-
-### [a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures
-
-#### Outcome
-
-Test authors can collect multiple `match_*` checks against one captured frame through a
-`SoftAssertions` accumulator that records every `AssertionFailure` and panics once at
-scope end with all messages, and the accumulated failures attach to the active
-`ProofCapture::assertions` so the HTML proof report can show all problems for a single
-capture instead of just the first.
-
-#### Promote when
-
-Promote when the Testty stream is ready for a soft-batched accumulator slice on top of
-the already-landed `match_*`/`AssertionFailure` surface.
-
-#### Depends on
-
-`None`
 
 ### [ca40b36d-2bb9-4f1a-a931-2ce93e285fab] Testty: Result-returning recipe matchers
 

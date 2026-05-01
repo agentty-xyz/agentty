@@ -8,6 +8,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use super::backend::ProofBackend;
+use crate::assertion::AssertionFailure;
 use crate::diff::FrameDiff;
 use crate::frame::TerminalFrame;
 
@@ -37,12 +38,33 @@ pub struct ProofCapture {
 }
 
 /// The outcome of a single assertion evaluated against a captured frame.
+///
+/// The `description` field is intentionally kept as a single-line summary
+/// so the annotated text backend can render `[PASS]`/`[FAIL]` markers on
+/// one row per assertion. When the assertion comes from the structured
+/// matcher core (for example, through
+/// [`ProofReport::record_soft_failure`]), the full
+/// [`AssertionFailure`] is preserved on `failure` so HTML and other
+/// structured backends can render `Expected`, `Region`, matched spans,
+/// and the frame excerpt without reparsing the formatted message.
+///
+/// Kept as a regular struct (not `#[non_exhaustive]`) so downstream
+/// crates that read [`ProofCapture::assertions`] can also push their own
+/// entries with struct literals when they assemble custom proof data.
+/// Because struct literals must name every field, every new field on
+/// this type is a breaking change for downstream constructors and lands
+/// in lockstep with a testty major version bump and a `CHANGELOG.md`
+/// migration note.
 #[derive(Debug, Clone)]
 pub struct AssertionResult {
     /// Whether the assertion passed.
     pub passed: bool,
-    /// Human-readable description of the assertion.
+    /// Single-line human-readable description of the assertion.
     pub description: String,
+    /// Structured failure context, when the result came from a `match_*`
+    /// matcher. `None` for legacy single-line assertions added through
+    /// [`ProofReport::add_assertion`].
+    pub failure: Option<Box<AssertionFailure>>,
 }
 
 /// Errors that can occur during proof report generation.
@@ -132,6 +154,44 @@ impl ProofReport {
             capture.assertions.push(AssertionResult {
                 passed,
                 description: description.into(),
+                failure: None,
+            });
+
+            return true;
+        }
+
+        false
+    }
+
+    /// Attach a soft-batched [`AssertionFailure`] to the most recent capture.
+    ///
+    /// Used by [`crate::assertion::SoftAssertions`] to route every
+    /// recorded failure into [`ProofCapture::assertions`] on the most
+    /// recently added capture, so a single capture can carry every batched
+    /// failure for the proof report instead of just the first.
+    ///
+    /// The pushed [`AssertionResult`] uses the first line of the
+    /// failure's pre-formatted `message` as `description` so the
+    /// annotated text backend keeps a one-line `[FAIL] <summary>` shape,
+    /// stores the full [`AssertionFailure`] on `failure` so structured
+    /// backends (HTML, future renderers) can render `Expected`, `Region`,
+    /// matched spans, and the frame excerpt without reparsing the
+    /// formatted message, and is always marked failed.
+    ///
+    /// Returns `true` when at least one capture exists and the failure was
+    /// attached, `false` when the report has no captures yet.
+    pub fn record_soft_failure(&mut self, failure: &AssertionFailure) -> bool {
+        if let Some(capture) = self.captures.last_mut() {
+            let summary = failure
+                .message
+                .lines()
+                .next()
+                .unwrap_or(&failure.message)
+                .to_string();
+            capture.assertions.push(AssertionResult {
+                passed: false,
+                description: summary,
+                failure: Some(Box::new(failure.clone())),
             });
 
             return true;
@@ -208,12 +268,21 @@ fn write_capture_section(output: &mut String, step_number: usize, capture: &Proo
     let _ = writeln!(output, "{frame_border}");
     let _ = writeln!(output);
 
-    // Assertion results.
+    // Assertion results. The first line of `description` is rendered on
+    // the `[PASS]`/`[FAIL]` row; any continuation lines (for example,
+    // when a soft failure stored a single-line summary but a future
+    // backend extends `description`) are indented under the marker so
+    // they do not visually merge with the next assertion.
     if !capture.assertions.is_empty() {
         let _ = writeln!(output, "  Assertions:");
         for assertion in &capture.assertions {
             let marker = if assertion.passed { "PASS" } else { "FAIL" };
-            let _ = writeln!(output, "    [{marker}] {}", assertion.description);
+            let mut lines = assertion.description.lines();
+            let first = lines.next().unwrap_or("");
+            let _ = writeln!(output, "    [{marker}] {first}");
+            for line in lines {
+                let _ = writeln!(output, "           {line}");
+            }
         }
         let _ = writeln!(output);
     }
@@ -227,6 +296,8 @@ fn write_footer(output: &mut String, capture_count: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assertion::{Expected, SoftAssertions, match_not_visible, match_text_in_region};
+    use crate::region::Region;
 
     #[test]
     fn proof_report_collects_captures() {
@@ -433,6 +504,188 @@ mod tests {
         // preserves ANSI formatting for accurate reconstruction.
         assert_eq!(report.diffs.len(), 1);
         assert!(!report.diffs[0].is_identical());
+    }
+
+    #[test]
+    fn record_soft_failure_attaches_to_latest_capture() {
+        // Arrange — two captures so we can prove "latest" is targeted.
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let mut report = ProofReport::new("soft_failure_routing");
+        report.add_capture("first", "First snapshot", &frame);
+        report.add_capture("second", "Second snapshot", &frame);
+
+        // Act
+        let failure = AssertionFailure {
+            message: "boom".to_string(),
+            expected: Expected::TextInRegion {
+                needle: "missing".to_string(),
+            },
+            region: None,
+            matched_spans: Vec::new(),
+            frame_excerpt: String::new(),
+        };
+        let attached = report.record_soft_failure(&failure);
+
+        // Assert — failure lands on the most recent capture, not the
+        // first. The description is the single-line summary so the
+        // annotated text marker shape stays clean, and the full
+        // structured `AssertionFailure` is preserved on `failure` so
+        // structured backends can render `Expected`, `Region`, matched
+        // spans, and the frame excerpt without reparsing the message.
+        assert!(attached);
+        assert!(report.captures[0].assertions.is_empty());
+        assert_eq!(report.captures[1].assertions.len(), 1);
+        let result = &report.captures[1].assertions[0];
+        assert!(!result.passed);
+        assert_eq!(result.description, "boom");
+        let stored = result
+            .failure
+            .as_deref()
+            .expect("structured failure should be preserved");
+        assert_eq!(stored.message, "boom");
+        assert!(matches!(stored.expected, Expected::TextInRegion { .. }));
+    }
+
+    #[test]
+    fn record_soft_failure_keeps_description_single_line_for_multiline_message() {
+        // Arrange — failure with a multi-line `message` mimicking what
+        // `match_text_in_region` produces. Without the single-line
+        // summary, the annotated text backend would lose the `[FAIL]`
+        // indent on continuation lines and visually merge with the next
+        // assertion.
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let mut report = ProofReport::new("soft_failure_multiline_summary");
+        report.add_capture("only", "Only capture", &frame);
+        let failure = AssertionFailure {
+            message: "first line summary\n  detail line\n  another detail".to_string(),
+            expected: Expected::TextInRegion {
+                needle: "missing".to_string(),
+            },
+            region: None,
+            matched_spans: Vec::new(),
+            frame_excerpt: String::new(),
+        };
+
+        // Act
+        report.record_soft_failure(&failure);
+
+        // Assert — `description` is the first line only, and the full
+        // multi-line message is preserved on the structured `failure`.
+        let result = &report.captures[0].assertions[0];
+        assert_eq!(result.description, "first line summary");
+        let stored = result.failure.as_deref().expect("failure preserved");
+        assert!(stored.message.contains("detail line"));
+        assert!(stored.message.contains("another detail"));
+    }
+
+    #[test]
+    fn annotated_text_indents_multiline_assertion_descriptions() {
+        // Arrange — capture with a multi-line `description` on an
+        // assertion (which can happen when a future caller fills in
+        // pre-existing `add_assertion` plumbing with structured text).
+        // The renderer must keep the `[FAIL]` marker on the first line
+        // and indent continuation lines under the marker so they do not
+        // visually merge with the next assertion.
+        let frame = TerminalFrame::new(40, 5, b"Test");
+        let mut report = ProofReport::new("multiline_render");
+        report.add_capture("check", "Verify state", &frame);
+        report
+            .captures
+            .last_mut()
+            .expect("capture exists")
+            .assertions
+            .push(AssertionResult {
+                passed: false,
+                description: "first summary line\nsecond detail line".to_string(),
+                failure: None,
+            });
+        report
+            .captures
+            .last_mut()
+            .expect("capture exists")
+            .assertions
+            .push(AssertionResult {
+                passed: true,
+                description: "next assertion".to_string(),
+                failure: None,
+            });
+
+        // Act
+        let text = report.to_annotated_text();
+
+        // Assert — the `[FAIL]` marker carries the first summary line,
+        // the continuation line is indented under it, and the next
+        // assertion's `[PASS]` marker is intact (not consumed by the
+        // multi-line description above).
+        assert!(text.contains("    [FAIL] first summary line"));
+        assert!(text.contains("           second detail line"));
+        assert!(text.contains("    [PASS] next assertion"));
+    }
+
+    #[test]
+    fn record_soft_failure_returns_false_without_captures() {
+        // Arrange
+        let mut report = ProofReport::new("empty_report");
+        let failure = AssertionFailure {
+            message: "no captures yet".to_string(),
+            expected: Expected::NotVisible {
+                needle: "x".to_string(),
+            },
+            region: None,
+            matched_spans: Vec::new(),
+            frame_excerpt: String::new(),
+        };
+
+        // Act
+        let attached = report.record_soft_failure(&failure);
+
+        // Assert
+        assert!(!attached);
+    }
+
+    #[test]
+    fn soft_assertions_attach_each_failure_to_active_capture() {
+        // Arrange — frame whose region excludes the needle so two soft
+        // checks fail and one passes against the same capture.
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let visible_region = Region::new(0, 0, 80, 1);
+        let empty_region = Region::new(20, 0, 60, 1);
+        let mut report = ProofReport::new("soft_capture_routing");
+        report.add_capture("only", "Only capture", &frame);
+
+        // Act — bind soft accumulator to the report and run several checks.
+        {
+            let mut soft = SoftAssertions::with_report(&mut report);
+            soft.check(match_text_in_region(&frame, "Hello", &empty_region));
+            soft.check(match_text_in_region(&frame, "Hello", &visible_region));
+            soft.check(match_not_visible(&frame, "Hello"));
+            // Consume to suppress the end-of-scope panic; the routed
+            // assertions on the proof report stay in place.
+            let failures = soft.into_failures();
+            assert_eq!(failures.len(), 2);
+        }
+
+        // Assert — both failures landed on the most recent capture in
+        // record order, the passing check left no trace, descriptions
+        // are single-line summaries (so the annotated text marker shape
+        // stays clean), and the full structured `AssertionFailure` is
+        // preserved on `failure` so structured backends can render
+        // `Expected`, `Region`, matched spans, and the frame excerpt.
+        let assertions = &report.captures[0].assertions;
+        assert_eq!(assertions.len(), 2);
+        assert!(assertions.iter().all(|result| !result.passed));
+        assert!(assertions[0].description.contains("not found in region"));
+        assert!(assertions[1].description.contains("NOT be visible"));
+        assert!(!assertions[0].description.contains('\n'));
+        assert!(!assertions[1].description.contains('\n'));
+        assert!(matches!(
+            assertions[0].failure.as_deref().map(|f| &f.expected),
+            Some(Expected::TextInRegion { .. })
+        ));
+        assert!(matches!(
+            assertions[1].failure.as_deref().map(|f| &f.expected),
+            Some(Expected::NotVisible { .. })
+        ));
     }
 
     #[test]

@@ -334,6 +334,55 @@ Adding the `match_*` siblings is a strictly additive change: all existing `asser
 callers keep working without modification, so this evolution does not require a major
 version bump for downstream crates.
 
+### Soft-batched assertions (`SoftAssertions`)
+
+`SoftAssertions` collects multiple `match_*` failures against one captured frame and
+panics once at scope end with every recorded message in record order, instead of failing
+fast on the first miss. Pass each `MatchResult` to `check`; passing results are dropped
+and failing ones are stored.
+
+```rust
+use testty::assertion::{self, SoftAssertions};
+use testty::region::Region;
+
+let region = Region::top_row(80);
+
+{
+    let mut soft = SoftAssertions::new();
+    soft.check(assertion::match_text_in_region(&frame, "Projects", &region));
+    soft.check(assertion::match_text_in_region(&frame, "Sessions", &region));
+    soft.check(assertion::match_not_visible(&frame, "Error"));
+    // Drop at the end of this block panics with one aggregated message
+    // listing every failure that was recorded above.
+}
+```
+
+Use `SoftAssertions::into_failures` to take ownership of the recorded failures before
+the accumulator goes out of scope; that path suppresses the end-of-scope panic so the
+caller can render the failures themselves.
+
+To attach every recorded failure to the most recent `ProofCapture::assertions` entry on
+a `ProofReport`, construct the accumulator with `SoftAssertions::with_report`. The
+report must already hold at least one capture — call `ProofReport::add_capture` first,
+otherwise `with_report` panics at the bind site so misconfigurations surface immediately
+instead of silently dropping failures from the proof report.
+
+```rust
+use testty::assertion::{self, SoftAssertions};
+use testty::proof::report::ProofReport;
+use testty::region::Region;
+
+let mut report = ProofReport::new("scenario");
+report.add_capture("startup", "Startup snapshot", &frame);
+
+let mut soft = SoftAssertions::with_report(&mut report);
+soft.check(assertion::match_text_in_region(&frame, "Projects", &Region::top_row(80)));
+soft.check(assertion::match_not_visible(&frame, "Error"));
+// Each recorded failure also lands on the latest capture's assertions
+// list so structured proof backends can render every failure together.
+let _ = soft.into_failures();
+```
+
 ### Recipe helpers (`recipe` module)
 
 High-level, composable helpers for common TUI patterns. Prefer these over raw

@@ -23,6 +23,7 @@ use std::fmt::Write;
 
 use crate::frame::{CellColor, TerminalFrame};
 use crate::locator::MatchedSpan;
+use crate::proof::report::ProofReport;
 use crate::region::Region;
 
 /// Result alias for [`AssertionFailure`]-returning matchers.
@@ -500,6 +501,172 @@ pub fn assert_span_is_not_highlighted(frame: &TerminalFrame, needle: &str) {
     );
 }
 
+/// Accumulator that batches `match_*` failures and panics once at scope end.
+///
+/// `SoftAssertions` lets test authors run several frame-level checks against
+/// one captured frame and surface every failure together instead of failing
+/// fast on the first miss. Pass each [`MatchResult`] from a `match_*`
+/// function to [`SoftAssertions::check`]; successful results are dropped
+/// and failures are stored. When the accumulator is dropped with at least
+/// one recorded failure and the current thread is not already unwinding,
+/// the [`Drop`] impl panics with a single message that lists every failure
+/// in record order.
+///
+/// Bind a [`ProofReport`] with [`SoftAssertions::with_report`] to also
+/// route every recorded failure into the most recent
+/// [`crate::proof::report::ProofCapture::assertions`] entry through
+/// [`ProofReport::record_soft_failure`], so a single capture in the proof
+/// pipeline can carry every batched failure for the report instead of just
+/// the first.
+///
+/// Call [`SoftAssertions::into_failures`] to take ownership of the
+/// recorded failures before the accumulator goes out of scope; that path
+/// suppresses the end-of-scope panic so callers can render the failures
+/// themselves without triggering a double-panic on drop.
+pub struct SoftAssertions<'r> {
+    failures: Vec<AssertionFailure>,
+    consumed: bool,
+    report: Option<&'r mut ProofReport>,
+}
+
+impl SoftAssertions<'static> {
+    /// Create a standalone accumulator that is not bound to a proof report.
+    ///
+    /// Recorded failures are still surfaced via the end-of-scope panic in
+    /// [`Drop`]; only the proof-report routing is skipped.
+    pub fn new() -> Self {
+        Self {
+            failures: Vec::new(),
+            consumed: false,
+            report: None,
+        }
+    }
+}
+
+impl Default for SoftAssertions<'static> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'r> SoftAssertions<'r> {
+    /// Create an accumulator bound to `report`.
+    ///
+    /// Each [`SoftAssertions::check`] call that records a failure also
+    /// attaches an [`crate::proof::report::AssertionResult`] to the most
+    /// recent capture on `report` through
+    /// [`ProofReport::record_soft_failure`].
+    ///
+    /// # Panics
+    ///
+    /// Panics when `report` has no captures yet. The accumulator borrows
+    /// `report` exclusively for its lifetime, so a missing capture cannot
+    /// be added later — failing fast at bind time prevents recorded
+    /// failures from being silently dropped from the proof report. Add
+    /// the capture via [`ProofReport::add_capture`] before binding.
+    pub fn with_report(report: &'r mut ProofReport) -> Self {
+        assert!(
+            !report.captures.is_empty(),
+            "SoftAssertions::with_report requires at least one capture on the report; call \
+             ProofReport::add_capture before binding so soft failures can be routed into \
+             ProofCapture::assertions"
+        );
+
+        Self {
+            failures: Vec::new(),
+            consumed: false,
+            report: Some(report),
+        }
+    }
+
+    /// Record one [`MatchResult`].
+    ///
+    /// Successful results are dropped. Errors are stored for the
+    /// end-of-scope panic and, when the accumulator is bound to a
+    /// [`ProofReport`], routed into the most recent capture via
+    /// [`ProofReport::record_soft_failure`].
+    pub fn check(&mut self, result: MatchResult) {
+        if let Err(failure) = result {
+            let failure = *failure;
+            if let Some(report) = self.report.as_mut() {
+                report.record_soft_failure(&failure);
+            }
+            self.failures.push(failure);
+        }
+    }
+
+    /// Number of failures recorded so far.
+    pub fn len(&self) -> usize {
+        self.failures.len()
+    }
+
+    /// Whether the accumulator has not recorded any failures yet.
+    pub fn is_empty(&self) -> bool {
+        self.failures.is_empty()
+    }
+
+    /// Take ownership of the recorded failures and suppress the
+    /// end-of-scope panic.
+    ///
+    /// Use this when the caller wants to render or forward the failures
+    /// themselves instead of relying on the [`Drop`] panic. The drop that
+    /// runs after `into_failures` returns sees an empty failure list and
+    /// the consumed flag, so it never double-panics.
+    pub fn into_failures(mut self) -> Vec<AssertionFailure> {
+        self.consumed = true;
+
+        std::mem::take(&mut self.failures)
+    }
+
+    /// Format the aggregated drop-time panic message for the recorded
+    /// failures. Extracted so unit tests can pin the exact rendered
+    /// shape without going through [`Drop`] and `catch_unwind`, which
+    /// would force a global-panic-hook swap that interferes with other
+    /// tests running in parallel.
+    fn format_aggregated_message(failures: &[AssertionFailure]) -> String {
+        let count = failures.len();
+        let mut message = format!("SoftAssertions: {count} failure(s) recorded:\n");
+        for (index, failure) in failures.iter().enumerate() {
+            // The first line of `failure.message` rides on the
+            // `[i/count]` marker; subsequent lines are indented under
+            // the marker so multi-line `match_*` failure messages stay
+            // attributable to their failure instead of visually merging
+            // with the next entry.
+            let mut lines = failure.message.lines();
+            let first = lines.next().unwrap_or("");
+            let _ = writeln!(message, "[{}/{count}] {first}", index + 1);
+            for line in lines {
+                let _ = writeln!(message, "      {line}");
+            }
+        }
+
+        message
+    }
+}
+
+impl Drop for SoftAssertions<'_> {
+    fn drop(&mut self) {
+        if self.consumed || self.failures.is_empty() {
+            return;
+        }
+
+        // Avoid a panic-in-panic if the surrounding scope is already
+        // unwinding for an unrelated reason; the failures are still
+        // attached to the proof report when one was bound.
+        if std::thread::panicking() {
+            return;
+        }
+
+        let message = Self::format_aggregated_message(&self.failures);
+
+        // The `assert!` form is used instead of a bare `panic!` so the
+        // workspace `clippy::panic` deny lint stays clean. The condition
+        // is always false here because the early return above bails out
+        // when `self.failures` is empty.
+        assert!(self.failures.is_empty(), "{message}");
+    }
+}
+
 /// Format a "text not found" error message with context.
 fn format_text_not_found(frame: &TerminalFrame, needle: &str, region: Region) -> String {
     let all_matches = frame.find_text(needle);
@@ -904,6 +1071,120 @@ mod tests {
         // frame_excerpt should include the visible screen contents even on
         // missing-text failures.
         assert!(failure.frame_excerpt.contains("plain text"));
+    }
+
+    #[test]
+    fn soft_assertions_empty_does_not_panic_on_drop() {
+        // Arrange / Act — drop without recording anything.
+        {
+            let _soft = SoftAssertions::new();
+        }
+
+        // Assert — reaching this point means drop did not panic.
+    }
+
+    #[test]
+    #[should_panic(expected = "SoftAssertions: 1 failure(s)")]
+    fn soft_assertions_single_failure_panics_on_drop_with_message() {
+        // Arrange
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let region = Region::new(20, 0, 60, 1);
+
+        // Act — drop triggers the panic with the only recorded failure.
+        let mut soft = SoftAssertions::new();
+        soft.check(match_text_in_region(&frame, "Hello", &region));
+    }
+
+    #[test]
+    fn soft_assertions_format_aggregated_message_lists_each_failure_in_order() {
+        // Arrange — record two failing checks against an empty region
+        // plus one passing check, then drain the accumulator to suppress
+        // the drop-time panic. Validating `format_aggregated_message`
+        // directly avoids swapping the global panic hook (which would
+        // suppress unrelated panics in other tests running in parallel)
+        // while still pinning the exact rendered shape that `Drop` emits.
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let empty_region = Region::new(20, 0, 60, 1);
+        let visible_region = Region::new(0, 0, 80, 1);
+
+        let mut soft = SoftAssertions::new();
+        soft.check(match_text_in_region(&frame, "Hello", &empty_region));
+        soft.check(match_text_in_region(&frame, "Hello", &visible_region));
+        soft.check(match_not_visible(&frame, "Hello"));
+        let failures = soft.into_failures();
+
+        // Act
+        let message = SoftAssertions::format_aggregated_message(&failures);
+
+        // Assert — header names the failure count, both failing checks
+        // appear with their 1-based indices in record order, the passing
+        // check is absent, and the failing-check ordering is preserved
+        // across the whole string.
+        assert_eq!(failures.len(), 2);
+        assert!(
+            message.starts_with("SoftAssertions: 2 failure(s) recorded:\n"),
+            "unexpected header: {message}"
+        );
+        let not_found_index = message
+            .find("[1/2]")
+            .expect("first failure should be indexed [1/2]");
+        let not_visible_index = message
+            .find("[2/2]")
+            .expect("second failure should be indexed [2/2]");
+        assert!(not_found_index < not_visible_index);
+        assert!(message[not_found_index..not_visible_index].contains("not found in region"));
+        assert!(message[not_visible_index..].contains("NOT be visible"));
+    }
+
+    #[test]
+    fn soft_assertions_into_failures_suppresses_drop_panic() {
+        // Arrange
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let region = Region::new(20, 0, 60, 1);
+
+        // Act — explicit consume should suppress the end-of-scope panic
+        // even when failures were recorded.
+        let mut soft = SoftAssertions::new();
+        soft.check(match_text_in_region(&frame, "Hello", &region));
+        let failures = soft.into_failures();
+
+        // Assert — failures handed to the caller, no panic on drop.
+        assert_eq!(failures.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "requires at least one capture")]
+    fn soft_assertions_with_report_panics_when_no_capture_exists() {
+        // Arrange — fresh report with no captures so binding is unsafe:
+        // failures recorded later could never be routed into
+        // `ProofCapture::assertions`.
+        let mut report = ProofReport::new("empty-report");
+
+        // Act — bind without first calling `add_capture`.
+        let _soft = SoftAssertions::with_report(&mut report);
+
+        // Assert — `with_report` panics before any check can run, so the
+        // misconfiguration surfaces at the bind site instead of being
+        // silently dropped from the proof report.
+    }
+
+    #[test]
+    fn soft_assertions_len_and_is_empty_track_recorded_failures() {
+        // Arrange
+        let frame = TerminalFrame::new(80, 24, b"Hello World");
+        let region = Region::new(20, 0, 60, 1);
+
+        // Act / Assert
+        let mut soft = SoftAssertions::new();
+        assert!(soft.is_empty());
+        assert_eq!(soft.len(), 0);
+
+        soft.check(match_text_in_region(&frame, "Hello", &region));
+        assert!(!soft.is_empty());
+        assert_eq!(soft.len(), 1);
+
+        // Drain to suppress the drop-time panic.
+        let _ = soft.into_failures();
     }
 
     #[test]

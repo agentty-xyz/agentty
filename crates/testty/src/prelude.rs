@@ -9,13 +9,13 @@
 //! ```
 
 pub use crate::assertion;
-pub use crate::assertion::{AssertionFailure, Expected, MatchResult};
+pub use crate::assertion::{AssertionFailure, Expected, MatchResult, SoftAssertions};
 pub use crate::feature::{FeatureDemo, FeatureMeta, FeatureResult, GifMode, GifStatus};
 pub use crate::frame::{CellColor, CellStyle, TerminalFrame};
 pub use crate::journey::Journey;
 pub use crate::locator::MatchedSpan;
 pub use crate::proof::backend::ProofBackend;
-pub use crate::proof::report::{ProofCapture, ProofError, ProofReport};
+pub use crate::proof::report::{AssertionResult, ProofCapture, ProofError, ProofReport};
 pub use crate::region::Region;
 pub use crate::scenario::Scenario;
 pub use crate::session::{PtySession, PtySessionBuilder, PtySessionError};

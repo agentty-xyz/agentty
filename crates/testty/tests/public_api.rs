@@ -71,6 +71,7 @@ fn prelude_surface_is_stable() {
     let _: Option<ProofCapture> = None;
     let _: Option<ProofReport> = None;
     let _: Option<ProofError> = None;
+    let _: Option<AssertionResult> = None;
 
     let _: fn(&NoopBackend) = accept_backend::<NoopBackend>;
 
@@ -80,6 +81,22 @@ fn prelude_surface_is_stable() {
     let _: fn(&TerminalFrame, &str) -> MatchResult = assertion::match_not_visible;
     let _: Option<AssertionFailure> = None;
     let _: Option<Expected> = None;
+
+    // SoftAssertions accumulator surface — both standalone and report-bound
+    // constructors return the same type so call sites can mix them, and
+    // `check` accepts any `MatchResult` from a `match_*` matcher.
+    let mut soft: SoftAssertions<'static> = SoftAssertions::new();
+    soft.check(Ok(()));
+    let failures: Vec<AssertionFailure> = soft.into_failures();
+    let _ = failures;
+    // `with_report` requires the report to already hold a capture before
+    // binding so soft failures cannot be silently dropped from the proof
+    // report; pin that contract by adding a capture before the bind here.
+    let mut report = ProofReport::new("public-api-soft");
+    report.add_capture("only", "Only capture", &TerminalFrame::new(1, 1, b""));
+    let mut soft_bound: SoftAssertions<'_> = SoftAssertions::with_report(&mut report);
+    soft_bound.check(Ok(()));
+    let _ = soft_bound.into_failures();
 
     // `Step::eventually` constructs an Eventually step from any predicate
     // closure with the documented signature. Pinning the call shape here
@@ -283,6 +300,25 @@ fn assertion_failure_destructuring_is_stable(failure: &AssertionFailure) -> &'st
         }
         _ => "unknown",
     }
+}
+
+/// Lock in the supported pattern for destructuring `AssertionResult`.
+///
+/// `AssertionResult` is a regular (not `#[non_exhaustive]`) struct so
+/// downstream crates can both destructure existing entries on
+/// [`ProofCapture::assertions`] and push their own entries with struct
+/// literals. This function is compiled (not run) so accidental renames
+/// of destructured field names fail the build before publication. The
+/// bound values are referenced after the destructure so clippy keeps the
+/// compatibility check explicit.
+#[allow(dead_code)]
+fn assertion_result_destructuring_is_stable(result: &AssertionResult) {
+    let AssertionResult {
+        passed,
+        description,
+        failure,
+    } = result;
+    let _: (&bool, &String, &Option<Box<AssertionFailure>>) = (passed, description, failure);
 }
 
 /// Lock in the supported pattern for matching `SnapshotError` variants.

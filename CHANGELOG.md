@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- testty: add `SoftAssertions` accumulator that batches `match_*` failures and panics
+  once at scope end with every recorded message. When constructed with
+  `SoftAssertions::with_report`, each recorded `AssertionFailure` is also routed into
+  the most recent `ProofCapture::assertions` entry through the new
+  `ProofReport::record_soft_failure` plumbing so a single capture can carry every
+  batched failure for the proof report. `SoftAssertions` is re-exported from
+  `testty::prelude`.
+- testty: re-export `AssertionResult` from `testty::prelude` so downstream code can
+  inspect `ProofCapture::assertions` entries (including the structured `failure`
+  payload) without naming the full module path.
 - testty: add `Step::Eventually` plus the `Step::eventually` and `Scenario::eventually`
   constructors so test authors can poll any `MatchResult`-returning frame predicate
   against the live PTY frame and surface the last `AssertionFailure` on timeout instead
@@ -19,6 +29,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- testty: add the new `AssertionResult::failure: Option<Box<AssertionFailure>>` field so
+  soft-batched failures preserve the full structured context (`Expected` variant,
+  optional `Region`, matched spans, frame excerpt) for HTML and other structured proof
+  backends instead of collapsing every failure into a formatted string. The annotated
+  text backend renders the first line of `description` next to `[PASS]`/`[FAIL]` and
+  indents continuation lines under the marker. `AssertionResult` stays a regular (not
+  `#[non_exhaustive]`) struct so downstream crates can both destructure entries on
+  `ProofCapture::assertions` and push their own entries with struct literals; existing
+  field reads through `assertion.passed` and `assertion.description` stay
+  source-compatible, but two downstream patterns break at compile time and must be
+  updated together: any caller constructing `AssertionResult` directly must add the new
+  `failure: None` field, and any caller exhaustively destructuring `AssertionResult`
+  with a `let AssertionResult { passed, description } = ...` pattern (the destructuring
+  contract pinned in `crates/testty/tests/public_api.rs`) must add the new `failure`
+  binding (or a `..` rest pattern).
 - testty: mark `PtySessionError` as `#[non_exhaustive]` and add the new
   `PtySessionError::Assertion(Box<AssertionFailure>)` variant so structured predicate
   failures from `Step::Eventually` flow through the existing executor return type.
