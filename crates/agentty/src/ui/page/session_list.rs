@@ -572,9 +572,13 @@ mod tests {
             crate::ui::page::fyi::session_list_messages(),
             2,
         );
-        let wrapped_message = crate::ui::page::fyi::rotating_message(
+        let fourth_message = crate::ui::page::fyi::rotating_message(
             crate::ui::page::fyi::session_list_messages(),
             3,
+        );
+        let wrapped_message = crate::ui::page::fyi::rotating_message(
+            crate::ui::page::fyi::session_list_messages(),
+            4,
         );
 
         // Assert
@@ -588,6 +592,10 @@ mod tests {
         );
         assert_eq!(
             third_message,
+            Some("Recommended: run Agentty in tmux to use session open commands.")
+        );
+        assert_eq!(
+            fourth_message,
             Some("Agentty refreshes PR statuses every minute.")
         );
         assert_eq!(

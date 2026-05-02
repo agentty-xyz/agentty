@@ -5,9 +5,10 @@ use crate::ui::state::app_mode::{AppMode, HelpContext};
 
 /// Rotating FYI messages shown in the top status bar while the sessions list
 /// is visible.
-const SESSION_LIST_FYI_MESSAGES: [&str; 3] = [
+const SESSION_LIST_FYI_MESSAGES: [&str; 4] = [
     "Press Enter to open the selected session.",
     "Go to Settings to specify commands that can open within a session.",
+    "Recommended: run Agentty in tmux to use session open commands.",
     "Agentty refreshes PR statuses every minute.",
 ];
 

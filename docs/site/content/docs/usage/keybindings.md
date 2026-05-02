@@ -106,7 +106,8 @@ until the background focused-review generation finishes and the session returns 
   worktree is available and the session is not actively running, rebasing, queued, or
   merging. If one `Open Commands` entry is configured for the active project, it runs
   immediately. If multiple entries are configured (one command per line), Agentty opens
-  a selector popup.
+  a selector popup. Run Agentty in `tmux` when you rely on `Open Commands`, because
+  those commands are dispatched into tmux windows.
 - **Draft sessions**: sessions created through the `a` selector do not create a worktree
   until you press `s` to start the staged bundle, so `o` stays hidden before the first
   live turn.
