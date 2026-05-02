@@ -1,5 +1,6 @@
 use std::cell::Cell;
-use std::io;
+use std::ffi::OsString;
+use std::{env, io};
 
 use crossterm::cursor::Show;
 use crossterm::event::{
@@ -29,6 +30,12 @@ trait TerminalOperation {
     /// Returns whether the active terminal supports keyboard enhancement
     /// flags for reporting modified keys like `Alt+Enter`.
     fn supports_keyboard_enhancement(&self) -> io::Result<bool>;
+
+    /// Returns whether the app is running through an SSH transport.
+    ///
+    /// SSH can hide terminal capability responses even when the outer
+    /// terminal will honor keyboard enhancement escape sequences.
+    fn is_ssh_session(&self) -> bool;
 
     /// Enters the alternate screen and enables bracketed paste, optionally
     /// enabling keyboard enhancement flags first.
@@ -61,6 +68,10 @@ impl TerminalOperation for CrosstermTerminalOperation {
 
     fn supports_keyboard_enhancement(&self) -> io::Result<bool> {
         supports_keyboard_enhancement()
+    }
+
+    fn is_ssh_session(&self) -> bool {
+        has_ssh_environment(|name| env::var_os(name))
     }
 
     fn enter_alternate_screen(
@@ -201,14 +212,33 @@ fn prepare_terminal_stdout_with_operation(
 ) -> io::Result<io::Stdout> {
     operation.enable_raw_mode()?;
 
-    let keyboard_enhancement_enabled =
-        matches!(operation.supports_keyboard_enhancement(), Ok(true));
+    let keyboard_enhancement_enabled = should_enable_keyboard_enhancement(operation);
     guard.set_keyboard_enhancement_enabled(keyboard_enhancement_enabled);
 
     let mut stdout = io::stdout();
     operation.enter_alternate_screen(&mut stdout, keyboard_enhancement_enabled)?;
 
     Ok(stdout)
+}
+
+/// Returns whether setup should push keyboard enhancement flags.
+///
+/// Crossterm's support query is the preferred signal for local terminals. Over
+/// SSH, the query can fail or report unsupported when the outer terminal still
+/// honors the enhancement sequence, so remote sessions optimistically enable
+/// it to keep modified `Enter` keys distinguishable.
+fn should_enable_keyboard_enhancement(operation: &dyn TerminalOperation) -> bool {
+    match operation.supports_keyboard_enhancement() {
+        Ok(true) => true,
+        Ok(false) | Err(_) => operation.is_ssh_session(),
+    }
+}
+
+/// Returns whether common SSH environment variables are present.
+fn has_ssh_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> bool {
+    ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+        .iter()
+        .any(|name| get_var(name).is_some())
 }
 
 /// Restores terminal modes and ignores failures so drop paths do not panic.
@@ -261,6 +291,7 @@ mod tests {
             .expect_supports_keyboard_enhancement()
             .once()
             .returning(|| Ok(false));
+        operation.expect_is_ssh_session().once().returning(|| false);
         operation
             .expect_enter_alternate_screen()
             .once()
@@ -319,6 +350,7 @@ mod tests {
             .expect_supports_keyboard_enhancement()
             .once()
             .returning(|| Err(io::Error::other("unsupported")));
+        operation.expect_is_ssh_session().once().returning(|| false);
         operation
             .expect_enter_alternate_screen()
             .once()
@@ -331,6 +363,99 @@ mod tests {
         // Assert
         let _stdout = result.expect("setup should fall back when support query fails");
         assert!(!guard.keyboard_enhancement_enabled());
+    }
+
+    /// Verifies SSH sessions optimistically enable keyboard enhancement when
+    /// the support query is hidden by the remote transport.
+    #[test]
+    fn setup_terminal_enables_keyboard_enhancement_for_ssh_query_failure() {
+        // Arrange
+        let mut operation = MockTerminalOperation::new();
+        let guard = TerminalGuard::new();
+        operation
+            .expect_enable_raw_mode()
+            .once()
+            .returning(|| Ok(()));
+        operation
+            .expect_supports_keyboard_enhancement()
+            .once()
+            .returning(|| Err(io::Error::other("timeout")));
+        operation.expect_is_ssh_session().once().returning(|| true);
+        operation
+            .expect_enter_alternate_screen()
+            .once()
+            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .returning(|_, _| Ok(()));
+
+        // Act
+        let result = prepare_terminal_stdout_with_operation(&operation, &guard);
+
+        // Assert
+        let _stdout = result.expect("setup should enable keyboard enhancement over SSH");
+        assert!(guard.keyboard_enhancement_enabled());
+    }
+
+    /// Verifies SSH sessions optimistically enable keyboard enhancement even
+    /// when the support query returns a negative capability signal.
+    #[test]
+    fn setup_terminal_enables_keyboard_enhancement_for_ssh_unsupported_query() {
+        // Arrange
+        let mut operation = MockTerminalOperation::new();
+        let guard = TerminalGuard::new();
+        operation
+            .expect_enable_raw_mode()
+            .once()
+            .returning(|| Ok(()));
+        operation
+            .expect_supports_keyboard_enhancement()
+            .once()
+            .returning(|| Ok(false));
+        operation.expect_is_ssh_session().once().returning(|| true);
+        operation
+            .expect_enter_alternate_screen()
+            .once()
+            .withf(|_, keyboard_enhancement_enabled| *keyboard_enhancement_enabled)
+            .returning(|_, _| Ok(()));
+
+        // Act
+        let result = prepare_terminal_stdout_with_operation(&operation, &guard);
+
+        // Assert
+        let _stdout = result.expect("setup should enable keyboard enhancement over SSH");
+        assert!(guard.keyboard_enhancement_enabled());
+    }
+
+    /// Verifies SSH detection accepts the environment variables set by common
+    /// OpenSSH server configurations.
+    #[test]
+    fn ssh_environment_detects_common_ssh_variables() {
+        // Arrange
+        let variables = [
+            ("SSH_CONNECTION", Some("client server")),
+            ("SSH_CLIENT", None),
+            ("SSH_TTY", None),
+        ];
+
+        // Act
+        let is_ssh_session = has_ssh_environment(|name| {
+            variables
+                .iter()
+                .find(|(variable_name, _)| *variable_name == name)
+                .and_then(|(_, value)| value.map(OsString::from))
+        });
+
+        // Assert
+        assert!(is_ssh_session);
+    }
+
+    /// Verifies SSH detection stays false when no common SSH variable is set.
+    #[test]
+    fn ssh_environment_rejects_local_terminal_without_ssh_variables() {
+        // Arrange & Act
+        let is_ssh_session = has_ssh_environment(|_| None);
+
+        // Assert
+        assert!(!is_ssh_session);
     }
 
     /// Verifies restore still attempts alternate-screen cleanup when raw-mode
