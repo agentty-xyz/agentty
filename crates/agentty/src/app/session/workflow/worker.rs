@@ -96,6 +96,10 @@ impl SessionCommand {
                 request_kind: AgentRequestKind::UtilityPrompt,
                 ..
             } => "utility_prompt",
+            Self::Run {
+                request_kind: AgentRequestKind::AccountRead,
+                ..
+            } => "account_read",
         }
     }
 }
@@ -1604,8 +1608,8 @@ mod tests {
     }
 
     #[test]
-    /// Ensures session start requests map to `start_prompt` and session
-    /// resume requests map to `reply` in persisted operation labels.
+    /// Ensures session command request kinds map to stable persisted
+    /// operation labels.
     fn test_session_command_kind_values() {
         // Arrange
         let start_command = SessionCommand::Run {
@@ -1628,14 +1632,25 @@ mod tests {
                 session_model: AgentModel::ClaudeSonnet46,
             },
         };
+        let account_read_command = SessionCommand::Run {
+            operation_id: "op-account-read".to_string(),
+            request_kind: AgentRequestKind::AccountRead,
+            prompt: "prompt".into(),
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                session_model: AgentModel::ClaudeSonnet46,
+            },
+        };
 
         // Act
         let start_kind = start_command.kind();
         let resume_kind = resume_command.kind();
+        let account_read_kind = account_read_command.kind();
 
         // Assert
         assert_eq!(start_kind, "start_prompt");
         assert_eq!(resume_kind, "reply");
+        assert_eq!(account_read_kind, "account_read");
     }
 
     #[test]

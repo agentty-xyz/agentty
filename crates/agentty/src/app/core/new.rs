@@ -159,11 +159,15 @@ impl App {
         );
 
         AppStartup::spawn_background_tasks(auto_update, &event_tx, &projects, &services, &sessions);
+        let agent_usage_refresh_requested_at = Some(clock.now_instant());
 
         Ok(Self {
             mode: crate::ui::state::app_mode::AppMode::List,
             needs_redraw: true,
             settings,
+            agent_usage_snapshot: crate::domain::agent_usage::AgentUsageSnapshot::default(),
+            agent_usage_refresh_completed_at: None,
+            agent_usage_refresh_requested_at,
             tabs: crate::app::tab::TabManager::default(),
             projects,
             services,
@@ -240,6 +244,7 @@ impl App {
             clock,
             event_tx,
             AppServiceDeps {
+                agent_usage_probe: Arc::clone(&clients.agent_usage_probe),
                 app_server_client_override: clients
                     .app_server_client_override
                     .as_ref()

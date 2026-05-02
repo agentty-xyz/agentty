@@ -69,8 +69,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/project.rs`: `ProjectManager` for project CRUD and selection
   orchestration.
 - `crates/agentty/src/app/service.rs`: `AppServices` dependency container for
-  `AppRepositories`, `FsClient`, `GitClient`, `ReviewRequestClient`, the optional
-  app-server test override, and the event sender.
+  `AppRepositories`, `FsClient`, `GitClient`, `ReviewRequestClient`, `AgentUsageProbe`,
+  the optional app-server test override, and the event sender.
 - `crates/agentty/src/app/session_state.rs`: `SessionState`, the per-session runtime
   state container.
 - `crates/agentty/src/app/session/workflow.rs`: Router-only session workflow module that
@@ -80,7 +80,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/tab.rs`: `TabManager` for top-level tab definitions and tab
   selection state.
 - `crates/agentty/src/app/task.rs`: App-scoped background tasks for git status polling,
-  version checks, review assists, and app-server turns.
+  provider usage snapshots, version checks, review assists, and app-server turns.
 - `crates/agentty/src/app/session/core.rs`: `SessionManager`, session clock boundary,
   shared constants, and session module tests.
 - `crates/agentty/src/app/session/workflow/access.rs`: Session lookup helpers.
@@ -163,6 +163,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   parsing.
 - `crates/agentty/src/infra/agent/availability.rs`: `AgentAvailabilityProbe` plus
   machine-scoped CLI discovery used to cache which agent kinds are locally runnable.
+- `crates/agentty/src/infra/agent/usage.rs`: `AgentUsageProbe` plus provider account
+  usage collection and placeholder rows for unwired provider collectors.
 - `crates/agentty/src/infra/agent/backend.rs`: `AgentBackend` trait and shared backend
   request or error types.
 - `crates/agentty/src/infra/agent/provider.rs`: Central provider registry for transport
@@ -176,7 +178,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   `crates/agentty/src/infra/agent/app_server/`: Router plus provider-specific app-server
   client trees kept private to the agent backend module. The Codex and Gemini trees both
   split `client.rs` orchestration from focused `lifecycle.rs`, `transport.rs`,
-  `stream_parser.rs`, `policy.rs`, and `usage.rs` helpers.
+  `stream_parser.rs`, `policy.rs`, and `usage.rs` helpers; Codex also has
+  `account_usage.rs` for app-server account and rate-limit reads.
 - `crates/agentty/src/infra/agent/codex.rs`: Codex backend runtime command construction.
 - `crates/agentty/src/infra/agent/gemini.rs`: Gemini backend runtime command
   construction.

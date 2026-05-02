@@ -38,7 +38,10 @@ pub(crate) fn plan_app_server_instruction_delivery(
         return InstructionDeliveryMode::BootstrapWithReplay;
     }
 
-    if matches!(request_kind, AgentRequestKind::UtilityPrompt) {
+    if matches!(
+        request_kind,
+        AgentRequestKind::UtilityPrompt | AgentRequestKind::AccountRead
+    ) {
         return InstructionDeliveryMode::BootstrapFull;
     }
 

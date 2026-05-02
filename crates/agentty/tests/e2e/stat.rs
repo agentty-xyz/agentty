@@ -7,7 +7,7 @@ use crate::common;
 use crate::common::FeatureTest;
 
 /// Verify that the Stats tab renders the activity heatmap and token stats
-/// table.
+/// table, plus the provider subscription usage panel.
 ///
 /// Navigates to the Stats tab and asserts that both the heatmap title
 /// and token stats table title are visible in the rendered frame.
@@ -29,11 +29,15 @@ fn stats_tab_shows_heatmap_and_tokens() {
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
                     .viewing_pause_ms(3000)
-                    .capture_labeled("stats_tab", "Stats tab with heatmap and token table")
+                    .capture_labeled(
+                        "stats_tab",
+                        "Stats tab with heatmap, subscription usage, and token table",
+                    )
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
+                assertion::assert_text_in_region(frame, "Subscription Usage", &full);
                 assertion::assert_text_in_region(frame, "Token Stats", &full);
             },
         )

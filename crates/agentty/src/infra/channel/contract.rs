@@ -272,6 +272,8 @@ pub enum AgentRequestKind {
     },
     /// Runs one isolated utility prompt outside the long-lived session flow.
     UtilityPrompt,
+    /// Reads provider account metadata without creating an agent turn.
+    AccountRead,
 }
 
 impl AgentRequestKind {
@@ -282,7 +284,9 @@ impl AgentRequestKind {
             Self::SessionStart | Self::SessionResume { .. } => {
                 crate::infra::agent::ProtocolRequestProfile::SessionTurn
             }
-            Self::UtilityPrompt => crate::infra::agent::ProtocolRequestProfile::UtilityPrompt,
+            Self::UtilityPrompt | Self::AccountRead => {
+                crate::infra::agent::ProtocolRequestProfile::UtilityPrompt
+            }
         }
     }
 
@@ -296,7 +300,7 @@ impl AgentRequestKind {
     #[must_use]
     pub fn session_output(&self) -> Option<&str> {
         match self {
-            Self::SessionStart | Self::UtilityPrompt => None,
+            Self::SessionStart | Self::UtilityPrompt | Self::AccountRead => None,
             Self::SessionResume { session_output } => session_output.as_deref(),
         }
     }
@@ -498,6 +502,25 @@ mod tests {
     fn test_agent_request_kind_utility_prompt_uses_utility_protocol_profile() {
         // Arrange
         let request_kind = AgentRequestKind::UtilityPrompt;
+
+        // Act
+        let protocol_profile = request_kind.protocol_profile();
+        let session_output = request_kind.session_output();
+
+        // Assert
+        assert_eq!(
+            protocol_profile,
+            crate::infra::agent::ProtocolRequestProfile::UtilityPrompt
+        );
+        assert_eq!(session_output, None);
+    }
+
+    #[test]
+    /// Ensures account-read requests are non-session utility requests without
+    /// replay output.
+    fn test_agent_request_kind_account_read_uses_utility_protocol_profile() {
+        // Arrange
+        let request_kind = AgentRequestKind::AccountRead;
 
         // Act
         let protocol_profile = request_kind.protocol_profile();
