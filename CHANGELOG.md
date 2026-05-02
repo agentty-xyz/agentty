@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.8.11] - 2026-05-02
+
 ### Added
 
 - testty: add `SoftAssertions` accumulator that batches `match_*` failures and panics
@@ -54,6 +56,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `Step::eventually` waiters keyed off the in-session and sessions-list footer markers
   so the journeys settle as soon as the UI transitions and surface a structured
   `AssertionFailure` on timeout instead of an opaque over-sleep.
+- Bump workspace crate metadata and lockfile package versions to `0.8.11`.
+
+### Contributors
+
+- @andagaev
+- @minev-dev
 
 ## [v0.8.10] - 2026-04-28
 
