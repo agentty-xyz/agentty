@@ -361,15 +361,16 @@ struct InlineCommentKey {
     side: ReviewCommentAnchorSide,
 }
 
-/// Side-aware lookup table for rendering review threads below matching diff
-/// lines.
+/// Side-aware lookup table for rendering unresolved review threads below
+/// matching diff lines.
 struct InlineCommentIndex<'a> {
     file_threads: HashMap<String, Vec<&'a ReviewCommentThread>>,
     line_threads: HashMap<InlineCommentKey, Vec<&'a ReviewCommentThread>>,
 }
 
 impl<'a> InlineCommentIndex<'a> {
-    /// Builds a lookup table from one cached review-comment snapshot.
+    /// Builds a lookup table from one cached review-comment snapshot, excluding
+    /// resolved threads from all inline diff anchors.
     fn new(snapshot: Option<&'a ReviewCommentSnapshot>) -> Self {
         let mut index = Self {
             file_threads: HashMap::new(),
@@ -379,7 +380,11 @@ impl<'a> InlineCommentIndex<'a> {
             return index;
         };
 
-        for thread in &snapshot.threads {
+        for thread in snapshot
+            .threads
+            .iter()
+            .filter(|thread| is_visible_thread(thread))
+        {
             if thread.anchor_side == ReviewCommentAnchorSide::File || thread.line.is_none() {
                 index
                     .file_threads
@@ -697,10 +702,10 @@ impl DiffPage<'_> {
                 }
 
                 let has_pr_level = !snapshot.pr_level_comments.is_empty();
-                let has_threads = !snapshot.threads.is_empty();
+                let has_threads = snapshot.threads.iter().any(is_visible_thread);
 
                 if !has_pr_level && !has_threads {
-                    lines.push(empty_muted_line("No review comments yet."));
+                    lines.push(empty_muted_line("No unresolved review comments."));
                 } else {
                     if has_pr_level {
                         append_pr_level_comments(
@@ -710,7 +715,12 @@ impl DiffPage<'_> {
                             width,
                         );
                     }
-                    for (index, thread) in snapshot.threads.iter().enumerate() {
+                    for (index, thread) in snapshot
+                        .threads
+                        .iter()
+                        .filter(|thread| is_visible_thread(thread))
+                        .enumerate()
+                    {
                         if index > 0 || has_pr_level {
                             lines.push(Line::default());
                         }
@@ -732,7 +742,7 @@ fn empty_muted_line(text: &'static str) -> Line<'static> {
     ))
 }
 
-/// Returns the top-of-panel summary line for review comments.
+/// Returns the top-of-panel summary line for unresolved review comments.
 fn comments_header_line(
     review_request: Option<&ReviewRequest>,
     snapshot: Option<&ReviewCommentSnapshot>,
@@ -757,21 +767,30 @@ fn comments_header_line(
     ])
 }
 
-/// Returns `(thread_count, comment_count)` totals for a review-comment
-/// snapshot, combining inline-thread comments with pull-request-level
-/// conversation comments.
+/// Returns unresolved `(thread_count, comment_count)` totals for a
+/// review-comment snapshot, combining unresolved inline-thread comments with
+/// pull-request-level conversation comments.
 fn comment_counts(snapshot: Option<&ReviewCommentSnapshot>) -> (usize, usize) {
     snapshot.map_or((0, 0), |snapshot| {
-        let thread_count = snapshot.threads.len();
-        let thread_comment_count = snapshot
+        let mut thread_count = 0;
+        let mut thread_comment_count = 0;
+        for thread in snapshot
             .threads
             .iter()
-            .map(|thread| thread.comments.len())
-            .sum::<usize>();
+            .filter(|thread| is_visible_thread(thread))
+        {
+            thread_count += 1;
+            thread_comment_count += thread.comments.len();
+        }
         let comment_count = snapshot.pr_level_comments.len() + thread_comment_count;
 
         (thread_count, comment_count)
     })
+}
+
+/// Returns whether a review thread still needs attention in the diff UI.
+fn is_visible_thread(thread: &ReviewCommentThread) -> bool {
+    !thread.is_resolved
 }
 
 /// Returns an empty-state line for a merged or closed review request.
@@ -909,6 +928,7 @@ fn append_indented_markdown(lines: &mut Vec<Line<'static>>, rendered: &Arc<[Line
 mod tests {
     use super::*;
     use crate::domain::session::tests::SessionFixtureBuilder;
+    use crate::domain::session::{ForgeKind, ReviewRequestSummary};
     use crate::domain::theme::ColorTheme;
     use crate::ui::util::parse_diff_lines;
 
@@ -923,6 +943,25 @@ mod tests {
         SessionFixtureBuilder::new()
             .title(Some("Diff Session".to_string()))
             .build()
+    }
+
+    fn session_with_review_request() -> Session {
+        let mut session = session_fixture();
+        session.review_request = Some(ReviewRequest {
+            last_refreshed_at: 0,
+            summary: ReviewRequestSummary {
+                display_id: "#42".to_string(),
+                forge_kind: ForgeKind::GitHub,
+                source_branch: "wt/diff-session".to_string(),
+                state: ReviewRequestState::Open,
+                status_summary: None,
+                target_branch: "main".to_string(),
+                title: "Diff Session".to_string(),
+                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+            },
+        });
+
+        session
     }
 
     fn new_diff_page<'a>(
@@ -943,21 +982,33 @@ mod tests {
         )
     }
 
-    fn review_comment_snapshot() -> ReviewCommentSnapshot {
+    fn mixed_review_comment_snapshot() -> ReviewCommentSnapshot {
         ReviewCommentSnapshot {
             pr_level_comments: Vec::new(),
-            threads: vec![ReviewCommentThread {
-                anchor_side: ReviewCommentAnchorSide::New,
-                comments: vec![ReviewComment {
-                    author: "alice".to_string(),
-                    body: "Please handle this edge case.".to_string(),
-                }],
-                is_outdated: Some(false),
-                is_resolved: false,
-                line: Some(2),
-                path: "src/main.rs".to_string(),
-                start_line: None,
+            threads: vec![
+                review_thread(2, "alice", "Please handle this edge case.", false),
+                review_thread(2, "bob", "Resolved and should stay hidden.", true),
+            ],
+        }
+    }
+
+    fn review_thread(
+        line: u32,
+        author: &str,
+        body: &str,
+        is_resolved: bool,
+    ) -> ReviewCommentThread {
+        ReviewCommentThread {
+            anchor_side: ReviewCommentAnchorSide::New,
+            comments: vec![ReviewComment {
+                author: author.to_string(),
+                body: body.to_string(),
             }],
+            is_outdated: Some(false),
+            is_resolved,
+            line: Some(line),
+            path: "src/main.rs".to_string(),
+            start_line: None,
         }
     }
 
@@ -986,6 +1037,14 @@ mod tests {
             .iter()
             .filter(|cell| cell.symbol() == symbol && cell.fg == style::palette::border())
             .count()
+    }
+
+    fn line_text(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     #[test]
@@ -1133,7 +1192,7 @@ mod tests {
         // Arrange
         let session = session_fixture();
         let markdown_render_cache = markdown::MarkdownRenderCache::default();
-        let snapshot = review_comment_snapshot();
+        let snapshot = mixed_review_comment_snapshot();
         let mut diff_page = DiffPage::new(
             &session,
             concat!(
@@ -1165,6 +1224,36 @@ mod tests {
         assert!(text.contains("1 comments · new · unresolved"));
         assert!(text.contains("alice"));
         assert!(text.contains("Please handle this edge case."));
+        assert!(!text.contains("bob"));
+        assert!(!text.contains("Resolved and should stay hidden."));
+    }
+
+    #[test]
+    fn test_comments_panel_hides_resolved_threads_from_counts_and_body() {
+        // Arrange
+        let session = session_with_review_request();
+        let markdown_render_cache = markdown::MarkdownRenderCache::default();
+        let snapshot = mixed_review_comment_snapshot();
+        let diff_page = DiffPage::new(
+            &session,
+            String::new(),
+            0,
+            0,
+            DiffRightPanel::Comments,
+            &markdown_render_cache,
+            Some(&snapshot),
+        );
+
+        // Act
+        let lines = diff_page.build_comments_lines(120);
+        let text = line_text(&lines);
+
+        // Assert
+        assert!(text.contains("1 comments in 1 threads"));
+        assert!(text.contains("alice"));
+        assert!(text.contains("Please handle this edge case."));
+        assert!(!text.contains("bob"));
+        assert!(!text.contains("Resolved and should stay hidden."));
     }
 
     #[test]

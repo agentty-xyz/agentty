@@ -244,7 +244,7 @@ case "$*" in
     printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
     ;;
   *"api --hostname github.com graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please simplify this line."}]}}]}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]},"reviewThreads":{"nodes":[{"diffSide":"RIGHT","isOutdated":false,"isResolved":false,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"alice"},"body":"Please simplify this line."}]}},{"diffSide":"RIGHT","isOutdated":false,"isResolved":true,"line":2,"path":"src/main.rs","startLine":null,"subjectType":"LINE","comments":{"nodes":[{"author":{"login":"bob"},"body":"Resolved comment should stay hidden."}]}}]}}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
@@ -986,8 +986,14 @@ fn review_comments_preview_opens_from_diff_page() -> E2eResult {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
+                let view_text = frame.text_in_region(&full);
+
                 assertion::assert_text_in_region(frame, "Please simplify this line.", &full);
                 assertion::assert_text_in_region(frame, "alice", &full);
+                assert!(
+                    !view_text.contains("Resolved comment should stay hidden."),
+                    "resolved review-thread comments should be hidden"
+                );
             },
         )?;
 

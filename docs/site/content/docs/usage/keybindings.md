@@ -171,9 +171,10 @@ includes aggregate line totals as `+added` and `-removed` counts for the current
 diff, and cached pull-request or merge-request line comments are rendered inline below
 matching diff lines. When the right panel shows review-request comments, it lists the
 same cached inline threads as an overview plus pull-request-level or merge-request-level
-"General discussion" comments. The comments panel is read-only; replies must happen on
-the forge web UI. Comment threads are fetched by the background review-request sync task
-and are pre-sorted by file path, line, and diff side.
+"General discussion" comments. Resolved inline threads are hidden from both views. The
+comments panel is read-only; replies must happen on the forge web UI. Comment threads
+are fetched by the background review-request sync task and are pre-sorted by file path,
+line, and diff side.
 
 ## Prompt Input
 

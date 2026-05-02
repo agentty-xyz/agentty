@@ -248,7 +248,8 @@ pull-request or merge-request line comments directly below matching diff lines. 
 the cached review-request comments overview so you can flip between code and feedback
 without leaving the view. The comments panel includes inline threads grouped by file
 (pre-sorted by line number and diff side) and pull-request-level or merge-request-level
-"General discussion" comments at the top. Threads are fetched by the same background
+"General discussion" comments at the top. Resolved inline threads are hidden from both
+the annotated diff and comments overview. Threads are fetched by the same background
 sync that refreshes review-request status. The panel is read-only — replies still happen
 on the forge web UI.
 
