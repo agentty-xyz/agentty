@@ -102,7 +102,7 @@ async fn load_codex_usage_row(request: &AgentUsageRequest) -> AgentUsageRow {
     .await
     {
         Ok(details) => AgentUsageStatus::Available(details),
-        Err(error) => codex_usage_error_status(error),
+        Err(error) => codex_usage_error_status(&error),
     };
 
     AgentUsageRow::new(AgentKind::Codex, status)
@@ -110,7 +110,7 @@ async fn load_codex_usage_row(request: &AgentUsageRequest) -> AgentUsageRow {
 
 /// Maps expected Codex account/network failures to muted unavailable states
 /// while preserving unexpected integration failures as errors.
-fn codex_usage_error_status(error: AppServerError) -> AgentUsageStatus {
+fn codex_usage_error_status(error: &AppServerError) -> AgentUsageStatus {
     let message = error.to_string();
     if is_codex_usage_unavailable_error(&message) {
         return AgentUsageStatus::Unavailable {
@@ -205,7 +205,7 @@ mod tests {
         let error = AppServerError::Provider("Codex auth token is expired".to_string());
 
         // Act
-        let status = codex_usage_error_status(error);
+        let status = codex_usage_error_status(&error);
 
         // Assert
         assert!(matches!(
@@ -222,7 +222,7 @@ mod tests {
         let error = AppServerError::Provider("Malformed rate-limit payload".to_string());
 
         // Act
-        let status = codex_usage_error_status(error);
+        let status = codex_usage_error_status(&error);
 
         // Assert
         assert_eq!(

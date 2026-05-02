@@ -60,10 +60,10 @@ use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 /// `agentty` home directory.
 pub const AGENTTY_WT_DIR: &str = "wt";
 /// Freshness window for provider usage snapshots loaded for the Stats page.
-const AGENT_USAGE_REFRESH_TTL: Duration = Duration::from_secs(120);
+const AGENT_USAGE_REFRESH_TTL: Duration = Duration::from_mins(2);
 /// Maximum time to treat a provider usage load as in-flight before allowing a
 /// retry.
-const AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(300);
+const AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Returns the resolved `agentty` home directory.
 ///
@@ -1855,7 +1855,9 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         let now = Instant::now();
-        let stale_at = now - AGENT_USAGE_REFRESH_TTL - Duration::from_secs(1);
+        let stale_at = now
+            .checked_sub(AGENT_USAGE_REFRESH_TTL + Duration::from_secs(1))
+            .expect("test instant should allow stale offset");
         app.agent_usage_refresh_requested_at = Some(stale_at);
         app.agent_usage_refresh_completed_at = Some(stale_at);
 
@@ -1871,8 +1873,9 @@ mod tests {
         // Arrange
         let mut app = new_test_app().await;
         let now = Instant::now();
-        let expired_request_at =
-            now - AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT - Duration::from_secs(1);
+        let expired_request_at = now
+            .checked_sub(AGENT_USAGE_REFRESH_IN_FLIGHT_TIMEOUT + Duration::from_secs(1))
+            .expect("test instant should allow expired in-flight offset");
         app.agent_usage_refresh_requested_at = Some(expired_request_at);
         app.agent_usage_refresh_completed_at = None;
 

@@ -93,7 +93,7 @@ impl Page for StatsPage<'_> {
 impl StatsPage<'_> {
     /// Renders the activity heatmap with a width-aware week count.
     fn render_heatmap(&self, f: &mut Frame, area: Rect) {
-        let visible_week_count = self.visible_heatmap_week_count(area.width);
+        let visible_week_count = Self::visible_heatmap_week_count(area.width);
         let heatmap = Paragraph::new(self.build_heatmap_lines(area.width)).block(
             Block::default()
                 .borders(Borders::ALL)
@@ -211,7 +211,7 @@ impl StatsPage<'_> {
         let activity = self.build_local_activity();
         let grid = build_activity_heatmap_grid(&activity, end_day_key);
         let max_count = heatmap_max_count(&grid);
-        let visible_week_count = self.visible_heatmap_week_count(available_width);
+        let visible_week_count = Self::visible_heatmap_week_count(available_width);
         let mut lines: Vec<Line<'static>> = Vec::new();
         let month_row = build_visible_heatmap_month_row(
             end_day_key,
@@ -276,7 +276,7 @@ impl StatsPage<'_> {
 
     /// Returns the number of heatmap week columns visible inside a panel of
     /// `available_width`.
-    fn visible_heatmap_week_count(&self, available_width: u16) -> usize {
+    fn visible_heatmap_week_count(available_width: u16) -> usize {
         let content_width = usize::from(available_width.saturating_sub(2));
 
         visible_heatmap_week_count(content_width, HEATMAP_DAY_LABEL_WIDTH, HEATMAP_CELL_WIDTH)
@@ -339,8 +339,10 @@ fn agent_usage_status_lines(status: &AgentUsageStatus) -> Vec<Line<'static>> {
     match status {
         AgentUsageStatus::Available(details) => agent_usage_details_lines(details),
         AgentUsageStatus::MissingCli => vec![muted_line("CLI not found on PATH")],
-        AgentUsageStatus::Unavailable { message } => vec![muted_line(message.clone())],
-        AgentUsageStatus::NotImplemented { message } => vec![muted_line(message.clone())],
+        AgentUsageStatus::Unavailable { message }
+        | AgentUsageStatus::NotImplemented { message } => {
+            vec![muted_line(message.clone())]
+        }
         AgentUsageStatus::Error { message } => vec![error_line(message.clone())],
     }
 }
@@ -698,7 +700,7 @@ mod tests {
         let usage_position = find_text_start_position(buffer, "Subscription Usage")
             .expect("usage title should render");
         let expected_panel_width = 89;
-        let expected_visible_weeks = page.visible_heatmap_week_count(expected_panel_width);
+        let expected_visible_weeks = StatsPage::visible_heatmap_week_count(expected_panel_width);
         let text = buffer_text(buffer);
 
         assert_eq!(usage_position.1 - heatmap_position.1, expected_panel_width);

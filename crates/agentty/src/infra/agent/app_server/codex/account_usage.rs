@@ -11,8 +11,8 @@ use crate::domain::agent_usage::{AgentRateLimit, AgentUsageDetails};
 use crate::infra::app_server::AppServerError;
 use crate::infra::{agent, app_server_transport};
 
-/// Loads ChatGPT account plan and current Codex rate-limit buckets from one
-/// temporary `codex app-server` runtime.
+/// Loads `ChatGPT` account plan and current `Codex` rate-limit buckets from
+/// one temporary `codex app-server` runtime.
 pub(crate) async fn load_codex_account_usage(
     folder: &Path,
     model: &str,
@@ -93,7 +93,7 @@ async fn send_account_request<Transport: CodexRuntimeTransport>(
     Ok(response_value)
 }
 
-/// Extracts the ChatGPT plan type from an `account/read` response.
+/// Extracts the `ChatGPT` plan type from an `account/read` response.
 fn extract_plan_type(response_value: &Value) -> Option<String> {
     response_value
         .get("result")
@@ -210,21 +210,19 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn load_codex_account_usage_with_transport_reads_plan_and_rate_limits() {
-        // Arrange
-        let initialize_id = Arc::new(Mutex::new(None));
-        let account_id = Arc::new(Mutex::new(None));
-        let rate_limits_id = Arc::new(Mutex::new(None));
-        let mut sequence = Sequence::new();
-        let mut transport = MockCodexRuntimeTransport::new();
-
+    /// Expects the `initialize` and `initialized` messages that prepare the
+    /// temporary `Codex` app-server runtime.
+    fn expect_initialize_handshake(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        initialize_id: &Arc<Mutex<Option<String>>>,
+    ) {
         transport
             .expect_write_json_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .withf({
-                let initialize_id = Arc::clone(&initialize_id);
+                let initialize_id = Arc::clone(initialize_id);
 
                 move |payload| {
                     remember_request_id(&initialize_id, payload);
@@ -236,9 +234,9 @@ mod tests {
         transport
             .expect_wait_for_response_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .returning({
-                let initialize_id = Arc::clone(&initialize_id);
+                let initialize_id = Arc::clone(initialize_id);
 
                 move |response_id| {
                     let expected_id = initialize_id
@@ -256,15 +254,24 @@ mod tests {
         transport
             .expect_write_json_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .withf(|payload| payload.get("method").and_then(Value::as_str) == Some("initialized"))
             .returning(|_| Box::pin(async { Ok(()) }));
+    }
+
+    /// Expects the `account/read` request and returns a `ChatGPT` plan
+    /// response.
+    fn expect_account_read(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        account_id: &Arc<Mutex<Option<String>>>,
+    ) {
         transport
             .expect_write_json_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .withf({
-                let account_id = Arc::clone(&account_id);
+                let account_id = Arc::clone(account_id);
 
                 move |payload| {
                     remember_request_id(&account_id, payload);
@@ -276,9 +283,9 @@ mod tests {
         transport
             .expect_wait_for_response_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .returning({
-                let account_id = Arc::clone(&account_id);
+                let account_id = Arc::clone(account_id);
 
                 move |response_id| {
                     let expected_id = account_id
@@ -295,12 +302,21 @@ mod tests {
                     })
                 }
             });
+    }
+
+    /// Expects the `account/rateLimits/read` request and returns one primary
+    /// rate-limit bucket.
+    fn expect_rate_limits_read(
+        transport: &mut MockCodexRuntimeTransport,
+        sequence: &mut Sequence,
+        rate_limits_id: &Arc<Mutex<Option<String>>>,
+    ) {
         transport
             .expect_write_json_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .withf({
-                let rate_limits_id = Arc::clone(&rate_limits_id);
+                let rate_limits_id = Arc::clone(rate_limits_id);
 
                 move |payload| {
                     remember_request_id(&rate_limits_id, payload);
@@ -312,9 +328,9 @@ mod tests {
         transport
             .expect_wait_for_response_line()
             .times(1)
-            .in_sequence(&mut sequence)
+            .in_sequence(sequence)
             .returning({
-                let rate_limits_id = Arc::clone(&rate_limits_id);
+                let rate_limits_id = Arc::clone(rate_limits_id);
 
                 move |response_id| {
                     let expected_id = rate_limits_id
@@ -331,6 +347,19 @@ mod tests {
                     })
                 }
             });
+    }
+
+    #[tokio::test]
+    async fn load_codex_account_usage_with_transport_reads_plan_and_rate_limits() {
+        // Arrange
+        let initialize_id = Arc::new(Mutex::new(None));
+        let account_id = Arc::new(Mutex::new(None));
+        let rate_limits_id = Arc::new(Mutex::new(None));
+        let mut sequence = Sequence::new();
+        let mut transport = MockCodexRuntimeTransport::new();
+        expect_initialize_handshake(&mut transport, &mut sequence, &initialize_id);
+        expect_account_read(&mut transport, &mut sequence, &account_id);
+        expect_rate_limits_read(&mut transport, &mut sequence, &rate_limits_id);
 
         // Act
         let usage = load_codex_account_usage_with_transport(&mut transport)
@@ -360,7 +389,7 @@ mod tests {
                     "primary": {
                         "used_percent": 12.5,
                         "window_duration_mins": 300,
-                        "resets_at": 1730947200
+                        "resets_at": 1_730_947_200
                     },
                     "rate_limit_reached_type": "primary"
                 }
