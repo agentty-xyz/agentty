@@ -124,7 +124,25 @@ fn auxiliary_surface_is_stable() {
         .with_update_mode(true);
     let _: bool = config.is_update_mode();
 
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_selected_tab;
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_unselected_tab;
     let _: fn(&TerminalFrame, &str) = testty::recipe::expect_instruction_visible;
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_keybinding_hint;
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_footer_action;
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_dialog_title;
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_status_message;
+    let _: fn(&TerminalFrame, &str) = testty::recipe::expect_not_visible;
+
+    // Result-returning recipe siblings exposed for composition with
+    // `SoftAssertions` and `ProofReport` flows.
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_selected_tab;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_unselected_tab;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_instruction_visible;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_keybinding_hint;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_footer_action;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_dialog_title;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_status_message;
+    let _: fn(&TerminalFrame, &str) -> MatchResult = testty::recipe::match_not_visible;
 
     // Feature freshness primitives — exposed so external tooling can build
     // freshness reports without re-running VHS.

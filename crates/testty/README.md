@@ -408,6 +408,21 @@ recipe::expect_status_message(&frame, "Saved");        // Anywhere in frame
 recipe::expect_not_visible(&frame, "Loading...");
 ```
 
+Each `expect_*` recipe has a `match_*` sibling that returns
+[`MatchResult`](https://docs.rs/testty) instead of panicking, so recipes compose with
+`SoftAssertions` and `ProofReport` flows the same way the underlying
+`assertion::match_*` matchers do:
+
+```rust
+use testty::assertion::SoftAssertions;
+use testty::recipe;
+
+let mut soft = SoftAssertions::new();
+soft.check(recipe::match_selected_tab(&frame, "Projects"));
+soft.check(recipe::match_keybinding_hint(&frame, "Quit"));
+let _ = soft.into_failures();
+```
+
 ## Snapshot testing
 
 The framework supports two snapshot modes: **frame text** (semantic) and **visual
