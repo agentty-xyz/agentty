@@ -15,6 +15,8 @@ use crate::common::FeatureTest;
 fn stats_tab_shows_heatmap_and_tokens() {
     // Arrange, Act, Assert
     FeatureTest::new("stats_content")
+        .with_stub_path_only()
+        .with_terminal_size(160, 24)
         .zola(
             "Stats tab",
             "View activity heatmap and per-session token usage statistics.",
@@ -28,6 +30,8 @@ fn stats_tab_shows_heatmap_and_tokens() {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
+                    .wait_for_text("Claude", 3000)
+                    .wait_for_stable_frame(500, 5000)
                     .viewing_pause_ms(3000)
                     .capture_labeled(
                         "stats_tab",
@@ -50,6 +54,8 @@ fn stats_tab_shows_heatmap_and_tokens() {
 fn stats_footer_shows_summary() {
     // Arrange, Act, Assert
     FeatureTest::new("stats_footer")
+        .with_stub_path_only()
+        .with_terminal_size(160, 24)
         .zola(
             "Stats footer",
             "Stats footer shows aggregate session and token counts.",
@@ -62,6 +68,8 @@ fn stats_footer_shows_summary() {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
+                    .wait_for_text("Claude", 3000)
+                    .wait_for_stable_frame(500, 5000)
                     .viewing_pause_ms(3000)
                     .capture_labeled("stats_footer", "Stats tab footer with counts")
             },
@@ -82,6 +90,8 @@ fn stats_footer_shows_summary() {
 fn stats_help_shows_keybindings() {
     // Arrange, Act, Assert
     FeatureTest::new("stats_help")
+        .with_stub_path_only()
+        .with_terminal_size(160, 24)
         .zola(
             "Stats help",
             "Press ? on the Stats tab to see stats-specific keybindings.",
@@ -94,6 +104,8 @@ fn stats_help_shows_keybindings() {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::switch_to_tab("Review"))
                     .compose(&common::switch_to_tab("Stats"))
+                    .wait_for_text("Claude", 3000)
+                    .wait_for_stable_frame(500, 5000)
                     .viewing_pause_ms(2000)
                     .compose(&common::open_help_overlay())
                     .viewing_pause_ms(3000)

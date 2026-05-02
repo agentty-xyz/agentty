@@ -308,10 +308,78 @@ pub fn compute_frame_hash(report: &ProofReport) -> u64 {
     let mut hasher = DefaultHasher::new();
 
     for capture in &report.captures {
-        capture.frame_bytes.hash(&mut hasher);
+        normalized_frame_bytes_for_hash(&capture.frame_bytes).hash(&mut hasher);
     }
 
     hasher.finish()
+}
+
+/// Returns frame bytes with volatile temp roots normalized for hashing.
+///
+/// Feature tests often run inside fresh [`tempfile::TempDir`] directories,
+/// while the captured TUI footer may display the absolute working directory.
+/// Normalizing those paths keeps freshness sidecars tied to visible UI state
+/// instead of one random temp directory name.
+fn normalized_frame_bytes_for_hash(frame_bytes: &[u8]) -> Vec<u8> {
+    let mut frame_text = String::from_utf8_lossy(frame_bytes).into_owned();
+
+    for temp_root in temp_root_strings() {
+        frame_text = frame_text.replace(&temp_root, "<tmp>");
+    }
+
+    normalize_tempfile_segments(&frame_text).into_bytes()
+}
+
+/// Returns temp root spellings that may appear in captured terminal frames.
+fn temp_root_strings() -> Vec<String> {
+    let temp_root = std::env::temp_dir();
+    let mut roots = vec![
+        temp_root
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string(),
+    ];
+
+    if let Ok(canonical_temp_root) = temp_root.canonicalize() {
+        roots.push(
+            canonical_temp_root
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string(),
+        );
+    }
+
+    roots.sort();
+    roots.dedup();
+
+    roots
+}
+
+/// Replaces random `tempfile` directory names after a normalized temp root.
+fn normalize_tempfile_segments(frame_text: &str) -> String {
+    const NORMALIZED_TEMPFILE_DIR: &str = "<tmp>/<tempdir>";
+    const TEMPFILE_PREFIX: &str = "<tmp>/.tmp";
+
+    let mut normalized = String::with_capacity(frame_text.len());
+    let mut remainder = frame_text;
+
+    while let Some(prefix_index) = remainder.find(TEMPFILE_PREFIX) {
+        let after_prefix_index = prefix_index + TEMPFILE_PREFIX.len();
+        normalized.push_str(&remainder[..prefix_index]);
+        normalized.push_str(NORMALIZED_TEMPFILE_DIR);
+
+        let after_prefix = &remainder[after_prefix_index..];
+        let random_name_length = after_prefix
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        remainder = &after_prefix[random_name_length..];
+    }
+
+    normalized.push_str(remainder);
+
+    normalized
 }
 
 /// Return the on-disk sidecar path that [`FeatureDemo`] uses to cache the
@@ -617,6 +685,42 @@ mod tests {
 
         // Assert — should produce a consistent hash even with no captures.
         assert_eq!(hash, compute_frame_hash(&report));
+    }
+
+    #[test]
+    fn normalized_frame_bytes_for_hash_removes_tempfile_directory_names() {
+        // Arrange
+        let temp_root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string();
+        let first_frame = format!("{temp_root}/.tmpAlpha123/test-project");
+        let second_frame = format!("{temp_root}/.tmpBeta456/test-project");
+
+        // Act
+        let first_normalized = normalized_frame_bytes_for_hash(first_frame.as_bytes());
+        let second_normalized = normalized_frame_bytes_for_hash(second_frame.as_bytes());
+
+        // Assert
+        assert_eq!(first_normalized, second_normalized);
+        assert_eq!(
+            String::from_utf8(first_normalized).expect("normalized frame should be utf8"),
+            "<tmp>/<tempdir>/test-project",
+        );
+    }
+
+    #[test]
+    fn normalize_tempfile_segments_preserves_non_tempfile_paths() {
+        // Arrange
+        let frame_text = "<tmp>/stable-project";
+
+        // Act
+        let normalized = normalize_tempfile_segments(frame_text);
+
+        // Assert
+        assert_eq!(normalized, frame_text);
     }
 
     #[test]

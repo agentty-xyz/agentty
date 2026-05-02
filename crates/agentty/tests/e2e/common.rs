@@ -78,10 +78,29 @@ impl BuilderEnv {
     pub(crate) fn builder(&self) -> PtySessionBuilder {
         let path_with_stub_bin = self.path_with_stub_bin();
 
+        self.builder_with_path_and_size(
+            path_with_stub_bin,
+            DEFAULT_TERMINAL_COLS,
+            DEFAULT_TERMINAL_ROWS,
+        )
+    }
+
+    /// Return a configured [`PtySessionBuilder`] with an explicit `PATH` and
+    /// terminal size.
+    ///
+    /// This keeps feature tests able to choose between inheriting system
+    /// commands, using only deterministic stub agent executables, and
+    /// exercising responsive layouts at their intended widths.
+    fn builder_with_path_and_size(
+        &self,
+        path_env: String,
+        terminal_cols: u16,
+        terminal_rows: u16,
+    ) -> PtySessionBuilder {
         PtySessionBuilder::new(cargo_bin("agentty"))
-            .size(80, 24)
+            .size(terminal_cols, terminal_rows)
             .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
-            .env("PATH", path_with_stub_bin)
+            .env("PATH", path_env)
             .workdir(&self.workdir)
     }
 
@@ -90,12 +109,20 @@ impl BuilderEnv {
     /// These match the variables set by [`BuilderEnv::builder`] so the VHS
     /// recording reproduces the same environment as the PTY session.
     pub(crate) fn as_vhs_env_pairs(&self) -> Vec<(String, String)> {
+        self.as_vhs_env_pairs_with_path(self.path_with_stub_bin())
+    }
+
+    /// Return VHS environment variable pairs with an explicit `PATH`.
+    ///
+    /// This mirrors [`BuilderEnv::builder_with_path_and_size`] so PTY proof
+    /// runs and VHS recordings see the same command lookup environment.
+    fn as_vhs_env_pairs_with_path(&self, path_env: String) -> Vec<(String, String)> {
         vec![
             (
                 "AGENTTY_ROOT".to_string(),
                 self.agentty_root.to_string_lossy().into_owned(),
             ),
-            ("PATH".to_string(), self.path_with_stub_bin()),
+            ("PATH".to_string(), path_env),
         ]
     }
 
@@ -110,6 +137,11 @@ impl BuilderEnv {
             Ok(path) => path.to_string_lossy().into_owned(),
             Err(_) => self.stub_bin.to_string_lossy().into_owned(),
         }
+    }
+
+    /// Build a deterministic `PATH` that exposes only the test stub bin.
+    fn stub_only_path(&self) -> String {
+        self.stub_bin.to_string_lossy().into_owned()
     }
 }
 
@@ -153,6 +185,12 @@ fn feature_output_dir() -> PathBuf {
 /// Unknown values fall back to the default. The variable is parsed once
 /// per test run.
 pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
+/// Default PTY width used by feature tests unless a scenario requests a
+/// wider responsive layout.
+const DEFAULT_TERMINAL_COLS: u16 = 80;
+/// Default PTY height used by feature tests unless a scenario requests a
+/// taller responsive layout.
+const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
 /// Resolve the GIF freshness mode from [`TESTTY_GIF_MODE_ENV_VAR`].
 ///
@@ -277,11 +315,17 @@ impl ZolaFeaturePage {
 /// }
 /// ```
 pub(crate) struct FeatureTest {
+    /// Whether PTY and VHS runs inherit the ambient system `PATH`.
+    inherit_system_path: bool,
     /// Feature name used for GIF filename and Zola page filename.
     name: String,
     /// Optional environment setup hook that can seed database state or files
     /// before the PTY session starts.
     setup: Option<FeatureSetupHook>,
+    /// Terminal column count used for the PTY proof run.
+    terminal_cols: u16,
+    /// Terminal row count used for the PTY proof run.
+    terminal_rows: u16,
     /// Whether to initialize a git repository in the workdir.
     with_git: bool,
     /// Optional Zola page metadata for auto-generation.
@@ -297,8 +341,11 @@ impl FeatureTest {
     /// The name is used as the GIF filename stem and Zola page filename.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
+            inherit_system_path: true,
             name: name.into(),
             setup: None,
+            terminal_cols: DEFAULT_TERMINAL_COLS,
+            terminal_rows: DEFAULT_TERMINAL_ROWS,
             with_git: false,
             zola_page: None,
         }
@@ -321,6 +368,28 @@ impl FeatureTest {
     /// session creation.
     pub(crate) fn with_git(mut self) -> Self {
         self.with_git = true;
+
+        self
+    }
+
+    /// Restrict the spawned app `PATH` to deterministic test stubs only.
+    ///
+    /// Use this for feature captures that must not vary based on provider
+    /// CLIs installed on the developer or CI host. Tests that need `git` or
+    /// other system tools should keep the default inherited `PATH`.
+    pub(crate) fn with_stub_path_only(mut self) -> Self {
+        self.inherit_system_path = false;
+
+        self
+    }
+
+    /// Set the terminal size used by the PTY proof run.
+    ///
+    /// This is intended for responsive UI feature captures whose asserted
+    /// content only renders above a documented width threshold.
+    pub(crate) fn with_terminal_size(mut self, cols: u16, rows: u16) -> Self {
+        self.terminal_cols = cols;
+        self.terminal_rows = rows;
 
         self
     }
@@ -364,7 +433,29 @@ impl FeatureTest {
         }
 
         let scenario = build_scenario(Scenario::new(&self.name));
-        let owned_pairs = env.as_vhs_env_pairs();
+        let terminal_cols = self.terminal_cols;
+        let terminal_rows = self.terminal_rows;
+        let uses_default_terminal_size =
+            terminal_cols == DEFAULT_TERMINAL_COLS && terminal_rows == DEFAULT_TERMINAL_ROWS;
+        let (builder, owned_pairs) = if self.inherit_system_path && uses_default_terminal_size {
+            (env.builder(), env.as_vhs_env_pairs())
+        } else if self.inherit_system_path {
+            (
+                env.builder_with_path_and_size(
+                    env.path_with_stub_bin(),
+                    terminal_cols,
+                    terminal_rows,
+                ),
+                env.as_vhs_env_pairs(),
+            )
+        } else {
+            let path_env = env.stub_only_path();
+
+            (
+                env.builder_with_path_and_size(path_env.clone(), terminal_cols, terminal_rows),
+                env.as_vhs_env_pairs_with_path(path_env),
+            )
+        };
         let env_pairs: Vec<(&str, &str)> = owned_pairs
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -374,7 +465,7 @@ impl FeatureTest {
         let result = FeatureDemo::new(&self.name)
             .gif_output_dir(feature_output_dir())
             .gif_mode(gif_mode)
-            .run(&scenario, env.builder(), &cargo_bin("agentty"), &env_pairs)
+            .run(&scenario, builder, &cargo_bin("agentty"), &env_pairs)
             .map_err(|error| std::io::Error::other(format!("feature demo failed: {error}")))?;
 
         // Surface GIF generation diagnostics — explicitly whitelist
