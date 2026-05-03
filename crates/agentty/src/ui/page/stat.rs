@@ -4,24 +4,21 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::domain::agent::AgentKind;
 use crate::domain::agent_usage::{
     AgentRateLimit, AgentUsageDetails, AgentUsageSnapshot, AgentUsageStatus,
 };
 use crate::domain::session::Session;
-use crate::ui::page::session_list::{model_column_width, project_column_width};
 use crate::ui::state::help_action;
-use crate::ui::util::{format_token_count, inline_text};
+use crate::ui::util::format_token_count;
 use crate::ui::{Page, layout, style};
 
 /// Fixed height reserved for provider usage on the Stats page.
 const USAGE_PANEL_HEIGHT: u16 = 11;
-/// Horizontal spacing between token-stat table columns.
-const TABLE_COLUMN_SPACING: u16 = 2;
 
-/// Stats dashboard showing provider usage and per-session token statistics.
+/// Stats dashboard showing provider usage and aggregate session totals.
 pub struct StatsPage<'a> {
     agent_usage_snapshot: &'a AgentUsageSnapshot,
     sessions: &'a [Session],
@@ -39,8 +36,8 @@ impl<'a> StatsPage<'a> {
 }
 
 impl Page for StatsPage<'_> {
-    /// Renders the dashboard with provider usage, token table, footer, and
-    /// compact tab-page spacing.
+    /// Renders the dashboard with provider usage, footer totals, and compact
+    /// tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let main_chunks = Layout::default()
@@ -49,13 +46,12 @@ impl Page for StatsPage<'_> {
             .split(areas.main_area);
 
         self.render_agent_usage(f, main_chunks[0]);
-        self.render_table(f, main_chunks[1]);
         self.render_footer(f, areas.footer_area);
     }
 }
 
 impl StatsPage<'_> {
-    /// Renders provider subscription and quota usage above token totals.
+    /// Renders provider subscription and quota usage in the main stats area.
     fn render_agent_usage(&self, f: &mut Frame, area: Rect) {
         let usage = Paragraph::new(self.build_agent_usage_lines()).block(
             Block::default()
@@ -67,56 +63,7 @@ impl StatsPage<'_> {
         f.render_widget(usage, area);
     }
 
-    /// Renders per-session token statistics using the shared table palette.
-    fn render_table(&self, f: &mut Frame, area: Rect) {
-        let header_style = Style::default()
-            .bg(style::palette::surface())
-            .fg(style::palette::text_muted())
-            .add_modifier(Modifier::BOLD);
-        let header_cells = ["Session", "Project", "Model", "Input", "Output"]
-            .iter()
-            .map(|header| Cell::from(*header));
-        let header = Row::new(header_cells)
-            .style(header_style)
-            .height(1)
-            .bottom_margin(1);
-
-        let rows = self.sessions.iter().map(|session| {
-            let cells = vec![
-                Cell::from(inline_text(session.display_title())),
-                Cell::from(session.project_name.clone()),
-                Cell::from(session.model.as_str()),
-                Cell::from(format_token_count(session.stats.input_tokens)),
-                Cell::from(format_token_count(session.stats.output_tokens)),
-            ];
-
-            Row::new(cells)
-                .style(Style::default().fg(style::palette::text()))
-                .height(1)
-        });
-
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Min(0),
-                project_column_width(self.sessions),
-                model_column_width(self.sessions),
-                Constraint::Length(10),
-                Constraint::Length(10),
-            ],
-        )
-        .column_spacing(TABLE_COLUMN_SPACING)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Token Stats")
-                .border_style(style::border_style()),
-        );
-
-        f.render_widget(table, area);
-    }
-
+    /// Renders Stats-tab help actions and aggregate token totals.
     fn render_footer(&self, f: &mut Frame, area: Rect) {
         let footer_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -312,18 +259,6 @@ mod tests {
     use crate::domain::theme::ColorTheme;
 
     #[test]
-    fn test_token_stats_table_column_spacing_is_wider_for_readability() {
-        // Arrange
-        let expected_spacing = 2;
-
-        // Act
-        let spacing = TABLE_COLUMN_SPACING;
-
-        // Assert
-        assert_eq!(spacing, expected_spacing);
-    }
-
-    #[test]
     fn test_render_uses_palette_border_for_stats_panels() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
@@ -344,8 +279,39 @@ mod tests {
         // Assert
         let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
         assert!(
-            border_cell_count >= 2,
-            "expected subscription usage and token table panels to use palette border color"
+            border_cell_count >= 1,
+            "expected subscription usage panel to use palette border color"
+        );
+    }
+
+    #[test]
+    fn test_render_keeps_subscription_usage_panel_compact() {
+        // Arrange
+        let sessions = vec![session_fixture()];
+        let usage_snapshot = AgentUsageSnapshot::default();
+        let mut page = StatsPage::new(&sessions, &usage_snapshot);
+        let backend = ratatui::backend::TestBackend::new(160, 30);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw stats page");
+
+        // Assert
+        let bottom_border_rows = symbol_y_positions(terminal.backend().buffer(), "└");
+        assert!(
+            !bottom_border_rows.is_empty(),
+            "expected subscription usage panel to render a bottom border"
+        );
+        assert!(
+            bottom_border_rows
+                .iter()
+                .all(|row| *row < USAGE_PANEL_HEIGHT.saturating_add(5)),
+            "expected subscription usage panel bottom border to stay near the top"
         );
     }
 
@@ -393,48 +359,6 @@ mod tests {
             .collect()
     }
 
-    fn find_text_start_cell<'a>(
-        buffer: &'a ratatui::buffer::Buffer,
-        needle: &str,
-    ) -> Option<&'a ratatui::buffer::Cell> {
-        let (cell_index, _) = find_text_start_position(buffer, needle)?;
-
-        buffer.content().get(cell_index)
-    }
-
-    fn find_text_start_position(
-        buffer: &ratatui::buffer::Buffer,
-        needle: &str,
-    ) -> Option<(usize, u16)> {
-        let width = usize::from(buffer.area.width.max(1));
-        let needle_symbols = needle
-            .chars()
-            .map(|character| character.to_string())
-            .collect::<Vec<_>>();
-        let content = buffer.content();
-
-        for row_start in (0..content.len()).step_by(width) {
-            let row_end = row_start + width.min(content.len().saturating_sub(row_start));
-            let row = &content[row_start..row_end];
-
-            for (index, window) in row.windows(needle_symbols.len()).enumerate() {
-                let window_matches = window
-                    .iter()
-                    .zip(&needle_symbols)
-                    .all(|(cell, symbol)| cell.symbol() == symbol);
-
-                if window_matches {
-                    let cell_index = row_start + index;
-                    let x = u16::try_from(index).ok()?;
-
-                    return Some((cell_index, x));
-                }
-            }
-        }
-
-        None
-    }
-
     /// Counts cells matching a rendered symbol and the active palette border
     /// color.
     fn foreground_symbol_cell_count(buffer: &ratatui::buffer::Buffer, symbol: &str) -> usize {
@@ -445,8 +369,26 @@ mod tests {
             .count()
     }
 
+    /// Returns the rendered row positions for cells matching one symbol.
+    fn symbol_y_positions(buffer: &ratatui::buffer::Buffer, symbol: &str) -> Vec<u16> {
+        let width = usize::from(buffer.area.width.max(1));
+
+        buffer
+            .content()
+            .iter()
+            .enumerate()
+            .filter_map(|(cell_index, cell)| {
+                if cell.symbol() == symbol {
+                    return u16::try_from(cell_index / width).ok();
+                }
+
+                None
+            })
+            .collect()
+    }
+
     #[test]
-    fn test_render_shows_subscription_usage_above_tokens() {
+    fn test_render_shows_subscription_usage_panel() {
         // Arrange
         let sessions = vec![session_fixture()];
         let usage_snapshot = AgentUsageSnapshot::new(vec![
@@ -507,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_shows_session_token_table() {
+    fn test_render_shows_aggregate_token_footer() {
         // Arrange
         let sessions = vec![
             session_fixture_with(
@@ -552,14 +494,8 @@ mod tests {
             .expect("failed to draw stats page");
 
         // Assert
-        let buffer = terminal.backend().buffer();
-        let fallback_cell = &buffer.content()[0];
-        let title_cell = find_text_start_cell(buffer, "Longest Session").unwrap_or(fallback_cell);
-        let text = buffer_text(buffer);
-        assert!(text.contains("Token Stats"));
-        assert!(text.contains("gpt-5.4"));
-        assert!(text.contains("claude-opus-4-7"));
-        assert_eq!(title_cell.fg, style::palette::text());
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Sessions: 3 | Input: 3.3k | Output: 1.4k"));
     }
 
     #[test]

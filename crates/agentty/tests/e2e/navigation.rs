@@ -121,7 +121,7 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 
                 let stats_frame = common::frame_from_capture(&report.captures[2]);
                 let stats_full = Region::full(stats_frame.cols(), stats_frame.rows());
-                assertion::assert_text_in_region(&stats_frame, "Token Stats", &stats_full);
+                assertion::assert_text_in_region(&stats_frame, "Subscription Usage", &stats_full);
             },
         )?;
 
@@ -256,7 +256,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
 
                 let stats_frame = common::frame_from_capture(&report.captures[1]);
                 let stats_full = Region::full(stats_frame.cols(), stats_frame.rows());
-                assertion::assert_text_in_region(&stats_frame, "Token Stats", &stats_full);
+                assertion::assert_text_in_region(&stats_frame, "Subscription Usage", &stats_full);
 
                 let review_frame = common::frame_from_capture(&report.captures[2]);
                 let review_full = Region::full(review_frame.cols(), review_frame.rows());

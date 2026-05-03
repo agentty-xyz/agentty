@@ -284,7 +284,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   replies.
 - `crates/agentty/src/ui/page/session_list.rs`: Session list page.
 - `crates/agentty/src/ui/page/setting.rs`: Settings page.
-- `crates/agentty/src/ui/page/stat.rs`: Provider usage and token statistics page.
+- `crates/agentty/src/ui/page/stat.rs`: Provider usage and aggregate stats page.
 - `crates/agentty/src/ui/page/task.rs`: Tasks page that renders roadmap queue summaries
   for projects with `docs/plan/roadmap.md`.
 - `crates/agentty/src/ui/task_roadmap.rs`: Roadmap parsing and formatting helpers used

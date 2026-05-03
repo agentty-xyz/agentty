@@ -336,14 +336,6 @@ fn render_session_row(
         .height(1)
 }
 
-/// Calculates the width of the project column from known session values.
-pub(crate) fn project_column_width(sessions: &[Session]) -> Constraint {
-    text_column_width(
-        "Project",
-        sessions.iter().map(|session| session.project_name.as_str()),
-    )
-}
-
 /// Calculates the width of the model column from known session values.
 pub(crate) fn model_column_width(sessions: &[Session]) -> Constraint {
     text_column_width(
@@ -786,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_project_column_width_uses_longest_project_value() {
+    fn test_text_column_width_uses_longest_project_value() {
         // Arrange
         let expected_width =
             u16::try_from("very-long-project-name".chars().count()).unwrap_or(u16::MAX);

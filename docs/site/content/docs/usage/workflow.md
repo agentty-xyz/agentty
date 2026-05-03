@@ -30,9 +30,9 @@ provider cap, the footer shows that Agentty is displaying the first matching req
 | **Tasks** | Shown only when the active project contains `docs/plan/roadmap.md`,
 summarizing the roadmap's `Ready Now`, `Queued Next`, and `Parked` task queues. | |
 **Stats** | View usage statistics, including the provider subscription or quota snapshot
-and per-session token totals. Provider usage refreshes when the Stats tab receives focus
-after the cached snapshot becomes stale. | | **Settings** | Configure the color theme,
-default reasoning level, smart/fast/review model defaults, the optional
+and aggregate session/token footer totals. Provider usage refreshes when the Stats tab
+receives focus after the cached snapshot becomes stale. | | **Settings** | Configure the
+color theme, default reasoning level, smart/fast/review model defaults, the optional
 `Last used model as default` smart-model mode, the session commit coauthor trailer, and
 `Open Commands` for the active project. |
 

@@ -1,4 +1,4 @@
-//! Stats page E2E tests: provider usage and token table rendering.
+//! Stats page E2E tests: provider usage and footer summary rendering.
 
 use testty::assertion;
 use testty::region::Region;
@@ -6,20 +6,20 @@ use testty::region::Region;
 use crate::common;
 use crate::common::FeatureTest;
 
-/// Verify that the Stats tab renders the token stats table and provider
-/// subscription usage panel.
+/// Verify that the Stats tab renders the provider subscription usage panel and
+/// aggregate session summary.
 ///
-/// Navigates to the Stats tab and asserts that both the provider usage and
-/// token stats table titles are visible in the rendered frame.
+/// Navigates to the Stats tab and asserts that the provider usage panel and
+/// aggregate session/token footer are visible in the rendered frame.
 #[test]
-fn stats_tab_shows_usage_and_tokens() {
+fn stats_tab_shows_usage_and_summary() {
     // Arrange, Act, Assert
     FeatureTest::new("stats_content")
         .with_stub_path_only()
         .with_terminal_size(160, 24)
         .zola(
             "Stats tab",
-            "View provider usage and per-session token usage statistics.",
+            "View provider usage and aggregate session statistics.",
             160,
         )
         .run(
@@ -33,15 +33,16 @@ fn stats_tab_shows_usage_and_tokens() {
                     .wait_for_text("Claude", 3000)
                     .wait_for_stable_frame(500, 5000)
                     .viewing_pause_ms(3000)
-                    .capture_labeled(
-                        "stats_tab",
-                        "Stats tab with subscription usage and token table",
-                    )
+                    .capture_labeled("stats_tab", "Stats tab with subscription usage")
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
                 assertion::assert_text_in_region(frame, "Subscription Usage", &full);
-                assertion::assert_text_in_region(frame, "Token Stats", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Sessions: 0 | Input: 0 | Output: 0",
+                    &full,
+                );
             },
         )
         .expect("feature test failed");
