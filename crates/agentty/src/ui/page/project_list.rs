@@ -22,13 +22,11 @@ const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const ACTIVE_PROJECT_MARKER: &str = "* ";
 /// Horizontal spacing between project-table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
-/// Fixed height reserved for the top Agentty activity and info panel.
+/// Fixed height reserved for the top Agentty activity and info panels.
 const AGENTTY_INFO_PANEL_HEIGHT: u16 = 12;
 /// Percentage of the top-panel width reserved for the activity heatmap,
 /// keeping it at half of the available panel.
 const ACTIVITY_HEATMAP_WIDTH_PERCENT: u16 = 50;
-/// Blank columns between the heatmap and Agentty details panes.
-const ACTIVITY_HEATMAP_DETAILS_GAP: u16 = 2;
 /// Compile-time version text shown in the projects info panel.
 const AGENTTY_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 /// Short overview text shown alongside the Agentty version.
@@ -68,8 +66,8 @@ impl<'a> ProjectListPage<'a> {
 }
 
 impl Page for ProjectListPage<'_> {
-    /// Renders the projects page with activity, metadata, project rows, and
-    /// compact tab-page spacing.
+    /// Renders the projects page with separate activity and metadata panels,
+    /// project rows, and compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let content_chunks = Layout::vertical([
@@ -79,24 +77,29 @@ impl Page for ProjectListPage<'_> {
         .split(areas.main_area);
         let info_area = content_chunks[0];
         let project_area = content_chunks[1];
-        let info_panel_block = Block::default()
+        let info_panel_chunks = Layout::horizontal([
+            Constraint::Percentage(ACTIVITY_HEATMAP_WIDTH_PERCENT),
+            Constraint::Fill(1),
+        ])
+        .split(info_area);
+        let heatmap_area = info_panel_chunks[0];
+        let details_area = info_panel_chunks[1];
+        let heatmap_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Activity")
+            .border_style(style::border_style());
+        let details_block = Block::default()
             .borders(Borders::ALL)
             .title("Agentty")
             .border_style(style::border_style());
-        let info_panel_inner_area = info_panel_block.inner(info_area);
-        let info_panel_chunks = Layout::horizontal([
-            Constraint::Percentage(ACTIVITY_HEATMAP_WIDTH_PERCENT),
-            Constraint::Length(ACTIVITY_HEATMAP_DETAILS_GAP),
-            Constraint::Fill(1),
-        ])
-        .split(info_panel_inner_area);
-        let heatmap_area = info_panel_chunks[0];
-        let details_area = info_panel_chunks[2];
-        let heatmap_panel = Paragraph::new(self.build_heatmap_lines(heatmap_area.width))
+        let heatmap_inner_area = heatmap_block.inner(heatmap_area);
+        let heatmap_panel = Paragraph::new(self.build_heatmap_lines(heatmap_inner_area.width))
             .style(Style::default().fg(style::palette::text()))
+            .block(heatmap_block)
             .wrap(Wrap { trim: false });
         let details_panel = Paragraph::new(agentty_info_details_text())
             .style(Style::default().fg(style::palette::text()))
+            .block(details_block)
             .wrap(Wrap { trim: true });
 
         let selected_style = Style::default().bg(style::palette::surface());
@@ -134,7 +137,6 @@ impl Page for ProjectListPage<'_> {
         .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
 
         f.render_stateful_widget(table, project_area, self.table_state);
-        f.render_widget(info_panel_block, info_area);
         f.render_widget(heatmap_panel, heatmap_area);
         f.render_widget(details_panel, details_area);
 
@@ -374,18 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn test_activity_heatmap_details_gap_adds_padding_between_sections() {
-        // Arrange
-        let expected_gap = 2;
-
-        // Act
-        let gap = ACTIVITY_HEATMAP_DETAILS_GAP;
-
-        // Assert
-        assert_eq!(gap, expected_gap);
-    }
-
-    #[test]
     fn test_render_uses_palette_border_for_projects_table() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
@@ -421,8 +411,8 @@ mod tests {
         // Assert
         let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
         assert!(
-            border_cell_count >= 2,
-            "expected both project page panels to use palette border color"
+            border_cell_count >= 3,
+            "expected heatmap, Agentty info, and projects panels to use palette border color"
         );
     }
 
@@ -643,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_shows_activity_heatmap_in_agentty_panel() {
+    fn test_render_shows_activity_heatmap_in_separate_top_panel() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let projects = vec![ProjectListItem {
@@ -679,6 +669,8 @@ mod tests {
 
         // Assert
         let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("┐┌"));
+        assert!(text.contains("Agentty"));
         assert!(text.contains("Activity Heatmap"));
         assert!(text.contains("Less"));
         assert!(text.contains("More"));
