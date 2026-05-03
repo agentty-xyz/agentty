@@ -106,18 +106,22 @@ fn make_fresh_demo_root() -> std::io::Result<PathBuf> {
 }
 
 /// Builds a `BuilderEnv` whose workdir is named `my_project` so the project
-/// row and path shown in the demo read cleanly.
+/// row and path shown in the demo read cleanly while discovery uses a
+/// deterministic isolated home directory.
 fn make_demo_env(demo_root: &Path) -> std::io::Result<BuilderEnv> {
     let agentty_root = demo_root.join("agentty_root");
+    let home_dir = demo_root.join("home");
     let workdir = demo_root.join("my_project");
     let stub_bin = demo_root.join("stub-bin");
 
     std::fs::create_dir_all(&agentty_root)?;
+    std::fs::create_dir_all(&home_dir)?;
     std::fs::create_dir_all(&workdir)?;
     std::fs::create_dir_all(&stub_bin)?;
 
     let env = BuilderEnv {
         agentty_root,
+        home_dir,
         stub_bin,
         workdir,
     };

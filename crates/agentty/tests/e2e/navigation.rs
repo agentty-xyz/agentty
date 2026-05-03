@@ -16,6 +16,7 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 fn startup_shows_projects_tab() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("startup")
+        .with_git()
         .zola(
             "Startup",
             "Initial render with the Projects tab selected.",
@@ -46,6 +47,7 @@ fn startup_shows_projects_tab() -> E2eResult {
 fn tab_key_switches_tabs() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("tab_switch")
+        .with_git()
         .zola(
             "Tab switching",
             "Jump between workspace tabs with a single keypress.",
@@ -78,6 +80,7 @@ fn tab_key_switches_tabs() -> E2eResult {
 fn tab_cycles_through_all_tabs() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("tab_full_cycle")
+        .with_git()
         .zola(
             "Full tab cycle",
             "Cycle through every workspace tab in order.",
@@ -132,7 +135,7 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 #[test]
 fn review_tab_shows_requested_reviews_page() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("review_tab").run(
+    FeatureTest::new("review_tab").with_git().run(
         |scenario| {
             scenario
                 .compose(&common::wait_for_agentty_startup())
@@ -158,6 +161,7 @@ fn review_tab_shows_requested_reviews_page() -> E2eResult {
 fn quit_shows_confirmation_dialog() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("quit_confirmation")
+        .with_git()
         .zola(
             "Quit confirmation",
             "Confirm before quitting to prevent accidental exits.",
@@ -188,6 +192,7 @@ fn quit_shows_confirmation_dialog() -> E2eResult {
 fn startup_shows_footer_hints() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("footer_hints")
+        .with_git()
         .zola(
             "Footer hints",
             "Context-sensitive hints in the footer guide available actions.",
@@ -201,12 +206,9 @@ fn startup_shows_footer_hints() -> E2eResult {
                     .capture_labeled("startup", "Footer with keybinding hints")
             },
             |frame, _report| {
-                let footer = Region::footer(frame.cols(), frame.rows());
-                let footer_text = frame.text_in_region(&footer);
-                assert!(
-                    !footer_text.trim().is_empty(),
-                    "Footer should contain keybinding hints"
-                );
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "q: quit", &full);
+                assertion::assert_text_in_region(frame, "?: help", &full);
             },
         )?;
 
@@ -222,6 +224,7 @@ fn startup_shows_footer_hints() -> E2eResult {
 fn backtab_cycles_tabs_reverse() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("backtab_reverse")
+        .with_git()
         .zola(
             "Reverse tab navigation",
             "Navigate tabs in reverse with Shift+Tab.",
@@ -281,6 +284,7 @@ fn backtab_cycles_tabs_reverse() -> E2eResult {
 fn help_overlay_toggle() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("help_overlay")
+        .with_git()
         .zola(
             "Help overlay",
             "Press ? to see available keybindings for the current view.",

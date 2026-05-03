@@ -28,6 +28,9 @@ use testty::step::Step;
 pub(crate) struct BuilderEnv {
     /// Path used as `AGENTTY_ROOT` for database and session isolation.
     pub(crate) agentty_root: PathBuf,
+    /// Directory used as `HOME` so project discovery stays isolated from
+    /// developer and CI machine repositories.
+    pub(crate) home_dir: PathBuf,
     /// Directory containing stub agent executables so the app passes startup
     /// availability validation even when no real agent CLI is installed.
     pub(crate) stub_bin: PathBuf,
@@ -46,10 +49,12 @@ impl BuilderEnv {
     /// Returns an error if directory creation fails.
     pub(crate) fn new(temp_root: &Path) -> std::io::Result<Self> {
         let agentty_root = temp_root.join("agentty_root");
+        let home_dir = temp_root.join("home");
         let workdir = temp_root.join("test-project");
         let stub_bin = temp_root.join("stub-bin");
 
         std::fs::create_dir_all(&agentty_root)?;
+        std::fs::create_dir_all(&home_dir)?;
         std::fs::create_dir_all(&workdir)?;
         std::fs::create_dir_all(&stub_bin)?;
 
@@ -65,6 +70,7 @@ impl BuilderEnv {
 
         Ok(Self {
             agentty_root,
+            home_dir,
             stub_bin,
             workdir,
         })
@@ -100,6 +106,7 @@ impl BuilderEnv {
         PtySessionBuilder::new(cargo_bin("agentty"))
             .size(terminal_cols, terminal_rows)
             .env("AGENTTY_ROOT", self.agentty_root.to_string_lossy())
+            .env("HOME", self.home_dir.to_string_lossy())
             .env("PATH", path_env)
             .workdir(&self.workdir)
     }
@@ -121,6 +128,10 @@ impl BuilderEnv {
             (
                 "AGENTTY_ROOT".to_string(),
                 self.agentty_root.to_string_lossy().into_owned(),
+            ),
+            (
+                "HOME".to_string(),
+                self.home_dir.to_string_lossy().into_owned(),
             ),
             ("PATH".to_string(), path_env),
         ]

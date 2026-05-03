@@ -114,6 +114,7 @@ fn quit_confirm_yes_exits() {
 fn quit_confirm_dismiss_returns() {
     // Arrange, Act, Assert
     FeatureTest::new("quit_dismiss")
+        .with_git()
         .zola(
             "Quit dismiss",
             "Dismiss the quit dialog to stay in the session.",
