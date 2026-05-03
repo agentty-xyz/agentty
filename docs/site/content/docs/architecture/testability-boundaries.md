@@ -72,9 +72,7 @@ provider runtimes without duplicating lifecycle policy in each provider. | |
 transport boundary for lifecycle, account usage, compaction, and turn-stream tests
 without scripted shell runtimes. | | `GeminiRuntimeTransport` |
 `infra/agent/app_server/gemini/transport.rs` | ACP stdio transport boundary for Gemini
-runtime protocol tests. | | `QeProbe` | `infra/qe.rs` | Read-only filesystem probe (file
-existence, UTF-8 reads, symlink targets) used by the `/qe:check` recommendation engine
-in `domain/qe/` so every check stays deterministic via `MockQeProbe`. |
+runtime protocol tests. |
 
 ### Typed Error Enums at Infra Boundaries
 

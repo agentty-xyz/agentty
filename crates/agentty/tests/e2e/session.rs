@@ -1131,6 +1131,45 @@ fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
     Ok(())
 }
 
+/// Verify that `/qe:check` is exposed in the prompt slash-command menu as a
+/// first-class selectable command.
+#[test]
+fn qe_check_slash_command_is_visible() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("qe_check_slash_command_visible")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("/")
+                    .write_text("q")
+                    .wait_for_text("/qe:check", 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
+                        "qe_check_slash_command_visible",
+                        "`/qe:check` appears in the slash-command picker",
+                    )
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "/qe:check", &full);
+                assertion::assert_text_in_region(
+                    frame,
+                    "Send the quality-enforcement check prompt.",
+                    &full,
+                );
+            },
+        )?;
+
+    Ok(())
+}
+
 /// Verify that `j` and `k` navigate the session list and that `Enter`
 /// opens the currently selected session.
 ///

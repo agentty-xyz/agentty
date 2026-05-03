@@ -1336,6 +1336,8 @@ mod tests {
         assert_eq!(commands, vec!["/model"]);
     }
 
+    /// Verifies the root slash-command menu exposes every command in display
+    /// order.
     #[test]
     fn test_prompt_slash_commands_lists_all_commands() {
         // Arrange & Act
@@ -1353,7 +1355,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Assert
-        assert_eq!(commands, vec!["/apply", "/model", "/reasoning", "/stats"]);
+        assert_eq!(
+            commands,
+            vec!["/apply", "/model", "/qe:check", "/reasoning", "/stats"]
+        );
     }
 
     #[test]

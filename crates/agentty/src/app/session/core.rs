@@ -1000,7 +1000,9 @@ mod tests {
             .returning(|_| Box::pin(async { Ok((0, 0)) }));
     }
 
-    /// Builds a merge-focused mock git client for no-op merge scenarios.
+    /// Builds a merge-focused mock git client for no-op merge scenarios,
+    /// including both main-checkout preflight and session-worktree clean
+    /// checks for each merge.
     fn create_mock_git_client_for_successful_noop_merges(
         expected_merge_count: usize,
         repo_root: PathBuf,
@@ -1014,7 +1016,7 @@ mod tests {
                 Box::pin(async move { Some(repo_root) })
             });
         mock.expect_is_worktree_clean()
-            .times(expected_merge_count)
+            .times(expected_merge_count * 2)
             .returning(|_| Box::pin(async { Ok(true) }));
         mock.expect_is_rebase_in_progress()
             .times(expected_merge_count)

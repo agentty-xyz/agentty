@@ -405,9 +405,11 @@ slash already inserted:
 focused-review suggestions against the current code, then apply only the ones that are
 still correct and relevant. Requires a completed focused review (`f` key). | | `/model`
 | Switch the model for the current session using only locally available backend CLIs. |
-| `/reasoning` | Override the reasoning level for the current session, with the current
-effective level preselected from settings or any existing session override. | | `/stats`
-| Show token usage statistics for the session. |
+| `/qe:check` | Send a predefined quality-enforcement audit prompt that asks the agent
+to inspect repository readiness rules and report recommendations without changing files.
+| | `/reasoning` | Override the reasoning level for the current session, with the
+current effective level preselected from settings or any existing session override. | |
+`/stats` | Show token usage statistics for the session. |
 
 Agentty requires at least one supported backend CLI (`codex`, `claude`, or `gemini`) on
 `PATH` at startup. Once launched, `/model` only offers runnable backends, and stored

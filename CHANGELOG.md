@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- agentty: add `/qe:check` as a prompt slash command that sends a checked-in
+  quality-enforcement audit prompt instead of running an in-process audit engine.
+
 ## [v0.9.1] - 2026-05-02
 
 ### Changed

@@ -69,8 +69,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/app/project.rs`: `ProjectManager` for project CRUD and selection
   orchestration.
 - `crates/agentty/src/app/prompt_intent.rs`: App-layer prompt intents for prompt
-  submission routing, slash-command execution, `/apply`, `/stats`, and prompt cancel
-  cleanup.
+  submission routing, slash-command execution, `/apply`, `/qe:check`, `/stats`, and
+  prompt cancel cleanup.
 - `crates/agentty/src/app/service.rs`: `AppServices` dependency container for
   `AppRepositories`, `FsClient`, `GitClient`, `ReviewRequestClient`, the optional
   app-server test override, and the event sender.
@@ -119,10 +119,6 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/domain/input.rs`: Input state management.
 - `crates/agentty/src/domain/permission.rs`: `PermissionMode` and permission logic.
 - `crates/agentty/src/domain/project.rs`: Project entities and display helpers.
-- `crates/agentty/src/domain/qe.rs` and `crates/agentty/src/domain/qe/`: Pure
-  recommendation registry, evaluation engine, and markdown report formatter that back
-  the `/qe:check` slash command. External I/O is routed through the `QeProbe` trait in
-  `infra/qe.rs` so every recommendation stays deterministic in tests via `MockQeProbe`.
 - `crates/agentty/src/domain/question.rs`: Structured clarification question model
   shared by session state, UI question panels, persistence hydration, and the agent
   response protocol schema.
@@ -232,9 +228,6 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/infra/project_discovery.rs`: `ProjectDiscoveryClient` trait plus
   the home-directory git-repository scan used by startup catalog refresh without leaking
   directory walking into `app/`.
-- `crates/agentty/src/infra/qe.rs`: `QeProbe` read-only filesystem boundary plus
-  `RealQeProbe` production adapter used by the `/qe:check` recommendation engine in
-  `domain/qe/`.
 - `crates/agentty/src/infra/tmux.rs`: `TmuxClient` trait and tmux subprocess adapter
   used by `App` worktree-open orchestration.
 - `crates/agentty/src/infra/version.rs`: Version checking infrastructure.

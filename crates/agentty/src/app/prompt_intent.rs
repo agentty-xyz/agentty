@@ -13,6 +13,9 @@ use crate::ui::state::prompt::{
 };
 use crate::ui::text_util::format_token_count;
 
+/// Checked-in prompt body submitted by the `/qe:check` slash command.
+const QE_CHECK_PROMPT: &str = include_str!("qe_check_prompt.md");
+
 /// App-layer prompt intent context derived from prompt-mode runtime state.
 ///
 /// Runtime key handling constructs this snapshot when a key maps to an
@@ -168,6 +171,10 @@ impl App {
             Some(PromptSuggestionSelection::Command("/stats")) => {
                 self.reset_prompt_slash_input();
                 self.handle_stats_prompt_command(context).await;
+            }
+            Some(PromptSuggestionSelection::Command("/qe:check")) => {
+                self.reset_prompt_slash_input();
+                self.handle_qe_check_prompt_command(context).await;
             }
             Some(PromptSuggestionSelection::Command("/reasoning")) => {
                 let selected_reasoning_level = self
@@ -570,6 +577,47 @@ impl App {
         self.append_output_for_session(&context.session_id, &stats_output)
             .await;
     }
+
+    /// Handles `/qe:check` by submitting the checked-in quality-enforcement
+    /// prompt as the next agent turn.
+    async fn handle_qe_check_prompt_command(&mut self, context: &PromptIntentContext) {
+        let prompt = build_qe_check_prompt();
+
+        self.cleanup_prompt_attachment_state().await;
+
+        if context.is_draft_session() {
+            if let Err(error) = self.stage_draft_message(&context.session_id, prompt).await {
+                self.append_output_for_session(
+                    &context.session_id,
+                    &TranscriptNotice::Error.format(error),
+                )
+                .await;
+            }
+        } else if context.is_new_session() {
+            if let Err(error) = self.start_session(&context.session_id, prompt).await {
+                self.append_output_for_session(
+                    &context.session_id,
+                    &TranscriptNotice::Error.format(error),
+                )
+                .await;
+            }
+        } else {
+            self.reply(&context.session_id, prompt).await;
+        }
+
+        self.mode = AppMode::View {
+            review_status_message: None,
+            review_text: None,
+            scroll_offset: None,
+            session_id: context.session_id.clone(),
+        };
+    }
+}
+
+/// Builds the agent-facing `/qe:check` prompt from the checked-in markdown
+/// template.
+pub(crate) fn build_qe_check_prompt() -> TurnPrompt {
+    TurnPrompt::from_text(QE_CHECK_PROMPT.trim_end().to_string())
 }
 
 /// Builds the agent-facing `/apply` prompt from focused-review suggestions.
@@ -700,4 +748,25 @@ pub(crate) fn format_duration(total_seconds: i64) -> String {
     let seconds = total_seconds % 60;
 
     format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies `/qe:check` submits the checked-in markdown prompt without
+    /// attachments or generated-data transport semantics.
+    #[test]
+    fn test_build_qe_check_prompt_uses_checked_in_template() {
+        // Arrange, Act
+        let prompt = build_qe_check_prompt();
+
+        // Assert
+        assert!(prompt.text.starts_with("# /qe:check"));
+        assert!(prompt.text.contains("change repository state"));
+        assert!(prompt.text.contains("Agent instruction files"));
+        assert!(prompt.text.contains("Suggested Next Prompt"));
+        assert!(prompt.attachments.is_empty());
+        assert_eq!(prompt.text_source, TurnPromptTextSource::UserPrompt);
+    }
 }

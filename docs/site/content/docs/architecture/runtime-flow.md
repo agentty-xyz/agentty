@@ -428,8 +428,8 @@ narrow screens.
 
 1. Prompt mode converts a submit key into an app-layer prompt intent.
 1. `App::handle_prompt_submit_intent()` drains normal prompt submissions or dispatches
-   slash-command selections through app-owned intent handlers such as `/apply` and
-   `/stats`.
+   slash-command selections through app-owned intent handlers such as `/apply`,
+   `/qe:check`, and `/stats`.
 1. `start_session()` for first prompt (`AgentRequestKind::SessionStart`) or `reply()`
    for follow-up (`AgentRequestKind::SessionResume`).
 1. Shared prompt-composer helpers in `crates/agentty/src/domain/composer.rs` derive

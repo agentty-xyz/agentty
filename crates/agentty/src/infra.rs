@@ -19,8 +19,6 @@ pub mod git;
 pub(crate) mod process;
 /// Startup project-discovery boundary for home-directory repository scans.
 pub mod project_discovery;
-/// Read-only probe boundary for `/qe:check` recommendation engine.
-pub mod qe;
 /// In-memory cache for review-request inline comment threads polled by the
 /// background sync task and read by the review-comments preview page.
 pub mod review_comment_cache;
