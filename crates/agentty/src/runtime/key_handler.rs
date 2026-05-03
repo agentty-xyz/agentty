@@ -584,6 +584,7 @@ async fn handle_regenerate_review_confirmation(
     let _ = app
         .services
         .db()
+        .sessions()
         .update_session_focused_review(session_id.as_str(), None, None)
         .await;
     app.start_review_assist(
@@ -966,7 +967,8 @@ mod tests {
             .expect("failed to create source session");
         app.services
             .db()
-            .update_session_merged_commit_hash(&source_session_id, Some("abc1234"))
+            .sessions()
+            .update_session_merged_commit_hash(&source_session_id, Some("abc1234".to_string()))
             .await
             .expect("failed to persist merged commit hash");
         let source_session = app
@@ -1102,7 +1104,11 @@ mod tests {
             .expect("failed to create session");
         app.services
             .db()
-            .update_session_merged_commit_hash(&source_session_id, Some(merged_commit_hash))
+            .sessions()
+            .update_session_merged_commit_hash(
+                &source_session_id,
+                Some(merged_commit_hash.to_string()),
+            )
             .await
             .expect("failed to persist merged commit hash");
         set_session_status_for_test(

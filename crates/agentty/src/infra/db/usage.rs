@@ -20,7 +20,7 @@ pub struct SessionUsageRow {
 /// Session-usage persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait UsageRepository: Send + Sync {
+pub trait UsageRepository: Send + Sync {
     /// Loads per-model token usage rows for a session, ordered by model name.
     async fn load_session_usage(&self, session_id: &str) -> Result<Vec<SessionUsageRow>, DbError>;
 

@@ -22,6 +22,7 @@ fn seed_settings_navigation_models(env: &BuilderEnv) -> Result<(), Box<dyn std::
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
+            .projects()
             .upsert_project(&canonical_workdir.to_string_lossy(), None)
             .await?;
 

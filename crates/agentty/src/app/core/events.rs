@@ -1131,10 +1131,11 @@ impl App {
             let _ = self
                 .services
                 .db()
+                .sessions()
                 .update_session_focused_review(
                     persistence_update.session_id.as_str(),
-                    diff_hash.as_deref(),
-                    persistence_update.text.as_deref(),
+                    diff_hash,
+                    persistence_update.text,
                 )
                 .await;
         }

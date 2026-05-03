@@ -23,7 +23,7 @@ pub struct SessionReviewRequestRow {
 /// Review-request persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait ReviewRepository: Send + Sync {
+pub trait ReviewRepository: Send + Sync {
     /// Updates the persisted forge review-request linkage for a session.
     async fn update_session_review_request(
         &self,

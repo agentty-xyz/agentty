@@ -196,6 +196,7 @@ impl SettingsManager {
 
         let open_command = services
             .db()
+            .settings()
             .get_project_setting(project_id, SettingName::OpenCommand)
             .await
             .unwrap_or(None)
@@ -577,6 +578,7 @@ impl SettingsManager {
                 // Best-effort: settings persistence failure is non-critical.
                 let _ = services
                     .db()
+                    .settings()
                     .upsert_project_setting(
                         self.project_id,
                         SettingName::OpenCommand,
@@ -683,6 +685,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .upsert_project_setting(
                 self.project_id,
                 SettingName::DefaultSmartModel,
@@ -692,6 +695,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .upsert_project_setting(
                 self.project_id,
                 SettingName::LastUsedModelAsDefault,
@@ -705,6 +709,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .set_project_reasoning_level(self.project_id, self.reasoning_level)
             .await;
     }
@@ -714,6 +719,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .upsert_project_setting(
                 self.project_id,
                 SettingName::DefaultFastModel,
@@ -727,6 +733,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .upsert_project_setting(
                 self.project_id,
                 SettingName::DefaultReviewModel,
@@ -743,6 +750,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .upsert_project_setting(
                 self.project_id,
                 SettingName::IncludeCoauthoredByAgentty,
@@ -756,6 +764,7 @@ impl SettingsManager {
         // Best-effort: settings persistence failure is non-critical.
         let _ = services
             .db()
+            .settings()
             .upsert_setting(SettingName::Theme, self.theme.as_str())
             .await;
     }
@@ -795,6 +804,7 @@ async fn load_project_bool_setting(
 
     services
         .db()
+        .settings()
         .get_project_setting(project_id, setting_name)
         .await
         .unwrap_or(None)
@@ -883,6 +893,7 @@ async fn load_model_setting(
 
     services
         .db()
+        .settings()
         .get_project_setting(project_id, setting_name)
         .await
         .unwrap_or(None)
@@ -903,6 +914,7 @@ async fn load_reasoning_level_setting(
 
     services
         .db()
+        .settings()
         .load_project_reasoning_level(project_id)
         .await
         .unwrap_or_default()
@@ -915,6 +927,7 @@ async fn load_reasoning_level_setting(
 async fn load_theme_setting(services: &AppServices) -> ColorTheme {
     services
         .db()
+        .settings()
         .get_setting(SettingName::Theme)
         .await
         .unwrap_or(None)
@@ -939,7 +952,8 @@ mod tests {
     async fn test_services() -> (AppServices, i64) {
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to create project");
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
@@ -1080,6 +1094,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
@@ -1106,6 +1121,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
@@ -1132,6 +1148,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
@@ -1154,6 +1171,7 @@ mod tests {
         // Arrange
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
@@ -1180,6 +1198,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
@@ -1189,6 +1208,7 @@ mod tests {
             .expect("failed to persist project smart model");
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
@@ -1198,6 +1218,7 @@ mod tests {
             .expect("failed to persist project fast model");
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultReviewModel,
@@ -1207,26 +1228,31 @@ mod tests {
             .expect("failed to persist review model");
         services
             .db()
+            .settings()
             .upsert_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty, "false")
             .await
             .expect("failed to persist coauthor setting");
         services
             .db()
+            .settings()
             .upsert_project_setting(project_id, SettingName::OpenCommand, "nvim .")
             .await
             .expect("failed to persist open command");
         services
             .db()
+            .settings()
             .set_project_reasoning_level(project_id, ReasoningLevel::Low)
             .await
             .expect("failed to persist reasoning level");
         services
             .db()
+            .settings()
             .upsert_project_setting(project_id, SettingName::LastUsedModelAsDefault, "true")
             .await
             .expect("failed to persist last-used-model flag");
         services
             .db()
+            .settings()
             .upsert_setting(SettingName::Theme, ColorTheme::Hacker.as_str())
             .await
             .expect("failed to persist theme setting");
@@ -1251,6 +1277,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::LastUsedModelAsDefault,
@@ -1272,6 +1299,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::IncludeCoauthoredByAgentty,
@@ -1293,6 +1321,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_setting(SettingName::Theme, "invalid-theme")
             .await
             .expect("failed to persist invalid theme");
@@ -1310,6 +1339,7 @@ mod tests {
         let (services, project_id) = test_services().await;
         services
             .db()
+            .settings()
             .upsert_setting(SettingName::Theme, ColorTheme::DarkHorizon.as_str())
             .await
             .expect("failed to persist theme setting");
@@ -1650,6 +1680,7 @@ mod tests {
         assert_eq!(
             services
                 .db()
+                .settings()
                 .get_project_setting(project_id, SettingName::OpenCommand)
                 .await
                 .expect("failed to load open command"),
@@ -1672,6 +1703,7 @@ mod tests {
         assert_eq!(
             services
                 .db()
+                .settings()
                 .get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
                 .await
                 .expect("failed to load coauthor setting"),
@@ -1691,6 +1723,7 @@ mod tests {
         let theme_after_first_cycle = manager.theme;
         let persisted_theme_after_first_cycle = services
             .db()
+            .settings()
             .get_setting(SettingName::Theme)
             .await
             .expect("failed to load theme setting");
@@ -1699,6 +1732,7 @@ mod tests {
         let theme_after_second_cycle = manager.theme;
         let persisted_theme_after_second_cycle = services
             .db()
+            .settings()
             .get_setting(SettingName::Theme)
             .await
             .expect("failed to load theme setting");
@@ -1707,6 +1741,7 @@ mod tests {
         let theme_after_wrap_cycle = manager.theme;
         let persisted_theme_after_wrap_cycle = services
             .db()
+            .settings()
             .get_setting(SettingName::Theme)
             .await
             .expect("failed to load theme setting");
@@ -1748,6 +1783,7 @@ mod tests {
         assert_eq!(
             services
                 .db()
+                .settings()
                 .get_project_setting(project_id, SettingName::OpenCommand)
                 .await
                 .expect("failed to load open command"),
@@ -1773,6 +1809,7 @@ mod tests {
         assert_eq!(
             services
                 .db()
+                .settings()
                 .get_project_setting(project_id, SettingName::LastUsedModelAsDefault)
                 .await
                 .expect("failed to load last-used flag"),
@@ -1788,6 +1825,7 @@ mod tests {
         assert_eq!(
             services
                 .db()
+                .settings()
                 .get_project_setting(project_id, SettingName::DefaultSmartModel)
                 .await
                 .expect("failed to load smart model"),
@@ -1796,6 +1834,7 @@ mod tests {
         assert_eq!(
             services
                 .db()
+                .settings()
                 .get_project_setting(project_id, SettingName::LastUsedModelAsDefault)
                 .await
                 .expect("failed to load last-used flag"),
@@ -1822,6 +1861,7 @@ mod tests {
         );
         services
             .db()
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,

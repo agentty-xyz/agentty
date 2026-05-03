@@ -29,7 +29,7 @@ impl SessionManager {
 
         self.state.refresh_deadline = self.next_refresh_deadline();
 
-        let Ok(sessions_metadata) = services.db().load_sessions_metadata().await else {
+        let Ok(sessions_metadata) = services.db().sessions().load_sessions_metadata().await else {
             return false;
         };
         let (sessions_row_count, sessions_updated_at_max) = sessions_metadata;
@@ -52,7 +52,7 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) {
-        let sessions_metadata = services.db().load_sessions_metadata().await.ok();
+        let sessions_metadata = services.db().sessions().load_sessions_metadata().await.ok();
         self.reload_sessions(mode, projects, services, sessions_metadata)
             .await;
         self.state.refresh_deadline = self.next_refresh_deadline();
@@ -264,7 +264,7 @@ impl SessionManager {
     /// Refreshes cached session metadata used by incremental list reloads.
     pub(crate) async fn update_sessions_metadata_cache(&mut self, services: &AppServices) {
         if let Ok((sessions_row_count, sessions_updated_at_max)) =
-            services.db().load_sessions_metadata().await
+            services.db().sessions().load_sessions_metadata().await
         {
             self.state.row_count = sessions_row_count;
             self.state.updated_at_max = sessions_updated_at_max;
@@ -358,10 +358,12 @@ mod tests {
     async fn database_with_session(session: &Session) -> AppRepositories {
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session(
                 &session.id,
                 session.model.as_str(),
@@ -373,7 +375,8 @@ mod tests {
             .expect("failed to insert session");
         if let Some(review_request) = &session.review_request {
             database
-                .update_session_review_request(&session.id, Some(review_request))
+                .reviews()
+                .update_session_review_request(&session.id, Some(review_request.clone()))
                 .await
                 .expect("failed to persist session review request");
         }
@@ -572,6 +575,7 @@ mod tests {
             .await
             .expect("linked review request should refresh");
         let persisted_row = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load session rows")

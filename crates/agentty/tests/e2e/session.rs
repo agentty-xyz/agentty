@@ -38,11 +38,19 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
-            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await?;
 
-        database.touch_project_last_opened(project_id).await?;
         database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
             .insert_session(
                 "review-shortcut-0001",
                 "gpt-5.4",
@@ -52,9 +60,11 @@ fn seed_review_ready_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             )
             .await?;
         database
+            .sessions()
             .update_session_title("review-shortcut-0001", "Review-ready session shortcuts")
             .await?;
         database
+            .sessions()
             .update_session_diff_stats(12, 3, "review-shortcut-0001", "M")
             .await
     })?;
@@ -93,10 +103,11 @@ fn seed_review_ready_session_with_persisted_focused_review(
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         database
+            .sessions()
             .update_session_focused_review(
                 "review-shortcut-0001",
-                Some("42"),
-                Some("## Review\nPersisted focused review finding."),
+                Some("42".to_string()),
+                Some("## Review\nPersisted focused review finding.".to_string()),
             )
             .await
     })?;
@@ -116,11 +127,19 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
-            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await?;
 
-        database.touch_project_last_opened(project_id).await?;
         database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
             .insert_session(
                 RUNNING_STOP_SESSION_ID,
                 "gpt-5.4",
@@ -130,6 +149,7 @@ fn seed_running_stop_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error:
             )
             .await?;
         database
+            .sessions()
             .update_session_title(RUNNING_STOP_SESSION_ID, "Running session stop")
             .await
     })?;
@@ -172,7 +192,8 @@ fn seed_review_ready_session_with_review_request(
         };
 
         database
-            .update_session_review_request("review-shortcut-0001", Some(&review_request))
+            .reviews()
+            .update_session_review_request("review-shortcut-0001", Some(review_request.clone()))
             .await
     })?;
 
@@ -282,18 +303,31 @@ fn seed_done_session_for_continuation(env: &BuilderEnv) -> Result<(), Box<dyn st
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
-            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await?;
 
-        database.touch_project_last_opened(project_id).await?;
         database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
             .insert_session("done-continue-0001", "gpt-5.4", "main", "Done", project_id)
             .await?;
         database
+            .sessions()
             .update_session_title("done-continue-0001", "Continue terminal session")
             .await?;
         database
-            .update_session_merged_commit_hash("done-continue-0001", Some(merged_commit_hash))
+            .sessions()
+            .update_session_merged_commit_hash(
+                "done-continue-0001",
+                Some(merged_commit_hash.to_string()),
+            )
             .await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
@@ -314,11 +348,19 @@ fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
-            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await?;
 
-        database.touch_project_last_opened(project_id).await?;
         database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
             .insert_session(
                 LOADER_SESSION_ID,
                 "gpt-5.4",
@@ -328,6 +370,7 @@ fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error
             )
             .await?;
         database
+            .sessions()
             .update_session_title(LOADER_SESSION_ID, "Loader session")
             .await?;
 

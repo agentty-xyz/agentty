@@ -81,9 +81,9 @@ enum instead of opaque `String` errors, so the app layer can discriminate failur
 without parsing formatted messages.
 
 | Error Type | Module | Variants | Wraps | |------------|--------|----------|-------| |
-`DbError` | `infra/db.rs` | `Migration`, `Query`, `Io` | `sqlx::Error` | | `GitError` |
-`infra/git/error.rs` | `WorktreeCreate`, `WorktreeRemove`, `BranchDelete`, `Command`,
-etc. | `std::io::Error`, process exit details | | `AppServerTransportError` |
+`DbError` | `infra/db/error.rs` | `Migration`, `Query`, `Io` | `sqlx::Error` | |
+`GitError` | `infra/git/error.rs` | `WorktreeCreate`, `WorktreeRemove`, `BranchDelete`,
+`Command`, etc. | `std::io::Error`, process exit details | | `AppServerTransportError` |
 `infra/app_server_transport.rs` | `Io`, `ProcessTerminated`, `Timeout` |
 `std::io::Error` | | `AppServerError` | `infra/app_server/error.rs` | `Transport`,
 `Provider`, `SessionNotFound`, `Shutdown` | `AppServerTransportError` via `#[from]` | |

@@ -154,7 +154,7 @@ impl SessionTaskService {
         session_id: &str,
         folder: &Path,
     ) -> Option<(SessionSize, u64, u64)> {
-        let base_branch = match db.get_session_base_branch(session_id).await {
+        let base_branch = match db.sessions().get_session_base_branch(session_id).await {
             Ok(base_branch) => base_branch?,
             Err(error) => {
                 warn!(
@@ -176,6 +176,7 @@ impl SessionTaskService {
             )
             .await;
         if let Err(error) = db
+            .sessions()
             .update_session_diff_stats(
                 added_lines,
                 deleted_lines,
@@ -285,7 +286,7 @@ impl SessionTaskService {
         db: &AppRepositories,
         session_id: &str,
     ) -> bool {
-        let project_id = match db.load_session_project_id(session_id).await {
+        let project_id = match db.sessions().load_session_project_id(session_id).await {
             Ok(project_id) => project_id,
             Err(error) => {
                 warn!(
@@ -302,6 +303,7 @@ impl SessionTaskService {
         };
 
         let persisted_value = match db
+            .settings()
             .get_project_setting(project_id, SettingName::IncludeCoauthoredByAgentty)
             .await
         {
@@ -345,7 +347,7 @@ impl SessionTaskService {
         session_id: &str,
         fallback_model: AgentModel,
     ) -> AgentModel {
-        let project_id = match db.load_session_project_id(session_id).await {
+        let project_id = match db.sessions().load_session_project_id(session_id).await {
             Ok(project_id) => project_id,
             Err(error) => {
                 warn!(
@@ -437,6 +439,7 @@ impl SessionTaskService {
     ) -> Result<SessionCommitOutcome, SessionError> {
         let base_branch = context
             .db
+            .sessions()
             .get_session_base_branch(&context.id)
             .await?
             .ok_or_else(|| {
@@ -469,7 +472,11 @@ impl SessionTaskService {
     ) -> Option<AgentModel> {
         let project_id = project_id?;
 
-        let persisted_value = match db.get_project_setting(project_id, setting_name).await {
+        let persisted_value = match db
+            .settings()
+            .get_project_setting(project_id, setting_name)
+            .await
+        {
             Ok(persisted_value) => persisted_value,
             Err(error) => {
                 warn!(
@@ -857,7 +864,11 @@ impl SessionTaskService {
             .await;
         }
 
-        if let Err(error) = db.update_session_stats(&id, &assist_submission.stats).await {
+        if let Err(error) = db
+            .sessions()
+            .update_session_stats(&id, &assist_submission.stats)
+            .await
+        {
             warn!(
                 session_id = id,
                 error = %error,
@@ -866,6 +877,7 @@ impl SessionTaskService {
         }
 
         if let Err(error) = db
+            .usage()
             .upsert_session_usage(&id, session_model.as_str(), &assist_submission.stats)
             .await
         {
@@ -946,6 +958,7 @@ impl SessionTaskService {
         let timestamp_seconds = unix_timestamp_from_system_time(clock.now_system_time());
 
         if let Err(error) = db
+            .sessions()
             .update_session_status_with_timing_at(id, &new.to_string(), timestamp_seconds)
             .await
         {
@@ -988,7 +1001,7 @@ impl SessionTaskService {
                 );
             }
         }
-        if let Err(error) = db.append_session_output(id, message).await {
+        if let Err(error) = db.sessions().append_session_output(id, message).await {
             warn!(
                 session_id = id,
                 error = %error,
@@ -1236,10 +1249,12 @@ mod tests {
     /// Inserts one review session used by assist-task tests.
     async fn insert_review_session(database: &AppRepositories, model: &str) {
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session("session-id", model, "main", "Review", project_id)
             .await
             .expect("failed to insert session");
@@ -1272,10 +1287,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session(
                 "session-id",
                 "gpt-5.4",
@@ -1335,6 +1352,7 @@ mod tests {
         )
         .await;
         let session_row = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions")
@@ -1822,11 +1840,13 @@ mod tests {
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let project_id = database
+            .sessions()
             .load_session_project_id("session-id")
             .await
             .expect("failed to load session project id")
             .expect("session should have project id");
         database
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::IncludeCoauthoredByAgentty,
@@ -1880,6 +1900,7 @@ mod tests {
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let summary_payload = "- Session branch updates README formatting.".to_string();
         database
+            .sessions()
             .update_session_summary("session-id", &summary_payload)
             .await
             .expect("failed to persist summary text");
@@ -1900,6 +1921,7 @@ mod tests {
         // Act
         SessionTaskService::handle_auto_commit(context).await;
         let sessions = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions");
@@ -1935,11 +1957,13 @@ mod tests {
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let project_id = database
+            .sessions()
             .load_session_project_id("session-id")
             .await
             .expect("failed to load session project id")
             .expect("session should have project id");
         database
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultFastModel,
@@ -1948,6 +1972,7 @@ mod tests {
             .await
             .expect("failed to persist default fast model");
         database
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
@@ -1976,11 +2001,13 @@ mod tests {
         let database = AppRepositories::in_memory().await;
         insert_review_session(&database, AgentModel::Gpt54.as_str()).await;
         let project_id = database
+            .sessions()
             .load_session_project_id("session-id")
             .await
             .expect("failed to load session project id")
             .expect("session should have project id");
         database
+            .settings()
             .upsert_project_setting(
                 project_id,
                 SettingName::DefaultSmartModel,
@@ -2002,6 +2029,7 @@ mod tests {
 
         // Arrange
         database
+            .settings()
             .upsert_project_setting(project_id, SettingName::DefaultSmartModel, "invalid")
             .await
             .expect("failed to persist invalid smart model");
@@ -2072,6 +2100,7 @@ mod tests {
         assert!(!output_text.contains(r#"{"answer""#));
         assert_eq!(*child_pid.lock().expect("failed to lock child pid"), None);
         let sessions = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions");
@@ -2134,6 +2163,7 @@ mod tests {
         let output_text = output.lock().map(|buf| buf.clone()).unwrap_or_default();
         assert!(output_text.is_empty());
         let sessions = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions");

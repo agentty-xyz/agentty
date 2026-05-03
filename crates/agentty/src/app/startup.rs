@@ -72,7 +72,11 @@ impl AppStartup {
         git_branch: Option<&str>,
     ) -> Result<i64, AppError> {
         let current_project_id = db
-            .upsert_project(&working_dir.to_string_lossy(), git_branch)
+            .projects()
+            .upsert_project(
+                &working_dir.to_string_lossy(),
+                git_branch.map(str::to_string),
+            )
             .await
             .map_err(|error| {
                 AppError::Workflow(format!(
@@ -81,7 +85,8 @@ impl AppStartup {
                 ))
             })?;
 
-        db.backfill_session_project(current_project_id)
+        db.sessions()
+            .backfill_session_project(current_project_id)
             .await
             .map_err(|error| {
                 AppError::Workflow(format!(
@@ -127,9 +132,10 @@ impl AppStartup {
         )
         .await;
         let active_project_id = db
+            .projects()
             .upsert_project(
                 &startup_working_dir.to_string_lossy(),
-                startup_git_branch.as_deref(),
+                startup_git_branch.clone(),
             )
             .await
             .map_err(|error| {
@@ -138,7 +144,8 @@ impl AppStartup {
                     startup_working_dir.display()
                 ))
             })?;
-        db.set_active_project_id(active_project_id)
+        db.settings()
+            .set_active_project_id(active_project_id)
             .await
             .map_err(|error| {
                 AppError::Workflow(format!(
@@ -146,7 +153,8 @@ impl AppStartup {
                     startup_working_dir.display()
                 ))
             })?;
-        db.touch_project_last_opened(active_project_id)
+        db.projects()
+            .touch_project_last_opened(active_project_id)
             .await
             .map_err(|error| {
                 AppError::Workflow(format!(
@@ -197,6 +205,7 @@ impl AppStartup {
         let clock = services.clock();
         let (sessions_row_count, sessions_updated_at_max) = services
             .db()
+            .sessions()
             .load_sessions_metadata()
             .await
             .unwrap_or((0, 0));
@@ -283,7 +292,10 @@ impl AppStartup {
         session_worktree_root: &Path,
     ) -> Vec<ProjectListItem> {
         Self::visible_project_rows(
-            db.load_projects_with_stats().await.unwrap_or_default(),
+            db.projects()
+                .load_projects_with_stats()
+                .await
+                .unwrap_or_default(),
             fs_client,
             session_worktree_root,
         )
@@ -334,7 +346,8 @@ impl AppStartup {
             let project_path = project_path.to_string_lossy().to_string();
             // Best-effort: project metadata persistence is non-critical.
             let _ = db
-                .upsert_project(project_path.as_str(), git_branch.as_deref())
+                .projects()
+                .upsert_project(project_path.as_str(), git_branch)
                 .await;
         }
     }
@@ -469,10 +482,17 @@ impl AppStartup {
         fs_client: &dyn FsClient,
         current_project_id: i64,
     ) -> i64 {
-        let Some(stored_project_id) = db.load_active_project_id().await.ok().flatten() else {
+        let Some(stored_project_id) = db.settings().load_active_project_id().await.ok().flatten()
+        else {
             return current_project_id;
         };
-        let Some(project_row) = db.get_project(stored_project_id).await.ok().flatten() else {
+        let Some(project_row) = db
+            .projects()
+            .get_project(stored_project_id)
+            .await
+            .ok()
+            .flatten()
+        else {
             return current_project_id;
         };
         if !Self::is_existing_project_path(fs_client, project_row.path.as_str()) {
@@ -489,7 +509,7 @@ impl AppStartup {
         fallback_working_dir: &Path,
         fallback_git_branch: Option<&str>,
     ) -> Project {
-        if let Some(project_row) = db.get_project(project_id).await.ok().flatten() {
+        if let Some(project_row) = db.projects().get_project(project_id).await.ok().flatten() {
             return Self::project_from_row(project_row);
         }
 
@@ -573,14 +593,23 @@ mod tests {
         let current_project_path = PathBuf::from("/workspace/current");
         let stored_project_path = PathBuf::from("/workspace/stored");
         let current_project_id = database
-            .upsert_project(&current_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &current_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to persist current project");
         let stored_project_id = database
-            .upsert_project(&stored_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &stored_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to persist stored project");
         database
+            .settings()
             .set_active_project_id(stored_project_id)
             .await
             .expect("failed to persist active project id");
@@ -610,14 +639,23 @@ mod tests {
         let current_project_path = PathBuf::from("/workspace/current");
         let missing_project_path = PathBuf::from("/workspace/missing");
         let current_project_id = database
-            .upsert_project(&current_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &current_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to persist current project");
         let missing_project_id = database
-            .upsert_project(&missing_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &missing_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to persist missing project");
         database
+            .settings()
             .set_active_project_id(missing_project_id)
             .await
             .expect("failed to persist active project id");
@@ -680,15 +718,24 @@ mod tests {
         let session_worktree_root = Path::new("/workspace/.agentty/wt");
         let worktree_project_path = session_worktree_root.join("session-a");
         database
-            .upsert_project(&visible_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &visible_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to persist visible project");
         database
+            .projects()
             .upsert_project(&nongit_project_path.to_string_lossy(), None)
             .await
             .expect("failed to persist nongit project");
         database
-            .upsert_project(&worktree_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &worktree_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to persist worktree project");
         let fs_client = mock_fs_client_with_directories_and_git_markers(

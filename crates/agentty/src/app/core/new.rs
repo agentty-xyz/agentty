@@ -153,6 +153,7 @@ impl App {
         .await;
         let review_cache = review::review_cache_from_rows(
             repositories
+                .sessions()
                 .load_session_focused_reviews_for_project(active_project_id)
                 .await
                 .unwrap_or_default(),

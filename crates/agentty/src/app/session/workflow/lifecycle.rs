@@ -209,6 +209,7 @@ impl SessionManager {
 
         services
             .db()
+            .sessions()
             .insert_draft_session(
                 &session_id,
                 session_model.as_str(),
@@ -277,6 +278,7 @@ impl SessionManager {
 
         if let Err(error) = services
             .db()
+            .sessions()
             .insert_session(
                 &session_id,
                 session_model.as_str(),
@@ -474,6 +476,7 @@ impl SessionManager {
     ) -> Result<PathBuf, SessionError> {
         let project_id = services
             .db()
+            .sessions()
             .load_session_project_id(session_id)
             .await?
             .ok_or_else(|| {
@@ -501,6 +504,7 @@ impl SessionManager {
     ) -> Result<PathBuf, SessionError> {
         let project_row = services
             .db()
+            .projects()
             .get_project(project_id)
             .await?
             .ok_or_else(|| {
@@ -526,11 +530,13 @@ impl SessionManager {
         .await?;
         services
             .db()
+            .sessions()
             .update_session_prompt(session_id, staged_prompt)
             .await?;
         if let Some(title) = title_to_save {
             services
                 .db()
+                .sessions()
                 .update_session_title(session_id, title)
                 .await?;
         }
@@ -604,6 +610,7 @@ impl SessionManager {
         };
         let project_id = services
             .db()
+            .sessions()
             .load_session_project_id(&persisted_session_id)
             .await?
             .ok_or_else(|| {
@@ -918,28 +925,36 @@ impl SessionManager {
 
         services
             .db()
+            .sessions()
             .update_session_model(session_id, session_model.as_str())
             .await?;
         if model_changed {
             services
                 .db()
+                .sessions()
                 .update_session_provider_conversation_id(session_id, None)
                 .await?;
             services
                 .db()
+                .sessions()
                 .update_session_instruction_conversation_id(session_id, None)
                 .await?;
 
             self.clear_session_worker(session_id);
         }
 
-        let session_project_id = services.db().load_session_project_id(session_id).await?;
+        let session_project_id = services
+            .db()
+            .sessions()
+            .load_session_project_id(session_id)
+            .await?;
 
         if Self::should_persist_last_used_model_as_default(services, session_project_id).await?
             && let Some(project_id) = session_project_id
         {
             services
                 .db()
+                .settings()
                 .upsert_project_setting(
                     project_id,
                     SettingName::DefaultSmartModel,
@@ -977,9 +992,11 @@ impl SessionManager {
 
         services
             .db()
+            .sessions()
             .update_session_reasoning_level(
                 session_id,
-                reasoning_level_override.map(ReasoningLevel::as_str),
+                reasoning_level_override
+                    .map(|reasoning_level| reasoning_level.as_str().to_string()),
             )
             .await?;
 
@@ -1003,6 +1020,7 @@ impl SessionManager {
 
         let should_persist = services
             .db()
+            .settings()
             .get_project_setting(project_id, SettingName::LastUsedModelAsDefault)
             .await?
             .and_then(|setting_value| setting_value.parse::<bool>().ok())
@@ -1212,6 +1230,7 @@ impl SessionManager {
 
         if let Err(error) = services
             .db()
+            .operations()
             .request_cancel_for_session_operations(&session.id)
             .await
         {
@@ -1226,7 +1245,7 @@ impl SessionManager {
         // so we never hold on to stale or potentially sensitive comment bodies
         // for a deleted session.
         services.review_comment_cache().forget(&session.id);
-        if let Err(error) = services.db().delete_session(&session.id).await {
+        if let Err(error) = services.db().sessions().delete_session(&session.id).await {
             warn!(
                 session_id = %session.id,
                 error = %error,
@@ -1367,7 +1386,8 @@ impl SessionManager {
             .ok_or(SessionError::NotFound)?;
         services
             .db()
-            .update_session_review_request(&session_id, Some(&review_request))
+            .reviews()
+            .update_session_review_request(&session_id, Some(review_request.clone()))
             .await?;
 
         let Some(session) = self.state.sessions.get_mut(session_index) else {
@@ -1390,7 +1410,8 @@ impl SessionManager {
     ) -> Result<(), SessionError> {
         services
             .db()
-            .update_session_published_upstream_ref(session_id, Some(&published_upstream_ref))
+            .sessions()
+            .update_session_published_upstream_ref(session_id, Some(published_upstream_ref.clone()))
             .await?;
 
         let session_index = self.session_index_or_err(session_id)?;
@@ -1569,7 +1590,12 @@ impl SessionManager {
         prompt: &str,
         title: &str,
     ) {
-        if let Err(error) = services.db().update_session_title(session_id, title).await {
+        if let Err(error) = services
+            .db()
+            .sessions()
+            .update_session_title(session_id, title)
+            .await
+        {
             warn!(
                 session_id = session_id,
                 error = %error,
@@ -1579,6 +1605,7 @@ impl SessionManager {
 
         if let Err(error) = services
             .db()
+            .sessions()
             .update_session_prompt(session_id, prompt)
             .await
         {
@@ -1844,6 +1871,7 @@ impl SessionManager {
             }
 
             match db
+                .sessions()
                 .update_session_title_for_prompt(&persisted_session_id, &prompt, &generated_title)
                 .await
             {
@@ -2031,7 +2059,7 @@ impl SessionManager {
         session_saved: bool,
     ) {
         if session_saved {
-            if let Err(error) = services.db().delete_session(session_id).await {
+            if let Err(error) = services.db().sessions().delete_session(session_id).await {
                 warn!(
                     session_id = session_id,
                     error = %error,
@@ -2086,6 +2114,7 @@ impl SessionManager {
     async fn record_session_creation_activity(services: &AppServices, session_id: &str) {
         if let Err(error) = services
             .db()
+            .activity()
             .insert_session_creation_activity_now(session_id)
             .await
         {
@@ -2218,6 +2247,7 @@ impl SessionManager {
     ) {
         if let Err(error) = services
             .db()
+            .operations()
             .request_cancel_for_session_operations(session_id)
             .await
         {
@@ -2591,11 +2621,13 @@ mod tests {
     async fn database_with_session(session: &Session) -> AppRepositories {
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         if session.is_draft {
             database
+                .sessions()
                 .insert_draft_session(
                     &session.id,
                     session.model.as_str(),
@@ -2607,6 +2639,7 @@ mod tests {
                 .expect("failed to insert draft session");
         } else {
             database
+                .sessions()
                 .insert_session(
                     &session.id,
                     session.model.as_str(),
@@ -2618,18 +2651,21 @@ mod tests {
                 .expect("failed to insert session");
         }
         database
+            .sessions()
             .update_session_prompt(&session.id, &session.prompt)
             .await
             .expect("failed to persist session prompt");
         if let Some(title) = &session.title {
             database
+                .sessions()
                 .update_session_title(&session.id, title)
                 .await
                 .expect("failed to persist session title");
         }
         if let Some(review_request) = &session.review_request {
             database
-                .update_session_review_request(&session.id, Some(review_request))
+                .reviews()
+                .update_session_review_request(&session.id, Some(review_request.clone()))
                 .await
                 .expect("failed to persist session review request");
         }
@@ -2754,6 +2790,7 @@ mod tests {
     /// Loads the persisted session row used by workflow assertions.
     async fn load_persisted_session_row(database: &AppRepositories) -> db::SessionRow {
         database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load session rows")
@@ -2782,6 +2819,7 @@ mod tests {
             .await
             .expect("reasoning level update should succeed");
         let persisted_reasoning_level = database
+            .sessions()
             .load_session_reasoning_level_override("session-id")
             .await
             .expect("reasoning override should load");
@@ -3961,11 +3999,19 @@ mod tests {
         session.model = AgentModel::ClaudeSonnet46;
         let database = database_with_session(&session).await;
         database
-            .update_session_provider_conversation_id("session-id", Some("provider-conv"))
+            .sessions()
+            .update_session_provider_conversation_id(
+                "session-id",
+                Some("provider-conv".to_string()),
+            )
             .await
             .expect("seed provider conversation id");
         database
-            .update_session_instruction_conversation_id("session-id", Some("instruction-conv"))
+            .sessions()
+            .update_session_instruction_conversation_id(
+                "session-id",
+                Some("instruction-conv".to_string()),
+            )
             .await
             .expect("seed instruction conversation id");
         let mut session_manager = session_manager_with_one_session(session);
@@ -3981,6 +4027,7 @@ mod tests {
             .await
             .expect("set session model should succeed");
         let persisted_model = database
+            .sessions()
             .load_sessions()
             .await
             .expect("load sessions should succeed")
@@ -3989,10 +4036,12 @@ mod tests {
             .expect("session row should exist")
             .model;
         let cleared_provider = database
+            .sessions()
             .get_session_provider_conversation_id("session-id")
             .await
             .expect("provider id load should succeed");
         let cleared_instruction = database
+            .sessions()
             .get_session_instruction_conversation_id("session-id")
             .await
             .expect("instruction id load should succeed");
@@ -4019,7 +4068,11 @@ mod tests {
         session.model = AgentModel::ClaudeSonnet46;
         let database = database_with_session(&session).await;
         database
-            .update_session_provider_conversation_id("session-id", Some("provider-conv"))
+            .sessions()
+            .update_session_provider_conversation_id(
+                "session-id",
+                Some("provider-conv".to_string()),
+            )
             .await
             .expect("seed provider conversation id");
         let mut session_manager = session_manager_with_one_session(session);
@@ -4035,6 +4088,7 @@ mod tests {
             .await
             .expect("set session model should succeed");
         let preserved_provider = database
+            .sessions()
             .get_session_provider_conversation_id("session-id")
             .await
             .expect("provider id load should succeed");

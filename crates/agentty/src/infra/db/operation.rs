@@ -22,7 +22,7 @@ pub struct SessionOperationRow {
 /// Session-operation persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait OperationRepository: Send + Sync {
+pub trait OperationRepository: Send + Sync {
     /// Marks unfinished operations as failed after process restart.
     async fn fail_unfinished_session_operations(&self, reason: &str) -> Result<(), DbError>;
 

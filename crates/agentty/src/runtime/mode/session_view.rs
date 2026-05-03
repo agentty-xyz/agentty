@@ -640,6 +640,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
     if let Err(error) = app
         .services
         .db()
+        .operations()
         .request_cancel_for_session_operations(session_id)
         .await
     {
@@ -670,6 +671,7 @@ async fn cancel_in_progress_turn(app: &mut App, session_id: &str) {
     if let Err(error) = app
         .services
         .db()
+        .sessions()
         .update_session_status_with_timing_at(
             session_id,
             &Status::Review.to_string(),
@@ -1082,6 +1084,7 @@ async fn open_review_output_mode(
     let _ = app
         .services
         .db()
+        .sessions()
         .update_session_focused_review(&view_context.session_id, None, None)
         .await;
     *review_status_message = Some(review_loading_message(review_model));
@@ -2967,6 +2970,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         app.sessions.session_handles_mut().insert(
@@ -3006,6 +3010,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         let handles =
@@ -3039,6 +3044,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         let handles =
@@ -3071,6 +3077,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::Review.to_string(), 0)
             .await;
         app.sessions.session_handles_mut().insert(
@@ -3103,6 +3110,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         let handles =
@@ -3177,6 +3185,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         let handles =
@@ -3246,6 +3255,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         let handles =
@@ -3293,6 +3303,7 @@ mod tests {
         let _ = app
             .services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, &Status::InProgress.to_string(), 0)
             .await;
         let handles =

@@ -166,11 +166,15 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
 
     // Register the project (mirrors what agentty does on startup).
     let project_id = database
-        .upsert_project(&workdir.to_string_lossy(), Some("main"))
+        .projects()
+        .upsert_project(&workdir.to_string_lossy(), Some("main".to_string()))
         .await?;
 
     // Touch last-opened so the project sorts to the top.
-    database.touch_project_last_opened(project_id).await?;
+    database
+        .projects()
+        .touch_project_last_opened(project_id)
+        .await?;
 
     // Session data: (id, model, status, title, size).
     let sessions = [
@@ -229,12 +233,17 @@ async fn seed_database(agentty_root: &Path, workdir: &Path) -> ShowcaseResult {
 
     for (session_id, model, status, title, size) in &sessions {
         database
+            .sessions()
             .insert_session(session_id, model, "main", status, project_id)
             .await?;
 
-        database.update_session_title(session_id, title).await?;
+        database
+            .sessions()
+            .update_session_title(session_id, title)
+            .await?;
 
         database
+            .sessions()
             .update_session_diff_stats(10, 5, session_id, size)
             .await?;
 

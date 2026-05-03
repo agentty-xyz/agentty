@@ -24,14 +24,23 @@ fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
-            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await?;
 
-        database.touch_project_last_opened(project_id).await?;
         database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
             .insert_draft_session("draft-cancel-0001", "gpt-5.4", "main", "Draft", project_id)
             .await?;
         database
+            .sessions()
             .update_session_title("draft-cancel-0001", "Cancel staged draft from list")
             .await
     })?;
@@ -51,14 +60,23 @@ fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
         let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
         let database = Database::open(&db_path).await?;
         let project_id = database
-            .upsert_project(&canonical_workdir.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_workdir.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await?;
 
-        database.touch_project_last_opened(project_id).await?;
         database
+            .projects()
+            .touch_project_last_opened(project_id)
+            .await?;
+        database
+            .sessions()
             .insert_session(session_id, "gpt-5.4", "main", "InProgress", project_id)
             .await?;
         database
+            .sessions()
             .update_session_title(session_id, "Cancel running session from list")
             .await
     })?;

@@ -2154,12 +2154,14 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
         let activity_timestamps = app
             .services
             .db()
+            .activity()
             .load_session_activity_timestamps()
             .await
             .expect("failed to load session activity timestamps");
@@ -2196,6 +2198,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2218,6 +2221,7 @@ mod tests {
         let default_smart_model_setting = app
             .services
             .db()
+            .settings()
             .get_project_setting(active_project_id, SettingName::DefaultSmartModel)
             .await
             .expect("failed to load setting");
@@ -2241,6 +2245,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2264,6 +2269,7 @@ mod tests {
         let active_project_id = app.active_project_id();
         app.services
             .db()
+            .settings()
             .upsert_project_setting(
                 active_project_id,
                 SettingName::LastUsedModelAsDefault,
@@ -2283,6 +2289,7 @@ mod tests {
         let default_smart_model_setting = app
             .services
             .db()
+            .settings()
             .get_project_setting(active_project_id, SettingName::DefaultSmartModel)
             .await
             .expect("failed to load setting");
@@ -2315,6 +2322,7 @@ mod tests {
         let active_project_id = app.active_project_id();
         app.services
             .db()
+            .settings()
             .upsert_project_setting(
                 active_project_id,
                 SettingName::DefaultSmartModel,
@@ -2363,12 +2371,14 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
         let activity_timestamps = app
             .services
             .db()
+            .activity()
             .load_session_activity_timestamps()
             .await
             .expect("failed to load session activity timestamps");
@@ -2422,6 +2432,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2444,6 +2455,7 @@ mod tests {
             .expect("failed to stage first draft");
         app.services
             .db()
+            .sessions()
             .update_session_title(&session_id, "Generated draft title")
             .await
             .expect("failed to persist generated draft title");
@@ -2466,6 +2478,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2634,6 +2647,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2693,6 +2707,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2727,6 +2742,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2757,6 +2773,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -2782,6 +2799,7 @@ mod tests {
         let activity_timestamps = app
             .services
             .db()
+            .activity()
             .load_session_activity_timestamps()
             .await
             .expect("failed to load session activity timestamps");
@@ -2947,6 +2965,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -3009,10 +3028,12 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session("12345678", "claude-opus-4-6", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("12345678", "claude-opus-4-6", "main", "Done", project_id)
             .await
             .expect("failed to insert");
 
@@ -3020,10 +3041,12 @@ mod tests {
         let data_dir = session_dir.join(SESSION_DATA_DIR);
         std::fs::create_dir(&session_dir).expect("failed to create session dir");
         std::fs::create_dir(&data_dir).expect("failed to create data dir");
-        db.update_session_prompt("12345678", "Existing")
+        db.sessions()
+            .update_session_prompt("12345678", "Existing")
             .await
             .expect("failed to update prompt");
-        db.append_session_output("12345678", "Output")
+        db.sessions()
+            .append_session_output("12345678", "Output")
             .await
             .expect("failed to update output");
 
@@ -3053,38 +3076,44 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project(&dir.path().to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(&dir.path().to_string_lossy(), Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "alpha0001",
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
-        .await
-        .expect("failed to insert alpha0001");
-        db.insert_session(
-            "beta00002",
-            AgentModel::ClaudeHaiku4520251001.as_str(),
-            "main",
-            "Done",
-            project_id,
-        )
-        .await
-        .expect("failed to insert beta00002");
-        db.upsert_project_setting(
-            project_id,
-            SettingName::DefaultSmartModel,
-            AgentModel::ClaudeHaiku4520251001.as_str(),
-        )
-        .await
-        .expect("failed to upsert default smart model setting");
-        db.update_session_updated_at("alpha0001", 1_i64)
+        db.sessions()
+            .insert_session(
+                "alpha0001",
+                "gemini-3-flash-preview",
+                "main",
+                "Done",
+                project_id,
+            )
+            .await
+            .expect("failed to insert alpha0001");
+        db.sessions()
+            .insert_session(
+                "beta00002",
+                AgentModel::ClaudeHaiku4520251001.as_str(),
+                "main",
+                "Done",
+                project_id,
+            )
+            .await
+            .expect("failed to insert beta00002");
+        db.settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::DefaultSmartModel,
+                AgentModel::ClaudeHaiku4520251001.as_str(),
+            )
+            .await
+            .expect("failed to upsert default smart model setting");
+        db.sessions()
+            .update_session_updated_at("alpha0001", 1_i64)
             .await
             .expect("failed to update alpha0001 timestamp");
-        db.update_session_updated_at("beta00002", 2_i64)
+        db.sessions()
+            .update_session_updated_at("beta00002", 2_i64)
             .await
             .expect("failed to update beta00002 timestamp");
         for session_id in ["alpha0001", "beta00002"] {
@@ -3116,26 +3145,31 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert alpha000");
-        db.insert_session(
-            "beta0000",
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
-        .await
-        .expect("failed to insert beta0000");
+        db.sessions()
+            .insert_session(
+                "beta0000",
+                "gemini-3-flash-preview",
+                "main",
+                "Done",
+                project_id,
+            )
+            .await
+            .expect("failed to insert beta0000");
 
-        db.update_session_updated_at("alpha000", 1_i64)
+        db.sessions()
+            .update_session_updated_at("alpha000", 1_i64)
             .await
             .expect("failed to update alpha000 timestamp");
-        db.update_session_updated_at("beta0000", 2_i64)
+        db.sessions()
+            .update_session_updated_at("beta0000", 2_i64)
             .await
             .expect("failed to update beta0000 timestamp");
 
@@ -3170,35 +3204,44 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert alpha000");
-        db.insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
-        db.insert_session("gamma000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("gamma000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert gamma000");
         let seconds_per_day = 86_400_i64;
         let day_key_one = 10_i64;
         let day_key_two = 11_i64;
 
-        db.update_session_created_at("alpha000", day_key_one * seconds_per_day + 10)
+        db.sessions()
+            .update_session_created_at("alpha000", day_key_one * seconds_per_day + 10)
             .await
             .expect("failed to update alpha000 created_at");
-        db.update_session_created_at("beta0000", day_key_one * seconds_per_day + 600)
+        db.sessions()
+            .update_session_created_at("beta0000", day_key_one * seconds_per_day + 600)
             .await
             .expect("failed to update beta0000 created_at");
-        db.update_session_created_at("gamma000", day_key_two * seconds_per_day + 50)
+        db.sessions()
+            .update_session_created_at("gamma000", day_key_two * seconds_per_day + 50)
             .await
             .expect("failed to update gamma000 created_at");
-        db.clear_session_activity()
+        db.activity()
+            .clear_session_activity()
             .await
             .expect("failed to clear session activity");
-        db.backfill_session_activity_from_sessions()
+        db.activity()
+            .backfill_session_activity_from_sessions()
             .await
             .expect("failed to backfill session activity from session rows");
         let working_dir = PathBuf::from("/tmp/test");
@@ -3245,22 +3288,28 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("alpha000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert alpha000");
-        db.insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
-        db.insert_session_creation_activity_at("alpha000", 10)
+        db.activity()
+            .insert_session_creation_activity_at("alpha000", 10)
             .await
             .expect("failed to persist first activity event");
-        db.insert_session_creation_activity_at("beta0000", 20)
+        db.activity()
+            .insert_session_creation_activity_at("beta0000", 20)
             .await
             .expect("failed to persist second activity event");
-        db.delete_session("alpha000")
+        db.sessions()
+            .delete_session("alpha000")
             .await
             .expect("failed to delete alpha000");
         let working_dir = PathBuf::from("/tmp/test");
@@ -3294,25 +3343,30 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "alpha000",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert alpha000");
-        db.insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session(
+                "alpha000",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert alpha000");
+        db.sessions()
+            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
-        db.update_session_updated_at("alpha000", 1)
+        db.sessions()
+            .update_session_updated_at("alpha000", 1)
             .await
             .expect("failed to set alpha000 timestamp");
-        db.update_session_updated_at("beta0000", 2)
+        db.sessions()
+            .update_session_updated_at("beta0000", 2)
             .await
             .expect("failed to set beta0000 timestamp");
         for session_id in ["alpha000", "beta0000"] {
@@ -3332,6 +3386,7 @@ mod tests {
         // Act
         app.services
             .db()
+            .sessions()
             .update_session_status_with_timing_at("alpha000", "Done", 0)
             .await
             .expect("failed to update session status");
@@ -3352,25 +3407,30 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "alpha000",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert alpha000");
-        db.insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
+        db.sessions()
+            .insert_session(
+                "alpha000",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert alpha000");
+        db.sessions()
+            .insert_session("beta0000", "claude-opus-4-7", "main", "Done", project_id)
             .await
             .expect("failed to insert beta0000");
-        db.update_session_updated_at("alpha000", 1)
+        db.sessions()
+            .update_session_updated_at("alpha000", 1)
             .await
             .expect("failed to set alpha000 timestamp");
-        db.update_session_updated_at("beta0000", 2)
+        db.sessions()
+            .update_session_updated_at("beta0000", 2)
             .await
             .expect("failed to set beta0000 timestamp");
         for session_id in ["alpha000", "beta0000"] {
@@ -3396,6 +3456,7 @@ mod tests {
         // Act
         app.services
             .db()
+            .sessions()
             .update_session_status_with_timing_at("alpha000", "Done", 0)
             .await
             .expect("failed to update session status");
@@ -3427,18 +3488,20 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "missing01",
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
+        db.sessions()
+            .insert_session(
+                "missing01",
+                "gemini-3-flash-preview",
+                "main",
+                "Done",
+                project_id,
+            )
+            .await
+            .expect("failed to insert");
 
         // Act
         let app = new_test_app_with_db(
@@ -3461,18 +3524,20 @@ mod tests {
         let dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "missing02",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert");
+        db.sessions()
+            .insert_session(
+                "missing02",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert");
 
         // Act
         let app = new_test_app_with_db(
@@ -3498,6 +3563,7 @@ mod tests {
             .expect("failed to create session");
         app.services
             .db()
+            .sessions()
             .update_session_diff_stats(8, 3, &session_id, "S")
             .await
             .expect("failed to update size");
@@ -3524,6 +3590,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -3584,6 +3651,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -3618,11 +3686,13 @@ mod tests {
             .expect("failed to create session");
         app.services
             .db()
+            .sessions()
             .update_session_diff_stats(21, 9, &session_id, "L")
             .await
             .expect("failed to update size");
         app.services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(&session_id, "Done", 0)
             .await
             .expect("failed to update status");
@@ -3649,6 +3719,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -3825,6 +3896,7 @@ mod tests {
         // `AgentRequestKind::SessionStart`.
         app.services
             .db()
+            .sessions()
             .update_session_prompt(&session_id, "Initial prompt")
             .await
             .expect("failed to persist initial prompt");
@@ -5036,6 +5108,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -5088,6 +5161,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -5117,6 +5191,7 @@ mod tests {
         set_session_status_for_test(&mut app, &session_id, Status::InProgress);
         app.services
             .db()
+            .operations()
             .insert_session_operation("operation-id", &session_id, "reply")
             .await
             .expect("failed to insert operation");
@@ -5160,6 +5235,7 @@ mod tests {
         assert!(
             app.services
                 .db()
+                .operations()
                 .is_cancel_requested_for_operation("operation-id")
                 .await
                 .expect("failed to load operation cancel status")
@@ -5167,6 +5243,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");
@@ -5470,6 +5547,7 @@ mod tests {
         let sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load");

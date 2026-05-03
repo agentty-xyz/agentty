@@ -545,7 +545,8 @@ pub(crate) async fn push_session_branch_to_remote(
             }
         })?;
 
-    db.update_session_published_upstream_ref(session_id, Some(&upstream_reference))
+    db.sessions()
+        .update_session_published_upstream_ref(session_id, Some(upstream_reference.clone()))
         .await
         .map_err(|error| {
             BranchPublishTaskFailure::failed(
@@ -648,7 +649,8 @@ async fn create_or_refresh_review_request(
         summary: review_request_summary,
     };
 
-    db.update_session_review_request(&branch_publish_session.id, Some(&review_request))
+    db.reviews()
+        .update_session_review_request(&branch_publish_session.id, Some(review_request.clone()))
         .await
         .map_err(|error| {
             BranchPublishTaskFailure::failed(
@@ -910,10 +912,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         database
+            .sessions()
             .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
@@ -945,6 +949,7 @@ mod tests {
         .await
         .expect("branch push should succeed");
         let persisted_session = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions")
@@ -1109,10 +1114,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         database
+            .sessions()
             .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
@@ -1146,10 +1153,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         database
+            .sessions()
             .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
@@ -1184,10 +1193,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         database
+            .sessions()
             .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
@@ -1229,10 +1240,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         database
+            .sessions()
             .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
@@ -1277,10 +1290,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         database
+            .sessions()
             .insert_session("session-id", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");

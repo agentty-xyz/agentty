@@ -699,6 +699,7 @@ mod tests {
             .expect("failed to create session");
         app.services
             .db()
+            .sessions()
             .update_session_diff_stats(0, 0, &expected_session_id, "XS")
             .await
             .expect("failed to set stale size");
@@ -720,6 +721,7 @@ mod tests {
         let db_sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions");

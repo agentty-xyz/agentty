@@ -91,11 +91,20 @@ impl SessionManager {
             .to_string();
 
         let db_rows = db
+            .sessions()
             .load_sessions_for_project(active_project_id)
             .await
             .unwrap_or_default();
-        let persisted_follow_up_tasks = db.load_session_follow_up_tasks().await.unwrap_or_default();
-        let stats_activity = db.load_session_activity().await.unwrap_or_default();
+        let persisted_follow_up_tasks = db
+            .sessions()
+            .load_session_follow_up_tasks()
+            .await
+            .unwrap_or_default();
+        let stats_activity = db
+            .activity()
+            .load_session_activity()
+            .await
+            .unwrap_or_default();
         let mut sessions: Vec<Session> = Vec::new();
         let mut follow_up_tasks_by_session = HashMap::<SessionId, Vec<_>>::new();
         let mut session_worktree_availability = HashMap::new();
@@ -163,7 +172,11 @@ impl SessionManager {
             .unwrap_or_else(|_| AgentKind::Gemini.default_model());
 
         let session_detail = if active_session_id.is_some_and(|active_id| active_id == row.id) {
-            db.load_session_detail(&row.id).await.ok().flatten()
+            db.sessions()
+                .load_session_detail(&row.id)
+                .await
+                .ok()
+                .flatten()
         } else {
             None
         };
@@ -259,7 +272,13 @@ impl SessionManager {
         db: &AppRepositories,
         session_id: &str,
     ) {
-        let Some(detail) = db.load_session_detail(session_id).await.ok().flatten() else {
+        let Some(detail) = db
+            .sessions()
+            .load_session_detail(session_id)
+            .await
+            .ok()
+            .flatten()
+        else {
             return;
         };
 
@@ -521,21 +540,24 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
 
         let session_id = "test-session";
-        db.insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.append_session_output(session_id, "DB Output")
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .append_session_output(session_id, "DB Output")
             .await
             .expect("failed to append persisted output");
 
@@ -591,29 +613,32 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
         let session_with_worktree_id = "worktree-available";
         let session_without_worktree_id = "draft-missing";
-        db.insert_session(
-            session_with_worktree_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Draft",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session with worktree");
-        db.insert_draft_session(
-            session_without_worktree_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Draft",
-            project_id,
-        )
-        .await
-        .expect("failed to insert draft session");
+        db.sessions()
+            .insert_session(
+                session_with_worktree_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Draft",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session with worktree");
+        db.sessions()
+            .insert_draft_session(
+                session_without_worktree_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Draft",
+                project_id,
+            )
+            .await
+            .expect("failed to insert draft session");
 
         let base_path = Path::new("/virtual/session-base");
         let mock_fs_client =
@@ -649,33 +674,39 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
 
         let session_id = "test-session";
-        db.insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.update_session_prompt(session_id, "persisted prompt")
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_prompt(session_id, "persisted prompt")
             .await
             .expect("failed to update session prompt");
-        db.update_session_questions(
-            session_id,
-            r#"[{"text":"persisted question?","options":["Yes"]}]"#,
-        )
-        .await
-        .expect("failed to update session questions");
-        db.update_session_summary(session_id, "persisted summary")
+        db.sessions()
+            .update_session_questions(
+                session_id,
+                r#"[{"text":"persisted question?","options":["Yes"]}]"#,
+            )
+            .await
+            .expect("failed to update session questions");
+        db.sessions()
+            .update_session_summary(session_id, "persisted summary")
             .await
             .expect("failed to update session summary");
-        db.append_session_output(session_id, "persisted output")
+        db.sessions()
+            .append_session_output(session_id, "persisted output")
             .await
             .expect("failed to append session output");
 
@@ -724,30 +755,36 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
 
         let session_id = "inactive-session";
-        db.insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.update_session_prompt(session_id, "large prompt")
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_prompt(session_id, "large prompt")
             .await
             .expect("failed to update prompt");
-        db.update_session_questions(session_id, r#"["Need detail?"]"#)
+        db.sessions()
+            .update_session_questions(session_id, r#"["Need detail?"]"#)
             .await
             .expect("failed to update questions");
-        db.update_session_summary(session_id, "large summary")
+        db.sessions()
+            .update_session_summary(session_id, "large summary")
             .await
             .expect("failed to update summary");
-        db.append_session_output(session_id, "large output")
+        db.sessions()
+            .append_session_output(session_id, "large output")
             .await
             .expect("failed to append output");
 
@@ -790,21 +827,24 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
 
         let session_id = "active-session";
-        db.insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.append_session_output(session_id, "persisted output")
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Review",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .append_session_output(session_id, "persisted output")
             .await
             .expect("failed to append output");
 
@@ -848,20 +888,22 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
 
         let session_id = "test-session";
-        db.insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Done",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         let base_path = Path::new("/virtual/session-base");
         let session_dir = session_folder(base_path, session_id);
@@ -906,6 +948,7 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
@@ -924,16 +967,18 @@ mod tests {
         };
 
         let session_id = "test-session";
-        db.insert_session(
-            session_id,
-            "gemini-3-flash-preview",
-            "main",
-            "Done",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.update_session_review_request(session_id, Some(&review_request))
+        db.sessions()
+            .insert_session(
+                session_id,
+                "gemini-3-flash-preview",
+                "main",
+                "Done",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.reviews()
+            .update_session_review_request(session_id, Some(review_request.clone()))
             .await
             .expect("failed to persist review request metadata");
 

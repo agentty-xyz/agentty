@@ -35,7 +35,7 @@ pub struct ProjectListRow {
 /// Project-focused persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait ProjectRepository: Send + Sync {
+pub trait ProjectRepository: Send + Sync {
     /// Looks up a project by identifier.
     async fn get_project(&self, id: i64) -> Result<Option<ProjectRow>, DbError>;
 

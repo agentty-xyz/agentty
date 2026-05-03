@@ -857,6 +857,7 @@ async fn end_turn_no_answer(app: &mut App) {
     if app
         .services
         .db()
+        .sessions()
         .update_session_status_with_timing_at(
             &session_id,
             &Status::Review.to_string(),
@@ -1478,11 +1479,13 @@ mod tests {
         let project_id = app
             .services
             .db()
+            .projects()
             .upsert_project("/tmp/test", None)
             .await
             .expect("failed to upsert project");
         app.services
             .db()
+            .sessions()
             .insert_session(
                 session_id,
                 "gemini-3-flash-preview",
@@ -1494,6 +1497,7 @@ mod tests {
             .expect("failed to insert session");
         app.services
             .db()
+            .sessions()
             .update_session_status_with_timing_at(session_id, "InProgress", 0)
             .await
             .expect("failed to open timing window");
@@ -1524,6 +1528,7 @@ mod tests {
         let sessions = app
             .services
             .db()
+            .sessions()
             .load_sessions_for_project(project_id)
             .await
             .expect("failed to load sessions");

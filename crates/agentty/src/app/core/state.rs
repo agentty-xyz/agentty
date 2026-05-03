@@ -395,6 +395,7 @@ impl App {
         let project = self
             .services
             .db()
+            .projects()
             .get_project(project_id)
             .await?
             .map(Self::project_from_row)
@@ -416,14 +417,21 @@ impl App {
         let _ = self
             .services
             .db()
-            .upsert_project(&project.path.to_string_lossy(), git_branch.as_deref())
+            .projects()
+            .upsert_project(&project.path.to_string_lossy(), git_branch.clone())
             .await;
-        // Best-effort: project metadata persistence is non-critical.
-        let _ = self.services.db().set_active_project_id(project.id).await;
         // Best-effort: project metadata persistence is non-critical.
         let _ = self
             .services
             .db()
+            .settings()
+            .set_active_project_id(project.id)
+            .await;
+        // Best-effort: project metadata persistence is non-critical.
+        let _ = self
+            .services
+            .db()
+            .projects()
             .touch_project_last_opened(project.id)
             .await;
 
@@ -615,6 +623,7 @@ impl App {
         let project_id = self
             .services
             .db()
+            .sessions()
             .load_session_project_id(source_session_id)
             .await?
             .ok_or_else(|| {
@@ -627,6 +636,7 @@ impl App {
         let prompt_seed = if let Some(merged_commit_hash) = self
             .services
             .db()
+            .sessions()
             .load_session_merged_commit_hash(source_session_id)
             .await?
         {
@@ -675,6 +685,7 @@ impl App {
         self.review_cache.remove(session_id);
         self.services
             .db()
+            .sessions()
             .update_session_focused_review(session_id, None, None)
             .await?;
 
@@ -709,6 +720,7 @@ impl App {
         self.review_cache.remove(session_id);
         self.services
             .db()
+            .sessions()
             .update_session_focused_review(session_id, None, None)
             .await?;
 
@@ -728,6 +740,7 @@ impl App {
         let _ = self
             .services
             .db()
+            .sessions()
             .update_session_focused_review(session_id, None, None)
             .await;
         self.sessions
@@ -1083,14 +1096,20 @@ impl App {
 
     /// Loads slash-command stats data for one session through the app layer.
     pub(crate) async fn stats_for_session(&self, session_id: &str) -> SessionStatsSnapshot {
-        let session_duration_seconds =
-            match self.services.db().load_session_timestamps(session_id).await {
-                Ok(Some((created_at, updated_at))) => Some((updated_at - created_at).max(0)),
-                Ok(None) | Err(_) => None,
-            };
+        let session_duration_seconds = match self
+            .services
+            .db()
+            .sessions()
+            .load_session_timestamps(session_id)
+            .await
+        {
+            Ok(Some((created_at, updated_at))) => Some((updated_at - created_at).max(0)),
+            Ok(None) | Err(_) => None,
+        };
         let usage_rows_result = self
             .services
             .db()
+            .usage()
             .load_session_usage(session_id)
             .await
             .map_err(|e| e.to_string())
@@ -1322,10 +1341,11 @@ impl App {
     ) -> Result<(), AppError> {
         self.services
             .db()
+            .sessions()
             .update_session_follow_up_task_launched_session_id(
                 session_id,
                 position,
-                launched_session_id.as_deref(),
+                launched_session_id.as_ref().map(ToString::to_string),
             )
             .await?;
         self.sessions.set_follow_up_task_launched_session_id(
@@ -1839,14 +1859,17 @@ mod tests {
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
         let first_project_id = database
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to insert first project");
         let second_project_id = database
+            .projects()
             .upsert_project(&second_project_dir.path().to_string_lossy(), None)
             .await
             .expect("failed to insert second project");
         database
+            .settings()
             .upsert_project_setting(
                 first_project_id,
                 SettingName::DefaultSmartModel,
@@ -1855,10 +1878,12 @@ mod tests {
             .await
             .expect("failed to persist first project smart model");
         database
+            .settings()
             .upsert_project_setting(first_project_id, SettingName::OpenCommand, "npm run dev")
             .await
             .expect("failed to persist first project open command");
         database
+            .settings()
             .upsert_project_setting(
                 second_project_id,
                 SettingName::DefaultSmartModel,
@@ -1867,10 +1892,12 @@ mod tests {
             .await
             .expect("failed to persist second project smart model");
         database
+            .settings()
             .upsert_project_setting(second_project_id, SettingName::OpenCommand, "cargo test")
             .await
             .expect("failed to persist second project open command");
         database
+            .settings()
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
@@ -1909,14 +1936,17 @@ mod tests {
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
         let first_project_id = database
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to insert first project");
         let second_project_id = database
+            .projects()
             .upsert_project(&second_project_dir.path().to_string_lossy(), None)
             .await
             .expect("failed to insert second project");
         database
+            .settings()
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
@@ -1955,14 +1985,17 @@ mod tests {
         let second_project_path = second_project_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
         let first_project_id = database
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to insert first project");
         let second_project_id = database
+            .projects()
             .upsert_project(&second_project_path.to_string_lossy(), None)
             .await
             .expect("failed to insert second project");
         database
+            .settings()
             .set_active_project_id(first_project_id)
             .await
             .expect("failed to persist initial active project");
@@ -2017,12 +2050,14 @@ mod tests {
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
         let project_id = database
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to upsert project");
         let active_session_id = "z-active-session";
         let archive_session_id = "a-archive-session";
         database
+            .sessions()
             .insert_session(
                 active_session_id,
                 "gemini-3-flash-preview",
@@ -2033,6 +2068,7 @@ mod tests {
             .await
             .expect("failed to insert active session");
         database
+            .sessions()
             .insert_session(
                 archive_session_id,
                 "gemini-3-flash-preview",
@@ -2141,20 +2177,30 @@ mod tests {
         let missing_project_path = temp_dir.path().join("missing-project");
         let database = AppRepositories::in_memory().await;
         let current_project_id = database
-            .upsert_project(&current_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &current_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to insert current project");
         let missing_project_id = database
-            .upsert_project(&missing_project_path.to_string_lossy(), Some("missing"))
+            .projects()
+            .upsert_project(
+                &missing_project_path.to_string_lossy(),
+                Some("missing".to_string()),
+            )
             .await
             .expect("failed to insert missing project");
         database
+            .settings()
             .set_active_project_id(missing_project_id)
             .await
             .expect("failed to persist stale active project");
         let current_session_id = "session-current";
         let missing_session_id = "session-missing";
         database
+            .sessions()
             .insert_session(
                 current_session_id,
                 "gemini-3-flash-preview",
@@ -2165,6 +2211,7 @@ mod tests {
             .await
             .expect("failed to insert current project session");
         database
+            .sessions()
             .insert_session(
                 missing_session_id,
                 "gemini-3-flash-preview",
@@ -2802,11 +2849,13 @@ mod tests {
         let project_id = app
             .services
             .db()
-            .upsert_project("/tmp/stats-project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/stats-project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         app.services
             .db()
+            .sessions()
             .insert_session(
                 session_id,
                 "gemini-2.5-flash",
@@ -2824,6 +2873,7 @@ mod tests {
         };
         app.services
             .db()
+            .usage()
             .upsert_session_usage(session_id, "gemini-2.5-flash", &usage)
             .await
             .expect("failed to upsert usage");
@@ -4217,10 +4267,12 @@ mod tests {
         let base_path = base_dir.path().to_path_buf();
         let database = AppRepositories::in_memory().await;
         let project_id = database
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session(
                 "session-1",
                 AgentModel::Gemini3FlashPreview.as_str(),
@@ -4641,14 +4693,23 @@ mod tests {
         let missing_project_path = current_project_path.join("removed-project");
         let database = AppRepositories::in_memory().await;
         let current_project_id = database
-            .upsert_project(&current_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &current_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to insert current project");
         let missing_project_id = database
-            .upsert_project(&missing_project_path.to_string_lossy(), Some("main"))
+            .projects()
+            .upsert_project(
+                &missing_project_path.to_string_lossy(),
+                Some("main".to_string()),
+            )
             .await
             .expect("failed to insert missing project");
         database
+            .settings()
             .set_active_project_id(missing_project_id)
             .await
             .expect("failed to persist active project");
@@ -4676,10 +4737,12 @@ mod tests {
         fs::create_dir_all(base_path.join(".git")).expect("failed to create project git marker");
         let database = AppRepositories::in_memory().await;
         let project_id = database
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session(
                 "session-active",
                 "gemini-3-flash-preview",
@@ -4714,6 +4777,7 @@ mod tests {
 
         app.services
             .db()
+            .sessions()
             .update_session_status_with_timing_at("session-active", &Status::Done.to_string(), 0)
             .await
             .expect("failed to update session status");
@@ -4755,6 +4819,7 @@ mod tests {
         assert!(project_items.is_empty());
         assert!(
             database
+                .projects()
                 .load_projects_with_stats()
                 .await
                 .expect("failed to load projects")
@@ -4866,18 +4931,21 @@ mod tests {
         let project_id = app
             .services
             .db()
+            .projects()
             .upsert_project(&base_path.to_string_lossy(), None)
             .await
             .expect("failed to insert project");
         app.services
             .db()
+            .sessions()
             .insert_session("done-source", "gpt-5.4", "release", "Done", project_id)
             .await
             .expect("failed to insert source session row");
         let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
         app.services
             .db()
-            .update_session_merged_commit_hash("done-source", Some(merged_commit_hash))
+            .sessions()
+            .update_session_merged_commit_hash("done-source", Some(merged_commit_hash.to_string()))
             .await
             .expect("failed to persist merged commit hash");
         let mut source_session = crate::domain::session::tests::SessionFixtureBuilder::new()
@@ -4968,6 +5036,7 @@ mod tests {
         let project_id = app.active_project_id();
         app.services
             .db()
+            .sessions()
             .insert_session("canceled-source", "gpt-5.4", "main", "Canceled", project_id)
             .await
             .expect("failed to insert source session row");
@@ -5438,6 +5507,7 @@ mod tests {
         let session_id = "session-1";
         app.services
             .db()
+            .sessions()
             .insert_session(
                 session_id,
                 "gemini-3-flash-preview",
@@ -5491,6 +5561,7 @@ mod tests {
         let session_id = "session-closed";
         app.services
             .db()
+            .sessions()
             .insert_session(
                 session_id,
                 "gemini-3-flash-preview",
@@ -5544,6 +5615,7 @@ mod tests {
         let session_id = "session-merged";
         app.services
             .db()
+            .sessions()
             .insert_session(
                 session_id,
                 "gemini-3-flash-preview",

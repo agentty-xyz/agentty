@@ -274,6 +274,7 @@ impl SessionWorkerService {
         timestamp_seconds: i64,
     ) {
         let interrupted_session_ids: HashSet<String> = db
+            .operations()
             .load_unfinished_session_operations()
             .await
             .unwrap_or_default()
@@ -284,6 +285,7 @@ impl SessionWorkerService {
         for session_id in interrupted_session_ids {
             // Best-effort: status persistence failure is non-critical.
             let _ = db
+                .sessions()
                 .update_session_status_with_timing_at(
                     &session_id,
                     &Status::Review.to_string(),
@@ -294,6 +296,7 @@ impl SessionWorkerService {
 
         // Best-effort: operation tracking metadata is non-critical.
         let _ = db
+            .operations()
             .fail_unfinished_session_operations(RESTART_FAILURE_REASON)
             .await;
     }
@@ -313,6 +316,7 @@ impl SessionWorkerService {
         let session_id = runtime.session_id.clone();
         services
             .db()
+            .operations()
             .insert_session_operation(&operation_id, &session_id, command.kind())
             .await?;
 
@@ -321,6 +325,7 @@ impl SessionWorkerService {
             // Best-effort: operation tracking metadata is non-critical.
             let _ = services
                 .db()
+                .operations()
                 .mark_session_operation_failed(&operation_id, "Session worker is not available")
                 .await;
 
@@ -445,6 +450,7 @@ impl SessionWorkerService {
         // Best-effort: operation tracking metadata is non-critical.
         let _ = context
             .db
+            .operations()
             .mark_session_operation_running(&operation_id)
             .await;
         if Self::should_skip_worker_command(context, &operation_id).await {
@@ -455,12 +461,17 @@ impl SessionWorkerService {
         match &result {
             Ok(()) => {
                 // Best-effort: operation tracking metadata is non-critical.
-                let _ = context.db.mark_session_operation_done(&operation_id).await;
+                let _ = context
+                    .db
+                    .operations()
+                    .mark_session_operation_done(&operation_id)
+                    .await;
             }
             Err(error) => {
                 // Best-effort: operation tracking metadata is non-critical.
                 let _ = context
                     .db
+                    .operations()
                     .mark_session_operation_failed(&operation_id, &error.to_string())
                     .await;
             }
@@ -498,6 +509,7 @@ impl SessionWorkerService {
             // Best-effort: operation tracking metadata is non-critical.
             let _ = context
                 .db
+                .operations()
                 .insert_session_operation(&operation_id, &context.session_id, "reply")
                 .await;
             append_drained_prompt_to_output(context, &prompt).await;
@@ -583,6 +595,7 @@ impl SessionWorkerService {
             // Best-effort: questions persistence failure is non-critical.
             let _ = context
                 .db
+                .sessions()
                 .update_session_questions(&context.session_id, "")
                 .await;
 
@@ -625,12 +638,14 @@ impl SessionWorkerService {
                 .await;
         let provider_conversation_id = context
             .db
+            .sessions()
             .get_session_provider_conversation_id(&context.session_id)
             .await
             .ok()
             .flatten();
         let persisted_instruction_conversation_id = context
             .db
+            .sessions()
             .get_session_instruction_conversation_id(&context.session_id)
             .await
             .ok()
@@ -694,6 +709,7 @@ impl SessionWorkerService {
     ) -> bool {
         let operation_is_unfinished = context
             .db
+            .operations()
             .is_session_operation_unfinished(operation_id)
             .await
             .unwrap_or(false);
@@ -703,6 +719,7 @@ impl SessionWorkerService {
 
         let is_cancel_requested = context
             .db
+            .operations()
             .is_cancel_requested_for_operation(operation_id)
             .await
             .unwrap_or(false);
@@ -713,6 +730,7 @@ impl SessionWorkerService {
         // Best-effort: operation tracking metadata is non-critical.
         let _ = context
             .db
+            .operations()
             .mark_session_operation_canceled(operation_id, CANCEL_BEFORE_EXECUTION_REASON)
             .await;
 
@@ -846,6 +864,7 @@ impl TurnPersistence<'_> {
             };
         self.context
             .db
+            .sessions()
             .persist_session_turn_metadata(
                 &self.context.session_id,
                 &SessionTurnMetadata {
@@ -860,6 +879,7 @@ impl TurnPersistence<'_> {
             .await?;
         self.context
             .db
+            .sessions()
             .replace_session_follow_up_tasks(&self.context.session_id, &persisted_follow_up_text)
             .await?;
 
@@ -1347,7 +1367,11 @@ async fn spawn_start_turn_title_generation(
 
 /// Loads the project identifier associated with one persisted session.
 async fn load_session_project_id(db: &AppRepositories, session_id: &str) -> Option<i64> {
-    db.load_session_project_id(session_id).await.ok().flatten()
+    db.sessions()
+        .load_session_project_id(session_id)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Loads the effective reasoning level for one session context.
@@ -1356,7 +1380,11 @@ async fn load_session_reasoning_level(
     session_id: &str,
     project_id: Option<i64>,
 ) -> ReasoningLevel {
-    if let Ok(Some(reasoning_level)) = db.load_session_reasoning_level_override(session_id).await {
+    if let Ok(Some(reasoning_level)) = db
+        .sessions()
+        .load_session_reasoning_level_override(session_id)
+        .await
+    {
         return reasoning_level;
     }
 
@@ -1364,7 +1392,8 @@ async fn load_session_reasoning_level(
         return ReasoningLevel::default();
     };
 
-    db.load_project_reasoning_level(project_id)
+    db.settings()
+        .load_project_reasoning_level(project_id)
         .await
         .unwrap_or_default()
 }
@@ -1380,7 +1409,8 @@ async fn load_project_model_setting(
 ) -> Option<AgentModel> {
     let project_id = project_id?;
 
-    db.get_project_setting(project_id, setting_name)
+    db.settings()
+        .get_project_setting(project_id, setting_name)
         .await
         .ok()
         .flatten()
@@ -1566,18 +1596,20 @@ mod tests {
     /// Inserts one in-progress Gemini session for worker-flow tests.
     async fn insert_in_progress_test_session(db: &AppRepositories) -> i64 {
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         project_id
     }
@@ -1915,7 +1947,11 @@ mod tests {
             "stopped turn worker must not fall back to Review before the UI cancellation path \
              finalizes Canceled"
         );
-        let sessions = db.load_sessions().await.expect("failed to load sessions");
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
         assert_eq!(
             sessions[0].status, "InProgress",
             "stopped turn worker must not persist Review and trigger automatic focused review"
@@ -1933,18 +1969,20 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         let mut mock_channel = MockAgentChannel::new();
         mock_channel
@@ -2407,18 +2445,20 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -2466,7 +2506,11 @@ mod tests {
         let status = apply_turn_result(&context, turn_metadata, turn_result)
             .await
             .expect("turn result should succeed");
-        let sessions = db.load_sessions().await.expect("failed to load sessions");
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
 
         // Assert
         assert_eq!(status, Status::Review);
@@ -2496,18 +2540,20 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -2595,18 +2641,20 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -2700,19 +2748,22 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.delete_session("sess1")
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .delete_session("sess1")
             .await
             .expect("failed to delete session");
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
@@ -2790,18 +2841,20 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         let mut mock_git_client = MockGitClient::new();
         mock_git_client
@@ -2868,10 +2921,12 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session("sess1", "gpt-5.4", "main", "InProgress", project_id)
+        db.sessions()
+            .insert_session("sess1", "gpt-5.4", "main", "InProgress", project_id)
             .await
             .expect("failed to insert session");
 
@@ -2919,6 +2974,7 @@ mod tests {
             .await
             .expect("turn result should succeed");
         let instruction_conversation_id = db
+            .sessions()
             .get_session_instruction_conversation_id("sess1")
             .await
             .expect("failed to load instruction conversation id");
@@ -2938,29 +2994,38 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.update_session_status_with_timing_at("sess1", "InProgress", 0)
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_status_with_timing_at("sess1", "InProgress", 0)
             .await
             .expect("failed to open in-progress timing window");
-        db.insert_session_operation("op-1", "sess1", "reply")
+        db.operations()
+            .insert_session_operation("op-1", "sess1", "reply")
             .await
             .expect("failed to insert session operation");
 
         // Act
         SessionWorkerService::fail_unfinished_operations_from_previous_run_at(&db, 300).await;
-        let sessions = db.load_sessions().await.expect("failed to load sessions");
+        let sessions = db
+            .sessions()
+            .load_sessions()
+            .await
+            .expect("failed to load sessions");
         let operation_is_unfinished = db
+            .operations()
             .is_session_operation_unfinished("op-1")
             .await
             .expect("failed to check operation status");
@@ -2981,19 +3046,22 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.insert_session_operation("op-1", "sess1", "reply")
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.operations()
+            .insert_session_operation("op-1", "sess1", "reply")
             .await
             .expect("failed to insert session operation");
 
@@ -3024,6 +3092,7 @@ mod tests {
         // Act
         let should_skip = SessionWorkerService::should_skip_worker_command(&context, "op-1").await;
         let is_unfinished = db
+            .operations()
             .is_session_operation_unfinished("op-1")
             .await
             .expect("failed to check operation status");
@@ -3041,22 +3110,26 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.insert_session_operation("op-1", "sess1", "reply")
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.operations()
+            .insert_session_operation("op-1", "sess1", "reply")
             .await
             .expect("failed to insert session operation");
-        db.request_cancel_for_session_operations("sess1")
+        db.operations()
+            .request_cancel_for_session_operations("sess1")
             .await
             .expect("failed to request cancel");
 
@@ -3087,6 +3160,7 @@ mod tests {
         // Act
         let should_skip = SessionWorkerService::should_skip_worker_command(&context, "op-1").await;
         let is_unfinished = db
+            .operations()
             .is_session_operation_unfinished("op-1")
             .await
             .expect("failed to check operation status");
@@ -3105,33 +3179,39 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         // Old operation that gets cancelled.
-        db.insert_session_operation("op-old", "sess1", "reply")
+        db.operations()
+            .insert_session_operation("op-old", "sess1", "reply")
             .await
             .expect("failed to insert old operation");
-        db.mark_session_operation_running("op-old")
+        db.operations()
+            .mark_session_operation_running("op-old")
             .await
             .expect("failed to mark old operation running");
-        db.request_cancel_for_session_operations("sess1")
+        db.operations()
+            .request_cancel_for_session_operations("sess1")
             .await
             .expect("failed to request cancel");
 
         // New operation created after the cancel request — its
         // `cancel_requested` defaults to 0.
-        db.insert_session_operation("op-new", "sess1", "reply")
+        db.operations()
+            .insert_session_operation("op-new", "sess1", "reply")
             .await
             .expect("failed to insert new operation");
 
@@ -3189,18 +3269,20 @@ mod tests {
         let base_dir = tempdir().expect("failed to create temp dir");
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert");
-        db.insert_session(
-            "sess1",
-            "gemini-3-flash-preview",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess1",
+                "gemini-3-flash-preview",
+                "main",
+                "InProgress",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         let mut mock_git_client = MockGitClient::new();
         let main_repo_root = base_dir.path().join("main");

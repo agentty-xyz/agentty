@@ -551,7 +551,12 @@ impl SessionMergeService {
     async fn load_merge_base_branch(
         context: &MergeStartRestoreContext<'_>,
     ) -> Result<String, SessionError> {
-        match context.db.get_session_base_branch(context.session_id).await {
+        match context
+            .db
+            .sessions()
+            .get_session_base_branch(context.session_id)
+            .await
+        {
             Ok(Some(base_branch)) => Ok(base_branch),
             Ok(None) => {
                 Self::restore_review_status(context).await;
@@ -611,6 +616,7 @@ impl SessionMergeService {
 
         let base_branch = services
             .db()
+            .sessions()
             .get_session_base_branch(&session.id)
             .await?
             .ok_or_else(|| {
@@ -852,7 +858,8 @@ impl SessionManager {
                 .await;
         }
         if let Some(merged_commit_hash) = merged_commit_hash {
-            db.update_session_merged_commit_hash(session_id, Some(merged_commit_hash))
+            db.sessions()
+                .update_session_merged_commit_hash(session_id, Some(merged_commit_hash.to_string()))
                 .await?;
         }
 
@@ -1353,6 +1360,7 @@ impl SessionManager {
         base_branch: &str,
     ) -> Result<String, SessionError> {
         let Some(published_upstream_ref) = db
+            .sessions()
             .load_session_published_upstream_ref(session_id)
             .await
             .map_err(SessionError::Db)?
@@ -1550,6 +1558,7 @@ impl SessionManager {
         session_update_versions: &SessionUpdateVersionMap,
     ) {
         let published_upstream_ref = db
+            .sessions()
             .load_session_published_upstream_ref(session_id)
             .await
             .ok()
@@ -1608,7 +1617,7 @@ impl SessionManager {
     ) {
         let title = Self::session_title_from_commit_message(commit_message);
 
-        if let Err(error) = db.update_session_title(session_id, &title).await {
+        if let Err(error) = db.sessions().update_session_title(session_id, &title).await {
             warn!(
                 session_id = session_id,
                 error = %error,
@@ -1641,7 +1650,11 @@ impl SessionManager {
             commit_message,
         );
 
-        if let Err(error) = db.update_session_summary(session_id, &summary).await {
+        if let Err(error) = db
+            .sessions()
+            .update_session_summary(session_id, &summary)
+            .await
+        {
             warn!(
                 session_id = session_id,
                 error = %error,
@@ -1652,7 +1665,11 @@ impl SessionManager {
 
     /// Loads the currently persisted session summary text for one session.
     async fn persisted_session_summary(db: &AppRepositories, session_id: &str) -> Option<String> {
-        db.load_session_summary(session_id).await.ok().flatten()
+        db.sessions()
+            .load_session_summary(session_id)
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Extracts the first non-empty line from one session commit message for
@@ -2441,10 +2458,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session(
                 "session-id",
                 AgentModel::ClaudeSonnet46.as_str(),
@@ -2456,6 +2475,7 @@ mod tests {
             .expect("failed to insert session");
         let existing_summary = "- Session branch updates README.";
         database
+            .sessions()
             .update_session_summary("session-id", existing_summary)
             .await
             .expect("failed to persist existing summary");
@@ -2471,6 +2491,7 @@ mod tests {
         )
         .await;
         let sessions = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions");
@@ -2492,10 +2513,12 @@ mod tests {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let project_id = database
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
         database
+            .sessions()
             .insert_session(
                 "session-id",
                 AgentModel::ClaudeSonnet46.as_str(),
@@ -2508,6 +2531,7 @@ mod tests {
         let existing_summary = "- Session branch updates README.";
         let commit_message = "Refine session commit message\n\n- Keep title in sync";
         database
+            .sessions()
             .update_session_summary("session-id", existing_summary)
             .await
             .expect("failed to persist existing summary");
@@ -2520,6 +2544,7 @@ mod tests {
         )
         .await;
         let sessions = database
+            .sessions()
             .load_sessions()
             .await
             .expect("failed to load sessions");
@@ -2617,11 +2642,13 @@ mod tests {
         let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
         let project_id = input
             .db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         input
             .db
+            .sessions()
             .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
             .await
             .expect("failed to insert merge session row");
@@ -2634,6 +2661,7 @@ mod tests {
         let message = result.expect("merge workflow should succeed");
         assert_eq!(message, "Successfully merged wt/session-123 into main");
         let merged_commit_hash = db
+            .sessions()
             .load_session_merged_commit_hash("session-123")
             .await
             .expect("failed to load merged commit hash");
@@ -2683,11 +2711,13 @@ mod tests {
         let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
         let project_id = input
             .db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to insert project");
         input
             .db
+            .sessions()
             .insert_session("session-123", "gpt-5.4", "main", "Merging", project_id)
             .await
             .expect("failed to insert merge session row");
@@ -2703,6 +2733,7 @@ mod tests {
             "Session changes from wt/session-123 are already present in main"
         );
         let merged_commit_hash = db
+            .sessions()
             .load_session_merged_commit_hash("session-123")
             .await
             .expect("failed to load merged commit hash");
@@ -2746,10 +2777,12 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let project_path = temp_dir.path().to_string_lossy().to_string();
         let project_id = db
-            .upsert_project(&project_path, Some("main"))
+            .projects()
+            .upsert_project(&project_path, Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session("sess-local", "gpt-5.4", "main", "Review", project_id)
+        db.sessions()
+            .insert_session("sess-local", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
         let mut mock_git_client = git::MockGitClient::new();
@@ -2778,13 +2811,19 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let project_path = temp_dir.path().to_string_lossy().to_string();
         let project_id = db
-            .upsert_project(&project_path, Some("main"))
+            .projects()
+            .upsert_project(&project_path, Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session("sess-remote", "gpt-5.4", "main", "Review", project_id)
+        db.sessions()
+            .insert_session("sess-remote", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
-        db.update_session_published_upstream_ref("sess-remote", Some("origin/wt/sess-remote"))
+        db.sessions()
+            .update_session_published_upstream_ref(
+                "sess-remote",
+                Some("origin/wt/sess-remote".to_string()),
+            )
             .await
             .expect("failed to set published upstream");
         let folder = temp_dir.path().join("sess-remote");
@@ -2817,13 +2856,19 @@ mod tests {
         let temp_dir = tempdir().expect("failed to create temporary test directory");
         let project_path = temp_dir.path().to_string_lossy().to_string();
         let project_id = db
-            .upsert_project(&project_path, Some("main"))
+            .projects()
+            .upsert_project(&project_path, Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session("sess-fetch", "gpt-5.4", "main", "Review", project_id)
+        db.sessions()
+            .insert_session("sess-fetch", "gpt-5.4", "main", "Review", project_id)
             .await
             .expect("failed to insert session");
-        db.update_session_published_upstream_ref("sess-fetch", Some("origin/wt/sess-fetch"))
+        db.sessions()
+            .update_session_published_upstream_ref(
+                "sess-fetch",
+                Some("origin/wt/sess-fetch".to_string()),
+            )
             .await
             .expect("failed to set published upstream");
         let folder = temp_dir.path().join("sess-fetch");
@@ -3703,19 +3748,25 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess-rebase",
-            "gemini-3-flash-preview",
-            "main",
-            "Rebasing",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-        db.update_session_published_upstream_ref("sess-rebase", Some("origin/wt/sess-rebase"))
+        db.sessions()
+            .insert_session(
+                "sess-rebase",
+                "gemini-3-flash-preview",
+                "main",
+                "Rebasing",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
+        db.sessions()
+            .update_session_published_upstream_ref(
+                "sess-rebase",
+                Some("origin/wt/sess-rebase".to_string()),
+            )
             .await
             .expect("failed to set published upstream ref");
 
@@ -3787,18 +3838,20 @@ mod tests {
         // Arrange
         let db = AppRepositories::in_memory().await;
         let project_id = db
-            .upsert_project("/tmp/project", Some("main"))
+            .projects()
+            .upsert_project("/tmp/project", Some("main".to_string()))
             .await
             .expect("failed to upsert project");
-        db.insert_session(
-            "sess-no-push",
-            "gemini-3-flash-preview",
-            "main",
-            "Rebasing",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+        db.sessions()
+            .insert_session(
+                "sess-no-push",
+                "gemini-3-flash-preview",
+                "main",
+                "Rebasing",
+                project_id,
+            )
+            .await
+            .expect("failed to insert session");
 
         let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
         let temp_dir = tempdir().expect("failed to create temp dir");

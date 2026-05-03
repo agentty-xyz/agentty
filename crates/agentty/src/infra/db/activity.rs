@@ -9,7 +9,7 @@ use crate::infra::db::{DbError, unix_timestamp_now};
 /// Session-activity persistence boundary used by app orchestration and tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait ActivityRepository: Send + Sync {
+pub trait ActivityRepository: Send + Sync {
     #[cfg(test)]
     /// Rebuilds `session_activity` rows from current `session.created_at`.
     async fn backfill_session_activity_from_sessions(&self) -> Result<(), DbError>;

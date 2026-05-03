@@ -224,16 +224,21 @@ fn seed_database(
 
         for (path, branch) in fake_project_paths.iter().zip(["main", "develop", "main"]) {
             let id = database
-                .upsert_project(&path.display().to_string(), Some(branch))
+                .projects()
+                .upsert_project(&path.display().to_string(), Some(branch.to_string()))
                 .await?;
-            database.touch_project_last_opened(id).await?;
+            database.projects().touch_project_last_opened(id).await?;
         }
 
         // Pre-register the cwd project so we can attach project-scoped
         // default-model settings before launch. Agentty's own startup upsert
         // matches on `path` and will reuse this row.
         let cwd_project_id = database
-            .upsert_project(&canonical_cwd.display().to_string(), Some("main"))
+            .projects()
+            .upsert_project(
+                &canonical_cwd.display().to_string(),
+                Some("main".to_string()),
+            )
             .await?;
 
         // Model defaults are stored in `project_setting`, not the global

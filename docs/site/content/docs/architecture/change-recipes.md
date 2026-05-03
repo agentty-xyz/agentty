@@ -14,7 +14,8 @@ through the correct modules without crossing layer boundaries.
 1. Update orchestration in `crates/agentty/src/app/session/` (`lifecycle.rs`,
    `worker.rs`, `task.rs`, etc.).
 1. Keep persistence in `crates/agentty/src/infra/db/` domain modules and keep
-   `crates/agentty/src/infra/db.rs` limited to pool wiring plus repository composition.
+   `crates/agentty/src/infra/db.rs` router-only. Use `repository.rs` for repository
+   bundle composition and `connection.rs` for pool wiring.
 1. Keep git operations behind `GitClient` in `crates/agentty/src/infra/git/client.rs`
    (re-exported from `crates/agentty/src/infra/git.rs`).
 1. Preserve the session-branch invariant: one evolving commit per session branch, with
@@ -52,7 +53,7 @@ through the correct modules without crossing layer boundaries.
 1. Add a new migration file in `crates/agentty/migrations/` (`NNN_description.sql`).
 1. Never modify existing migration files.
 1. Keep query changes in the matching `crates/agentty/src/infra/db/*.rs` domain module
-   instead of expanding `crates/agentty/src/infra/db.rs`.
+   instead of expanding the router-only `crates/agentty/src/infra/db.rs`.
 1. Ensure any status/model behavior changes are reflected in docs pages affected by
    user-facing behavior.
 

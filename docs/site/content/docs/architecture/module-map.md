@@ -137,8 +137,15 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 
 ## Infrastructure Layer (`infra/`)
 
-- `crates/agentty/src/infra/db.rs`: SQLite database open and pool wiring, shared
-  repository bundle construction, and row or repository re-exports.
+- `crates/agentty/src/infra/db.rs`: Router-only database module that declares
+  persistence child modules and re-exports row or repository APIs.
+- `crates/agentty/src/infra/db/connection.rs`: `Database` open helpers, `SQLite` pool
+  configuration, WAL/foreign-key setup, embedded migration execution, and test
+  connection helpers.
+- `crates/agentty/src/infra/db/repository.rs`: `AppRepositories` bundle construction and
+  typed repository accessors used by app orchestration.
+- `crates/agentty/src/infra/db/error.rs`: `DbError` variants shared by database
+  connection and repository adapters.
 - `crates/agentty/src/infra/db/session.rs`: `SessionRepository`,
   `SqliteSessionRepository`, session row models, turn-metadata persistence,
   focused-review cache persistence, and session query helpers.
