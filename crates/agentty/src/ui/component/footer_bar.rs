@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -9,25 +11,36 @@ use crate::ui::{Component, style};
 
 /// Footer widget that renders the working directory and optional git status.
 pub struct FooterBar {
-    git_branch: Option<String>,
     git_base_ref: Option<String>,
     git_base_status: Option<(u32, u32)>,
+    git_branch: Option<String>,
     git_status: Option<(u32, u32)>,
     git_upstream_ref: Option<String>,
     working_dir: String,
+    workspace_context_visible: bool,
 }
 
 impl FooterBar {
-    /// Creates a footer bar initialized with the active working directory.
+    /// Creates a footer bar initialized with the active working directory and
+    /// visible workspace context.
     pub fn new(working_dir: String) -> Self {
         Self {
-            git_branch: None,
             git_base_ref: None,
             git_base_status: None,
+            git_branch: None,
             git_status: None,
             git_upstream_ref: None,
             working_dir,
+            workspace_context_visible: true,
         }
+    }
+
+    /// Sets whether the footer renders active workspace path and branch
+    /// context.
+    #[must_use]
+    pub fn workspace_context_visible(mut self, visible: bool) -> Self {
+        self.workspace_context_visible = visible;
+        self
     }
 
     /// Sets the active git branch name.
@@ -125,13 +138,25 @@ impl FooterBar {
 }
 
 impl Component for FooterBar {
+    /// Renders the footer background plus optional workspace path and git
+    /// context.
     fn render(&self, f: &mut Frame, area: Rect) {
         if area.width == 0 {
             return;
         }
 
+        let total_width = usize::from(area.width);
+
+        if !self.workspace_context_visible {
+            let footer = Paragraph::new(Line::from(" ".repeat(total_width)))
+                .style(Style::default().bg(style::palette::surface()));
+            f.render_widget(footer, area);
+
+            return;
+        }
+
         let display_path = if let Some(home) = dirs::home_dir() {
-            if let Ok(path) = std::path::Path::new(&self.working_dir).strip_prefix(home) {
+            if let Ok(path) = Path::new(&self.working_dir).strip_prefix(home) {
                 format!("~/{}", path.display())
             } else {
                 self.working_dir.clone()
@@ -147,7 +172,6 @@ impl Component for FooterBar {
         let left_text = Span::styled(format!(" {display_path}"), path_style);
 
         let left_width = left_text.width();
-        let total_width = usize::from(area.width);
         let mut spans = vec![left_text];
 
         if let Some(branch) = &self.git_branch {
@@ -201,6 +225,7 @@ mod tests {
         assert_eq!(footer.git_base_status, None);
         assert_eq!(footer.git_status, None);
         assert_eq!(footer.git_upstream_ref, None);
+        assert!(footer.workspace_context_visible);
     }
 
     #[test]
@@ -218,6 +243,36 @@ mod tests {
         assert_eq!(footer.git_base_status, None);
         assert_eq!(footer.git_status, None);
         assert_eq!(footer.git_upstream_ref, None);
+        assert!(footer.workspace_context_visible);
+    }
+
+    #[test]
+    fn test_footer_bar_render_hides_workspace_context() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(40, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let footer = FooterBar::new("/tmp/project".to_string())
+            .git_branch(Some("main".to_string()))
+            .workspace_context_visible(false);
+
+        // Act
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                Component::render(&footer, f, area);
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let content = buffer.content();
+        let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert_eq!(text.trim(), "");
+        assert!(
+            content
+                .iter()
+                .all(|cell| cell.bg == style::palette::surface())
+        );
     }
 
     #[test]

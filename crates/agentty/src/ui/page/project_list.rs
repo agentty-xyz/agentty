@@ -36,8 +36,8 @@ const AGENTTY_SHORT_DESCRIPTION: &str = "Agentty is an ADE (Agentic Development 
                                          structured, controllable AI-assisted software \
                                          development.";
 
-/// Projects tab renderer showing saved repositories, activity, and quick
-/// Agentty metadata.
+/// Projects tab renderer showing saved repository dashboard data, activity,
+/// and quick Agentty metadata.
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
@@ -100,7 +100,7 @@ impl Page for ProjectListPage<'_> {
             .wrap(Wrap { trim: true });
 
         let selected_style = Style::default().bg(style::palette::surface());
-        let header = Row::new(["Project", "Branch", "Sessions", "Last Opened", "Path"])
+        let header = Row::new(["Project", "Sessions", "Last Opened"])
             .style(
                 Style::default()
                     .bg(style::palette::surface())
@@ -117,11 +117,9 @@ impl Page for ProjectListPage<'_> {
         let table = Table::new(
             rows,
             [
-                Constraint::Length(20),
-                Constraint::Length(12),
+                Constraint::Percentage(50),
                 Constraint::Length(8),
-                Constraint::Length(12),
-                Constraint::Fill(1),
+                Constraint::Percentage(50),
             ],
         )
         .column_spacing(TABLE_COLUMN_SPACING)
@@ -246,17 +244,15 @@ impl ProjectListPage<'_> {
 
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
-    let (title, branch, last_opened, path) = project_row_values(project_item, active_project_id);
+    let (title, last_opened) = project_row_values(project_item, active_project_id);
 
     Row::new(vec![
         Cell::from(title),
-        Cell::from(branch),
         Cell::from(session_count_line(
             project_item.session_count,
             project_item.active_session_count,
         )),
         Cell::from(last_opened),
-        Cell::from(path),
     ])
     .style(project_row_style(project_item, active_project_id))
 }
@@ -274,17 +270,12 @@ fn project_list_footer_line() -> Line<'static> {
 }
 
 /// Returns project row display values for reuse and testing.
-fn project_row_values(
-    project_item: &ProjectListItem,
-    active_project_id: i64,
-) -> (String, String, String, String) {
+fn project_row_values(project_item: &ProjectListItem, active_project_id: i64) -> (String, String) {
     let project = &project_item.project;
     let title = project_title(project_item, active_project_id);
-    let branch = project.git_branch.as_deref().unwrap_or("-");
     let last_opened = format_last_opened(project.last_opened_at);
-    let path = project.path.to_string_lossy().to_string();
 
-    (title, branch.to_string(), last_opened, path)
+    (title, last_opened)
 }
 
 /// Returns style for one project row, emphasizing the active project.
@@ -472,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn test_project_row_values_show_metadata() {
+    fn test_project_row_values_show_dashboard_metadata() {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
@@ -495,13 +486,11 @@ mod tests {
 
         // Assert
         assert_eq!(values.0, "agentty");
-        assert_eq!(values.1, "main");
-        assert_eq!(values.2, "2023-11-14");
-        assert_eq!(values.3, "/tmp/agentty");
+        assert_eq!(values.1, "2023-11-14");
     }
 
     #[test]
-    fn test_project_row_values_use_fallbacks_for_missing_branch_and_timestamp() {
+    fn test_project_row_values_use_fallback_for_missing_timestamp() {
         // Arrange
         let project_item = ProjectListItem {
             active_session_count: 0,
@@ -524,8 +513,7 @@ mod tests {
 
         // Assert
         assert_eq!(values.0, "agentty");
-        assert_eq!(values.1, "-");
-        assert_eq!(values.2, "Never");
+        assert_eq!(values.1, "Never");
     }
 
     #[test]

@@ -117,6 +117,9 @@ struct ProjectFooterContext<'a> {
 /// Borrowed data required to render the footer bar for one frame.
 #[derive(Clone, Copy)]
 struct FooterBarRenderContext<'a> {
+    /// Active top-level tab used to suppress workspace context on dashboard
+    /// pages.
+    current_tab: Tab,
     /// Active app mode used to resolve session-scoped footer overrides.
     mode: &'a AppMode,
     /// Project footer values used when the active mode is not session-scoped.
@@ -163,6 +166,7 @@ pub fn render(f: &mut Frame, context: RenderContext<'_>) {
         f,
         footer_bar_area,
         FooterBarRenderContext {
+            current_tab: context.current_tab,
             mode: context.mode,
             project: ProjectFooterContext {
                 git_branch: context.git_branch,
@@ -193,6 +197,7 @@ fn current_version_display_text() -> String {
 /// branch and, when available, its tracked remote branch.
 fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRenderContext<'_>) {
     let FooterBarRenderContext {
+        current_tab,
         mode,
         project,
         session_branch_names,
@@ -271,12 +276,15 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
         ),
     };
 
+    let workspace_context_visible = session_for_footer.is_some() || current_tab != Tab::Projects;
+
     component::footer_bar::FooterBar::new(footer_dir)
         .git_branch(footer_branch)
         .git_base_ref(footer_base_ref)
         .git_base_status(footer_base_status)
         .git_upstream_ref(footer_upstream_ref)
         .git_status(footer_status)
+        .workspace_context_visible(workspace_context_visible)
         .render(f, footer_bar_area);
 }
 
@@ -340,6 +348,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch: Some("main"),
@@ -387,6 +396,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch: Some("main"),
@@ -439,6 +449,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch: Some("main"),
@@ -481,6 +492,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch,
@@ -501,6 +513,46 @@ mod tests {
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("/tmp/current-workspace"));
         assert!(text.contains("feature/test-render -> origin/feature/test-render"));
+    }
+
+    #[test]
+    fn render_footer_bar_hides_project_context_on_projects_tab() {
+        // Arrange
+        let backend = ratatui::backend::TestBackend::new(120, 1);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mode = AppMode::List;
+        let sessions = Vec::new();
+        let session_index_by_id = session_index_by_id(&sessions);
+        let session_branch_names = HashMap::new();
+        let working_dir = Path::new("/tmp/current-workspace");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                render_footer_bar(
+                    frame,
+                    frame.area(),
+                    FooterBarRenderContext {
+                        current_tab: Tab::Projects,
+                        mode: &mode,
+                        project: ProjectFooterContext {
+                            git_branch: Some("feature/test-render"),
+                            git_status: Some((0, 0)),
+                            git_upstream_ref: Some("origin/feature/test-render"),
+                            working_dir,
+                        },
+                        session_branch_names: &session_branch_names,
+                        session_git_statuses: &HashMap::new(),
+                        session_index_by_id: &session_index_by_id,
+                        sessions: &sessions,
+                    },
+                );
+            })
+            .expect("failed to draw");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        assert_eq!(text.trim(), "");
     }
 
     #[test]
@@ -535,6 +587,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch: Some("main"),
@@ -589,6 +642,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch: Some("main"),
@@ -637,6 +691,7 @@ mod tests {
                     frame,
                     frame.area(),
                     FooterBarRenderContext {
+                        current_tab: Tab::Sessions,
                         mode: &mode,
                         project: ProjectFooterContext {
                             git_branch: Some("main"),
