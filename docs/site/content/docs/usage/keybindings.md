@@ -67,7 +67,8 @@ review for the active project | | `Tab` | Switch tab | | `?` | Help |
 
 The **Review** tab is read-only: it lists matching GitHub pull requests and GitLab merge
 requests, including drafts marked with `Draft`, but does not select rows or open browser
-links. Open a listed review from the forge UI or CLI.
+links. GitHub rows are separated into direct review requests and team-sourced review
+requests. Open a listed review from the forge UI or CLI.
 
 ## Tasks
 

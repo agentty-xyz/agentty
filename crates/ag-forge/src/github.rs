@@ -1,15 +1,17 @@
 //! GitHub review-request adapter routed through the `gh` CLI.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Deserialize;
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, RequestedReview, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
-    command_output_detail, looks_like_authentication_failure, looks_like_host_resolution_failure,
-    map_spawn_error, normalize_provider_label, parse_remote_url, status_summary_parts, strip_port,
+    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
+    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestState,
+    ReviewRequestSummary, command_output_detail, looks_like_authentication_failure,
+    looks_like_host_resolution_failure, map_spawn_error, normalize_provider_label,
+    parse_remote_url, status_summary_parts, strip_port,
 };
 
 /// Maximum requested-review rows loaded from `gh` for one refresh.
@@ -102,27 +104,33 @@ impl GitHubReviewRequestAdapter {
     }
 
     /// Lists open pull requests in `remote` that request review from the
-    /// current authenticated GitHub user.
+    /// current authenticated GitHub user, fetching the broader and direct
+    /// requested-review searches concurrently after authentication.
     pub(crate) async fn list_requested_reviews(
         &self,
         remote: ForgeRemote,
     ) -> Result<Vec<RequestedReview>, ReviewRequestError> {
         self.ensure_authenticated(&remote).await?;
 
-        let output = self
-            .run_review_command(
+        let (all_output, personal_output) = tokio::try_join!(
+            self.run_review_command(
                 &remote,
                 requested_reviews_command(&remote),
                 "list requested pull-request reviews",
+            ),
+            self.run_review_command(
+                &remote,
+                personal_requested_reviews_command(&remote),
+                "list personally requested pull-request reviews",
             )
-            .await?;
+        )?;
 
-        parse_requested_reviews_response(&output.stdout, &remote).map_err(|message| {
-            ReviewRequestError::OperationFailed {
-                forge_kind: ForgeKind::GitHub,
-                message,
-            }
-        })
+        let all_reviews = parse_requested_reviews_response(&all_output.stdout, &remote)
+            .map_err(requested_reviews_parse_error)?;
+        let personal_reviews = parse_requested_reviews_response(&personal_output.stdout, &remote)
+            .map_err(requested_reviews_parse_error)?;
+
+        Ok(categorize_requested_reviews(all_reviews, &personal_reviews))
     }
 
     /// Finds one existing pull request after authentication has been verified.
@@ -372,6 +380,27 @@ fn requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
     )
 }
 
+/// Builds the `gh search prs` command for pull requests requesting review
+/// from the current GitHub user directly, excluding team-only requests.
+fn personal_requested_reviews_command(remote: &ForgeRemote) -> ForgeCommand {
+    github_command(
+        remote,
+        vec![
+            "search".to_string(),
+            "prs".to_string(),
+            "user-review-requested:@me".to_string(),
+            "--state".to_string(),
+            "open".to_string(),
+            "--repo".to_string(),
+            remote.project_path(),
+            "--limit".to_string(),
+            REQUESTED_REVIEW_LIMIT.to_string(),
+            "--json".to_string(),
+            "number,title,url,isDraft,updatedAt".to_string(),
+        ],
+    )
+}
+
 /// Builds the `gh pr view` command for one pull-request number.
 fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
     github_command(
@@ -446,6 +475,7 @@ fn parse_requested_reviews_response(
             };
 
             RequestedReview {
+                audience: RequestedReviewAudience::Personal,
                 display_id: format!("#{}", pull_request.number),
                 forge_kind: ForgeKind::GitHub,
                 repository: remote.project_path(),
@@ -456,6 +486,56 @@ fn parse_requested_reviews_response(
             }
         })
         .collect())
+}
+
+/// Maps a GitHub requested-review JSON parse failure into the adapter error
+/// shape used by authenticated operations.
+fn requested_reviews_parse_error(message: String) -> ReviewRequestError {
+    ReviewRequestError::OperationFailed {
+        forge_kind: ForgeKind::GitHub,
+        message,
+    }
+}
+
+/// Merges requested-review rows from both GitHub searches, marking rows as
+/// personal when they appear in the `user-review-requested:@me` result and as
+/// group requests otherwise.
+///
+/// Rows from the broader search keep their original order, while personal-only
+/// rows are appended so brief API timing or pagination differences do not drop
+/// directly requested pull requests from the UI.
+fn categorize_requested_reviews(
+    all_reviews: Vec<RequestedReview>,
+    personal_reviews: &[RequestedReview],
+) -> Vec<RequestedReview> {
+    let personal_urls = personal_reviews
+        .iter()
+        .map(|review| review.web_url.as_str())
+        .collect::<HashSet<_>>();
+    let mut seen_urls = HashSet::new();
+    let mut categorized_reviews = Vec::with_capacity(all_reviews.len().max(personal_reviews.len()));
+
+    for mut review in all_reviews {
+        review.audience = if personal_urls.contains(review.web_url.as_str()) {
+            RequestedReviewAudience::Personal
+        } else {
+            RequestedReviewAudience::Group
+        };
+
+        if seen_urls.insert(review.web_url.clone()) {
+            categorized_reviews.push(review);
+        }
+    }
+
+    for review in personal_reviews {
+        if seen_urls.insert(review.web_url.clone()) {
+            let mut review = review.clone();
+            review.audience = RequestedReviewAudience::Personal;
+            categorized_reviews.push(review);
+        }
+    }
+
+    categorized_reviews
 }
 
 /// Parses one GitHub pull-request display id into the numeric argument for
@@ -900,15 +980,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_requested_reviews_builds_search_command_and_returns_rows() {
+    async fn list_requested_reviews_separates_personal_and_group_rows() {
         // Arrange
         let remote = github_remote();
-        let mut sequence = Sequence::new();
         let mut command_runner = MockForgeCommandRunner::new();
         command_runner
             .expect_run()
             .once()
-            .in_sequence(&mut sequence)
             .withf({
                 let remote = remote.clone();
 
@@ -918,13 +996,23 @@ mod tests {
         command_runner
             .expect_run()
             .once()
-            .in_sequence(&mut sequence)
             .withf({
                 let remote = remote.clone();
 
                 move |command| command == &requested_reviews_command(&remote)
             })
             .returning(|_| Box::pin(async { Ok(success_output(github_requested_reviews_json())) }));
+        command_runner
+            .expect_run()
+            .once()
+            .withf({
+                let remote = remote.clone();
+
+                move |command| command == &personal_requested_reviews_command(&remote)
+            })
+            .returning(|_| {
+                Box::pin(async { Ok(success_output(github_personal_requested_reviews_json())) })
+            });
         let adapter = GitHubReviewRequestAdapter::new(Arc::new(command_runner));
 
         // Act
@@ -936,15 +1024,38 @@ mod tests {
         // Assert
         assert_eq!(
             requested_reviews,
-            vec![RequestedReview {
-                display_id: "#42".to_string(),
-                forge_kind: ForgeKind::GitHub,
-                repository: "agentty-xyz/agentty".to_string(),
-                status_summary: Some("Draft".to_string()),
-                title: "Add forge review support".to_string(),
-                updated_at: Some("2026-04-27T21:30:00Z".to_string()),
-                web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-            }]
+            vec![
+                RequestedReview {
+                    audience: RequestedReviewAudience::Personal,
+                    display_id: "#42".to_string(),
+                    forge_kind: ForgeKind::GitHub,
+                    repository: "agentty-xyz/agentty".to_string(),
+                    status_summary: Some("Draft".to_string()),
+                    title: "Add forge review support".to_string(),
+                    updated_at: Some("2026-04-27T21:30:00Z".to_string()),
+                    web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+                },
+                RequestedReview {
+                    audience: RequestedReviewAudience::Group,
+                    display_id: "#43".to_string(),
+                    forge_kind: ForgeKind::GitHub,
+                    repository: "agentty-xyz/agentty".to_string(),
+                    status_summary: None,
+                    title: "Review team-owned parser".to_string(),
+                    updated_at: Some("2026-04-28T21:30:00Z".to_string()),
+                    web_url: "https://github.com/agentty-xyz/agentty/pull/43".to_string(),
+                },
+                RequestedReview {
+                    audience: RequestedReviewAudience::Personal,
+                    display_id: "#44".to_string(),
+                    forge_kind: ForgeKind::GitHub,
+                    repository: "agentty-xyz/agentty".to_string(),
+                    status_summary: None,
+                    title: "Review direct-only parser".to_string(),
+                    updated_at: Some("2026-04-29T21:30:00Z".to_string()),
+                    web_url: "https://github.com/agentty-xyz/agentty/pull/44".to_string(),
+                },
+            ]
         );
     }
 
@@ -1278,6 +1389,34 @@ mod tests {
                 "title": "Add forge review support",
                 "updatedAt": "2026-04-27T21:30:00Z",
                 "url": "https://github.com/agentty-xyz/agentty/pull/42"
+            },
+            {
+                "isDraft": false,
+                "number": 43,
+                "title": "Review team-owned parser",
+                "updatedAt": "2026-04-28T21:30:00Z",
+                "url": "https://github.com/agentty-xyz/agentty/pull/43"
+            }
+        ]"#
+        .to_string()
+    }
+
+    /// Returns one `user-review-requested:@me` fixture for personal reviews.
+    fn github_personal_requested_reviews_json() -> String {
+        r#"[
+            {
+                "isDraft": true,
+                "number": 42,
+                "title": "Add forge review support",
+                "updatedAt": "2026-04-27T21:30:00Z",
+                "url": "https://github.com/agentty-xyz/agentty/pull/42"
+            },
+            {
+                "isDraft": false,
+                "number": 44,
+                "title": "Review direct-only parser",
+                "updatedAt": "2026-04-29T21:30:00Z",
+                "url": "https://github.com/agentty-xyz/agentty/pull/44"
             }
         ]"#
         .to_string()

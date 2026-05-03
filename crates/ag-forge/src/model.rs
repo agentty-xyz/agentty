@@ -178,9 +178,23 @@ pub struct ReviewRequestSummary {
     pub web_url: String,
 }
 
-/// Normalized row for one open PR or MR requesting the current user's review.
+/// Review audience that caused one PR or MR to require the current user's
+/// attention.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequestedReviewAudience {
+    /// The current user was directly requested as a reviewer.
+    Personal,
+    /// A group or team containing the current user was requested as reviewer.
+    Group,
+}
+
+/// Normalized row for one open PR or MR requesting the current user's
+/// attention.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RequestedReview {
+    /// Whether the review request targets the user directly or through a
+    /// group membership.
+    pub audience: RequestedReviewAudience,
     /// Provider display id such as GitHub `#123` or GitLab `!123`.
     pub display_id: String,
     /// Forge family that owns the review request.

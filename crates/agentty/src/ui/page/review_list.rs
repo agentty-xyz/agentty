@@ -1,4 +1,4 @@
-use ag_forge::RequestedReview;
+use ag_forge::{RequestedReview, RequestedReviewAudience};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
@@ -89,9 +89,7 @@ fn render_review_table(f: &mut Frame, area: Rect, items: &[RequestedReview]) {
         TABLE_COLUMN_SPACING,
         0,
     );
-    let rows = items
-        .iter()
-        .map(|item| review_row(item, title_column_width));
+    let rows = review_rows(items, title_column_width);
     let table = Table::new(rows, constraints)
         .column_spacing(TABLE_COLUMN_SPACING)
         .header(header)
@@ -141,6 +139,61 @@ fn review_block() -> Block<'static> {
         .borders(Borders::ALL)
         .title("Review Requests")
         .border_style(style::border_style())
+}
+
+/// Builds sectioned table rows for requested PRs or MRs, keeping personal
+/// review requests visually separate from group-sourced requests.
+fn review_rows(items: &[RequestedReview], title_column_width: usize) -> Vec<Row<'static>> {
+    let mut rows = Vec::new();
+
+    push_review_section(
+        &mut rows,
+        items,
+        title_column_width,
+        RequestedReviewAudience::Personal,
+        "Requested from you",
+    );
+    push_review_section(
+        &mut rows,
+        items,
+        title_column_width,
+        RequestedReviewAudience::Group,
+        "Requested from your groups",
+    );
+
+    rows
+}
+
+/// Appends one requested-review audience section when it contains rows.
+fn push_review_section(
+    rows: &mut Vec<Row<'static>>,
+    items: &[RequestedReview],
+    title_column_width: usize,
+    audience: RequestedReviewAudience,
+    label: &'static str,
+) {
+    let mut section_items = items
+        .iter()
+        .filter(|item| item.audience == audience)
+        .peekable();
+    if section_items.peek().is_none() {
+        return;
+    }
+
+    rows.push(section_row(label));
+    rows.extend(section_items.map(|item| review_row(item, title_column_width)));
+}
+
+/// Builds one visual section heading inside the requested-review table.
+fn section_row(label: &'static str) -> Row<'static> {
+    let cells = vec![
+        Cell::from(label).style(Style::default().fg(style::palette::accent())),
+        Cell::from(""),
+        Cell::from(""),
+        Cell::from(""),
+    ];
+
+    Row::new(cells).height(1)
 }
 
 /// Builds one table row for a requested PR or MR.
@@ -220,15 +273,25 @@ mod tests {
     use crate::domain::theme::ColorTheme;
 
     #[test]
-    fn test_render_loaded_reviews_shows_pr_and_mr_rows() {
+    fn test_render_loaded_reviews_groups_personal_and_group_rows() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
         let backend = TestBackend::new(100, 10);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
         let state = RequestedReviewState::Loaded {
             items: vec![
-                requested_review(ForgeKind::GitHub, "#42", "Add review tab"),
-                requested_review(ForgeKind::GitLab, "!7", "Polish merge request"),
+                requested_review(
+                    RequestedReviewAudience::Personal,
+                    ForgeKind::GitHub,
+                    "#42",
+                    "Add review tab",
+                ),
+                requested_review(
+                    RequestedReviewAudience::Group,
+                    ForgeKind::GitLab,
+                    "!7",
+                    "Polish merge request",
+                ),
             ],
             project_id: 1,
         };
@@ -243,8 +306,19 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("Review Requests"));
+        assert!(text.contains("Requested from you"));
         assert!(text.contains("PR #42 Add review tab"));
+        assert!(text.contains("Requested from your groups"));
         assert!(text.contains("MR !7 Polish merge request"));
+
+        let buffer = terminal.backend().buffer();
+        let fallback_cell = &buffer.content()[0];
+        let personal_group_cell =
+            find_text_start_cell(buffer, "Requested from you").unwrap_or(fallback_cell);
+        let member_group_cell =
+            find_text_start_cell(buffer, "Requested from your groups").unwrap_or(fallback_cell);
+        assert_eq!(personal_group_cell.fg, style::palette::accent());
+        assert_eq!(member_group_cell.fg, style::palette::accent());
     }
 
     #[test]
@@ -279,7 +353,12 @@ mod tests {
         let state = RequestedReviewState::Loaded {
             items: (0..REQUESTED_REVIEW_DISPLAY_LIMIT)
                 .map(|index| {
-                    requested_review(ForgeKind::GitHub, &format!("#{index}"), "Needs review")
+                    requested_review(
+                        RequestedReviewAudience::Personal,
+                        ForgeKind::GitHub,
+                        &format!("#{index}"),
+                        "Needs review",
+                    )
                 })
                 .collect(),
             project_id: 1,
@@ -299,8 +378,14 @@ mod tests {
     }
 
     /// Builds one requested-review fixture for render tests.
-    fn requested_review(forge_kind: ForgeKind, display_id: &str, title: &str) -> RequestedReview {
+    fn requested_review(
+        audience: RequestedReviewAudience,
+        forge_kind: ForgeKind,
+        display_id: &str,
+        title: &str,
+    ) -> RequestedReview {
         RequestedReview {
+            audience,
             display_id: display_id.to_string(),
             forge_kind,
             repository: "agentty-xyz/agentty".to_string(),
@@ -319,5 +404,36 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    /// Returns the first rendered cell that starts the requested text.
+    fn find_text_start_cell<'a>(
+        buffer: &'a ratatui::buffer::Buffer,
+        needle: &str,
+    ) -> Option<&'a ratatui::buffer::Cell> {
+        let width = usize::from(buffer.area.width.max(1));
+        let needle_symbols = needle
+            .chars()
+            .map(|character| character.to_string())
+            .collect::<Vec<_>>();
+        let content = buffer.content();
+
+        for row_start in (0..content.len()).step_by(width) {
+            let row_end = row_start + width.min(content.len().saturating_sub(row_start));
+            let row = &content[row_start..row_end];
+
+            for (index, window) in row.windows(needle_symbols.len()).enumerate() {
+                let window_matches = window
+                    .iter()
+                    .zip(&needle_symbols)
+                    .all(|(cell, symbol)| cell.symbol() == symbol);
+
+                if window_matches {
+                    return Some(&row[index]);
+                }
+            }
+        }
+
+        None
     }
 }

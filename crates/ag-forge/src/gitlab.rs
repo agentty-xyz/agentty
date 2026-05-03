@@ -7,9 +7,9 @@ use url::{Url, form_urlencoded};
 
 use super::{
     CreateReviewRequestInput, ForgeCommand, ForgeCommandOutput, ForgeCommandRunner, ForgeKind,
-    ForgeRemote, RequestedReview, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot,
-    ReviewCommentThread, ReviewRequestError, ReviewRequestState, ReviewRequestSummary,
-    command_output_detail, is_gitlab_host, looks_like_authentication_failure,
+    ForgeRemote, RequestedReview, RequestedReviewAudience, ReviewComment, ReviewCommentAnchorSide,
+    ReviewCommentSnapshot, ReviewCommentThread, ReviewRequestError, ReviewRequestState,
+    ReviewRequestSummary, command_output_detail, is_gitlab_host, looks_like_authentication_failure,
     looks_like_host_resolution_failure, map_spawn_error, normalize_provider_label,
     parse_remote_url, status_summary_parts, strip_port,
 };
@@ -464,6 +464,10 @@ fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
 }
 
 /// Parses GitLab list rows into normalized requested-review rows.
+///
+/// The current `glab mr list --reviewer @me` surface filters by user reviewer
+/// and does not expose a separate reviewer-group audience for listed rows, so
+/// GitLab requested reviews are normalized as personal requests.
 fn parse_requested_reviews_response(
     stdout: &str,
     remote: &ForgeRemote,
@@ -481,6 +485,7 @@ fn parse_requested_reviews_response(
             };
 
             RequestedReview {
+                audience: RequestedReviewAudience::Personal,
                 display_id: format!("!{}", merge_request.iid),
                 forge_kind: ForgeKind::GitLab,
                 repository: remote.project_path(),
@@ -973,6 +978,7 @@ mod tests {
         assert_eq!(
             requested_reviews,
             vec![RequestedReview {
+                audience: RequestedReviewAudience::Personal,
                 display_id: "!42".to_string(),
                 forge_kind: ForgeKind::GitLab,
                 repository: "agentty-xyz/agentty".to_string(),

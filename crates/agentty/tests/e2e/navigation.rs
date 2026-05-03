@@ -1,12 +1,92 @@
 //! Navigation E2E tests: tab cycling, reverse tab cycling, and help overlay.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
+
 use testty::assertion;
 use testty::region::Region;
 
 use crate::common;
-use crate::common::FeatureTest;
+use crate::common::{BuilderEnv, FeatureTest};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
+
+/// Seeds a GitHub remote and `gh` stub that returns personal and group-sourced
+/// requested reviews for the Review tab feature scenario.
+fn seed_review_tab_requested_reviews(env: &BuilderEnv) -> E2eResult {
+    let output = Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/agentty-xyz/agentty.git",
+        ])
+        .current_dir(&env.workdir)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "git remote add origin failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+
+    let gh_stub = env.stub_bin.join("gh");
+    std::fs::write(
+        &gh_stub,
+        r#"#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  exit 0
+fi
+
+if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "--review-requested" ]; then
+  cat <<'JSON'
+[
+  {
+    "isDraft": false,
+    "number": 42,
+    "title": "Review personal parser",
+    "updatedAt": "2026-04-27T21:30:00Z",
+    "url": "https://github.com/agentty-xyz/agentty/pull/42"
+  },
+  {
+    "isDraft": false,
+    "number": 43,
+    "title": "Review team parser",
+    "updatedAt": "2026-04-28T21:30:00Z",
+    "url": "https://github.com/agentty-xyz/agentty/pull/43"
+  }
+]
+JSON
+  exit 0
+fi
+
+if [ "$1" = "search" ] && [ "$2" = "prs" ] && [ "$3" = "user-review-requested:@me" ]; then
+  cat <<'JSON'
+[
+  {
+    "isDraft": false,
+    "number": 42,
+    "title": "Review personal parser",
+    "updatedAt": "2026-04-27T21:30:00Z",
+    "url": "https://github.com/agentty-xyz/agentty/pull/42"
+  }
+]
+JSON
+  exit 0
+fi
+
+echo "unexpected gh args: $*" >&2
+exit 1
+"#,
+    )?;
+
+    #[cfg(unix)]
+    std::fs::set_permissions(&gh_stub, std::fs::Permissions::from_mode(0o755))?;
+
+    Ok(())
+}
 
 /// Verify that agentty startup renders the Projects tab as selected.
 ///
@@ -135,20 +215,29 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
 #[test]
 fn review_tab_shows_requested_reviews_page() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("review_tab").with_git().run(
-        |scenario| {
-            scenario
-                .compose(&common::wait_for_agentty_startup())
-                .compose(&common::switch_to_tab("Sessions"))
-                .compose(&common::switch_to_tab("Review"))
-                .viewing_pause_ms(1500)
-                .capture_labeled("review", "Review tab selected")
-        },
-        |frame, _report| {
-            let full = Region::full(frame.cols(), frame.rows());
-            assertion::assert_text_in_region(frame, "Review Requests", &full);
-        },
-    )?;
+    FeatureTest::new("review_tab")
+        .with_git()
+        .setup(seed_review_tab_requested_reviews)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Review"))
+                    .wait_for_text("Requested from you", 5000)
+                    .wait_for_text("Requested from your groups", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("review", "Review tab selected")
+            },
+            |frame, _report| {
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Review Requests", &full);
+                assertion::assert_text_in_region(frame, "Requested from you", &full);
+                assertion::assert_text_in_region(frame, "PR #42 Review personal parser", &full);
+                assertion::assert_text_in_region(frame, "Requested from your groups", &full);
+                assertion::assert_text_in_region(frame, "PR #43 Review team parser", &full);
+            },
+        )?;
 
     Ok(())
 }
