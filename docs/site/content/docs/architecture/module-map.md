@@ -109,9 +109,14 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/domain/composer.rs`: Shared prompt-composer logic for slash-menu
   derivation, attachment placeholder tracking, prompt submission draining, agent-facing
   `@path` normalization, and image-token-aware deletion helpers.
+- `crates/agentty/src/domain/file_entry.rs`: Transport-neutral file and directory entry
+  model shared by file indexing, prompt state, and UI layout.
 - `crates/agentty/src/domain/input.rs`: Input state management.
 - `crates/agentty/src/domain/permission.rs`: `PermissionMode` and permission logic.
 - `crates/agentty/src/domain/project.rs`: Project entities and display helpers.
+- `crates/agentty/src/domain/question.rs`: Structured clarification question model
+  shared by session state, UI question panels, persistence hydration, and the agent
+  response protocol schema.
 - `crates/agentty/src/domain/session.rs`: Session entities, statuses, sizes, stats,
   review-request linkage wrappers, and re-exports of shared forge review-request types
   from `ag-forge`.
@@ -121,6 +126,9 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   strings, and settings selector ordering.
 - `crates/agentty/src/domain/transcript_notice.rs`: Canonical bracketed transcript
   workflow notice labels shared by producers and session-output rendering.
+- `crates/agentty/src/domain/turn_prompt.rs`: Transport-neutral turn prompt payload,
+  prompt attachment, prompt text-source, and prompt content-part helpers used before
+  infrastructure adapters serialize prompts for providers.
 
 ## Infrastructure Layer (`infra/`)
 
@@ -152,7 +160,8 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
 - `crates/agentty/src/infra/channel.rs` and `crates/agentty/src/infra/channel/`:
   `AgentChannel` trait and provider-agnostic turn execution.
 - `crates/agentty/src/infra/channel/contract.rs`: Shared `AgentChannel` trait plus turn
-  request, event, and result types.
+  request, event, and result types that carry domain-owned prompt payloads across the
+  provider boundary.
 - `crates/agentty/src/infra/channel/factory.rs`: Provider-to-channel routing factory via
   `create_agent_channel()`.
 - `crates/agentty/src/infra/channel/cli.rs`: `CliAgentChannel`, the CLI subprocess
@@ -206,7 +215,7 @@ a machine-readable workspace summary to `target/agentty/workspace-map.json`.
   utilities for app-server processes, including common child-process spawn wiring for
   piped stdin or stdout runtimes.
 - `crates/agentty/src/infra/file_index.rs`: Gitignore-aware file indexing and fuzzy
-  filtering for `@` mentions in prompts.
+  filtering for `@` mentions in prompts, returning domain-owned `FileEntry` values.
 - `crates/agentty/src/infra/project_discovery.rs`: `ProjectDiscoveryClient` trait plus
   the home-directory git-repository scan used by startup catalog refresh without leaking
   directory walking into `app/`.

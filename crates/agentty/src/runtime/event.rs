@@ -250,8 +250,8 @@ mod tests {
     use crate::db::Database;
     use crate::domain::agent::AgentKind;
     use crate::domain::input::InputState;
+    use crate::domain::question::QuestionItem;
     use crate::domain::session::{Session, SessionSize, SessionStats, Status};
-    use crate::infra::agent::protocol::QuestionItem;
     use crate::ui::state::app_mode::{AppMode, QuestionFocus};
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 

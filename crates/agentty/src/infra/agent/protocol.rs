@@ -8,7 +8,7 @@ mod parse;
 mod schema;
 
 pub use model::ProtocolRequestProfile;
-pub(crate) use model::{AgentResponse, AgentResponseSummary, QuestionItem};
+pub(crate) use model::{AgentResponse, AgentResponseSummary};
 pub(crate) use parse::{
     format_protocol_parse_debug_details, normalize_turn_response, parse_agent_response_strict,
 };

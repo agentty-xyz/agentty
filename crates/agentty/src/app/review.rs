@@ -496,7 +496,7 @@ mod tests {
     use crate::app::session::RealClock;
     use crate::app::session_state::SessionState;
     use crate::domain::input::InputState;
-    use crate::infra::agent::protocol::QuestionItem;
+    use crate::domain::question::QuestionItem;
     use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 

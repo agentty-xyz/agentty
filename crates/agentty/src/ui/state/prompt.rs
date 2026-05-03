@@ -7,7 +7,7 @@ pub use crate::domain::composer::{
     insert_prompt_local_image, insert_prompt_text, prompt_slash_option_count,
     resolve_prompt_slash_selection,
 };
-use crate::infra::file_index::FileEntry;
+use crate::domain::file_entry::FileEntry;
 
 /// UI state for prompt `@` file and directory mention selection.
 #[derive(Clone, Debug)]

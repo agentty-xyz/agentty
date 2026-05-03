@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::domain::session::SESSION_DATA_DIR;
-use crate::infra::channel::TurnPromptAttachment;
+use crate::domain::turn_prompt::TurnPromptAttachment;
 use crate::infra::fs::{FsClient, FsError};
 
 /// Metadata filename used for staged draft-session image attachments.

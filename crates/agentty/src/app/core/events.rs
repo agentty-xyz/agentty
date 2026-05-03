@@ -26,12 +26,12 @@ use crate::app::session::{
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent_usage::AgentUsageSnapshot;
+use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::{
     PublishBranchAction, PublishedBranchSyncStatus, SessionId, SessionSize, Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::file_index::FileEntry;
 use crate::runtime::mode::{at_mention, question, sync_blocked};
 use crate::ui::state::app_mode::{AppMode, ConfirmationViewMode, QuestionFocus};
 use crate::ui::state::prompt::PromptAtMentionState;

@@ -5,8 +5,8 @@ use super::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
 use crate::domain::input::InputState;
+use crate::domain::question::QuestionItem;
 use crate::domain::session::{PublishBranchAction, SessionId};
-use crate::infra::agent::protocol::QuestionItem;
 
 /// Semantic intent for a `Confirmation` overlay interaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

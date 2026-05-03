@@ -44,7 +44,7 @@ use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, Session, SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::channel::TurnPrompt;
+use crate::domain::turn_prompt::TurnPrompt;
 #[cfg(test)]
 use crate::infra::db;
 use crate::infra::fs::{FsClient, RealFsClient};
@@ -1685,15 +1685,16 @@ mod tests {
     use crate::app::session_state::SessionGitStatus;
     use crate::app::{AppServiceDeps, diff_content_hash, review_loading_message};
     use crate::domain::agent::AgentModel;
+    use crate::domain::file_entry::FileEntry;
+    use crate::domain::question::QuestionItem;
     use crate::domain::session::{
         ForgeKind, PublishedBranchSyncStatus, ReviewRequestState, ReviewRequestSummary,
         SESSION_DATA_DIR, Session, SessionFollowUpTask, SessionHandles, SessionSize, SessionStats,
         Status,
     };
     use crate::domain::setting::SettingName;
-    use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
+    use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::infra::db::AppRepositories;
-    use crate::infra::file_index::FileEntry;
     use crate::infra::project_discovery::{
         HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient,
     };

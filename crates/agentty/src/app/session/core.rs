@@ -17,12 +17,12 @@ use super::workflow::worker::SessionWorkerService;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{AppServices, SessionState, setting};
 use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::file_entry::FileEntry;
+use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, FollowUpTaskAction, PublishedBranchSyncStatus, ReviewRequest, Session,
     SessionFollowUpTask, SessionId, SessionStats,
 };
-use crate::infra::agent::protocol::QuestionItem;
-use crate::infra::file_index::FileEntry;
 use crate::infra::git;
 
 /// Render payload tuple returned by [`SessionManager::render_parts`].

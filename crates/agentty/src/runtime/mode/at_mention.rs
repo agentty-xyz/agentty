@@ -10,9 +10,10 @@ use tracing::warn;
 
 use crate::app::AppEvent;
 use crate::app::session::SessionManager;
+use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::SessionId;
-use crate::infra::file_index::{self, FileEntry};
+use crate::infra::file_index;
 use crate::ui::state::prompt::PromptAtMentionState;
 
 /// Delay applied before a fresh `@`-mention filesystem walk starts.

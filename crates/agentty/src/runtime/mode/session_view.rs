@@ -3111,8 +3111,10 @@ mod tests {
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");
-            queued.push_back(crate::infra::channel::TurnPrompt::from("first queued"));
-            queued.push_back(crate::infra::channel::TurnPrompt::from("second queued"));
+            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from("first queued"));
+            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from(
+                "second queued",
+            ));
         }
         app.sessions
             .handles
@@ -3130,7 +3132,7 @@ mod tests {
             .lock()
             .expect("queued_messages lock")
             .iter()
-            .map(crate::infra::channel::TurnPrompt::transcript_text)
+            .map(crate::domain::turn_prompt::TurnPrompt::transcript_text)
             .collect();
         assert_eq!(
             remaining_handle_queue,
@@ -3183,8 +3185,10 @@ mod tests {
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");
-            queued.push_back(crate::infra::channel::TurnPrompt::from("first queued"));
-            queued.push_back(crate::infra::channel::TurnPrompt::from("second queued"));
+            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from("first queued"));
+            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from(
+                "second queued",
+            ));
         }
         app.sessions
             .handles
@@ -3296,8 +3300,10 @@ mod tests {
         let queued_messages = std::sync::Arc::clone(&handles.queued_messages);
         {
             let mut queued = queued_messages.lock().expect("queued_messages lock");
-            queued.push_back(crate::infra::channel::TurnPrompt::from("first queued"));
-            queued.push_back(crate::infra::channel::TurnPrompt::from("second queued"));
+            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from("first queued"));
+            queued.push_back(crate::domain::turn_prompt::TurnPrompt::from(
+                "second queued",
+            ));
         }
         app.sessions
             .handles

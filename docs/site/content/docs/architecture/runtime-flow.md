@@ -520,7 +520,7 @@ flowchart TD
 ```
 
 <a id="architecture-key-types"></a> Key types (`infra/channel/contract.rs`, re-exported
-by `infra/channel.rs`):
+by `infra/channel.rs`, with prompt payloads owned by `domain/turn_prompt.rs`):
 
 | Type | Purpose | |------|---------| | `TurnRequest` | Input payload:
 `reasoning_level`, folder, `live_session_output`, model, `request_kind`, prompt, and

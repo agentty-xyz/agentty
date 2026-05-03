@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::agent::{AgentModel, ReasoningLevel};
-use crate::infra::agent::protocol::QuestionItem;
-use crate::infra::channel::{TurnPrompt, TurnPromptAttachment};
+use crate::domain::question::QuestionItem;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 
 /// Folder name under a project root that stores Agentty session metadata.
 pub const SESSION_DATA_DIR: &str = ".agentty";

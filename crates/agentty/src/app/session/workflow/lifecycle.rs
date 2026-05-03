@@ -24,9 +24,8 @@ use crate::domain::session::{
 };
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::channel::{
-    AgentRequestKind, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource,
-};
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
+use crate::infra::channel::AgentRequestKind;
 use crate::infra::fs::{FsClient, FsError};
 use crate::infra::{agent, db, git};
 use crate::ui::page::session_list::grouped_session_indexes;
@@ -2489,7 +2488,7 @@ mod tests {
         ForgeKind, ReviewRequestState, ReviewRequestSummary, SessionHandles, SessionSize,
         SessionStats,
     };
-    use crate::infra::channel::{TurnPromptAttachment, TurnPromptTextSource};
+    use crate::domain::turn_prompt::{TurnPromptAttachment, TurnPromptTextSource};
     use crate::infra::db::{self, AppRepositories};
     use crate::infra::{app_server, fs};
 

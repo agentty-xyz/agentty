@@ -829,7 +829,7 @@ mod tests {
     async fn test_handle_quit_with_question_snapshot_restores_question_mode() {
         // Arrange — diff opened from question mode carries a snapshot.
         use crate::domain::input::InputState;
-        use crate::infra::agent::protocol::QuestionItem;
+        use crate::domain::question::QuestionItem;
         use crate::ui::state::app_mode::QuestionModeSnapshot;
 
         let (mut app, _base_dir) = new_test_app().await;
@@ -880,7 +880,7 @@ mod tests {
     async fn test_handle_question_then_help_then_exit_preserves_restore_question() {
         // Arrange — diff opened from question mode, then user opens help with `?`.
         use crate::domain::input::InputState;
-        use crate::infra::agent::protocol::QuestionItem;
+        use crate::domain::question::QuestionItem;
         use crate::ui::state::app_mode::QuestionModeSnapshot;
 
         let (mut app, _base_dir) = new_test_app().await;

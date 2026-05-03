@@ -3,10 +3,10 @@ use std::process::{Command, Stdio};
 
 use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{PromptPreparationRequest, prepare_prompt_text};
-use crate::infra::agent::protocol::agent_response_output_schema_json;
-use crate::infra::channel::{
+use crate::domain::turn_prompt::{
     TurnPromptAttachment, TurnPromptContentPart, split_turn_prompt_content,
 };
+use crate::infra::agent::protocol::agent_response_output_schema_json;
 
 /// Lists the Claude tools Agentty enables for unattended sessions.
 ///

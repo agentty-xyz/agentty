@@ -11,7 +11,7 @@ use crate::domain::input::InputState;
 use crate::domain::review;
 use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
-use crate::infra::channel::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::runtime::mode::{at_mention, input_key};
 use crate::runtime::{EventResult, clipboard_image};
 use crate::ui::state::app_mode::AppMode;
@@ -1507,8 +1507,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::domain::file_entry::FileEntry;
     use crate::infra::db::Database;
-    use crate::infra::file_index::FileEntry;
     use crate::ui::state::prompt::{
         PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
     };

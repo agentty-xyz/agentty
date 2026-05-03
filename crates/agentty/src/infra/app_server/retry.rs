@@ -8,7 +8,7 @@ use super::prompt::{
     instruction_delivery_mode_for_runtime, read_latest_session_output, turn_prompt_for_runtime,
 };
 use super::registry::AppServerSessionRegistry;
-use crate::infra::channel::TurnPrompt;
+use crate::domain::turn_prompt::TurnPrompt;
 
 /// Callbacks for inspecting runtime state during turn execution.
 ///
@@ -222,8 +222,9 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::ReasoningLevel;
+    use crate::domain::turn_prompt::TurnPrompt;
     use crate::infra::agent::InstructionDeliveryMode;
-    use crate::infra::channel::{AgentRequestKind, TurnPrompt};
+    use crate::infra::channel::AgentRequestKind;
 
     struct TestRuntime {
         model: String,

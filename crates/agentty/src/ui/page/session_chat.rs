@@ -4,9 +4,9 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::domain::agent::ReasoningLevel;
+use crate::domain::question::QuestionItem;
 use crate::domain::session::Session;
 use crate::domain::{input, review};
-use crate::infra::agent::protocol::QuestionItem;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
@@ -580,8 +580,8 @@ mod tests {
     use super::*;
     use crate::domain::agent::{AgentModel, ReasoningLevel};
     use crate::domain::input::InputState;
+    use crate::domain::question::QuestionItem;
     use crate::domain::session::Status;
-    use crate::infra::agent::protocol::QuestionItem;
     use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 

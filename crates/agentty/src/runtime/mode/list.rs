@@ -339,7 +339,7 @@ mod tests {
     use crate::app::{AppEvent, MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
     use crate::db::Database;
     use crate::domain::agent_usage::AgentUsageSnapshot;
-    use crate::infra::agent::protocol::QuestionItem;
+    use crate::domain::question::QuestionItem;
     use crate::infra::agent::{AgentUsageProbe, AgentUsageRequest};
 
     /// Usage probe that records how many refreshes were requested.

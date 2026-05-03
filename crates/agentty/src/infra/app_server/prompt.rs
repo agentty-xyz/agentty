@@ -1,9 +1,10 @@
 //! Shared app-server prompt shaping helpers.
 
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::infra::agent;
 use crate::infra::agent::InstructionDeliveryMode;
 use crate::infra::app_server::{AppServerError, AppServerTurnRequest};
-use crate::infra::channel::{AgentRequestKind, TurnPrompt, TurnPromptTextSource};
+use crate::infra::channel::AgentRequestKind;
 
 /// Reads the latest session output, preferring the live buffer over the
 /// stale snapshot.

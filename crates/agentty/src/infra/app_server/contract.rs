@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::domain::agent::ReasoningLevel;
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::app_server::AppServerError;
-use crate::infra::channel::{AgentRequestKind, TurnPrompt};
+use crate::infra::channel::AgentRequestKind;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;

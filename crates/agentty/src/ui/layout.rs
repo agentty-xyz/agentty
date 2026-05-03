@@ -1493,11 +1493,11 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+    use crate::domain::file_entry::FileEntry;
     use crate::domain::input::InputState;
     use crate::domain::session::{PublishedBranchSyncStatus, Session, Status};
     use crate::domain::theme::ColorTheme;
     use crate::infra::agent::protocol::AgentResponseSummary;
-    use crate::infra::file_index::FileEntry;
     use crate::ui::state::app_mode::QuestionFocus;
     use crate::ui::state::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
 

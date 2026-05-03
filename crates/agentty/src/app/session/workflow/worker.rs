@@ -1542,8 +1542,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::domain::question::QuestionItem;
     use crate::infra::agent::AgentResponse;
-    use crate::infra::agent::protocol::{AgentResponseSummary, QuestionItem};
+    use crate::infra::agent::protocol::AgentResponseSummary;
     use crate::infra::channel::MockAgentChannel;
     use crate::infra::db::AppRepositories;
     use crate::infra::fs;

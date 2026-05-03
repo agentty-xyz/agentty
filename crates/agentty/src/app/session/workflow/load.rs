@@ -6,11 +6,11 @@ use std::path::Path;
 use super::{draft, session_folder};
 use crate::app::SessionManager;
 use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestSummary, Session,
     SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
-use crate::infra::agent::protocol::QuestionItem;
 use crate::infra::db::{AppRepositories, SessionDetailRow, SessionListRow};
 use crate::infra::fs::FsClient;
 use crate::infra::git::GitClient;
@@ -33,7 +33,7 @@ struct LoadSessionContext<'a> {
 
 /// Precomputed fields needed to assemble one loaded session snapshot.
 struct LoadedSessionInput {
-    draft_attachments: Vec<crate::infra::channel::TurnPromptAttachment>,
+    draft_attachments: Vec<crate::domain::turn_prompt::TurnPromptAttachment>,
     follow_up_tasks: Vec<SessionFollowUpTask>,
     folder: std::path::PathBuf,
     project_name: String,

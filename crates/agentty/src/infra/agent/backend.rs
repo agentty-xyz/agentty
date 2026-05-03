@@ -4,7 +4,8 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::domain::agent::ReasoningLevel;
-use crate::infra::channel::{AgentRequestKind, TurnPromptAttachment};
+use crate::domain::turn_prompt::TurnPromptAttachment;
+use crate::infra::channel::AgentRequestKind;
 
 /// Transport runtime used to execute turns for one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

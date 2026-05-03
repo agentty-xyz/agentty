@@ -9,11 +9,11 @@ use tokio::sync::mpsc;
 use super::transport::{CodexRuntimeTransport, CodexStdioTransport};
 use super::{policy, stream_parser, usage};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptContentPart};
 use crate::infra::agent;
 use crate::infra::agent::protocol::agent_response_output_schema;
 use crate::infra::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::infra::app_server_transport::{self, extract_json_error_message, response_id_matches};
-use crate::infra::channel::{TurnPrompt, TurnPromptContentPart};
 
 /// Mutable runtime state required while a Codex app-server process is active.
 pub(super) struct CodexRuntimeState {
@@ -810,8 +810,8 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::{AgentModel, ReasoningLevel};
+    use crate::domain::turn_prompt::{TurnPromptAttachment, TurnPromptTextSource};
     use crate::infra::agent::app_server::codex::MockCodexRuntimeTransport;
-    use crate::infra::channel::{TurnPromptAttachment, TurnPromptTextSource};
 
     /// Captures the dynamic JSON-RPC `id` from a written payload through the
     /// supplied mutex so the response side of a mock can echo it back.
