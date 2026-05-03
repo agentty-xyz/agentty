@@ -11,7 +11,7 @@ use crate::ui::state::prompt::{
     PromptSlashStage, PromptSuggestionSelection, drain_prompt_submission,
     resolve_prompt_slash_selection,
 };
-use crate::ui::util::format_token_count;
+use crate::ui::text_util::format_token_count;
 
 /// App-layer prompt intent context derived from prompt-mode runtime state.
 ///

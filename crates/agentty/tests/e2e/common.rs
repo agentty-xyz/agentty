@@ -383,6 +383,15 @@ impl FeatureTest {
         self
     }
 
+    /// Configure the PTY terminal dimensions used while running the feature
+    /// proof.
+    pub(crate) fn with_terminal_size(mut self, cols: u16, rows: u16) -> Self {
+        self.terminal_cols = cols;
+        self.terminal_rows = rows;
+
+        self
+    }
+
     /// Configure Zola feature page auto-generation.
     ///
     /// When set, the test runner writes a minimal `.md` frontmatter page
