@@ -22,7 +22,7 @@ async-trait = "0.1"
 agent-client-protocol = "0.11.1"
 assert_cmd = "2"
 arboard = { version = "3", features = ["image-data", "wayland-data-control"] }
-askama = "0.15.4"
+askama = "0.16.0"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"
