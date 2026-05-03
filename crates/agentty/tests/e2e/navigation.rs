@@ -204,12 +204,14 @@ fn tab_cycles_through_all_tabs() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the Review tab renders requested PR/MR review state.
+/// Verify that the Review tab renders requested PR/MR review state at a
+/// width that leaves grouped review headings and titles inspectable.
 #[test]
 fn review_tab_shows_requested_reviews_page() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_tab")
         .with_git()
+        .with_terminal_size(100, 24)
         .setup(seed_review_tab_requested_reviews)
         .run(
             |scenario| {

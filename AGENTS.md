@@ -323,8 +323,10 @@ targeted checks cover the full impact, run the full repository suite instead.
   and tests for crates that embed or query those migrations.
 - **Planning docs:** Run `prek run check-roadmap --all-files`.
 - **Hook catalog:** Run `prek run validate-prek-config --files .pre-commit-config.yaml`.
-- **User-visible UI behavior:** Add or update required `FeatureTest` coverage. Do not
-  run the E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
+- **User-visible UI behavior:** Add or update required `FeatureTest` coverage and run
+  focused E2E tests for the changed workflows, such as
+  `cargo nextest run --locked --profile ci -p agentty --test e2e <test-filter>`. Do not
+  run the full E2E feature suite locally; `.github/workflows/postsubmit.yml` runs
   `test-agentty-e2e` on GitHub after merge to `main`.
 
 ### Autofix Discipline
