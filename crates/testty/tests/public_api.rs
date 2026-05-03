@@ -57,6 +57,26 @@ fn prelude_surface_is_stable() {
     let _: Option<PtySession> = None;
     let _: Option<PtySessionError> = None;
 
+    // `StartupWait` presets and the matching `Journey` constructors are part
+    // of the published surface so test authors can pick a documented startup
+    // profile instead of hand-tuning `(stable_ms, timeout_ms)` values.
+    let _: StartupWait = StartupWait::Default;
+    let _: StartupWait = StartupWait::FastNative;
+    let _: StartupWait = StartupWait::SlowNode;
+    let _: StartupWait = StartupWait::Custom {
+        stable_ms: 100,
+        timeout_ms: 1_000,
+    };
+    let _: u32 = StartupWait::Default.stable_ms();
+    let _: u32 = StartupWait::Default.timeout_ms();
+    let _: fn(StartupWait) -> Journey = Journey::wait_for_startup_preset;
+    let _: fn() -> Journey = Journey::wait_for_startup_default;
+    // Pin the legacy raw-number constructor too: it is the documented
+    // back-compat entry point for callers that pre-date the named presets,
+    // so a silent signature drift here would break downstream code that
+    // still passes `(stable_ms, timeout_ms)` directly.
+    let _: fn(u32, u32) -> Journey = Journey::wait_for_startup;
+
     // `PtySessionBuilder::args` accepts any `IntoIterator<Item: Into<String>>`
     // and returns the builder by value. Pinning the shape here breaks the
     // build before publication if the signature drifts (for example, if it

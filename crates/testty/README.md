@@ -545,10 +545,10 @@ Frame text | `FrameTextBackend` | `.txt` | CI logs, quick inspection | | PNG str
 of repeating low-level step sequences, compose scenarios from pre-built journeys:
 
 ```rust
-use testty::journey::Journey;
+use testty::journey::{Journey, StartupWait};
 use testty::scenario::Scenario;
 
-let startup = Journey::wait_for_startup(300, 5000);
+let startup = Journey::wait_for_startup_default();
 let navigate = Journey::navigate_with_key("Tab", "Settings", 3000);
 let input = Journey::type_and_confirm("search query");
 let snapshot = Journey::capture_labeled("final", "End state");
@@ -558,16 +558,40 @@ let scenario = Scenario::new("settings_search")
     .compose(&navigate)
     .compose(&input)
     .compose(&snapshot);
+
+// Pick a named profile for projects that boot faster or slower than the
+// balanced default, or fall back to raw values via `StartupWait::Custom`.
+let _ = Journey::wait_for_startup_preset(StartupWait::FastNative);
+let _ = Journey::wait_for_startup_preset(StartupWait::SlowNode);
+let _ = Journey::wait_for_startup_preset(StartupWait::Custom {
+    stable_ms: 250,
+    timeout_ms: 4_000,
+});
 ```
 
 ### Built-in journeys
 
 | Journey | Steps | Description | |---------|-------|-------------| |
-`wait_for_startup(stable_ms, timeout_ms)` | 1 | Wait for app to render and stabilize | |
+`wait_for_startup_default()` | 1 | Wait for app to render with the balanced default
+preset (`StartupWait::Default` = `300ms` / `5_000ms`) | |
+`wait_for_startup_preset(StartupWait)` | 1 | Wait for app to render using a named preset
+(`Default`, `FastNative`, `SlowNode`, or `Custom`) | |
+`wait_for_startup(stable_ms, timeout_ms)` | 1 | Legacy raw-number entry point retained
+for back-compat; routes through `StartupWait::Custom` | |
 `navigate_with_key(key, expected, timeout)` | 2 | Press key, wait for expected text | |
 `type_and_confirm(text)` | 2 | Type text and press Enter | | `press_and_wait(key, ms)` |
 2 | Press key and sleep briefly | | `capture_labeled(label, desc)` | 1 | Capture with
 label for proofs |
+
+### Startup-wait presets
+
+| Preset | `stable_ms` | `timeout_ms` | Use case |
+|--------|-------------|--------------|----------| | `StartupWait::Default` | `300` |
+`5_000` | Balanced profile that matches the historical defaults. | |
+`StartupWait::FastNative` | `200` | `3_000` | Native binaries that reach a stable frame
+quickly (for example, Rust TUIs). | | `StartupWait::SlowNode` | `500` | `10_000` |
+Slow-starting TUIs (for example, Node-based CLIs). | | `StartupWait::Custom` | caller |
+caller | Explicit `(stable_ms, timeout_ms)` for cases that no preset matches. |
 
 ## Frame diffing
 

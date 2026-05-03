@@ -7,9 +7,33 @@
 
 #![allow(clippy::print_stdout)]
 
-use testty::journey::Journey;
+use testty::journey::{Journey, StartupWait};
 use testty::scenario::Scenario;
 use testty::step::Step;
+
+/// Print a one-line summary for a journey using its name, step count,
+/// and optional description so the showcase output stays compact.
+fn print_journey(journey: &Journey) {
+    println!(
+        "  Journey '{}': {} step(s) — {}",
+        journey.name,
+        journey.steps.len(),
+        journey.description.as_deref().unwrap_or("(no description)"),
+    );
+}
+
+/// Print a one-line summary for a startup-wait preset alongside its
+/// documented `(stable_ms, timeout_ms)` pair so the example can advertise
+/// the named profiles without repeating the formatting boilerplate.
+fn print_startup_preset(label: &str, journey: &Journey, preset: StartupWait) {
+    println!(
+        "  Journey '{}': {} step(s) — {label} preset ({}ms stable / {}ms timeout)",
+        journey.name,
+        journey.steps.len(),
+        preset.stable_ms(),
+        preset.timeout_ms(),
+    );
+}
 
 fn main() {
     println!("=== Testty Journey Composition Showcase ===\n");
@@ -17,57 +41,26 @@ fn main() {
     // --- Part 1: Building reusable journeys ---
     println!("--- Part 1: Reusable Journey Building Blocks ---\n");
 
-    let startup = Journey::wait_for_startup(300, 5000);
-    println!(
-        "  Journey '{}': {} step(s) — {}",
-        startup.name,
-        startup.steps.len(),
-        startup.description.as_deref().unwrap_or("(no description)")
-    );
+    let startup = Journey::wait_for_startup_default();
+    print_startup_preset("default", &startup, StartupWait::Default);
+
+    let startup_fast = Journey::wait_for_startup_preset(StartupWait::FastNative);
+    print_startup_preset("fast-native", &startup_fast, StartupWait::FastNative);
+
+    let startup_slow = Journey::wait_for_startup_preset(StartupWait::SlowNode);
+    print_startup_preset("slow-node", &startup_slow, StartupWait::SlowNode);
 
     let navigate_settings = Journey::navigate_with_key("Tab", "Settings", 3000);
-    println!(
-        "  Journey '{}': {} step(s) — {}",
-        navigate_settings.name,
-        navigate_settings.steps.len(),
-        navigate_settings
-            .description
-            .as_deref()
-            .unwrap_or("(no description)")
-    );
+    print_journey(&navigate_settings);
 
     let type_search = Journey::type_and_confirm("hello world");
-    println!(
-        "  Journey '{}': {} step(s) — {}",
-        type_search.name,
-        type_search.steps.len(),
-        type_search
-            .description
-            .as_deref()
-            .unwrap_or("(no description)")
-    );
+    print_journey(&type_search);
 
     let dismiss_dialog = Journey::press_and_wait("Escape", 200);
-    println!(
-        "  Journey '{}': {} step(s) — {}",
-        dismiss_dialog.name,
-        dismiss_dialog.steps.len(),
-        dismiss_dialog
-            .description
-            .as_deref()
-            .unwrap_or("(no description)")
-    );
+    print_journey(&dismiss_dialog);
 
     let snapshot = Journey::capture_labeled("final_state", "Application final state");
-    println!(
-        "  Journey '{}': {} step(s) — {}",
-        snapshot.name,
-        snapshot.steps.len(),
-        snapshot
-            .description
-            .as_deref()
-            .unwrap_or("(no description)")
-    );
+    print_journey(&snapshot);
 
     // --- Part 2: Composing scenarios from journeys ---
     println!("\n--- Part 2: Scenario Composition ---\n");

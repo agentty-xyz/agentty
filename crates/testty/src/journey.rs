@@ -5,10 +5,75 @@
 //! steps, agents and contributors build scenarios from pre-built journeys
 //! like [`wait_for_startup()`](Journey::wait_for_startup) and
 //! [`type_and_confirm()`](Journey::type_and_confirm).
+//!
+//! Startup-wait timing is also expressible as a named [`StartupWait`]
+//! preset so test authors can pick a documented profile (default, fast
+//! native binary, slow Node-based TUI) instead of hand-tuning raw
+//! `stable_ms` and `timeout_ms` numbers per project.
 
 use std::time::Duration;
 
 use crate::step::Step;
+
+/// Named startup-wait timing profiles for [`Journey::wait_for_startup_preset`].
+///
+/// Each variant maps to a documented `(stable_ms, timeout_ms)` pair tuned
+/// for a class of TUI binaries. Use [`StartupWait::Custom`] for one-off
+/// values, or [`StartupWait::Default`] when you want the documented
+/// balanced profile without spelling the numbers out.
+///
+/// The enum is `#[non_exhaustive]` so future presets can be added without
+/// a major version bump. Downstream `match` statements must include a
+/// fallback `_` arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StartupWait {
+    /// Balanced profile that matches the historical
+    /// `wait_for_startup(300, 5000)` defaults. Use this when your TUI does
+    /// not fall into the fast-native or slow-Node buckets.
+    Default,
+    /// Tight profile for fast native binaries (for example, Rust TUIs)
+    /// that reach a stable frame quickly after launch.
+    FastNative,
+    /// Generous profile for slow-starting TUIs (for example, Node-based
+    /// CLIs) that take noticeably longer to render their first stable
+    /// frame.
+    SlowNode,
+    /// Explicit `(stable_ms, timeout_ms)` values for cases that do not
+    /// match any built-in preset.
+    Custom {
+        /// Milliseconds the frame must remain unchanged before the wait
+        /// considers the application stable.
+        stable_ms: u32,
+        /// Milliseconds to wait for stabilization before the journey
+        /// gives up.
+        timeout_ms: u32,
+    },
+}
+
+impl StartupWait {
+    /// Milliseconds the frame must remain unchanged before the wait
+    /// considers the application stable.
+    pub const fn stable_ms(self) -> u32 {
+        match self {
+            Self::Default => 300,
+            Self::FastNative => 200,
+            Self::SlowNode => 500,
+            Self::Custom { stable_ms, .. } => stable_ms,
+        }
+    }
+
+    /// Milliseconds to wait for stabilization before the journey gives
+    /// up.
+    pub const fn timeout_ms(self) -> u32 {
+        match self {
+            Self::Default => 5_000,
+            Self::FastNative => 3_000,
+            Self::SlowNode => 10_000,
+            Self::Custom { timeout_ms, .. } => timeout_ms,
+        }
+    }
+}
 
 /// A named, reusable sequence of steps for composing into scenarios.
 ///
@@ -50,14 +115,46 @@ impl Journey {
         self
     }
 
-    /// Wait for the application to start up and stabilize.
+    /// Wait for the application to start up and stabilize using raw
+    /// `(stable_ms, timeout_ms)` values.
     ///
     /// Waits for the terminal frame to stop changing for `stable_ms`
-    /// milliseconds, with a maximum timeout of `timeout_ms`.
+    /// milliseconds, with a maximum timeout of `timeout_ms`. Prefer
+    /// [`Journey::wait_for_startup_preset`] with a named [`StartupWait`]
+    /// profile, or [`Journey::wait_for_startup_default`] for the
+    /// documented balanced defaults, when no project-specific tuning is
+    /// required.
     pub fn wait_for_startup(stable_ms: u32, timeout_ms: u32) -> Self {
+        Self::wait_for_startup_preset(StartupWait::Custom {
+            stable_ms,
+            timeout_ms,
+        })
+    }
+
+    /// Wait for the application to start up and stabilize using a named
+    /// [`StartupWait`] preset.
+    ///
+    /// Presets cover the common cases (balanced default, fast native
+    /// binary, slow Node-based TUI) so test authors can pick a documented
+    /// profile instead of hand-tuning `stable_ms` and `timeout_ms`. Use
+    /// [`StartupWait::Custom`] when no preset matches.
+    pub fn wait_for_startup_preset(preset: StartupWait) -> Self {
         Self::new("wait_for_startup")
             .with_description("Wait for application startup and frame stabilization")
-            .step(Step::wait_for_stable_frame(stable_ms, timeout_ms))
+            .step(Step::wait_for_stable_frame(
+                preset.stable_ms(),
+                preset.timeout_ms(),
+            ))
+    }
+
+    /// Wait for the application to start up and stabilize using the
+    /// documented [`StartupWait::Default`] preset.
+    ///
+    /// Equivalent to
+    /// `Journey::wait_for_startup_preset(StartupWait::Default)` and
+    /// matches the historical `wait_for_startup(300, 5_000)` numbers.
+    pub fn wait_for_startup_default() -> Self {
+        Self::wait_for_startup_preset(StartupWait::Default)
     }
 
     /// Navigate by pressing a key and waiting for expected text to appear.
@@ -162,6 +259,88 @@ mod tests {
             Step::WaitForStableFrame {
                 stable_ms: 300,
                 timeout_ms: 5000
+            }
+        ));
+    }
+
+    #[test]
+    fn startup_wait_presets_expose_documented_durations() {
+        // Arrange / Act / Assert — each named preset reports the documented
+        // `(stable_ms, timeout_ms)` numbers callers can pin against.
+        assert_eq!(StartupWait::Default.stable_ms(), 300);
+        assert_eq!(StartupWait::Default.timeout_ms(), 5_000);
+
+        assert_eq!(StartupWait::FastNative.stable_ms(), 200);
+        assert_eq!(StartupWait::FastNative.timeout_ms(), 3_000);
+
+        assert_eq!(StartupWait::SlowNode.stable_ms(), 500);
+        assert_eq!(StartupWait::SlowNode.timeout_ms(), 10_000);
+
+        let custom = StartupWait::Custom {
+            stable_ms: 123,
+            timeout_ms: 4_567,
+        };
+        assert_eq!(custom.stable_ms(), 123);
+        assert_eq!(custom.timeout_ms(), 4_567);
+    }
+
+    #[test]
+    fn wait_for_startup_preset_uses_preset_durations() {
+        // Arrange / Act
+        let journey = Journey::wait_for_startup_preset(StartupWait::SlowNode);
+
+        // Assert
+        assert_eq!(journey.name, "wait_for_startup");
+        assert_eq!(journey.steps.len(), 1);
+        assert!(matches!(
+            &journey.steps[0],
+            Step::WaitForStableFrame {
+                stable_ms: 500,
+                timeout_ms: 10_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn wait_for_startup_default_matches_default_preset() {
+        // Arrange / Act
+        let from_helper = Journey::wait_for_startup_default();
+        let from_preset = Journey::wait_for_startup_preset(StartupWait::Default);
+
+        // Assert — both helpers must produce the same documented step so
+        // call sites can mix and match without behavioral drift.
+        assert_eq!(from_helper.steps.len(), 1);
+        assert_eq!(from_preset.steps.len(), 1);
+        assert!(matches!(
+            &from_helper.steps[0],
+            Step::WaitForStableFrame {
+                stable_ms: 300,
+                timeout_ms: 5_000,
+            }
+        ));
+        assert!(matches!(
+            &from_preset.steps[0],
+            Step::WaitForStableFrame {
+                stable_ms: 300,
+                timeout_ms: 5_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn wait_for_startup_raw_args_route_through_custom_preset() {
+        // Arrange / Act — the raw constructor should still produce the
+        // legacy `(stable_ms, timeout_ms)` step shape so existing callers
+        // keep working.
+        let journey = Journey::wait_for_startup(150, 2_500);
+
+        // Assert
+        assert_eq!(journey.steps.len(), 1);
+        assert!(matches!(
+            &journey.steps[0],
+            Step::WaitForStableFrame {
+                stable_ms: 150,
+                timeout_ms: 2_500,
             }
         ));
     }

@@ -46,12 +46,14 @@ per-turn digest of used skills, executed commands, or changed-file CRUD after ea
 | Missing | | testty published surface | The in-tree source exposes the Result-returning
 `match_*` matcher core, `AssertionFailure`, `MatchResult`, blank-column-preserving
 `Frame::all_text()` with wide-character continuation cells skipped,
-`PtySessionBuilder::args` for non-interactive subcommand flows, and the predicate-driven
+`PtySessionBuilder::args` for non-interactive subcommand flows, the predicate-driven
 `Step::Eventually` waiter that surfaces structured failures through
-`PtySessionError::Assertion`; the agentty E2E session-creation journeys now wait on
-those predicates instead of fixed `Step::sleep` durations. Soft accumulators, recipe
-`match_*` siblings, structured failure rendering in HTML proof reports, and startup-wait
-presets remain queued. | Partial |
+`PtySessionError::Assertion`, and the named `StartupWait` presets plus
+`Journey::wait_for_startup_preset` / `Journey::wait_for_startup_default` constructors
+that replace hand-tuned `(stable_ms, timeout_ms)` numbers. The agentty E2E
+session-creation journeys now wait on those predicates instead of fixed `Step::sleep`
+durations. Soft accumulators, recipe `match_*` siblings, and structured failure
+rendering in HTML proof reports remain queued. | Partial |
 
 ## Active Streams
 
@@ -228,7 +230,6 @@ flowchart TD
         T3["[a9ef45e2] SoftAssertions accumulator"]
         T4["[ca40b36d] Recipe match_* siblings"]
         T5["[07cce0e7] HTML structured failure diff"]
-        T7["[8d5f9b02] Startup wait timeout presets"]
         T3 -. queued follow-up .-> T5
     end
 
@@ -470,22 +471,6 @@ has wired structured failures into `ProofCapture::assertions`.
 #### Depends on
 
 `[a9ef45e2-c6ea-4b20-ae00-f9c32e0017f7] Testty: SoftAssertions accumulator for batched test failures`
-
-### [8d5f9b02-4c3e-4f6a-ab9c-2d3e4f5a6b7c] Testty: Add startup wait timeout presets
-
-#### Outcome
-
-testty users can opt into named startup-wait presets on `Journey::wait_for_startup` (for
-example, slow Node TUIs vs. fast native Rust binaries) and a documented default, instead
-of hand-tuning `stable_ms` and `timeout_ms` numbers per project.
-
-#### Promote when
-
-Promote when the Testty stream is ready for the next ergonomics slice.
-
-#### Depends on
-
-`None`
 
 ### [8e3ba5c4-9442-4248-a6bf-dd78c1951659] Auto-Review: Surface orchestrator verdict on /auto-review one-shot
 

@@ -7,6 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- testty: add the named `StartupWait` preset enum (`Default`, `FastNative`, `SlowNode`,
+  `Custom { stable_ms, timeout_ms }`) plus the `Journey::wait_for_startup_preset` and
+  `Journey::wait_for_startup_default` constructors so test authors can pick a documented
+  startup-wait profile instead of hand-tuning raw `(stable_ms, timeout_ms)` numbers per
+  project. `StartupWait` is re-exported from `testty::prelude`. The historical
+  `Journey::wait_for_startup(stable_ms, timeout_ms)` entry point keeps working and now
+  routes through `StartupWait::Custom`.
+
 ## [v0.8.11] - 2026-05-02
 
 ### Added
