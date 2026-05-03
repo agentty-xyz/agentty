@@ -280,9 +280,9 @@ impl App {
 
     /// Loads project list entries for the projects tab.
     ///
-    /// Agentty-managed session worktrees and missing project directories are
-    /// excluded so the list keeps only user-facing repository roots that still
-    /// exist on disk.
+    /// Agentty-managed session worktrees, missing project directories, and
+    /// non-git folders are excluded so the list keeps only user-facing
+    /// repository roots that still exist on disk.
     pub(super) async fn load_project_items(
         db: &AppRepositories,
         fs_client: &dyn FsClient,
@@ -346,8 +346,8 @@ impl App {
         AppStartup::is_session_worktree_project_path(project_path, session_worktree_root)
     }
 
-    /// Filters persisted project rows down to entries that should remain
-    /// visible in the Projects tab.
+    /// Filters persisted project rows down to git repository entries that
+    /// should remain visible in the Projects tab.
     #[cfg(test)]
     pub(super) fn visible_project_rows(
         project_rows: Vec<db::ProjectListRow>,

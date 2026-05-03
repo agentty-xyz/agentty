@@ -1900,6 +1900,14 @@ mod tests {
             .expect("failed to build test app")
     }
 
+    /// Returns whether a path is the direct git metadata marker used by
+    /// project-list repository filtering tests.
+    fn is_git_marker_path(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|file_name| file_name.to_str())
+            .is_some_and(|file_name| file_name == ".git")
+    }
+
     #[tokio::test]
     async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
         // Arrange
@@ -2278,6 +2286,8 @@ mod tests {
         let current_project_path = temp_dir.path().join("current-project");
         fs::create_dir_all(&agentty_home).expect("failed to create agentty home");
         fs::create_dir_all(&current_project_path).expect("failed to create current project");
+        fs::create_dir_all(current_project_path.join(".git"))
+            .expect("failed to create current project git marker");
         let missing_project_path = temp_dir.path().join("missing-project");
         let database = AppRepositories::in_memory().await;
         let current_project_id = database
@@ -4562,6 +4572,9 @@ mod tests {
         let mut fs_client = crate::infra::fs::MockFsClient::new();
         fs_client.expect_is_dir().returning(|_| true);
         fs_client
+            .expect_exists()
+            .returning(|path| is_git_marker_path(path.as_path()));
+        fs_client
             .expect_is_file()
             .once()
             .withf(move |path| path == &roadmap_path)
@@ -4591,6 +4604,9 @@ mod tests {
         let mut fs_client = crate::infra::fs::MockFsClient::new();
         fs_client.expect_is_dir().returning(|_| true);
         fs_client
+            .expect_exists()
+            .returning(|path| is_git_marker_path(path.as_path()));
+        fs_client
             .expect_is_file()
             .once()
             .withf(move |path| path == &roadmap_path)
@@ -4619,6 +4635,9 @@ mod tests {
         ])));
         let mut fs_client = crate::infra::fs::MockFsClient::new();
         fs_client.expect_is_dir().returning(|_| true);
+        fs_client
+            .expect_exists()
+            .returning(|path| is_git_marker_path(path.as_path()));
         fs_client
             .expect_is_file()
             .times(2)
@@ -4677,6 +4696,9 @@ mod tests {
         let mut fs_client = crate::infra::fs::MockFsClient::new();
         fs_client.expect_is_dir().returning(|_| true);
         fs_client
+            .expect_exists()
+            .returning(|path| is_git_marker_path(path.as_path()));
+        fs_client
             .expect_is_file()
             .times(2)
             .withf(move |path| path == &roadmap_path_for_file_check)
@@ -4712,25 +4734,40 @@ mod tests {
     }
 
     #[test]
-    fn visible_project_rows_excludes_missing_and_session_worktree_projects() {
+    fn visible_project_rows_excludes_missing_nongit_and_session_worktree_projects() {
         // Arrange
         let existing_project_path = "/home/test/src/agentty".to_string();
+        let nongit_project_path = "/home/test/src/notes".to_string();
         let session_worktree_project_path = "/home/test/.agentty/wt/a1b2c3d4".to_string();
         let missing_project_path = "/home/test/src/removed".to_string();
         let session_worktree_root = Path::new("/home/test/.agentty/wt");
         let project_rows = vec![
             project_list_row_fixture(1, existing_project_path.clone()),
-            project_list_row_fixture(2, session_worktree_project_path),
-            project_list_row_fixture(3, missing_project_path.clone()),
+            project_list_row_fixture(2, nongit_project_path.clone()),
+            project_list_row_fixture(3, session_worktree_project_path),
+            project_list_row_fixture(4, missing_project_path.clone()),
         ];
         let mut fs_client = crate::infra::fs::MockFsClient::new();
         let existing_project_path_for_match = PathBuf::from(existing_project_path.clone());
+        let existing_git_marker_for_match = existing_project_path_for_match.join(".git");
+        let nongit_project_path_for_match = PathBuf::from(nongit_project_path);
         let missing_project_path_for_match = PathBuf::from(missing_project_path);
         fs_client
             .expect_is_dir()
             .once()
             .withf(move |path| path == &existing_project_path_for_match)
             .return_const(true);
+        fs_client
+            .expect_exists()
+            .once()
+            .withf(move |path| path == &existing_git_marker_for_match)
+            .return_const(true);
+        fs_client
+            .expect_is_dir()
+            .once()
+            .withf(move |path| path == &nongit_project_path_for_match)
+            .return_const(true);
+        fs_client.expect_exists().once().return_const(false);
         fs_client
             .expect_is_dir()
             .once()
@@ -4786,6 +4823,7 @@ mod tests {
         // Arrange
         let base_dir = tempdir().expect("failed to create temp dir");
         let base_path = base_dir.path().to_path_buf();
+        fs::create_dir_all(base_path.join(".git")).expect("failed to create project git marker");
         let database = AppRepositories::in_memory().await;
         let project_id = database
             .upsert_project(&base_path.to_string_lossy(), None)

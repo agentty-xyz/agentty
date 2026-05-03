@@ -381,6 +381,7 @@ impl AppStartup {
                     project_row.path.as_str(),
                     session_worktree_root,
                 ) && Self::is_existing_project_path(fs_client, project_row.path.as_str())
+                    && Self::is_git_repository_project_path(fs_client, project_row.path.as_str())
             })
             .collect()
     }
@@ -389,6 +390,15 @@ impl AppStartup {
     /// directory.
     pub(crate) fn is_existing_project_path(fs_client: &dyn FsClient, project_path: &str) -> bool {
         fs_client.is_dir(PathBuf::from(project_path))
+    }
+
+    /// Returns whether one persisted project path has a direct git metadata
+    /// marker, either as a `.git` directory or linked-worktree `.git` file.
+    pub(crate) fn is_git_repository_project_path(
+        fs_client: &dyn FsClient,
+        project_path: &str,
+    ) -> bool {
+        fs_client.exists(Path::new(project_path).join(".git"))
     }
 
     /// Converts a project row into the domain project model.
@@ -543,6 +553,23 @@ mod tests {
         fs_client
     }
 
+    /// Builds one mock filesystem client that reports existing directories and
+    /// direct `.git` metadata markers from separate sets.
+    fn mock_fs_client_with_directories_and_git_markers(
+        existing_directories: HashSet<PathBuf>,
+        git_marker_paths: HashSet<PathBuf>,
+    ) -> MockFsClient {
+        let mut fs_client = MockFsClient::new();
+        fs_client
+            .expect_is_dir()
+            .returning(move |path| existing_directories.contains(&path));
+        fs_client
+            .expect_exists()
+            .returning(move |path| git_marker_paths.contains(&path));
+
+        fs_client
+    }
+
     /// Verifies startup project resolution prefers the persisted active
     /// project when its directory still exists.
     #[tokio::test]
@@ -614,24 +641,30 @@ mod tests {
         assert_eq!(resolved_project_id, current_project_id);
     }
 
-    /// Verifies visible project filtering removes missing directories and
-    /// agentty-managed worktree paths.
+    /// Verifies visible project filtering removes missing directories,
+    /// non-git folders, and agentty-managed worktree paths.
     #[test]
-    fn visible_project_rows_excludes_missing_and_worktree_projects() {
+    fn visible_project_rows_excludes_missing_nongit_and_worktree_projects() {
         // Arrange
         let visible_project_path = PathBuf::from("/workspace/visible");
+        let nongit_project_path = PathBuf::from("/workspace/nongit");
         let missing_project_path = PathBuf::from("/workspace/missing");
         let session_worktree_root = Path::new("/workspace/.agentty/wt");
         let worktree_project_path = session_worktree_root.join("session-a");
         let project_rows = vec![
             project_list_row_fixture(1, &visible_project_path),
-            project_list_row_fixture(2, &missing_project_path),
-            project_list_row_fixture(3, &worktree_project_path),
+            project_list_row_fixture(2, &nongit_project_path),
+            project_list_row_fixture(3, &missing_project_path),
+            project_list_row_fixture(4, &worktree_project_path),
         ];
-        let fs_client = mock_fs_client_with_directories(HashSet::from([
-            visible_project_path.clone(),
-            worktree_project_path,
-        ]));
+        let fs_client = mock_fs_client_with_directories_and_git_markers(
+            HashSet::from([
+                visible_project_path.clone(),
+                nongit_project_path,
+                worktree_project_path,
+            ]),
+            HashSet::from([visible_project_path.join(".git")]),
+        );
 
         // Act
         let visible_rows =
@@ -642,13 +675,14 @@ mod tests {
         assert_eq!(visible_rows[0].path, visible_project_path.to_string_lossy());
     }
 
-    /// Verifies project-item loading uses database rows and filters
-    /// agentty-managed worktree paths before building UI items.
+    /// Verifies project-item loading uses database rows and filters non-git
+    /// folders plus agentty-managed worktree paths before building UI items.
     #[tokio::test]
     async fn load_project_items_with_session_worktree_root_filters_database_rows() {
         // Arrange
         let database = AppRepositories::in_memory().await;
         let visible_project_path = PathBuf::from("/workspace/visible");
+        let nongit_project_path = PathBuf::from("/workspace/nongit");
         let session_worktree_root = Path::new("/workspace/.agentty/wt");
         let worktree_project_path = session_worktree_root.join("session-a");
         database
@@ -656,13 +690,21 @@ mod tests {
             .await
             .expect("failed to persist visible project");
         database
+            .upsert_project(&nongit_project_path.to_string_lossy(), None)
+            .await
+            .expect("failed to persist nongit project");
+        database
             .upsert_project(&worktree_project_path.to_string_lossy(), Some("main"))
             .await
             .expect("failed to persist worktree project");
-        let fs_client = mock_fs_client_with_directories(HashSet::from([
-            visible_project_path.clone(),
-            worktree_project_path,
-        ]));
+        let fs_client = mock_fs_client_with_directories_and_git_markers(
+            HashSet::from([
+                visible_project_path.clone(),
+                nongit_project_path,
+                worktree_project_path,
+            ]),
+            HashSet::from([visible_project_path.join(".git")]),
+        );
 
         // Act
         let project_items = AppStartup::load_project_items_with_session_worktree_root(

@@ -6,16 +6,17 @@ use testty::region::Region;
 use crate::common;
 use crate::common::FeatureTest;
 
-/// Verify that the Projects tab lists the registered project name from
+/// Verify that the Projects tab lists the registered git project name from
 /// the temp workdir and shows the activity heatmap.
 ///
-/// Agentty auto-registers the current working directory as a project on
-/// startup. The test creates a `test-project` working directory and asserts
-/// that the project name appears in the project list.
+/// Agentty auto-registers the current git working directory as a project on
+/// startup. The test creates a `test-project` repository and asserts that
+/// the project name appears in the project list.
 #[test]
 fn projects_page_shows_cwd() {
     // Arrange, Act, Assert
     FeatureTest::new("projects_cwd")
+        .with_git()
         .zola(
             "Project directory",
             "See activity and switch the active project directory.",

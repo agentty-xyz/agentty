@@ -41,7 +41,7 @@ const AGENTTY_SHORT_DESCRIPTION: &str = "Agentty is an ADE (Agentic Development 
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
-    /// Project rows displayed in the table.
+    /// Git repository project rows displayed in the table.
     pub projects: &'a [ProjectListItem],
     /// Persisted local-day session activity used by the projects heatmap.
     pub stats_activity: &'a [DailyActivity],
