@@ -23,20 +23,13 @@ const ROW_HIGHLIGHT_SYMBOL: &str = "";
 const ACTIVE_PROJECT_MARKER: &str = "* ";
 /// Horizontal spacing between project-table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
-/// Fixed height reserved for the top Agentty activity and info panels.
-const AGENTTY_INFO_PANEL_HEIGHT: u16 = 12;
+/// Fixed height reserved for the top activity and work-pace panels.
+const PROJECT_DASHBOARD_PANEL_HEIGHT: u16 = 12;
 /// Percentage of the top-panel width reserved for the activity heatmap,
 /// keeping it at half of the available panel.
 const ACTIVITY_HEATMAP_WIDTH_PERCENT: u16 = 50;
-/// Compile-time version text shown in the projects info panel.
-const AGENTTY_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
-/// Short overview text shown alongside the Agentty version.
-const AGENTTY_SHORT_DESCRIPTION: &str = "Agentty is an ADE (Agentic Development Environment) for \
-                                         structured, controllable AI-assisted software \
-                                         development.";
-
 /// Projects tab renderer showing saved repositories, activity, compact
-/// work-performance stats, and quick Agentty metadata.
+/// work-performance stats, and project metadata.
 pub struct ProjectListPage<'a> {
     /// Identifier for the currently active project.
     pub active_project_id: i64,
@@ -67,12 +60,12 @@ impl<'a> ProjectListPage<'a> {
 }
 
 impl Page for ProjectListPage<'_> {
-    /// Renders the projects page with separate activity and Agentty dashboard
+    /// Renders the projects page with separate activity and work-pace dashboard
     /// panels, project rows, and compact tab-page spacing.
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
         let content_chunks = Layout::vertical([
-            Constraint::Length(AGENTTY_INFO_PANEL_HEIGHT),
+            Constraint::Length(PROJECT_DASHBOARD_PANEL_HEIGHT),
             Constraint::Min(0),
         ])
         .split(areas.main_area);
@@ -91,7 +84,7 @@ impl Page for ProjectListPage<'_> {
             .border_style(style::border_style());
         let details_block = Block::default()
             .borders(Borders::ALL)
-            .title("Agentty")
+            .title("Work Pace")
             .border_style(style::border_style());
         let heatmap_inner_area = heatmap_block.inner(heatmap_area);
         let heatmap_panel = Paragraph::new(self.build_heatmap_lines(heatmap_inner_area.width))
@@ -101,7 +94,7 @@ impl Page for ProjectListPage<'_> {
         let activity_stats =
             build_recent_activity_stats(self.stats_activity, current_day_key_local());
         let active_stats = ActiveProjectStats::from_projects(self.projects);
-        let details_panel = Paragraph::new(agentty_dashboard_lines(&activity_stats, active_stats))
+        let details_panel = Paragraph::new(work_stats_summary_lines(&activity_stats, active_stats))
             .style(Style::default().fg(style::palette::text()))
             .block(details_block)
             .wrap(Wrap { trim: true });
@@ -277,26 +270,6 @@ impl ActiveProjectStats {
     }
 }
 
-/// Builds the right-side Agentty dashboard lines with work stats and product
-/// metadata.
-fn agentty_dashboard_lines(
-    activity_stats: &RecentActivityStats,
-    active_stats: ActiveProjectStats,
-) -> Vec<Line<'static>> {
-    let mut lines = work_stats_summary_lines(activity_stats, active_stats);
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        stat_label_span("Version "),
-        stat_value_span(AGENTTY_VERSION),
-    ]));
-    lines.push(Line::from(Span::styled(
-        AGENTTY_SHORT_DESCRIPTION,
-        Style::default().fg(style::palette::text_muted()),
-    )));
-
-    lines
-}
-
 /// Renders one project metadata row.
 fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) -> Row<'static> {
     let (title, last_opened) = project_row_values(project_item, active_project_id);
@@ -312,18 +285,13 @@ fn render_project_row(project_item: &ProjectListItem, active_project_id: i64) ->
     .style(project_row_style(project_item, active_project_id))
 }
 
-/// Builds styled summary lines for work-performance metrics.
+/// Builds styled summary lines for work-performance metrics shown beneath
+/// the `Work Pace` panel title.
 fn work_stats_summary_lines(
     activity_stats: &RecentActivityStats,
     active_stats: ActiveProjectStats,
 ) -> Vec<Line<'static>> {
     vec![
-        Line::from(Span::styled(
-            "Work Pace",
-            Style::default()
-                .fg(style::palette::text())
-                .add_modifier(Modifier::BOLD),
-        )),
         Line::from(vec![
             stat_label_span("7d "),
             stat_value_span(activity_stats.sessions_last_7_days.to_string()),
@@ -509,7 +477,7 @@ mod tests {
         let border_cell_count = foreground_symbol_cell_count(terminal.backend().buffer(), "┌");
         assert!(
             border_cell_count >= 3,
-            "expected heatmap, Agentty info, and projects panels to use palette border color"
+            "expected heatmap, work-pace, and projects panels to use palette border color"
         );
     }
 
@@ -716,36 +684,6 @@ mod tests {
     }
 
     #[test]
-    fn test_agentty_dashboard_lines_include_version_description_and_stats() {
-        // Arrange
-        let expected_version = AGENTTY_VERSION;
-        let expected_description = AGENTTY_SHORT_DESCRIPTION;
-        let activity_stats = RecentActivityStats {
-            best_streak_days: 5,
-            current_streak_days: 3,
-            sessions_last_30_days: 22,
-            sessions_last_7_days: 8,
-        };
-        let active_stats = ActiveProjectStats {
-            project_count: 2,
-            session_count: 4,
-        };
-
-        // Act
-        let info_text = agentty_dashboard_lines(&activity_stats, active_stats)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Assert
-        assert!(info_text.contains(expected_version));
-        assert!(info_text.contains(expected_description));
-        assert!(info_text.contains("Work Pace"));
-        assert!(info_text.contains("Active Sessions 4"));
-    }
-
-    #[test]
     fn test_render_shows_activity_heatmap_in_separate_top_panel() {
         // Arrange
         let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
@@ -754,7 +692,7 @@ mod tests {
             last_session_updated_at: None,
             project: Project {
                 created_at: 1,
-                display_name: Some("agentty".to_string()),
+                display_name: Some("test-project".to_string()),
                 git_branch: Some("main".to_string()),
                 id: 42,
                 is_favorite: false,
@@ -783,11 +721,12 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert!(text.contains("┐┌"));
-        assert!(text.contains("Agentty"));
         assert!(text.contains("Activity Heatmap"));
         assert!(text.contains("Less"));
         assert!(text.contains("More"));
         assert!(text.contains("Work Pace"));
+        assert!(!text.contains("Version"));
+        assert!(!text.contains("Agentic Development Environment"));
         assert!(text.contains("Active Sessions 0"));
         assert!(text.contains("Active Projects 0"));
         assert!(!text.contains("Daily Pace"));
@@ -855,7 +794,9 @@ mod tests {
             .join("\n");
 
         // Assert
-        assert!(rendered_text.contains("Work Pace"));
+        assert!(!rendered_text.contains("Version"));
+        assert!(!rendered_text.contains("Agentic Development Environment"));
+        assert!(!rendered_text.contains("Work Pace"));
         assert!(rendered_text.contains("7d 8"));
         assert!(rendered_text.contains("30d 22"));
         assert!(rendered_text.contains("Streak 3d"));

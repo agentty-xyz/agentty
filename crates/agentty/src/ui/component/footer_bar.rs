@@ -268,6 +268,8 @@ mod tests {
         let content = buffer.content();
         let text: String = content.iter().map(ratatui::buffer::Cell::symbol).collect();
         assert_eq!(text.trim(), "");
+        assert!(!text.contains("/tmp/project"));
+        assert!(!text.contains("main"));
         assert!(
             content
                 .iter()

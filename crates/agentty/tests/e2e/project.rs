@@ -31,11 +31,12 @@ fn projects_page_shows_cwd() {
             },
             |frame, _report| {
                 let full = Region::full(frame.cols(), frame.rows());
-                assertion::assert_text_in_region(frame, "Agentty", &full);
                 assertion::assert_text_in_region(frame, "Activity Heatmap", &full);
                 assertion::assert_text_in_region(frame, "Sessions", &full);
                 assertion::assert_text_in_region(frame, "Last Opened", &full);
                 assertion::assert_text_in_region(frame, "Work Pace", &full);
+                assertion::assert_not_visible(frame, "Version");
+                assertion::assert_not_visible(frame, "Agentty is an ADE");
                 assertion::assert_text_in_region(frame, "Active", &full);
                 assertion::assert_text_in_region(frame, "test-project", &full);
                 assertion::assert_not_visible(frame, "Branch");

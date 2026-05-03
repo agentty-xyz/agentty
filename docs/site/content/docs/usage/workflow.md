@@ -18,25 +18,24 @@ tabs, with one conditional `Tasks` tab also accessible with `Tab` when the activ
 project has a roadmap:
 
 | Tab | Purpose | |-----|---------| | **Projects** | Select between projects (git
-repositories) in a dashboard view: equal-width activity heatmap and Agentty panels on
-top, with work-performance stats, version metadata, and product context beside the
-heatmap; the project table below shows project names, session counts, and last-opened
-dates. Agentty skips stale entries whose project directories no longer exist or no
-longer contain git metadata. | | **Sessions** | List, create, and manage agent sessions.
-When a project is active, this tab appears as `Sessions (<project-name>)`. | |
-**Review** | List open GitHub pull requests or GitLab merge requests in the active
-project that request the current forge user's review, including drafts marked with a
-`Draft` status. The tab is a read-only forge list; press `s` to refresh and open reviews
-from the forge UI or CLI. If the list reaches the provider cap, the footer shows that
-Agentty is displaying the first matching requests. | | **Tasks** | Shown only when the
-active project contains `docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`,
-`Queued Next`, and `Parked` task queues. | | **Stats** | View usage statistics,
-including the provider subscription or quota snapshot and aggregate session/token footer
-totals. Provider usage refreshes when the Stats tab receives focus after the cached
-snapshot becomes stale. | | **Settings** | Configure the color theme, default reasoning
-level, smart/fast/review model defaults, the optional `Last used model as default`
-smart-model mode, the session commit coauthor trailer, and `Open Commands` for the
-active project. |
+repositories) in a dashboard view: equal-width activity heatmap and `Work Pace` panels
+on top, with recent session pace and active-project metrics beside the heatmap; the
+project table below shows project names, session counts, and last-opened dates. Agentty
+skips stale entries whose project directories no longer exist or no longer contain git
+metadata. | | **Sessions** | List, create, and manage agent sessions. When a project is
+active, this tab appears as `Sessions (<project-name>)`. | | **Review** | List open
+GitHub pull requests or GitLab merge requests in the active project that request the
+current forge user's review, including drafts marked with a `Draft` status. The tab is a
+read-only forge list; press `s` to refresh and open reviews from the forge UI or CLI. If
+the list reaches the provider cap, the footer shows that Agentty is displaying the first
+matching requests. | | **Tasks** | Shown only when the active project contains
+`docs/plan/roadmap.md`, summarizing the roadmap's `Ready Now`, `Queued Next`, and
+`Parked` task queues. | | **Stats** | View usage statistics, including the provider
+subscription or quota snapshot and aggregate session/token footer totals. Provider usage
+refreshes when the Stats tab receives focus after the cached snapshot becomes stale. | |
+**Settings** | Configure the color theme, default reasoning level, smart/fast/review
+model defaults, the optional `Last used model as default` smart-model mode, the session
+commit coauthor trailer, and `Open Commands` for the active project. |
 
 In session chat view, the status-colored session title renders in a dedicated header row
 above the output panel. A second metadata row shows the persisted size bucket, current
@@ -55,14 +54,14 @@ The top status bar keeps the current version and update status visible, and it a
 rotates short page-scoped `FYI:` messages once per minute while you are in the
 **Sessions** list or a session chat view.
 
-The footer always shows the active directory. When the current branch tracks an
-upstream, the footer branch badge renders `local -> remote`, for example
-`main -> origin/main`. When you open an active session, the footer switches to that
-session directory and shows the session branch's ahead/behind counts relative to its
-base branch (for example `main`). If the session branch already tracks a remote, the
-footer also shows a second ahead/behind segment using the compact form
-`[stats] main | [stats] local -> remote`. Before first publish, the same second segment
-still renders for the local branch as `[stats] local`.
+The footer hides workspace context on the **Projects** tab. In other top-level tabs it
+shows the active directory. When the current branch tracks an upstream, the footer
+branch badge renders `local -> remote`, for example `main -> origin/main`. When you open
+an active session, the footer switches to that session directory and shows the session
+branch's ahead/behind counts relative to its base branch (for example `main`). If the
+session branch already tracks a remote, the footer also shows a second ahead/behind
+segment using the compact form `[stats] main | [stats] local -> remote`. Before first
+publish, the same second segment still renders for the local branch as `[stats] local`.
 
 New session worktrees start from the local active base branch. If local `main` is behind
 `origin/main`, the session branch still starts from local `main`; run list-mode sync

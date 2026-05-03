@@ -553,6 +553,8 @@ mod tests {
         // Assert
         let text = buffer_text(terminal.backend().buffer());
         assert_eq!(text.trim(), "");
+        assert!(!text.contains("/tmp/current-workspace"));
+        assert!(!text.contains("feature/test-render"));
     }
 
     #[test]
